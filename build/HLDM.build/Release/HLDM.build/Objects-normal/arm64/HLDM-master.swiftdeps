@@ -1,0 +1,20 @@
+version: "Apple Swift version 5.8.1 (swiftlang-5.8.0.124.5 clang-1403.0.22.11.100)"
+options: "5d302b6a88d8cdd1477d695f1f4470687407222d8ce5a6c480184ca30322399d"
+build_start_time: [1777672390, 336903000]
+build_end_time: [1777672419, 752364000]
+inputs:
+  "/Users/more/Documents/HLDM/HLDM/AirPlayQuickConnect.swift": [1777647756, 966747142]
+  "/Users/more/Documents/HLDM/HLDM/AppDelegate.swift": [1777647733, 213512240]
+  "/Users/more/Documents/HLDM/HLDM/AudioManager.swift": [1777653653, 872242915]
+  "/Users/more/Documents/HLDM/HLDM/ContentView.swift": [1776101624, 725598838]
+  "/Users/more/Documents/HLDM/HLDM/ControlStripPresenter.swift": [1777647740, 665966652]
+  "/Users/more/Documents/HLDM/HLDM/GlobalHotkey.swift": [1777648111, 895155852]
+  "/Users/more/Documents/HLDM/HLDM/HotkeyPreference.swift": [1777647751, 438651761]
+  "/Users/more/Documents/HLDM/HLDM/KeyRecorderView.swift": [1776983612, 868141358]
+  "/Users/more/Documents/HLDM/HLDM/MenuBuilder.swift": [1777647730, 274761486]
+  "/Users/more/Documents/HLDM/HLDM/SettingsWindowController.swift": [1777647763, 483508095]
+  "/Users/more/Documents/HLDM/HLDM/SpeechSynthesizer.swift": [1777492722, 931510123]
+  "/Users/more/Documents/HLDM/HLDM/TouchBarProvider.swift": [1777647754, 106141675]
+  "/Users/more/Documents/HLDM/HLDM/VideoManager.swift": [1777653658, 375214285]
+  "/Users/more/Documents/HLDM/HLDM/VisibilityPreferences.swift": [1777647748, 896145184]
+  "/Users/more/Documents/HLDM/HLDM/boarApp.swift": [1776103837, 700949329]

@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(xcodebuild -scheme boar -destination 'platform=macOS' build)",
+      "Bash(sudo xcode-select:*)",
+      "Bash(DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -scheme boar -project /Users/more/Documents/boar/boar.xcodeproj -destination 'platform=macOS' build)",
+      "Bash(system_profiler SPHardwareDataType)",
+      "Bash(find /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/System/Library/Frameworks/AppKit.framework/Headers -name \"*Graphics*\" -exec basename {} \\\\;)",
+      "Bash(system_profiler SPDisplaysDataType)",
+      "Bash(xcodebuild -scheme boar -configuration Debug build)",
+      "Read(//Applications/**)",
+      "Bash(mdfind \"kMDItemCFBundleIdentifier == 'com.apple.dt.Xcode'\")",
+      "Bash(xcodebuild -scheme boar -configuration Debug -project /Users/more/Documents/boar/boar.xcodeproj build)",
+      "Bash(DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -scheme boar -configuration Debug -project /Users/more/Documents/boar/boar.xcodeproj build)",
+      "Bash(xcodebuild build-for-testing *)",
+      "Bash(DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild build -project HLDM.xcodeproj -scheme HLDM -destination 'platform=macOS')",
+      "Bash(DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -project HLDM.xcodeproj -list)",
+      "Bash(DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild build -project HLDM.xcodeproj -target HLDM -destination 'platform=macOS,arch=x86_64')"
+    ]
+  }
+}

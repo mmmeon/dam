@@ -1,0 +1,12 @@
+{
+  "source": "/Users/more/Documents/HLDM/HLDM/ContentView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "Hello, world!"
+      }
+    ]
+  },
+  "version": 1
+}
