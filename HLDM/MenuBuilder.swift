@@ -31,6 +31,7 @@ func buildStatusMenu(audio: AudioManager,
 
     // — AirPlay Display section —
     menu.addItem(sectionHeader("AirPlay Display"))
+    let canMirrorDisplays = canMirror(video: video)
     if video.airPlayDevices.isEmpty {
         menu.addItem(disabledItem("Searching…"))
     } else {
@@ -42,15 +43,13 @@ func buildStatusMenu(audio: AudioManager,
             )
             item.representedObject = display
             item.state = display.isConnected ? .on : .off
-            if display.isMirroring || video.isBeingMirrored(display) {
-                item.image = menuIcon("square.on.square")
-            }
+            let mirrorActive = display.isMirroring || video.isBeingMirrored(display)
+            if mirrorActive { item.image = menuIcon("square.on.square") }
 
             if display.isConnected && display.cgDisplayID != 0 {
                 let submenu = buildResolutionSubmenu(display: display, video: video)
                 submenu.addItem(.separator())
-                if canMirror(video: video) {
-                    let mirrorActive = display.isMirroring || video.isBeingMirrored(display)
+                if canMirrorDisplays {
                     submenu.addItem(mirrorToggleItem(for: display, isMirroring: mirrorActive))
                     // When AirPlay is the slave (built-in is master), offer a dedicated
                     // "Optimize for this Display" item that promotes it to master without
@@ -83,7 +82,7 @@ func buildStatusMenu(audio: AudioManager,
 
             if display.cgDisplayID != 0 {
                 let submenu = buildResolutionSubmenu(display: display, video: video)
-                if canMirror(video: video) {
+                if canMirrorDisplays {
                     submenu.addItem(.separator())
                     submenu.addItem(mirrorToggleItem(for: display, isMirroring: mirrorActive))
                 }
