@@ -168,6 +168,15 @@ extension AppDelegate: NSMenuDelegate {
         }
     }
 
+    @objc func toggleVirtualAnchor(_ sender: NSMenuItem) {
+        guard let display = sender.representedObject as? DisplayInfo else { return }
+        if videoManager.hasVirtualAnchor(for: display.name) {
+            videoManager.disableVirtualAnchor(for: display)
+        } else {
+            videoManager.enableVirtualAnchor(for: display)
+        }
+    }
+
     @objc func selectResolution(_ sender: NSMenuItem) {
         guard let sel = sender.representedObject as? ResolutionSelection else { return }
         videoManager.setMode(sel.mode, for: sel.cgDisplayID)

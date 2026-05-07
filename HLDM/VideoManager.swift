@@ -69,6 +69,11 @@ final class VideoManager: ObservableObject {
     /// Caches IOKit-derived display names by cgID. Valid for the lifetime of a
     /// cgID — IDs are reassigned on disconnect, so stale entries are never accessed.
     private var ioKitNameCache: [CGDirectDisplayID: String] = [:]
+    /// Retained CGVirtualDisplay objects keyed by AirPlay device name.
+    /// Stored as AnyObject to avoid @available on the stored property.
+    private var virtualAnchorStore: [String: AnyObject] = [:]
+    /// Maps AirPlay device name → the CGDirectDisplayID of its active virtual anchor.
+    private(set) var virtualAnchorCGIDs: [String: CGDirectDisplayID] = [:]
 
     /// Start continuous Bonjour discovery. Call once on launch; runs until the app quits.
     func startDiscovery() {
@@ -347,6 +352,87 @@ final class VideoManager: ObservableObject {
 
     // MARK: - Private
 
+    // MARK: - Virtual Display Anchor
+
+    func hasVirtualAnchor(for name: String) -> Bool {
+        virtualAnchorStore[name] != nil
+    }
+
+    /// Returns the CGDirectDisplayID to use for resolution queries and changes.
+    /// When a virtual anchor is active for this display, returns the anchor's ID
+    /// (the mirror master) so that resolution changes target the anchor rather than
+    /// the AirPlay slave.
+    func resolutionControlID(for display: DisplayInfo) -> CGDirectDisplayID {
+        virtualAnchorCGIDs[display.name] ?? display.cgDisplayID
+    }
+
+    /// Creates a CGVirtualDisplay, stores it as the anchor for `display`, then
+    /// configures AirPlay as the mirror slave so it streams the virtual display's output.
+    func enableVirtualAnchor(for display: DisplayInfo) {
+        guard #available(macOS 12.3, *) else { return }
+        guard display.cgDisplayID != 0, !hasVirtualAnchor(for: display.name) else { return }
+
+        let descriptor = CGVirtualDisplayDescriptor()
+        descriptor.queue = DispatchQueue(label: "mmmeon.hldm.virtual.\(display.name)")
+        descriptor.name = "HLDM Virtual Anchor"
+        descriptor.sizeInMillimeters = CGSize(width: 600, height: 340)
+        descriptor.maxPixelsWide = 3840
+        descriptor.maxPixelsHigh = 2160
+        descriptor.hiDPI = false
+
+        guard let vd = CGVirtualDisplay(descriptor: descriptor) else { return }
+
+        let settings = CGVirtualDisplaySettings()
+        settings.modes = [
+            CGVirtualDisplayMode(width: 3840, height: 2160, refreshRate: 60),
+            CGVirtualDisplayMode(width: 2560, height: 1440, refreshRate: 60),
+            CGVirtualDisplayMode(width: 1920, height: 1080, refreshRate: 60),
+            CGVirtualDisplayMode(width: 1280, height: 720,  refreshRate: 60),
+        ]
+
+        let airPlayCGID = display.cgDisplayID
+        let deviceName  = display.name
+        vd.apply(settings) { [weak self] success in
+            guard success, let self else { return }
+            let virtualID = vd.displayID
+            guard virtualID != 0 else { return }
+            DispatchQueue.main.async {
+                self.virtualAnchorStore[deviceName] = vd
+                self.virtualAnchorCGIDs[deviceName] = virtualID
+                var config: CGDisplayConfigRef?
+                guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else { return }
+                CGConfigureDisplayMirrorOfDisplay(cfg, airPlayCGID, virtualID)
+                CGCompleteDisplayConfiguration(cfg, .permanently)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                    self?.mergeDevices()
+                }
+            }
+        }
+    }
+
+    /// Breaks the virtual anchor: extends AirPlay back to an independent display,
+    /// then releases the CGVirtualDisplay so it disappears from the system.
+    func disableVirtualAnchor(for display: DisplayInfo) {
+        guard hasVirtualAnchor(for: display.name) else { return }
+        let airPlayCGID = display.cgDisplayID != 0
+            ? display.cgDisplayID
+            : (cachedAirPlayCGIDs[display.name] ?? 0)
+        if airPlayCGID != 0 {
+            var config: CGDisplayConfigRef?
+            if CGBeginDisplayConfiguration(&config) == .success, let cfg = config {
+                CGConfigureDisplayMirrorOfDisplay(cfg, airPlayCGID, CGDirectDisplayID(0))
+                CGCompleteDisplayConfiguration(cfg, .permanently)
+            }
+        }
+        virtualAnchorStore.removeValue(forKey: display.name)
+        virtualAnchorCGIDs.removeValue(forKey: display.name)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.mergeDevices()
+        }
+    }
+
+    // MARK: - Private
+
     private func mergeDevices() {
         // Build a cgID → name map from active NSScreen entries.
         // Include the built-in panel — it disappears from NSScreen in clamshell
@@ -438,9 +524,19 @@ final class VideoManager: ObservableObject {
         // Includes the built-in panel when the lid is open (it appears in NSScreen
         // and therefore idToName). Absent in clamshell mode, which is correct.
         let airPlayIDs = Set(newAirPlay.map(\.cgDisplayID))
+        let anchorIDs  = Set(virtualAnchorCGIDs.values)
+
+        // Release virtual anchors whose AirPlay device is no longer online.
+        let connectedAirPlayNames = Set(newAirPlay.filter { $0.isConnected }.map { $0.name })
+        for name in Array(virtualAnchorStore.keys) where !connectedAirPlayNames.contains(name) {
+            virtualAnchorStore.removeValue(forKey: name)
+            virtualAnchorCGIDs.removeValue(forKey: name)
+        }
+
         var physical: [DisplayInfo] = []
         for cgID in onlineIDs {
             guard !airPlayIDs.contains(cgID) else { continue }
+            guard !anchorIDs.contains(cgID)  else { continue }   // hide virtual anchors from display list
             guard let name = idToName[cgID] else { continue }
             let isBuiltIn   = CGDisplayIsBuiltin(cgID) != 0
             let isMirroring = CGDisplayMirrorsDisplay(cgID) != CGDirectDisplayID(0)

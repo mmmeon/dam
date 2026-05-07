@@ -49,6 +49,9 @@ func buildStatusMenu(audio: AudioManager,
             if display.isConnected && display.cgDisplayID != 0 {
                 let submenu = buildResolutionSubmenu(display: display, video: video)
                 submenu.addItem(.separator())
+                if #available(macOS 12.3, *) {
+                    submenu.addItem(virtualAnchorItem(for: display, video: video))
+                }
                 if canMirrorDisplays {
                     submenu.addItem(mirrorToggleItem(for: display, isMirroring: mirrorActive))
                     // When AirPlay is the slave (built-in is master), offer a dedicated
@@ -124,8 +127,9 @@ private func sectionHeader(_ title: String) -> NSMenuItem {
 
 private func buildResolutionSubmenu(display: DisplayInfo, video: VideoManager) -> NSMenu {
     let submenu = NSMenu()
-    let current = video.currentMode(for: display.cgDisplayID)
-    let modes = video.availableModesDeduped(for: display.cgDisplayID)
+    let cgID    = video.resolutionControlID(for: display)
+    let current = video.currentMode(for: cgID)
+    let modes   = video.availableModesDeduped(for: cgID)
 
     if modes.isEmpty {
         submenu.addItem(disabledItem("No modes available"))
@@ -136,7 +140,7 @@ private func buildResolutionSubmenu(display: DisplayInfo, video: VideoManager) -
                 action: #selector(AppDelegate.selectResolution(_:)),
                 keyEquivalent: ""
             )
-            item.representedObject = ResolutionSelection(mode: mode, cgDisplayID: display.cgDisplayID)
+            item.representedObject = ResolutionSelection(mode: mode, cgDisplayID: cgID)
             item.state = (mode.ioModeID == current?.ioModeID) ? .on : .off
             submenu.addItem(item)
         }
@@ -149,6 +153,18 @@ private func canMirror(video: VideoManager) -> Bool {
     let active = (video.allAirPlayDevices + video.allConnectedDisplays)
         .filter { $0.cgDisplayID != 0 }
     return active.count >= 2
+}
+
+@available(macOS 12.3, *)
+private func virtualAnchorItem(for display: DisplayInfo, video: VideoManager) -> NSMenuItem {
+    let item = NSMenuItem(
+        title: "Virtual Anchor",
+        action: #selector(AppDelegate.toggleVirtualAnchor(_:)),
+        keyEquivalent: ""
+    )
+    item.representedObject = display
+    item.state = video.hasVirtualAnchor(for: display.name) ? .on : .off
+    return item
 }
 
 private func disconnectItem(for display: DisplayInfo) -> NSMenuItem {

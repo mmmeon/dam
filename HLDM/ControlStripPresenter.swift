@@ -341,7 +341,8 @@ final class ControlStripPresenter: NSObject {
         let item = NSCustomTouchBarItem(identifier: id)
 
         // Filter to modes matching the native aspect ratio, then cap at 5.
-        let allModes = videoManager?.availableModesDeduped(for: display.cgDisplayID) ?? []
+        let resID    = videoManager?.resolutionControlID(for: display) ?? display.cgDisplayID
+        let allModes = videoManager?.availableModesDeduped(for: resID) ?? []
         let modes: [DisplayMode]
         if let native = allModes.first {
             func gcd(_ a: Int, _ b: Int) -> Int { b == 0 ? a : gcd(b, a % b) }
@@ -355,10 +356,10 @@ final class ControlStripPresenter: NSObject {
         } else {
             modes = []
         }
-        let current  = videoManager?.currentMode(for: display.cgDisplayID)
+        let current  = videoManager?.currentMode(for: resID)
 
-        NSLog("HLDM: makeResolutionSegItem display='%@' cgDisplayID=%u modes=%d (capped from %d)",
-              display.name, display.cgDisplayID, modes.count, allModes.count)
+        NSLog("HLDM: makeResolutionSegItem display='%@' resID=%u modes=%d (capped from %d)",
+              display.name, resID, modes.count, allModes.count)
 
         if modes.isEmpty {
             let tf = NSTextField(labelWithString: display.cgDisplayID == 0 ? "No display ID" : "No modes")
@@ -501,7 +502,8 @@ final class ControlStripPresenter: NSObject {
         guard let ctx = resolutionSegMap[ObjectIdentifier(seg)] else { return }
         let idx = seg.selectedSegment
         guard idx >= 0, idx < ctx.modes.count else { return }
-        videoManager?.setMode(ctx.modes[idx], for: ctx.display.cgDisplayID)
+        guard let vm = videoManager else { return }
+        vm.setMode(ctx.modes[idx], for: vm.resolutionControlID(for: ctx.display))
     }
 }
 
