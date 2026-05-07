@@ -268,7 +268,7 @@ final class VideoManager: ObservableObject {
             .sorted { ($0.pixelWidth, $0.pixelHeight, $0.refreshRate) > ($1.pixelWidth, $1.pixelHeight, $1.refreshRate) }
     }
 
-    /// One mode per pixel resolution, keeping the highest refresh rate.
+    /// One mode per logical resolution, preferring HiDPI over non-HiDPI, then highest refresh rate.
     /// Single pass over CGDisplayCopyAllDisplayModes — does not call availableModes().
     func availableModesDeduped(for cgDisplayID: CGDirectDisplayID) -> [DisplayMode] {
         guard cgDisplayID != 0 else { return [] }
@@ -281,8 +281,13 @@ final class VideoManager: ObservableObject {
             let hz = cgMode.refreshRate == 0 ? 60.0 : cgMode.refreshRate
             let pw = cgMode.pixelWidth, ph = cgMode.pixelHeight
             let hiDPI = pw > w
-            let key = "\(pw)x\(ph)"
-            if let existing = best[key], hz <= existing.refreshRate { continue }
+            let key = "\(w)x\(h)"
+            if let existing = best[key] {
+                // HiDPI always wins over non-HiDPI at the same logical resolution.
+                // Among equal HiDPI status, keep the higher refresh rate.
+                if existing.isHiDPI && !hiDPI { continue }
+                if existing.isHiDPI == hiDPI && hz <= existing.refreshRate { continue }
+            }
             let id = hiDPI ? "\(w)x\(h)@\(hz)@2x" : "\(w)x\(h)@\(hz)"
             best[key] = DisplayMode(id: id, ioModeID: cgMode.ioDisplayModeID,
                                     width: w, height: h, pixelWidth: pw, pixelHeight: ph,
