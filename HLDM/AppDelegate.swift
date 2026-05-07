@@ -105,7 +105,6 @@ extension AppDelegate: NSMenuDelegate {
     @objc func selectAudioDevice(_ sender: NSMenuItem) {
         guard let device = sender.representedObject as? AudioDevice else { return }
         audioManager.setDefaultDevice(device)
-        rebuild()
     }
 
     @objc func selectDisplay(_ sender: NSMenuItem) {

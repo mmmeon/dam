@@ -62,6 +62,9 @@ final class VideoManager: ObservableObject {
     /// it appeared in NSScreen.screens (extend mode). Used to keep tracking the
     /// display when it becomes a mirror slave and drops out of NSScreen.
     private var cachedAirPlayCGIDs: [String: CGDirectDisplayID] = [:]
+    /// Caches IOKit-derived display names by cgID. Valid for the lifetime of a
+    /// cgID — IDs are reassigned on disconnect, so stale entries are never accessed.
+    private var ioKitNameCache: [CGDirectDisplayID: String] = [:]
 
     /// Start continuous Bonjour discovery. Call once on launch; runs until the app quits.
     func startDiscovery() {
@@ -86,9 +89,10 @@ final class VideoManager: ObservableObject {
 
     /// Re-applies the current visibility preferences without re-querying displays.
     func applyVisibility() {
-        airPlayDevices    = VideoManager.filter(airPlayDevices: allAirPlayDevices, hidden: VisibilityPreferences.hiddenAirPlayDevices)
-        connectedDisplays = VideoManager.filter(connectedDisplays: allConnectedDisplays, hidden: VisibilityPreferences.hiddenDisplays)
-        objectWillChange.send()
+        let fa = VideoManager.filter(airPlayDevices: allAirPlayDevices, hidden: VisibilityPreferences.hiddenAirPlayDevices)
+        let fc = VideoManager.filter(connectedDisplays: allConnectedDisplays, hidden: VisibilityPreferences.hiddenDisplays)
+        if airPlayDevices    != fa { airPlayDevices    = fa }
+        if connectedDisplays != fc { connectedDisplays = fc }
     }
 
     static func filter(airPlayDevices: [DisplayInfo], hidden: Set<String>) -> [DisplayInfo] {
@@ -256,15 +260,18 @@ final class VideoManager: ObservableObject {
     }
 
     /// One mode per logical resolution, keeping the highest refresh rate.
+    /// Single pass over CGDisplayCopyAllDisplayModes — does not call availableModes().
     func availableModesDeduped(for cgDisplayID: CGDirectDisplayID) -> [DisplayMode] {
+        guard cgDisplayID != 0 else { return [] }
+        guard let modeList = CGDisplayCopyAllDisplayModes(cgDisplayID, nil) as? [CGDisplayMode] else { return [] }
         var best: [String: DisplayMode] = [:]
-        for mode in availableModes(for: cgDisplayID) {
-            let key = "\(mode.width)x\(mode.height)"
-            if let existing = best[key] {
-                if mode.refreshRate > existing.refreshRate { best[key] = mode }
-            } else {
-                best[key] = mode
-            }
+        for cgMode in modeList {
+            let w = cgMode.width, h = cgMode.height
+            guard w > 1, h > 1 else { continue }
+            let hz = cgMode.refreshRate == 0 ? 60.0 : cgMode.refreshRate
+            let key = "\(w)x\(h)"
+            if let existing = best[key], hz <= existing.refreshRate { continue }
+            best[key] = DisplayMode(id: "\(key)@\(hz)", ioModeID: cgMode.ioDisplayModeID, width: w, height: h, refreshRate: hz)
         }
         return best.values.sorted { ($0.width, $0.height) > ($1.width, $1.height) }
     }
@@ -344,7 +351,10 @@ final class VideoManager: ObservableObject {
         for cgID in onlineIDs {
             guard idToName[cgID] == nil else { continue }
             guard CGDisplayIsBuiltin(cgID) == 0 else { continue }   // built-in has no IODisplayConnect
-            if let name = displayNameFromIOKit(cgID) {
+            if let name = ioKitNameCache[cgID] {
+                idToName[cgID] = name
+            } else if let name = displayNameFromIOKit(cgID) {
+                ioKitNameCache[cgID] = name
                 idToName[cgID] = name
             }
         }
@@ -388,7 +398,7 @@ final class VideoManager: ObservableObject {
             }
         }
 
-        allAirPlayDevices = discoveredNames.sorted().map { name in
+        let newAirPlay = discoveredNames.sorted().map { name in
             guard let cgID = resolvedIDs[name], onlineSet.contains(cgID) else {
                 return DisplayInfo(id: name, name: name,
                                    isConnected: false, cgDisplayID: 0,
@@ -403,7 +413,7 @@ final class VideoManager: ObservableObject {
         // Physical: all online displays not in the Bonjour list.
         // Includes the built-in panel when the lid is open (it appears in NSScreen
         // and therefore idToName). Absent in clamshell mode, which is correct.
-        let airPlayIDs = Set(allAirPlayDevices.map(\.cgDisplayID))
+        let airPlayIDs = Set(newAirPlay.map(\.cgDisplayID))
         var physical: [DisplayInfo] = []
         for cgID in onlineIDs {
             guard !airPlayIDs.contains(cgID) else { continue }
@@ -418,11 +428,13 @@ final class VideoManager: ObservableObject {
                                         isBuiltIn: isBuiltIn))
         }
         // Built-in first, then external sorted by name.
-        allConnectedDisplays = physical.sorted { l, r in
+        let newPhysical = physical.sorted { l, r in
             if l.isBuiltIn != r.isBuiltIn { return l.isBuiltIn }
             return l.name < r.name
         }
 
+        if allAirPlayDevices    != newAirPlay   { allAirPlayDevices    = newAirPlay   }
+        if allConnectedDisplays != newPhysical  { allConnectedDisplays = newPhysical  }
         applyVisibility()
     }
 

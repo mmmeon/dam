@@ -21,9 +21,10 @@ final class AudioManager: ObservableObject {
     func refresh() {
         let fetched = fetchOutputDevices()
         autoHideNewVirtualDevices(in: fetched)
-        allOutputDevices = fetched
+        if allOutputDevices != fetched { allOutputDevices = fetched }
         applyVisibility()
-        defaultDeviceID = fetchDefaultOutputDeviceID()
+        let newID = fetchDefaultOutputDeviceID()
+        if defaultDeviceID != newID { defaultDeviceID = newID }
     }
 
     /// On first discovery, virtual devices are hidden by default so they don't
@@ -41,8 +42,8 @@ final class AudioManager: ObservableObject {
 
     /// Re-applies the current visibility preferences without re-querying CoreAudio.
     func applyVisibility() {
-        devices = AudioManager.filter(devices: allOutputDevices, hidden: VisibilityPreferences.hiddenAudioDevices)
-        objectWillChange.send()
+        let filtered = AudioManager.filter(devices: allOutputDevices, hidden: VisibilityPreferences.hiddenAudioDevices)
+        if devices != filtered { devices = filtered }
     }
 
     static func filter(devices: [AudioDevice], hidden: Set<String>) -> [AudioDevice] {
@@ -62,7 +63,6 @@ final class AudioManager: ObservableObject {
             UInt32(MemoryLayout<AudioDeviceID>.size), &deviceID
         )
         defaultDeviceID = device.id
-        objectWillChange.send()
     }
 
     // MARK: - Private
