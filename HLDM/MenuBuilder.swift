@@ -49,9 +49,7 @@ func buildStatusMenu(audio: AudioManager,
             if display.isConnected && display.cgDisplayID != 0 {
                 let submenu = buildResolutionSubmenu(display: display, video: video)
                 submenu.addItem(.separator())
-                if #available(macOS 12.3, *) {
-                    submenu.addItem(virtualAnchorItem(for: display, video: video))
-                }
+                submenu.addItem(virtualAnchorItem(for: display, video: video))
                 if canMirrorDisplays {
                     submenu.addItem(mirrorToggleItem(for: display, isMirroring: mirrorActive))
                     // When AirPlay is the slave (built-in is master), offer a dedicated
@@ -155,7 +153,6 @@ private func canMirror(video: VideoManager) -> Bool {
     return active.count >= 2
 }
 
-@available(macOS 12.3, *)
 private func virtualAnchorItem(for display: DisplayInfo, video: VideoManager) -> NSMenuItem {
     let item = NSMenuItem(
         title: "Virtual Anchor",
