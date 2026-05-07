@@ -11,22 +11,26 @@ import IOKit.graphics
 import Network
 
 struct DisplayMode: Identifiable, Hashable {
-    let id: String              // "WIDTHxHEIGHT@RATE"
+    let id: String              // "WIDTHxHEIGHT@RATE" or "WIDTHxHEIGHT@RATE@2x" for HiDPI
     let ioModeID: Int32
-    let width: Int
-    let height: Int
+    let width: Int              // logical (point) width
+    let height: Int             // logical (point) height
+    let pixelWidth: Int         // actual rendered pixel width
+    let pixelHeight: Int        // actual rendered pixel height
     let refreshRate: Double
+    let isHiDPI: Bool
 
-    /// Full label for menus: "3840 × 2160 — 60 Hz"
+    /// Full label for menus: "3840 × 2160 — 60 Hz" / "1920 × 1080 — 60 Hz  HiDPI"
     var label: String {
         let hz = refreshRate.truncatingRemainder(dividingBy: 1) == 0
             ? String(format: "%.0f Hz", refreshRate)
             : String(format: "%.1f Hz", refreshRate)
-        return "\(width) × \(height) — \(hz)"
+        let base = "\(width) × \(height) — \(hz)"
+        return isHiDPI ? base + "  HiDPI" : base
     }
 
-    /// Compact label for Touch Bar: "3840×2160"
-    var shortLabel: String { "\(width)×\(height)" }
+    /// Compact label for Touch Bar: "3840×2160" / "1920×1080↑"
+    var shortLabel: String { isHiDPI ? "\(width)×\(height)↑" : "\(width)×\(height)" }
 }
 
 struct DisplayInfo: Identifiable, Hashable {
@@ -243,46 +247,61 @@ final class VideoManager: ObservableObject {
 
     func availableModes(for cgDisplayID: CGDirectDisplayID) -> [DisplayMode] {
         guard cgDisplayID != 0 else { return [] }
-        guard let modeList = CGDisplayCopyAllDisplayModes(cgDisplayID, nil) as? [CGDisplayMode] else { return [] }
+        let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
+        guard let modeList = CGDisplayCopyAllDisplayModes(cgDisplayID, options) as? [CGDisplayMode] else { return [] }
 
         var seen = Set<String>()
         return modeList
             .compactMap { cgMode -> DisplayMode? in
-                let w = cgMode.width
-                let h = cgMode.height
+                let w = cgMode.width, h = cgMode.height
                 guard w > 1, h > 1 else { return nil }
                 let hz = cgMode.refreshRate == 0 ? 60.0 : cgMode.refreshRate
-                let key = "\(w)x\(h)@\(hz)"
-                guard seen.insert(key).inserted else { return nil }
-                return DisplayMode(id: key, ioModeID: cgMode.ioDisplayModeID, width: w, height: h, refreshRate: hz)
+                let pw = cgMode.pixelWidth, ph = cgMode.pixelHeight
+                let hiDPI = pw > w
+                let dedupeKey = "\(pw)x\(ph)@\(hz)"
+                guard seen.insert(dedupeKey).inserted else { return nil }
+                let id = hiDPI ? "\(w)x\(h)@\(hz)@2x" : "\(w)x\(h)@\(hz)"
+                return DisplayMode(id: id, ioModeID: cgMode.ioDisplayModeID,
+                                   width: w, height: h, pixelWidth: pw, pixelHeight: ph,
+                                   refreshRate: hz, isHiDPI: hiDPI)
             }
-            .sorted { ($0.width, $0.height, $0.refreshRate) > ($1.width, $1.height, $1.refreshRate) }
+            .sorted { ($0.pixelWidth, $0.pixelHeight, $0.refreshRate) > ($1.pixelWidth, $1.pixelHeight, $1.refreshRate) }
     }
 
-    /// One mode per logical resolution, keeping the highest refresh rate.
+    /// One mode per pixel resolution, keeping the highest refresh rate.
     /// Single pass over CGDisplayCopyAllDisplayModes — does not call availableModes().
     func availableModesDeduped(for cgDisplayID: CGDirectDisplayID) -> [DisplayMode] {
         guard cgDisplayID != 0 else { return [] }
-        guard let modeList = CGDisplayCopyAllDisplayModes(cgDisplayID, nil) as? [CGDisplayMode] else { return [] }
+        let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
+        guard let modeList = CGDisplayCopyAllDisplayModes(cgDisplayID, options) as? [CGDisplayMode] else { return [] }
         var best: [String: DisplayMode] = [:]
         for cgMode in modeList {
             let w = cgMode.width, h = cgMode.height
             guard w > 1, h > 1 else { continue }
             let hz = cgMode.refreshRate == 0 ? 60.0 : cgMode.refreshRate
-            let key = "\(w)x\(h)"
+            let pw = cgMode.pixelWidth, ph = cgMode.pixelHeight
+            let hiDPI = pw > w
+            let key = "\(pw)x\(ph)"
             if let existing = best[key], hz <= existing.refreshRate { continue }
-            best[key] = DisplayMode(id: "\(key)@\(hz)", ioModeID: cgMode.ioDisplayModeID, width: w, height: h, refreshRate: hz)
+            let id = hiDPI ? "\(w)x\(h)@\(hz)@2x" : "\(w)x\(h)@\(hz)"
+            best[key] = DisplayMode(id: id, ioModeID: cgMode.ioDisplayModeID,
+                                    width: w, height: h, pixelWidth: pw, pixelHeight: ph,
+                                    refreshRate: hz, isHiDPI: hiDPI)
         }
-        return best.values.sorted { ($0.width, $0.height) > ($1.width, $1.height) }
+        return best.values.sorted { ($0.pixelWidth, $0.pixelHeight) > ($1.pixelWidth, $1.pixelHeight) }
     }
 
     func currentMode(for cgDisplayID: CGDirectDisplayID) -> DisplayMode? {
         guard cgDisplayID != 0,
               let cgMode = CGDisplayCopyDisplayMode(cgDisplayID) else { return nil }
-        let w = cgMode.width
-        let h = cgMode.height
+        let w = cgMode.width, h = cgMode.height
         let hz = cgMode.refreshRate == 0 ? 60.0 : cgMode.refreshRate
-        return DisplayMode(id: "\(w)x\(h)@\(hz)", ioModeID: cgMode.ioDisplayModeID, width: w, height: h, refreshRate: hz)
+        let pw = cgMode.pixelWidth, ph = cgMode.pixelHeight
+        let hiDPI = pw > w
+        let id = hiDPI ? "\(w)x\(h)@\(hz)@2x" : "\(w)x\(h)@\(hz)"
+        return DisplayMode(id: id, ioModeID: cgMode.ioDisplayModeID,
+                           width: w, height: h, pixelWidth: pw, pixelHeight: ph,
+                           refreshRate: hz, isHiDPI: hiDPI)
     }
 
     /// Promotes `display` from mirror slave to mirror master ("Optimize for this Display").
@@ -303,7 +322,7 @@ final class VideoManager: ObservableObject {
 
     func setMode(_ mode: DisplayMode, for cgDisplayID: CGDirectDisplayID) {
         guard cgDisplayID != 0 else { return }
-        let options = [kCGDisplayShowDuplicateLowResolutionModes: false] as CFDictionary
+        let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
         guard let modeList = CGDisplayCopyAllDisplayModes(cgDisplayID, options) as? [CGDisplayMode],
               let cgMode = modeList.first(where: { $0.ioDisplayModeID == mode.ioModeID }) else { return }
 

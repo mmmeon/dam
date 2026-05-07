@@ -25,7 +25,8 @@ final class VideoManagerFilterTests: XCTestCase {
     }
 
     private func mode(_ w: Int, _ h: Int, hz: Double = 60) -> DisplayMode {
-        DisplayMode(id: "\(w)x\(h)@\(hz)", ioModeID: 0, width: w, height: h, refreshRate: hz)
+        DisplayMode(id: "\(w)x\(h)@\(hz)", ioModeID: 0, width: w, height: h,
+                    pixelWidth: w, pixelHeight: h, refreshRate: hz, isHiDPI: false)
     }
 
     // MARK: - VideoManager.filter(airPlayDevices:hidden:)
