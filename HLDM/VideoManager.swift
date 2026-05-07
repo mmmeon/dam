@@ -401,7 +401,7 @@ final class VideoManager: ObservableObject {
             CGVirtualDisplayMode(width: UInt(1280), height: UInt(720),  refreshRate: 60),
         ]
 
-        guard vd.applySettings(settings) else { return }
+        guard vd.apply(settings) else { return }
 
         // Keep vd alive; poll CGGetActiveDisplayList until the virtual display appears,
         // then wire up mirroring.
