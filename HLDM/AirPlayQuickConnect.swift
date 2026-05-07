@@ -64,7 +64,7 @@ final class AirPlayQuickConnect: NSObject {
 
         let all = vm.airPlayDevices
         guard !all.isEmpty else {
-            SpeechSynthesizer.shared.speak("No AirPlay displays available")
+            SpeechSynthesizer.shared.speak("No AirPlay displays found")
             return
         }
 
@@ -72,8 +72,10 @@ final class AirPlayQuickConnect: NSObject {
         // not toggling. Already-active displays are announced and skipped.
         let displays = all.filter { !$0.isConnected }
         guard !displays.isEmpty else {
-            let names = all.map(\.name).joined(separator: ", ")
-            SpeechSynthesizer.shared.speak("Already connected to \(names)")
+            let msg = all.count == 1
+                ? "Already connected to \(all[0].name)"
+                : "All displays already connected"
+            SpeechSynthesizer.shared.speak(msg)
             return
         }
 
@@ -97,7 +99,7 @@ final class AirPlayQuickConnect: NSObject {
         let list = displays.enumerated()
             .map { "\($0.offset + 1). \($0.element.name)" }
             .joined(separator: ". ")
-        let speech = "\(displays.count) AirPlay device\(displays.count == 1 ? "" : "s") available. Select one of the following. \(list)"
+        let speech = "Select a display. \(list)"
         DispatchQueue.main.async {
             // touchBar: false — the numbered selection buttons must stay tappable.
             SpeechSynthesizer.shared.speak(speech, touchBar: false)
@@ -121,7 +123,7 @@ final class AirPlayQuickConnect: NSObject {
             SpeechSynthesizer.shared.onFinish = { [weak self] in
                 self?.connect(display: display)
             }
-            SpeechSynthesizer.shared.speak("Connected to \(display.name)")
+            SpeechSynthesizer.shared.speak("Connecting to \(display.name)")
         }
     }
 
