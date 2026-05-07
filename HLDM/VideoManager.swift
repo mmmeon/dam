@@ -9,6 +9,7 @@ import Foundation
 import IOKit
 import IOKit.graphics
 import Network
+import Quartz
 
 struct DisplayMode: Identifiable, Hashable {
     let id: String              // "WIDTHxHEIGHT@RATE" or "WIDTHxHEIGHT@RATE@2x" for HiDPI
