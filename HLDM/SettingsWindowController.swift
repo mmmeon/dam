@@ -220,6 +220,34 @@ final class SettingsWindowController: NSWindowController {
 
         stack.addArrangedSubview(separator())
 
+        // — Virtual Display —
+        stack.addArrangedSubview(sectionHeader("Virtual Display"))
+
+        // Refresh rate checkboxes (30 / 60 / 120 / 240 Hz).
+        let availableRates = [30, 60, 120, 240]
+        for rate in availableRates {
+            stack.addArrangedSubview(
+                checkbox(
+                    title: "\(rate) Hz",
+                    isOn: VisibilityPreferences.virtualRefreshRates.contains(rate),
+                    action: { [weak self] isOn in
+                        var rates = VisibilityPreferences.virtualRefreshRates
+                        if isOn { rates.insert(rate) } else { rates.remove(rate) }
+                        // Always keep at least one rate selected.
+                        if rates.isEmpty { rates = [60] }
+                        VisibilityPreferences.virtualRefreshRates = rates
+                        self?.onRebuild?()
+                    }
+                )
+            )
+        }
+
+        // Default resolution popup.
+        let resolutionRow = buildDefaultResolutionRow()
+        stack.addArrangedSubview(resolutionRow)
+
+        stack.addArrangedSubview(separator())
+
         // — Connected Displays —
         stack.addArrangedSubview(sectionHeader("Connected Displays"))
         let physicalDisplays = videoManager.allConnectedDisplays
@@ -319,6 +347,44 @@ final class SettingsWindowController: NSWindowController {
         return row
     }
 
+    // MARK: - Virtual Display helpers
+
+    /// Label + popup for choosing the default virtual resolution.
+    private func buildDefaultResolutionRow() -> NSView {
+        let label = NSTextField(labelWithString: "Default resolution:")
+        label.font = .systemFont(ofSize: NSFont.systemFontSize)
+
+        let popup = DefaultResolutionPopup(onSelect: { [weak self] key in
+            VisibilityPreferences.defaultVirtualResolution = key
+            self?.onRebuild?()
+        })
+        popup.font = .systemFont(ofSize: NSFont.systemFontSize)
+
+        // Options: (title, stored key or nil)
+        let options: [(String, String?)] = [
+            ("None",  nil),
+            ("720p",  "1280x720"),
+            ("1080p", "1920x1080"),
+            ("1440p", "2560x1440"),
+            ("4K",    "3840x2160"),
+        ]
+        for (title, key) in options {
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            item.representedObject = key
+            popup.menu?.addItem(item)
+        }
+
+        // Select the item that matches the stored preference.
+        let stored = VisibilityPreferences.defaultVirtualResolution
+        let matchIndex = options.firstIndex { $0.1 == stored } ?? 0
+        popup.selectItem(at: matchIndex)
+
+        let row = NSStackView(views: [label, popup])
+        row.orientation = .horizontal
+        row.spacing     = 10
+        return row
+    }
+
     // MARK: - View factories
 
     private func sectionHeader(_ title: String) -> NSView {
@@ -415,6 +481,27 @@ extension SettingsWindowController: NSToolbarDelegate {
 /// document from the top-left rather than the bottom-left.
 private final class FlippedClipView: NSClipView {
     override var isFlipped: Bool { true }
+}
+
+// MARK: - DefaultResolutionPopup
+
+/// NSPopUpButton subclass that fires a closure when the selection changes, carrying
+/// the `representedObject` of the chosen item (a `String?` resolution key or nil).
+private final class DefaultResolutionPopup: NSPopUpButton {
+    private let handler: (String?) -> Void
+
+    init(onSelect: @escaping (String?) -> Void) {
+        handler = onSelect
+        super.init(frame: .zero, pullsDown: false)
+        target = self
+        action = #selector(selectionChanged)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    @objc private func selectionChanged() {
+        handler(selectedItem?.representedObject as? String)
+    }
 }
 
 // MARK: - ClosureButton

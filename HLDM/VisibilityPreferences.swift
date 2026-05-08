@@ -72,6 +72,23 @@ enum VisibilityPreferences {
         set { UserDefaults.standard.set(newValue, forKey: autoConnectKey) }
     }
 
+    // MARK: - Virtual Display
+
+    /// Refresh rates (Hz) to expose on the virtual anchor display. Defaults to [60].
+    static var virtualRefreshRates: Set<Int> {
+        get { Set((UserDefaults.standard.array(forKey: "hldm.virtual.refreshRates") as? [Int]) ?? [60]) }
+        set { UserDefaults.standard.set(Array(newValue), forKey: "hldm.virtual.refreshRates") }
+    }
+
+    /// Default virtual resolution stored as "WIDTHxHEIGHT", e.g. "3840x2160". Nil means no default.
+    static var defaultVirtualResolution: String? {
+        get { UserDefaults.standard.string(forKey: "hldm.virtual.defaultResolution") }
+        set {
+            if let v = newValue { UserDefaults.standard.set(v, forKey: "hldm.virtual.defaultResolution") }
+            else { UserDefaults.standard.removeObject(forKey: "hldm.virtual.defaultResolution") }
+        }
+    }
+
     // MARK: - Connected (physical) displays
 
     private static let displayKey = "hldm.hidden.displays"

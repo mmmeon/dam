@@ -393,18 +393,27 @@ final class VideoManager: ObservableObject {
         virtualAnchorStore[name] != nil
     }
 
-    /// The four fixed resolutions supported by the virtual anchor (720p / 1080p / 1440p / 4K).
-    static func virtualModes() -> [DisplayMode] {
+    /// Generates one DisplayMode per combination of the 4 fixed resolutions × each selected
+    /// refresh rate. Results are sorted descending by resolution, then refresh rate.
+    /// Pass `refreshRates` explicitly (e.g. from VisibilityPreferences) or omit to read the
+    /// preference automatically.
+    static func virtualModes(refreshRates: Set<Int> = VisibilityPreferences.virtualRefreshRates) -> [DisplayMode] {
         let specs: [(Int, Int)] = [(3840, 2160), (2560, 1440), (1920, 1080), (1280, 720)]
-        return specs.map { w, h in
-            DisplayMode(id: "\(w)x\(h)@60.0_virtual",
-                        ioModeID: 0,
-                        width: w, height: h,
-                        pixelWidth: w, pixelHeight: h,
-                        refreshRate: 60.0,
-                        isHiDPI: false,
-                        isVirtual: true)
+        let rates = refreshRates.isEmpty ? [60] : refreshRates
+        var modes: [DisplayMode] = []
+        for (w, h) in specs {
+            for rate in rates.sorted(by: >) {
+                let hz = Double(rate)
+                modes.append(DisplayMode(id: "\(w)x\(h)@\(hz)_virtual",
+                                         ioModeID: 0,
+                                         width: w, height: h,
+                                         pixelWidth: w, pixelHeight: h,
+                                         refreshRate: hz,
+                                         isHiDPI: false,
+                                         isVirtual: true))
+            }
         }
+        return modes
     }
 
     /// Selects a virtual resolution for an AirPlay display.
@@ -478,12 +487,14 @@ final class VideoManager: ObservableObject {
         let vd = CGVirtualDisplay(descriptor: descriptor)
         let settings = CGVirtualDisplaySettings()
         settings.hiDPI = 0
-        settings.modes = [
-            CGVirtualDisplayMode(width: UInt(3840), height: UInt(2160), refreshRate: 60),
-            CGVirtualDisplayMode(width: UInt(2560), height: UInt(1440), refreshRate: 60),
-            CGVirtualDisplayMode(width: UInt(1920), height: UInt(1080), refreshRate: 60),
-            CGVirtualDisplayMode(width: UInt(1280), height: UInt(720),  refreshRate: 60),
-        ]
+        let resolutions: [(UInt, UInt)] = [(3840, 2160), (2560, 1440), (1920, 1080), (1280, 720)]
+        let rates = VisibilityPreferences.virtualRefreshRates
+        let effectiveRates = rates.isEmpty ? [60] : rates
+        settings.modes = resolutions.flatMap { w, h in
+            effectiveRates.sorted(by: >).map { rate in
+                CGVirtualDisplayMode(width: w, height: h, refreshRate: Double(rate))
+            }
+        }
 
         guard vd.apply(settings) else { return }
 
@@ -511,6 +522,21 @@ final class VideoManager: ObservableObject {
             CGCompleteDisplayConfiguration(cfg, .permanently)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
                 self?.mergeDevices()
+                // Apply the default virtual resolution, if one is configured.
+                if let resString = VisibilityPreferences.defaultVirtualResolution {
+                    let parts = resString.split(separator: "x").compactMap { Int($0) }
+                    if parts.count == 2 {
+                        let targetW = parts[0], targetH = parts[1]
+                        let matchingMode = VideoManager.virtualModes().first {
+                            $0.width == targetW && $0.height == targetH
+                        }
+                        if let mode = matchingMode {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                                self?.setModeOnVirtualAnchor(mode, anchorID: virtualID)
+                            }
+                        }
+                    }
+                }
             }
         } else if attempt < 10 {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
