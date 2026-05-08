@@ -112,9 +112,6 @@ final class VideoManager: ObservableObject {
     private var virtualAnchorStore: [String: AnyObject] = [:]
     /// Maps AirPlay device name → the CGDirectDisplayID of its active virtual anchor.
     private(set) var virtualAnchorCGIDs: [String: CGDirectDisplayID] = [:]
-    /// Mode requested via selectVirtualMode before the anchor is established.
-    /// Consumed by waitForVirtualDisplay step3 so the asyncAfter race is eliminated.
-    private var pendingVirtualMode: [String: DisplayMode] = [:]
 
     /// Start continuous Bonjour discovery. Call once on launch; runs until the app quits.
     func startDiscovery() {
@@ -429,16 +426,14 @@ final class VideoManager: ObservableObject {
     /// Selects a virtual resolution for a display.
     ///
     /// - If the virtual anchor is already active, sets the mode directly on the anchor.
-    /// - If the virtual anchor is not yet active, stores the mode as a pending request and
-    ///   enables the anchor. `waitForVirtualDisplay` step3 will pick it up and apply it
-    ///   after the mirror is established — no asyncAfter race condition.
+    /// - If the virtual anchor is not yet active, enables it; the user can re-select a
+    ///   resolution from the menu once the anchor appears.
     func selectVirtualMode(_ mode: DisplayMode, for display: DisplayInfo) {
         if hasVirtualAnchor(for: display.name) {
             guard let anchorID = virtualAnchorCGIDs[display.name] else { return }
             setModeOnVirtualAnchor(mode, anchorID: anchorID)
         } else {
-            vdLog.debug("selectVirtualMode: storing pending mode \(mode.width)×\(mode.height) for '\(display.name)' — anchor not yet active")
-            pendingVirtualMode[display.name] = mode
+            vdLog.debug("selectVirtualMode: anchor not yet active for '\(display.name)' — enabling anchor, mode change deferred to user")
             enableVirtualAnchor(for: display)
         }
     }
@@ -665,35 +660,10 @@ final class VideoManager: ObservableObject {
             let mirrorErr = CGCompleteDisplayConfiguration(cfg, .forAppOnly)
             vdLog.debug("step2: CompleteDisplayConfiguration err=\(mirrorErr.rawValue)")
 
-            // Step 3: let the system settle, then refresh UI and apply the requested mode.
-            // Priority: pendingVirtualMode (user clicked a specific res) > default pref.
+            // Step 3: let the system settle, then refresh the UI.
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-                guard let self else { return }
-                vdLog.debug("step3: mergeDevices + optional resolution apply")
-                self.mergeDevices()
-
-                // Determine which mode to apply (pending request takes priority).
-                let modeToApply: DisplayMode? = {
-                    if let pending = self.pendingVirtualMode[name] {
-                        vdLog.debug("step3: using pending mode \(pending.width)×\(pending.height)")
-                        self.pendingVirtualMode.removeValue(forKey: name)
-                        return pending
-                    }
-                    guard let resString = VisibilityPreferences.defaultVirtualResolution(for: context) else { return nil }
-                    let parts = resString.split(separator: "x").compactMap { Int($0) }
-                    guard parts.count == 2 else { return nil }
-                    let targetW = parts[0], targetH = parts[1]
-                    let match = VideoManager.virtualModes(for: context).first { $0.width == targetW && $0.height == targetH }
-                    if let match { vdLog.debug("step3: using default pref \(targetW)×\(targetH)") }
-                    return match
-                }()
-
-                if let mode = modeToApply {
-                    vdLog.debug("step3: scheduling mode \(mode.width)×\(mode.height) on anchorID=\(virtualID) in 1.0 s")
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-                        self?.setModeOnVirtualAnchor(mode, anchorID: virtualID)
-                    }
-                }
+                vdLog.debug("step3: mergeDevices")
+                self?.mergeDevices()
             }
         }
     }
@@ -714,7 +684,6 @@ final class VideoManager: ObservableObject {
         }
         virtualAnchorStore.removeValue(forKey: display.name)
         virtualAnchorCGIDs.removeValue(forKey: display.name)
-        pendingVirtualMode.removeValue(forKey: display.name)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             self?.mergeDevices()
         }
