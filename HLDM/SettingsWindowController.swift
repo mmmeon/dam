@@ -242,6 +242,14 @@ final class SettingsWindowController: NSWindowController {
             )
         }
 
+        // Compact label aspect ratio popup.
+        stack.addArrangedSubview(
+            settingGroup(
+                control: buildAspectRatioRow(),
+                description: "Resolutions matching this ratio use compact \"1080p\" labels in the Touch Bar."
+            )
+        )
+
         // Default resolution popup.
         let resolutionRow = buildDefaultResolutionRow()
         stack.addArrangedSubview(resolutionRow)
@@ -348,6 +356,37 @@ final class SettingsWindowController: NSWindowController {
     }
 
     // MARK: - Virtual Display helpers
+
+    /// Label + popup for choosing the aspect ratio used for compact Touch Bar labels.
+    private func buildAspectRatioRow() -> NSView {
+        let label = NSTextField(labelWithString: "Compact label ratio:")
+        label.font = .systemFont(ofSize: NSFont.systemFontSize)
+
+        let popup = AspectRatioPopup(onSelect: { [weak self] key in
+            let parts = key.split(separator: ":").compactMap { Int($0) }
+            if parts.count == 2 {
+                VisibilityPreferences.defaultAspectRatio = (parts[0], parts[1])
+                self?.onRebuild?()
+            }
+        })
+        popup.font = .systemFont(ofSize: NSFont.systemFontSize)
+
+        let options = ["16:9", "16:10", "4:3", "21:9"]
+        for key in options {
+            let item = NSMenuItem(title: key, action: nil, keyEquivalent: "")
+            item.representedObject = key
+            popup.menu?.addItem(item)
+        }
+
+        let ar = VisibilityPreferences.defaultAspectRatio
+        let stored = "\(ar.w):\(ar.h)"
+        popup.selectItem(at: options.firstIndex(of: stored) ?? 0)
+
+        let row = NSStackView(views: [label, popup])
+        row.orientation = .horizontal
+        row.spacing = 10
+        return row
+    }
 
     /// Label + popup for choosing the default virtual resolution.
     private func buildDefaultResolutionRow() -> NSView {
@@ -481,6 +520,26 @@ extension SettingsWindowController: NSToolbarDelegate {
 /// document from the top-left rather than the bottom-left.
 private final class FlippedClipView: NSClipView {
     override var isFlipped: Bool { true }
+}
+
+// MARK: - AspectRatioPopup
+
+/// NSPopUpButton that fires a closure with the selected "W:H" string.
+private final class AspectRatioPopup: NSPopUpButton {
+    private let handler: (String) -> Void
+
+    init(onSelect: @escaping (String) -> Void) {
+        handler = onSelect
+        super.init(frame: .zero, pullsDown: false)
+        target = self
+        action = #selector(selectionChanged)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    @objc private func selectionChanged() {
+        if let key = selectedItem?.representedObject as? String { handler(key) }
+    }
 }
 
 // MARK: - DefaultResolutionPopup

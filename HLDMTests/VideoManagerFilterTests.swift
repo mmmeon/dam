@@ -4,12 +4,13 @@ import CoreGraphics
 
 final class VideoManagerFilterTests: XCTestCase {
 
-    private let airPlayKey  = "hldm.hidden.airplay"
-    private let displayKey  = "hldm.hidden.displays"
+    private let airPlayKey      = "hldm.hidden.airplay"
+    private let displayKey      = "hldm.hidden.displays"
+    private let aspectRatioKey  = "hldm.display.aspectRatio"
 
     override func tearDown() {
         super.tearDown()
-        [airPlayKey, displayKey].forEach { UserDefaults.standard.removeObject(forKey: $0) }
+        [airPlayKey, displayKey, aspectRatioKey].forEach { UserDefaults.standard.removeObject(forKey: $0) }
     }
 
     // MARK: - Helpers
@@ -156,14 +157,22 @@ final class VideoManagerFilterTests: XCTestCase {
         XCTAssertFalse(m.shortLabel.contains(" "), "shortLabel should have no spaces: \(m.shortLabel)")
     }
 
-    func testDisplayMode_shortLabel_usesLowercaseX() {
+    func testDisplayMode_shortLabel_16x9_usesPFormat() {
+        // 1920×1080 is 16:9, so the compact "1080p" label is used (shorter than "1920×1080").
         let m = mode(1920, 1080)
-        XCTAssertEqual(m.shortLabel, "1920×1080")
+        XCTAssertEqual(m.shortLabel, "1080p")
     }
 
-    func testDisplayMode_shortLabel_4K() {
+    func testDisplayMode_shortLabel_4K_usesPFormat() {
+        // 3840×2160 is 16:9, so "2160p" is shorter than "3840×2160".
         let m = mode(3840, 2160)
-        XCTAssertEqual(m.shortLabel, "3840×2160")
+        XCTAssertEqual(m.shortLabel, "2160p")
+    }
+
+    func testDisplayMode_shortLabel_nonStandardRatio_usesWxH() {
+        // 1600×900 is 16:9, but 800×600 is 4:3 — with default 16:9 ratio that's non-matching.
+        let m = mode(800, 600)
+        XCTAssertEqual(m.shortLabel, "800×600")
     }
 
     // MARK: - DisplayMode.id
