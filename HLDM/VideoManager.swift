@@ -45,19 +45,19 @@ struct DisplayMode: Identifiable, Hashable {
         return isHiDPI ? base + "  HiDPI" : base
     }
 
-    /// Compact label for Touch Bar: "3840×2160" / "1920×1080↑" / "4K✦" (virtual)
+    /// Compact label for Touch Bar.
+    /// Uses "HEIGHTp" when the resolution matches the configured default aspect ratio and
+    /// that representation is shorter; otherwise "WIDTHxHEIGHT". Appends "✦" for virtual
+    /// modes and "↑" for HiDPI.
     var shortLabel: String {
-        if isVirtual {
-            // Use friendly names for the four standard virtual resolutions.
-            switch (width, height) {
-            case (3840, 2160): return "4K✦"
-            case (2560, 1440): return "1440p✦"
-            case (1920, 1080): return "1080p✦"
-            case (1280,  720): return "720p✦"
-            default:           return "\(width)×\(height)✦"
-            }
+        let suffix = isVirtual ? "✦" : (isHiDPI ? "↑" : "")
+        let ar = VisibilityPreferences.defaultAspectRatio
+        if width * ar.h == height * ar.w {
+            let pLabel = "\(height)p\(suffix)"
+            let wLabel = "\(width)×\(height)\(suffix)"
+            return pLabel.count <= wLabel.count ? pLabel : wLabel
         }
-        return isHiDPI ? "\(width)×\(height)↑" : "\(width)×\(height)"
+        return "\(width)×\(height)\(suffix)"
     }
 }
 
