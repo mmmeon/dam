@@ -13,6 +13,7 @@
 		8BFD3C0B2F8D60780090E796 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BFD3C0A2F8D60780090E796 /* AppDelegate.swift */; };
 		8BFD3C0D2F8D60780090E796 /* AudioManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BFD3C0C2F8D60780090E796 /* AudioManager.swift */; };
 		8BFD3C0F2F8D60780090E796 /* VideoManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BFD3C0E2F8D60780090E796 /* VideoManager.swift */; };
+		AA1001002F9D00000090E796 /* VideoManager+VirtualAnchor.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1000FF2F9D00000090E796 /* VideoManager+VirtualAnchor.swift */; };
 		8BFD3C112F8D60780090E796 /* MenuBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BFD3C102F8D60780090E796 /* MenuBuilder.swift */; };
 		AA0001002F8D60780090E796 /* ControlStripPresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000FF2F8D60780090E796 /* ControlStripPresenter.swift */; };
 		AA0003002F8D60780090E796 /* GlobalHotkey.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0002FF2F8D60780090E796 /* GlobalHotkey.swift */; };
@@ -48,6 +49,7 @@
 		8BFD3C0A2F8D60780090E796 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		8BFD3C0C2F8D60780090E796 /* AudioManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioManager.swift; sourceTree = "<group>"; };
 		8BFD3C0E2F8D60780090E796 /* VideoManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoManager.swift; sourceTree = "<group>"; };
+		AA1000FF2F9D00000090E796 /* VideoManager+VirtualAnchor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "VideoManager+VirtualAnchor.swift"; sourceTree = "<group>"; };
 		8BFD3C102F8D60780090E796 /* MenuBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBuilder.swift; sourceTree = "<group>"; };
 		AA0000FF2F8D60780090E796 /* ControlStripPresenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlStripPresenter.swift; sourceTree = "<group>"; };
 		AA0002FF2F8D60780090E796 /* GlobalHotkey.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlobalHotkey.swift; sourceTree = "<group>"; };
@@ -106,6 +108,7 @@
 				8BFD3C0A2F8D60780090E796 /* AppDelegate.swift */,
 				8BFD3C0C2F8D60780090E796 /* AudioManager.swift */,
 				8BFD3C0E2F8D60780090E796 /* VideoManager.swift */,
+				AA1000FF2F9D00000090E796 /* VideoManager+VirtualAnchor.swift */,
 				8BFD3C102F8D60780090E796 /* MenuBuilder.swift */,
 				AA0000FF2F8D60780090E796 /* ControlStripPresenter.swift */,
 				AA0002FF2F8D60780090E796 /* GlobalHotkey.swift */,
@@ -245,6 +248,7 @@
 				8BFD3C0B2F8D60780090E796 /* AppDelegate.swift in Sources */,
 				8BFD3C0D2F8D60780090E796 /* AudioManager.swift in Sources */,
 				8BFD3C0F2F8D60780090E796 /* VideoManager.swift in Sources */,
+				AA1001002F9D00000090E796 /* VideoManager+VirtualAnchor.swift in Sources */,
 				8BFD3C112F8D60780090E796 /* MenuBuilder.swift in Sources */,
 				AA0001002F8D60780090E796 /* ControlStripPresenter.swift in Sources */,
 				AA0003002F8D60780090E796 /* GlobalHotkey.swift in Sources */,
