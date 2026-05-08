@@ -373,7 +373,7 @@ final class VideoManager: ObservableObject {
 
         let descriptor = CGVirtualDisplayDescriptor()
         descriptor.queue = DispatchQueue(label: "mmmeon.hldm.virtual.\(display.name)")
-        descriptor.name = "HLDM Virtual Anchor"
+        descriptor.name = "HLDM"
         descriptor.sizeInMillimeters = CGSize(width: 600, height: 340)
         descriptor.maxPixelsWide = 3840
         descriptor.maxPixelsHigh = 2160
