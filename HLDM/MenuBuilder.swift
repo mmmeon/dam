@@ -132,6 +132,7 @@ private func buildResolutionSubmenu(display: DisplayInfo, video: VideoManager) -
 
     if isAirPlay {
         // — Native group —
+        submenu.addItem(sectionHeader("Native"))
         let nativeCGID  = display.cgDisplayID
         let nativeModes = video.availableModesDeduped(for: nativeCGID)
         let hasAnchor   = video.hasVirtualAnchor(for: display.name)
