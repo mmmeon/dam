@@ -168,21 +168,37 @@ extension AppDelegate: NSMenuDelegate {
         }
     }
 
-    @objc func toggleVirtualAnchor(_ sender: NSMenuItem) {
-        guard let display = sender.representedObject as? DisplayInfo else { return }
-        if videoManager.hasVirtualAnchor(for: display.name) {
-            videoManager.disableVirtualAnchor(for: display)
+    @objc func selectResolution(_ sender: NSMenuItem) {
+        guard let sel = sender.representedObject as? ResolutionSelection else { return }
+        // When a native resolution is chosen and a virtual anchor is active for the
+        // display that owns this cgDisplayID, disable the anchor first so the AirPlay
+        // display is freed from mirror mode before we set the native mode.
+        let matchingAirPlay = videoManager.airPlayDevices.first {
+            $0.cgDisplayID == sel.cgDisplayID
+        }
+        if let ap = matchingAirPlay, videoManager.hasVirtualAnchor(for: ap.name) {
+            videoManager.disableVirtualAnchor(for: ap)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                self?.videoManager.setMode(sel.mode, for: sel.cgDisplayID)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    self?.rebuild()
+                }
+            }
         } else {
-            videoManager.enableVirtualAnchor(for: display)
+            videoManager.setMode(sel.mode, for: sel.cgDisplayID)
+            // Allow the display reconfiguration to settle before querying the new
+            // current mode — CGDisplayCopyDisplayMode can lag the config commit.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                self?.rebuild()
+            }
         }
     }
 
-    @objc func selectResolution(_ sender: NSMenuItem) {
-        guard let sel = sender.representedObject as? ResolutionSelection else { return }
-        videoManager.setMode(sel.mode, for: sel.cgDisplayID)
-        // Allow the display reconfiguration to settle before querying the new
-        // current mode — CGDisplayCopyDisplayMode can lag the config commit.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+    @objc func selectVirtualResolution(_ sender: NSMenuItem) {
+        guard let sel = sender.representedObject as? VirtualResolutionSelection else { return }
+        videoManager.selectVirtualMode(sel.mode, for: sel.display)
+        // Rebuild after the anchor has time to activate and the mode to settle.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) { [weak self] in
             self?.rebuild()
         }
     }

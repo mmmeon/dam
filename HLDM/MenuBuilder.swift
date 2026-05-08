@@ -44,12 +44,14 @@ func buildStatusMenu(audio: AudioManager,
             item.representedObject = display
             item.state = display.isConnected ? .on : .off
             let mirrorActive = display.isMirroring || video.isBeingMirrored(display)
-            if mirrorActive { item.image = menuIcon("square.on.square") }
+            if mirrorActive {
+                let icon = video.hasVirtualAnchor(for: display.name) ? "sparkles" : "square.on.square"
+                item.image = menuIcon(icon)
+            }
 
             if display.isConnected && display.cgDisplayID != 0 {
                 let submenu = buildResolutionSubmenu(display: display, video: video)
                 submenu.addItem(.separator())
-                submenu.addItem(virtualAnchorItem(for: display, video: video))
                 if canMirrorDisplays {
                     submenu.addItem(mirrorToggleItem(for: display, isMirroring: mirrorActive))
                     // When AirPlay is the slave (built-in is master), offer a dedicated
@@ -78,8 +80,9 @@ func buildStatusMenu(audio: AudioManager,
             item.state = display.isConnected ? .on : .off
 
             // Mirror icon whether this display is the slave OR the master in a set.
+            // Physical displays never have a virtual anchor, so always use square.on.square.
             let mirrorActive = display.isMirroring || video.isBeingMirrored(display)
-            if mirrorActive { item.image = menuIcon("square.on.square") }
+            if mirrorActive { item.image = menuIcon("square.on.square") }  // physical display
 
             if display.cgDisplayID != 0 {
                 let submenu = buildResolutionSubmenu(display: display, video: video)
@@ -125,22 +128,74 @@ private func sectionHeader(_ title: String) -> NSMenuItem {
 
 private func buildResolutionSubmenu(display: DisplayInfo, video: VideoManager) -> NSMenu {
     let submenu = NSMenu()
-    let cgID    = video.resolutionControlID(for: display)
-    let current = video.currentMode(for: cgID)
-    let modes   = video.availableModesDeduped(for: cgID)
+    let isAirPlay = video.allAirPlayDevices.contains(where: { $0.id == display.id })
 
-    if modes.isEmpty {
-        submenu.addItem(disabledItem("No modes available"))
-    } else {
-        for mode in modes {
+    if isAirPlay {
+        // — Native group —
+        let nativeCGID  = display.cgDisplayID
+        let nativeModes = video.availableModesDeduped(for: nativeCGID)
+        let hasAnchor   = video.hasVirtualAnchor(for: display.name)
+        let anchorCGID  = video.virtualAnchorCGIDs[display.name] ?? 0
+
+        // Checkmark: native mode active only when NO virtual anchor is running.
+        let nativeCurrent: DisplayMode? = hasAnchor ? nil : video.currentMode(for: nativeCGID)
+
+        if nativeModes.isEmpty {
+            submenu.addItem(disabledItem("No modes available"))
+        } else {
+            for mode in nativeModes {
+                let item = NSMenuItem(
+                    title: mode.label,
+                    action: #selector(AppDelegate.selectResolution(_:)),
+                    keyEquivalent: ""
+                )
+                item.representedObject = ResolutionSelection(mode: mode, cgDisplayID: nativeCGID)
+                item.state = (mode.ioModeID == nativeCurrent?.ioModeID) ? .on : .off
+                submenu.addItem(item)
+            }
+        }
+
+        // — Virtual group header —
+        submenu.addItem(sectionHeader("Virtual"))
+
+        // — Virtual mode items —
+        let virtualModes = VideoManager.virtualModes()
+        // Checkmark on the virtual mode matching the anchor's current mode (if anchor active).
+        let anchorCurrent: DisplayMode? = hasAnchor ? video.currentMode(for: anchorCGID) : nil
+
+        for mode in virtualModes {
             let item = NSMenuItem(
                 title: mode.label,
-                action: #selector(AppDelegate.selectResolution(_:)),
+                action: #selector(AppDelegate.selectVirtualResolution(_:)),
                 keyEquivalent: ""
             )
-            item.representedObject = ResolutionSelection(mode: mode, cgDisplayID: cgID)
-            item.state = (mode.ioModeID == current?.ioModeID) ? .on : .off
+            item.representedObject = VirtualResolutionSelection(mode: mode, display: display)
+            // Match by pixel dimensions since ioModeID is 0 for our synthetic virtual modes.
+            let isSelected = anchorCurrent.map {
+                $0.pixelWidth == mode.width && $0.pixelHeight == mode.height
+            } ?? false
+            item.state = isSelected ? .on : .off
             submenu.addItem(item)
+        }
+    } else {
+        // Physical display — simple single-group resolution list.
+        let cgID    = video.resolutionControlID(for: display)
+        let current = video.currentMode(for: cgID)
+        let modes   = video.availableModesDeduped(for: cgID)
+
+        if modes.isEmpty {
+            submenu.addItem(disabledItem("No modes available"))
+        } else {
+            for mode in modes {
+                let item = NSMenuItem(
+                    title: mode.label,
+                    action: #selector(AppDelegate.selectResolution(_:)),
+                    keyEquivalent: ""
+                )
+                item.representedObject = ResolutionSelection(mode: mode, cgDisplayID: cgID)
+                item.state = (mode.ioModeID == current?.ioModeID) ? .on : .off
+                submenu.addItem(item)
+            }
         }
     }
     return submenu
@@ -151,17 +206,6 @@ private func canMirror(video: VideoManager) -> Bool {
     let active = (video.allAirPlayDevices + video.allConnectedDisplays)
         .filter { $0.cgDisplayID != 0 }
     return active.count >= 2
-}
-
-private func virtualAnchorItem(for display: DisplayInfo, video: VideoManager) -> NSMenuItem {
-    let item = NSMenuItem(
-        title: "Virtual Anchor",
-        action: #selector(AppDelegate.toggleVirtualAnchor(_:)),
-        keyEquivalent: ""
-    )
-    item.representedObject = display
-    item.state = video.hasVirtualAnchor(for: display.name) ? .on : .off
-    return item
 }
 
 private func disconnectItem(for display: DisplayInfo) -> NSMenuItem {

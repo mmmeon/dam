@@ -19,6 +19,22 @@ struct DisplayMode: Identifiable, Hashable {
     let pixelHeight: Int        // actual rendered pixel height
     let refreshRate: Double
     let isHiDPI: Bool
+    /// True for the four fixed virtual-anchor modes (720p / 1080p / 1440p / 4K).
+    let isVirtual: Bool
+
+    init(id: String, ioModeID: Int32, width: Int, height: Int,
+         pixelWidth: Int, pixelHeight: Int, refreshRate: Double,
+         isHiDPI: Bool, isVirtual: Bool = false) {
+        self.id = id
+        self.ioModeID = ioModeID
+        self.width = width
+        self.height = height
+        self.pixelWidth = pixelWidth
+        self.pixelHeight = pixelHeight
+        self.refreshRate = refreshRate
+        self.isHiDPI = isHiDPI
+        self.isVirtual = isVirtual
+    }
 
     /// Full label for menus: "3840 × 2160 — 60 Hz" / "1920 × 1080 — 60 Hz  HiDPI"
     var label: String {
@@ -29,8 +45,20 @@ struct DisplayMode: Identifiable, Hashable {
         return isHiDPI ? base + "  HiDPI" : base
     }
 
-    /// Compact label for Touch Bar: "3840×2160" / "1920×1080↑"
-    var shortLabel: String { isHiDPI ? "\(width)×\(height)↑" : "\(width)×\(height)" }
+    /// Compact label for Touch Bar: "3840×2160" / "1920×1080↑" / "4K✦" (virtual)
+    var shortLabel: String {
+        if isVirtual {
+            // Use friendly names for the four standard virtual resolutions.
+            switch (width, height) {
+            case (3840, 2160): return "4K✦"
+            case (2560, 1440): return "1440p✦"
+            case (1920, 1080): return "1080p✦"
+            case (1280,  720): return "720p✦"
+            default:           return "\(width)×\(height)✦"
+            }
+        }
+        return isHiDPI ? "\(width)×\(height)↑" : "\(width)×\(height)"
+    }
 }
 
 struct DisplayInfo: Identifiable, Hashable {
@@ -47,6 +75,13 @@ struct DisplayInfo: Identifiable, Hashable {
 struct ResolutionSelection: Hashable {
     let mode: DisplayMode
     let cgDisplayID: CGDirectDisplayID
+}
+
+/// Carries the chosen virtual resolution and its target AirPlay display so the action
+/// handler can route through `VideoManager.selectVirtualMode`.
+struct VirtualResolutionSelection {
+    let mode: DisplayMode
+    let display: DisplayInfo
 }
 
 final class VideoManager: ObservableObject {
@@ -356,6 +391,55 @@ final class VideoManager: ObservableObject {
 
     func hasVirtualAnchor(for name: String) -> Bool {
         virtualAnchorStore[name] != nil
+    }
+
+    /// The four fixed resolutions supported by the virtual anchor (720p / 1080p / 1440p / 4K).
+    static func virtualModes() -> [DisplayMode] {
+        let specs: [(Int, Int)] = [(3840, 2160), (2560, 1440), (1920, 1080), (1280, 720)]
+        return specs.map { w, h in
+            DisplayMode(id: "\(w)x\(h)@60.0_virtual",
+                        ioModeID: 0,
+                        width: w, height: h,
+                        pixelWidth: w, pixelHeight: h,
+                        refreshRate: 60.0,
+                        isHiDPI: false,
+                        isVirtual: true)
+        }
+    }
+
+    /// Selects a virtual resolution for an AirPlay display.
+    ///
+    /// - If the virtual anchor is already active, sets the mode directly on the anchor's display ID.
+    /// - If the virtual anchor is not yet active, enables it and schedules a delayed mode set
+    ///   (~3.5 s) to let the polling in `enableVirtualAnchor` complete first.
+    func selectVirtualMode(_ mode: DisplayMode, for display: DisplayInfo) {
+        if hasVirtualAnchor(for: display.name) {
+            guard let anchorID = virtualAnchorCGIDs[display.name] else { return }
+            setModeOnVirtualAnchor(mode, anchorID: anchorID)
+        } else {
+            enableVirtualAnchor(for: display)
+            // Schedule after the max poll window (10 attempts × 0.3 s = 3.0 s + buffer).
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) { [weak self] in
+                guard let self, let anchorID = self.virtualAnchorCGIDs[display.name] else { return }
+                self.setModeOnVirtualAnchor(mode, anchorID: anchorID)
+            }
+        }
+    }
+
+    /// Sets a mode on a virtual anchor display by matching pixel dimensions at 60 Hz.
+    private func setModeOnVirtualAnchor(_ mode: DisplayMode, anchorID: CGDirectDisplayID) {
+        guard anchorID != 0 else { return }
+        let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
+        guard let modeList = CGDisplayCopyAllDisplayModes(anchorID, options) as? [CGDisplayMode] else { return }
+        // Virtual anchor modes have ioModeID == 0 in our DisplayMode struct, so match by size.
+        guard let cgMode = modeList.first(where: {
+            $0.pixelWidth == mode.width && $0.pixelHeight == mode.height
+        }) else { return }
+
+        var config: CGDisplayConfigRef?
+        guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else { return }
+        CGConfigureDisplayWithDisplayMode(cfg, anchorID, cgMode, nil)
+        CGCompleteDisplayConfiguration(cfg, .permanently)
     }
 
     /// Returns the CGDirectDisplayID to use for resolution queries and changes.
