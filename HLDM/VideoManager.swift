@@ -500,16 +500,28 @@ final class VideoManager: ObservableObject {
             return l.name < r.name
         }
 
-        // Release virtual anchors whose display (AirPlay or physical) is no longer connected.
-        // Guard: skip anchors that are still being established (waitForVirtualDisplay is
-        // in progress and has not yet written virtualAnchorCGIDs). Cleaning them up during
-        // the 3-second poll window would deallocate CGVirtualDisplay prematurely.
+        // Release virtual anchors whose display is no longer connected.
+        //
+        // Two guards protect live anchors from being prematurely torn down:
+        //
+        // 1. Poll-in-progress guard: if waitForVirtualDisplay hasn't yet written
+        //    virtualAnchorCGIDs[name], the anchor is still being established — skip it.
+        //
+        // 2. Mirror-slave guard: a physical display that is the mirror slave of a virtual
+        //    anchor is HIDDEN from NSScreen.screens (macOS omits slaves), so its
+        //    isConnected is false even though the mirror is running correctly.
+        //    AirPlay displays avoid this because their isConnected is based on
+        //    CGGetOnlineDisplayList rather than NSScreen — but physical displays use
+        //    NSScreen. Check whether any online display is actively mirroring the
+        //    anchor before tearing it down.
         let connectedDisplayNames = Set(
             newAirPlay.filter { $0.isConnected }.map { $0.name } +
             newPhysical.filter { $0.isConnected }.map { $0.name }
         )
         for name in Array(virtualAnchorStore.keys) where !connectedDisplayNames.contains(name) {
-            guard virtualAnchorCGIDs[name] != nil else { continue }
+            guard let anchorID = virtualAnchorCGIDs[name] else { continue }   // guard 1: still polling
+            // Guard 2: keep the anchor alive while a physical slave is mirroring it.
+            if onlineIDs.contains(where: { CGDisplayMirrorsDisplay($0) == anchorID }) { continue }
             virtualAnchorStore.removeValue(forKey: name)
             virtualAnchorCGIDs.removeValue(forKey: name)
         }
