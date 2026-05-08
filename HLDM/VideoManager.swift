@@ -445,17 +445,51 @@ final class VideoManager: ObservableObject {
     /// Sets a mode on a virtual anchor display by matching pixel dimensions at 60 Hz.
     private func setModeOnVirtualAnchor(_ mode: DisplayMode, anchorID: CGDirectDisplayID) {
         guard anchorID != 0 else { return }
+
+        // When a virtual anchor is the mirror master, CGConfigureDisplayWithDisplayMode on the
+        // master's synthetic UUID fails with "invalid display identifier". Instead, target the
+        // physical slave: macOS propagates the mode request up to the master in a mirror set.
+        // We try the slave first; fall back to the master if no slave is found.
+        let slaveID: CGDirectDisplayID = {
+            var count: CGDisplayCount = 0
+            CGGetOnlineDisplayList(0, nil, &count)
+            var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+            CGGetOnlineDisplayList(count, &ids, &count)
+            // The slave is whichever online display has anchorID as its mirror master.
+            if let s = ids.first(where: { CGDisplayMirrorsDisplay($0) == anchorID }) {
+                vdLog.debug("setModeOnVirtualAnchor: found slave \(s) for master \(anchorID)")
+                return s
+            }
+            vdLog.debug("setModeOnVirtualAnchor: no slave found, targeting master \(anchorID) directly")
+            return anchorID
+        }()
+
         let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
-        guard let modeList = CGDisplayCopyAllDisplayModes(anchorID, options) as? [CGDisplayMode] else { return }
-        // Virtual anchor modes have ioModeID == 0 in our DisplayMode struct, so match by size.
+        guard let modeList = CGDisplayCopyAllDisplayModes(slaveID, options) as? [CGDisplayMode] else {
+            vdLog.error("setModeOnVirtualAnchor: CGDisplayCopyAllDisplayModes returned nil for \(slaveID)")
+            return
+        }
+        vdLog.debug("setModeOnVirtualAnchor: \(modeList.count) modes available on \(slaveID), seeking \(mode.width)×\(mode.height)")
+        // Virtual anchor modes have ioModeID == 0 in our DisplayMode struct, so match by pixel size.
         guard let cgMode = modeList.first(where: {
             $0.pixelWidth == mode.width && $0.pixelHeight == mode.height
-        }) else { return }
+        }) else {
+            vdLog.error("setModeOnVirtualAnchor: no mode matching \(mode.width)×\(mode.height) in list")
+            // Log available sizes to aid debugging.
+            for m in modeList { vdLog.debug("  available: \(m.pixelWidth)×\(m.pixelHeight) @\(m.refreshRate)Hz") }
+            return
+        }
+        vdLog.debug("setModeOnVirtualAnchor: matched mode \(cgMode.pixelWidth)×\(cgMode.pixelHeight) @\(cgMode.refreshRate)Hz")
 
         var config: CGDisplayConfigRef?
-        guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else { return }
-        CGConfigureDisplayWithDisplayMode(cfg, anchorID, cgMode, nil)
-        CGCompleteDisplayConfiguration(cfg, .forAppOnly)
+        let beginErr = CGBeginDisplayConfiguration(&config)
+        guard beginErr == .success, let cfg = config else {
+            vdLog.error("setModeOnVirtualAnchor: BeginDisplayConfiguration err=\(beginErr.rawValue)")
+            return
+        }
+        CGConfigureDisplayWithDisplayMode(cfg, slaveID, cgMode, nil)
+        let completeErr = CGCompleteDisplayConfiguration(cfg, .forAppOnly)
+        vdLog.debug("setModeOnVirtualAnchor: CompleteDisplayConfiguration err=\(completeErr.rawValue) on display \(slaveID)")
     }
 
     /// Returns the CGDirectDisplayID to use for resolution queries and changes.
