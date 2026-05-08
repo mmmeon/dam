@@ -80,9 +80,12 @@ func buildStatusMenu(audio: AudioManager,
             item.state = display.isConnected ? .on : .off
 
             // Mirror icon whether this display is the slave OR the master in a set.
-            // Physical displays never have a virtual anchor, so always use square.on.square.
+            // Use sparkles when a virtual anchor is driving the display (same as AirPlay).
             let mirrorActive = display.isMirroring || video.isBeingMirrored(display)
-            if mirrorActive { item.image = menuIcon("square.on.square") }  // physical display
+            if mirrorActive {
+                let icon = video.hasVirtualAnchor(for: display.name) ? "sparkles" : "square.on.square"
+                item.image = menuIcon(icon)
+            }
 
             if display.cgDisplayID != 0 {
                 let submenu = buildResolutionSubmenu(display: display, video: video)
