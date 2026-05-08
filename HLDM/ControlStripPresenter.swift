@@ -276,7 +276,13 @@ final class ControlStripPresenter: NSObject {
         let symbolName: String?
         if isAirPlay {
             let isAirPlayMirroring = display.isMirroring || (videoManager?.isBeingMirrored(display) ?? false)
-            symbolName = isAirPlayMirroring ? "square.on.square" : "airplayvideo"
+            if isAirPlayMirroring {
+                // Virtual anchor active → show sparkles to indicate it's a virtual-display mirror.
+                let hasAnchor = videoManager?.hasVirtualAnchor(for: display.name) ?? false
+                symbolName = hasAnchor ? "sparkles" : "square.on.square"
+            } else {
+                symbolName = "airplayvideo"
+            }
         } else if display.isBuiltIn {
             symbolName = "laptopcomputer"
         } else if display.isMirroring {
@@ -339,27 +345,50 @@ final class ControlStripPresenter: NSObject {
     private func makeResolutionSegItem(id: NSTouchBarItem.Identifier,
                                        display: DisplayInfo) -> NSTouchBarItem {
         let item = NSCustomTouchBarItem(identifier: id)
+        let vm = videoManager
 
-        // Filter to modes matching the native aspect ratio, then cap at 5.
-        let resID    = videoManager?.resolutionControlID(for: display) ?? display.cgDisplayID
-        let allModes = videoManager?.availableModesDeduped(for: resID) ?? []
-        let modes: [DisplayMode]
-        if let native = allModes.first {
-            func gcd(_ a: Int, _ b: Int) -> Int { b == 0 ? a : gcd(b, a % b) }
-            let g = gcd(native.width, native.height)
-            let arW = native.width / g, arH = native.height / g
-            let sameAR = allModes.filter {
+        let isAirPlay = vm?.allAirPlayDevices.contains(where: { $0.id == display.id }) ?? false
+
+        // Always use the native cgDisplayID for the base native-modes list (Task 4 requirement).
+        let nativeCGID  = display.cgDisplayID
+        let allNative   = vm?.availableModesDeduped(for: nativeCGID) ?? []
+
+        // Filter native to modes matching the native aspect ratio.
+        func gcd(_ a: Int, _ b: Int) -> Int { b == 0 ? a : gcd(b, a % b) }
+        let filteredNative: [DisplayMode]
+        if let first = allNative.first {
+            let g = gcd(first.width, first.height)
+            let arW = first.width / g, arH = first.height / g
+            filteredNative = allNative.filter {
                 let g2 = gcd($0.width, $0.height)
                 return $0.width / g2 == arW && $0.height / g2 == arH
             }
-            modes = Array(sameAR.prefix(5))
         } else {
-            modes = []
+            filteredNative = []
         }
-        let current  = videoManager?.currentMode(for: resID)
 
-        NSLog("HLDM: makeResolutionSegItem display='%@' resID=%u modes=%d (capped from %d)",
-              display.name, resID, modes.count, allModes.count)
+        // Build virtual modes for AirPlay displays.
+        let virtualModes: [DisplayMode] = isAirPlay ? VideoManager.virtualModes() : []
+
+        // Cap total at 5 segments: take as many native as fit, then fill with virtual.
+        let maxTotal = 5
+        let nativeToUse  = Array(filteredNative.prefix(maxTotal))
+        let remaining    = maxTotal - nativeToUse.count
+        let virtualToUse = Array(virtualModes.prefix(remaining))
+        let modes        = nativeToUse + virtualToUse
+
+        // Determine current segment based on anchor state.
+        let hasAnchor  = isAirPlay && (vm?.hasVirtualAnchor(for: display.name) ?? false)
+        let anchorCGID = vm?.virtualAnchorCGIDs[display.name] ?? 0
+        let current: DisplayMode?
+        if hasAnchor && anchorCGID != 0 {
+            current = vm?.currentMode(for: anchorCGID)
+        } else {
+            current = vm?.currentMode(for: nativeCGID)
+        }
+
+        NSLog("HLDM: makeResolutionSegItem display='%@' nativeModes=%d virtual=%d total=%d",
+              display.name, nativeToUse.count, virtualToUse.count, modes.count)
 
         if modes.isEmpty {
             let tf = NSTextField(labelWithString: display.cgDisplayID == 0 ? "No display ID" : "No modes")
@@ -367,8 +396,7 @@ final class ControlStripPresenter: NSObject {
             tf.font = .systemFont(ofSize: 12)
             item.view = tf
         } else {
-            // Use compact "1440p" / "1080p" labels so all segments fit.
-            let labels = modes.map { "\($0.height)p" }
+            let labels = modes.map { $0.shortLabel }
             let seg = NSSegmentedControl(
                 labels: labels,
                 trackingMode: .selectOne,
@@ -376,9 +404,16 @@ final class ControlStripPresenter: NSObject {
                 action: #selector(resolutionSegmentTapped(_:))
             )
             seg.segmentStyle = .rounded
-            if let cur = current,
-               let idx = modes.firstIndex(where: { $0.ioModeID == cur.ioModeID }) {
-                seg.setSelected(true, forSegment: idx)
+            if let cur = current {
+                // For virtual modes match by pixel dimensions; for native match by ioModeID.
+                let idx = modes.firstIndex {
+                    if $0.isVirtual {
+                        return $0.width == cur.pixelWidth && $0.height == cur.pixelHeight
+                    } else {
+                        return $0.ioModeID == cur.ioModeID
+                    }
+                }
+                if let idx { seg.setSelected(true, forSegment: idx) }
             }
             resolutionSegMap[ObjectIdentifier(seg)] = (display: display, modes: modes)
             item.view = seg
@@ -503,7 +538,22 @@ final class ControlStripPresenter: NSObject {
         let idx = seg.selectedSegment
         guard idx >= 0, idx < ctx.modes.count else { return }
         guard let vm = videoManager else { return }
-        vm.setMode(ctx.modes[idx], for: vm.resolutionControlID(for: ctx.display))
+        let mode    = ctx.modes[idx]
+        let display = ctx.display
+        if mode.isVirtual {
+            // Virtual mode: enable anchor if needed, then set mode.
+            vm.selectVirtualMode(mode, for: display)
+        } else {
+            // Native mode: if anchor is active, disable it first, then set the native mode.
+            if vm.hasVirtualAnchor(for: display.name) {
+                vm.disableVirtualAnchor(for: display)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                    vm.setMode(mode, for: display.cgDisplayID)
+                }
+            } else {
+                vm.setMode(mode, for: display.cgDisplayID)
+            }
+        }
     }
 }
 
