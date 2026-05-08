@@ -220,29 +220,8 @@ final class SettingsWindowController: NSWindowController {
 
         stack.addArrangedSubview(separator())
 
-        // — Virtual Display —
-        stack.addArrangedSubview(sectionHeader("Virtual Display"))
-
-        // Refresh rate checkboxes (30 / 60 / 120 / 240 Hz).
-        let availableRates = [30, 60, 120, 240]
-        for rate in availableRates {
-            stack.addArrangedSubview(
-                checkbox(
-                    title: "\(rate) Hz",
-                    isOn: VisibilityPreferences.virtualRefreshRates.contains(rate),
-                    action: { [weak self] isOn in
-                        var rates = VisibilityPreferences.virtualRefreshRates
-                        if isOn { rates.insert(rate) } else { rates.remove(rate) }
-                        // Always keep at least one rate selected.
-                        if rates.isEmpty { rates = [60] }
-                        VisibilityPreferences.virtualRefreshRates = rates
-                        self?.onRebuild?()
-                    }
-                )
-            )
-        }
-
-        // Compact label aspect ratio popup.
+        // — Touch Bar Labels —
+        stack.addArrangedSubview(sectionHeader("Touch Bar Labels"))
         stack.addArrangedSubview(
             settingGroup(
                 control: buildAspectRatioRow(),
@@ -250,9 +229,17 @@ final class SettingsWindowController: NSWindowController {
             )
         )
 
-        // Default resolution popup.
-        let resolutionRow = buildDefaultResolutionRow()
-        stack.addArrangedSubview(resolutionRow)
+        stack.addArrangedSubview(separator())
+
+        // — Virtual Display (AirPlay) —
+        stack.addArrangedSubview(sectionHeader("Virtual Display — AirPlay"))
+        buildVirtualDisplayControls(for: .airPlay, into: stack)
+
+        stack.addArrangedSubview(separator())
+
+        // — Virtual Display (External) —
+        stack.addArrangedSubview(sectionHeader("Virtual Display — External"))
+        buildVirtualDisplayControls(for: .external, into: stack)
 
         stack.addArrangedSubview(separator())
 
@@ -357,6 +344,28 @@ final class SettingsWindowController: NSWindowController {
 
     // MARK: - Virtual Display helpers
 
+    /// Adds refresh-rate checkboxes and the default-resolution popup for one virtual-display context.
+    private func buildVirtualDisplayControls(for context: VisibilityPreferences.DisplayContext,
+                                             into stack: NSStackView) {
+        let availableRates = [30, 60, 120, 240]
+        for rate in availableRates {
+            stack.addArrangedSubview(
+                checkbox(
+                    title: "\(rate) Hz",
+                    isOn: VisibilityPreferences.virtualRefreshRates(for: context).contains(rate),
+                    action: { [weak self] isOn in
+                        var rates = VisibilityPreferences.virtualRefreshRates(for: context)
+                        if isOn { rates.insert(rate) } else { rates.remove(rate) }
+                        if rates.isEmpty { rates = [60] }
+                        VisibilityPreferences.setVirtualRefreshRates(rates, for: context)
+                        self?.onRebuild?()
+                    }
+                )
+            )
+        }
+        stack.addArrangedSubview(buildDefaultResolutionRow(for: context))
+    }
+
     /// Label + popup for choosing the aspect ratio used for compact Touch Bar labels.
     private func buildAspectRatioRow() -> NSView {
         let label = NSTextField(labelWithString: "Compact label ratio:")
@@ -388,13 +397,13 @@ final class SettingsWindowController: NSWindowController {
         return row
     }
 
-    /// Label + popup for choosing the default virtual resolution.
-    private func buildDefaultResolutionRow() -> NSView {
+    /// Label + popup for choosing the default virtual resolution for a given context.
+    private func buildDefaultResolutionRow(for context: VisibilityPreferences.DisplayContext) -> NSView {
         let label = NSTextField(labelWithString: "Default resolution:")
         label.font = .systemFont(ofSize: NSFont.systemFontSize)
 
         let popup = DefaultResolutionPopup(onSelect: { [weak self] key in
-            VisibilityPreferences.defaultVirtualResolution = key
+            VisibilityPreferences.setDefaultVirtualResolution(key, for: context)
             self?.onRebuild?()
         })
         popup.font = .systemFont(ofSize: NSFont.systemFontSize)
@@ -414,7 +423,7 @@ final class SettingsWindowController: NSWindowController {
         }
 
         // Select the item that matches the stored preference.
-        let stored = VisibilityPreferences.defaultVirtualResolution
+        let stored = VisibilityPreferences.defaultVirtualResolution(for: context)
         let matchIndex = options.firstIndex { $0.1 == stored } ?? 0
         popup.selectItem(at: matchIndex)
 
