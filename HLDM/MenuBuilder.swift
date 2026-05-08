@@ -178,8 +178,51 @@ private func buildResolutionSubmenu(display: DisplayInfo, video: VideoManager) -
             item.state = isSelected ? .on : .off
             submenu.addItem(item)
         }
+    } else if !display.isBuiltIn {
+        // External physical display — Native + Virtual groups (mirrors AirPlay layout).
+        let nativeCGID   = display.cgDisplayID
+        let hasAnchor    = video.hasVirtualAnchor(for: display.name)
+        let anchorCGID   = video.virtualAnchorCGIDs[display.name] ?? 0
+
+        // Suppress native checkmark while a virtual anchor is driving the display.
+        let nativeCurrent: DisplayMode? = hasAnchor ? nil : video.currentMode(for: nativeCGID)
+        let nativeModes  = video.availableModesDeduped(for: nativeCGID)
+
+        submenu.addItem(sectionHeader("Native"))
+        if nativeModes.isEmpty {
+            submenu.addItem(disabledItem("No modes available"))
+        } else {
+            for mode in nativeModes {
+                let item = NSMenuItem(
+                    title: mode.label,
+                    action: #selector(AppDelegate.selectResolution(_:)),
+                    keyEquivalent: ""
+                )
+                item.representedObject = ResolutionSelection(mode: mode, cgDisplayID: nativeCGID)
+                item.state = (mode.ioModeID == nativeCurrent?.ioModeID) ? .on : .off
+                submenu.addItem(item)
+            }
+        }
+
+        submenu.addItem(sectionHeader("Virtual"))
+        let virtualModes  = VideoManager.virtualModes()
+        let anchorCurrent: DisplayMode? = hasAnchor ? video.currentMode(for: anchorCGID) : nil
+
+        for mode in virtualModes {
+            let item = NSMenuItem(
+                title: mode.label,
+                action: #selector(AppDelegate.selectVirtualResolution(_:)),
+                keyEquivalent: ""
+            )
+            item.representedObject = VirtualResolutionSelection(mode: mode, display: display)
+            let isSelected = anchorCurrent.map {
+                $0.pixelWidth == mode.width && $0.pixelHeight == mode.height
+            } ?? false
+            item.state = isSelected ? .on : .off
+            submenu.addItem(item)
+        }
     } else {
-        // Physical display — simple single-group resolution list.
+        // Built-in display — native modes only.
         let cgID    = video.resolutionControlID(for: display)
         let current = video.currentMode(for: cgID)
         let modes   = video.availableModesDeduped(for: cgID)

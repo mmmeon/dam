@@ -171,12 +171,12 @@ extension AppDelegate: NSMenuDelegate {
     @objc func selectResolution(_ sender: NSMenuItem) {
         guard let sel = sender.representedObject as? ResolutionSelection else { return }
         // When a native resolution is chosen and a virtual anchor is active for the
-        // display that owns this cgDisplayID, disable the anchor first so the AirPlay
-        // display is freed from mirror mode before we set the native mode.
-        let matchingAirPlay = videoManager.airPlayDevices.first {
+        // display that owns this cgDisplayID, disable the anchor first so the display
+        // is freed from mirror mode before we set the native mode.
+        let matchingDisplay = (videoManager.airPlayDevices + videoManager.connectedDisplays).first {
             $0.cgDisplayID == sel.cgDisplayID
         }
-        if let ap = matchingAirPlay, videoManager.hasVirtualAnchor(for: ap.name) {
+        if let ap = matchingDisplay, videoManager.hasVirtualAnchor(for: ap.name) {
             videoManager.disableVirtualAnchor(for: ap)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
                 self?.videoManager.setMode(sel.mode, for: sel.cgDisplayID)
