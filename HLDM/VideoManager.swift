@@ -9,6 +9,7 @@ import Foundation
 import IOKit
 import IOKit.graphics
 import Network
+import os.log
 
 struct DisplayMode: Identifiable, Hashable {
     let id: String              // "WIDTHxHEIGHT@RATE" or "WIDTHxHEIGHT@RATE@2x" for HiDPI
@@ -83,6 +84,8 @@ struct VirtualResolutionSelection {
     let mode: DisplayMode
     let display: DisplayInfo
 }
+
+private let vdLog = Logger(subsystem: "mmmeon.hldm", category: "VirtualDisplay")
 
 final class VideoManager: ObservableObject {
     /// All Bonjour-discovered AirPlay destinations, regardless of visibility preference.
@@ -466,10 +469,14 @@ final class VideoManager: ObservableObject {
     /// Creates a CGVirtualDisplay, stores it as the anchor for `display`, then
     /// configures the display as the mirror slave so it streams the virtual display's output.
     func enableVirtualAnchor(for display: DisplayInfo) {
-        guard display.cgDisplayID != 0, !hasVirtualAnchor(for: display.name) else { return }
+        guard display.cgDisplayID != 0, !hasVirtualAnchor(for: display.name) else {
+            vdLog.debug("enableVirtualAnchor: skipped '\(display.name)' cgID=\(display.cgDisplayID) hasAnchor=\(self.hasVirtualAnchor(for: display.name))")
+            return
+        }
 
         let context: VisibilityPreferences.DisplayContext =
             allAirPlayDevices.contains { $0.id == display.id } ? .airPlay : .external
+        vdLog.debug("enableVirtualAnchor: starting for '\(display.name)' cgID=\(display.cgDisplayID) context=\(context.rawValue)")
 
         let descriptor = CGVirtualDisplayDescriptor()
         descriptor.setDispatchQueue(.main)
@@ -480,10 +487,13 @@ final class VideoManager: ObservableObject {
         descriptor.vendorID  = 0x3456
         descriptor.productID = 0x1234
         descriptor.serialNum = 0x0002
+        vdLog.debug("enableVirtualAnchor: descriptor configured — vendor=0x3456 product=0x1234 serial=0x0002 queue=main")
 
         let airPlayCGID = display.cgDisplayID
         let deviceName  = display.name
-        descriptor.terminationHandler = { [weak self] _, _ in
+        descriptor.terminationHandler = { [weak self] _, vd in
+            let assignedID = vd.displayID
+            vdLog.debug("terminationHandler: virtual display for '\(deviceName)' terminated (displayID=\(assignedID))")
             DispatchQueue.main.async {
                 self?.virtualAnchorStore.removeValue(forKey: deviceName)
                 self?.virtualAnchorCGIDs.removeValue(forKey: deviceName)
@@ -492,6 +502,8 @@ final class VideoManager: ObservableObject {
         }
 
         let vd = CGVirtualDisplay(descriptor: descriptor)
+        vdLog.debug("enableVirtualAnchor: CGVirtualDisplay created — immediate displayID=\(vd.displayID)")
+
         let settings = CGVirtualDisplaySettings()
         settings.hiDPI = 0
         let resolutions: [(UInt, UInt)] = [(3840, 2160), (2560, 1440), (1920, 1080), (1280, 720)]
@@ -502,11 +514,18 @@ final class VideoManager: ObservableObject {
                 CGVirtualDisplayMode(width: w, height: h, refreshRate: Double(rate))
             }
         }
+        vdLog.debug("enableVirtualAnchor: applying \(settings.modes.count) modes (\(effectiveRates.sorted(by: >) as [Int]) Hz)")
 
-        guard vd.apply(settings) else { return }
+        let applied = vd.apply(settings)
+        vdLog.debug("enableVirtualAnchor: applySettings returned \(applied) — displayID after apply=\(vd.displayID)")
+        guard applied else {
+            vdLog.error("enableVirtualAnchor: applySettings FAILED — aborting")
+            return
+        }
 
         // Keep vd alive; poll until the virtual display appears, then wire up mirroring.
         virtualAnchorStore[deviceName] = vd
+        vdLog.debug("enableVirtualAnchor: stored anchor, beginning poll (attempt 0)")
         waitForVirtualDisplay(vd, name: deviceName, airPlayID: airPlayCGID, context: context, attempt: 0)
     }
 
@@ -529,67 +548,103 @@ final class VideoManager: ObservableObject {
 
         let allIDs = Set(onlineIDs + activeIDs)
         let claimedAnchorIDs = Set(virtualAnchorCGIDs.values)
+        let directID = vd.displayID
+
+        vdLog.debug("waitForVirtualDisplay: attempt \(attempt)/10 — vd.displayID=\(directID) online=\(onlineIDs) active=\(activeIDs) claimed=\(Array(claimedAnchorIDs))")
 
         // Primary: trust vd.displayID if the system has assigned it.
         // Fallback: scan for a display with our synthetic vendor/product IDs that
         // isn't already claimed as an anchor — handles macOS versions where
         // displayID isn't assigned synchronously with CGVirtualDisplay init.
-        let directID = vd.displayID
         let virtualID: CGDirectDisplayID? = {
-            if directID != 0, allIDs.contains(directID) { return directID }
-            return allIDs.first {
+            if directID != 0, allIDs.contains(directID) {
+                vdLog.debug("waitForVirtualDisplay: found via directID \(directID)")
+                return directID
+            }
+            if let heuristic = allIDs.first(where: {
                 CGDisplayVendorNumber($0) == 0x3456 &&
                 CGDisplayModelNumber($0) == 0x1234 &&
                 !claimedAnchorIDs.contains($0)
+            }) {
+                vdLog.debug("waitForVirtualDisplay: found via vendor/product heuristic id=\(heuristic)")
+                return heuristic
             }
+            // Log every display's vendor/model to help diagnose a miss.
+            for id in allIDs {
+                vdLog.debug("waitForVirtualDisplay:   display \(id) vendor=\(CGDisplayVendorNumber(id)) model=\(CGDisplayModelNumber(id))")
+            }
+            return nil
         }()
 
         guard let virtualID else {
             if attempt < 10 {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                vdLog.debug("waitForVirtualDisplay: virtual display not found yet, retrying in 1 s")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
                     self?.waitForVirtualDisplay(vd, name: name, airPlayID: airPlayID,
                                                context: context, attempt: attempt + 1)
                 }
             } else {
+                vdLog.error("waitForVirtualDisplay: gave up after \(attempt) attempts — removing anchor for '\(name)'")
                 virtualAnchorStore.removeValue(forKey: name)
             }
             return
         }
 
         virtualAnchorCGIDs[name] = virtualID
+        vdLog.debug("waitForVirtualDisplay: virtual display id=\(virtualID) registered for '\(name)'")
 
         // Step 1: if the target display is already in a mirror set, tear it down
         // first in a separate transaction. Calling CGConfigureDisplayMirrorOfDisplay
         // on a display that is already a slave can silently fail.
-        if CGDisplayMirrorsDisplay(airPlayID) != CGDirectDisplayID(0) {
+        let existingMirror = CGDisplayMirrorsDisplay(airPlayID)
+        vdLog.debug("step1: airPlayID=\(airPlayID) existingMirrorMaster=\(existingMirror)")
+        if existingMirror != CGDirectDisplayID(0) {
             var teardown: CGDisplayConfigRef?
-            if CGBeginDisplayConfiguration(&teardown) == .success, let tc = teardown {
+            let tearErr = CGBeginDisplayConfiguration(&teardown)
+            vdLog.debug("step1: BeginDisplayConfiguration err=\(tearErr.rawValue)")
+            if tearErr == .success, let tc = teardown {
                 CGConfigureDisplayMirrorOfDisplay(tc, airPlayID, CGDirectDisplayID(0))
-                CGCompleteDisplayConfiguration(tc, .forAppOnly)
+                let completeErr = CGCompleteDisplayConfiguration(tc, .forAppOnly)
+                vdLog.debug("step1: teardown complete err=\(completeErr.rawValue) — waiting 1 s before mirror")
             }
         }
 
         // Step 2: mirror the target display onto the virtual anchor.
-        var config: CGDisplayConfigRef?
-        guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else { return }
-        CGConfigureDisplayMirrorOfDisplay(cfg, airPlayID, virtualID)
-        // .forAppOnly (rawValue 0): config reverts automatically when the app exits,
-        // which is correct — the virtual display only lives for this process lifetime.
-        // (.forSession would persist until logout; .permanently writes a stale UUID.)
-        CGCompleteDisplayConfiguration(cfg, .forAppOnly)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            self?.mergeDevices()
-            // Apply the default virtual resolution for this context, if configured.
-            if let resString = VisibilityPreferences.defaultVirtualResolution(for: context) {
-                let parts = resString.split(separator: "x").compactMap { Int($0) }
-                if parts.count == 2 {
-                    let targetW = parts[0], targetH = parts[1]
-                    let matchingMode = VideoManager.virtualModes(for: context).first {
-                        $0.width == targetW && $0.height == targetH
-                    }
-                    if let mode = matchingMode {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                            self?.setModeOnVirtualAnchor(mode, anchorID: virtualID)
+        // Wait 1 s after any teardown (or immediately if no teardown needed) so macOS
+        // can settle before the next configuration transaction.
+        let step2Delay: Double = existingMirror != CGDirectDisplayID(0) ? 1.0 : 0.5
+        DispatchQueue.main.asyncAfter(deadline: .now() + step2Delay) { [weak self] in
+            guard let self else { return }
+            vdLog.debug("step2: configuring mirror airPlayID=\(airPlayID) → virtualID=\(virtualID)")
+            var config: CGDisplayConfigRef?
+            let beginErr = CGBeginDisplayConfiguration(&config)
+            vdLog.debug("step2: BeginDisplayConfiguration err=\(beginErr.rawValue)")
+            guard beginErr == .success, let cfg = config else {
+                vdLog.error("step2: BeginDisplayConfiguration failed — aborting")
+                return
+            }
+            CGConfigureDisplayMirrorOfDisplay(cfg, airPlayID, virtualID)
+            // .forAppOnly (rawValue 0): config reverts automatically when the app exits.
+            let mirrorErr = CGCompleteDisplayConfiguration(cfg, .forAppOnly)
+            vdLog.debug("step2: CompleteDisplayConfiguration err=\(mirrorErr.rawValue)")
+
+            // Step 3: let the system settle, then refresh UI and apply default resolution.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                guard let self else { return }
+                vdLog.debug("step3: mergeDevices + optional resolution apply")
+                self.mergeDevices()
+                if let resString = VisibilityPreferences.defaultVirtualResolution(for: context) {
+                    let parts = resString.split(separator: "x").compactMap { Int($0) }
+                    if parts.count == 2 {
+                        let targetW = parts[0], targetH = parts[1]
+                        let matchingMode = VideoManager.virtualModes(for: context).first {
+                            $0.width == targetW && $0.height == targetH
+                        }
+                        if let mode = matchingMode {
+                            vdLog.debug("step3: applying default resolution \(targetW)×\(targetH) on anchorID=\(virtualID)")
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                                self?.setModeOnVirtualAnchor(mode, anchorID: virtualID)
+                            }
                         }
                     }
                 }
