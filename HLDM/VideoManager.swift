@@ -112,6 +112,9 @@ final class VideoManager: ObservableObject {
     private var virtualAnchorStore: [String: AnyObject] = [:]
     /// Maps AirPlay device name → the CGDirectDisplayID of its active virtual anchor.
     private(set) var virtualAnchorCGIDs: [String: CGDirectDisplayID] = [:]
+    /// Mode requested via selectVirtualMode before the anchor is established.
+    /// Consumed by waitForVirtualDisplay step3 so the asyncAfter race is eliminated.
+    private var pendingVirtualMode: [String: DisplayMode] = [:]
 
     /// Start continuous Bonjour discovery. Call once on launch; runs until the app quits.
     func startDiscovery() {
@@ -423,22 +426,20 @@ final class VideoManager: ObservableObject {
         virtualModes(refreshRates: VisibilityPreferences.virtualRefreshRates(for: context))
     }
 
-    /// Selects a virtual resolution for an AirPlay display.
+    /// Selects a virtual resolution for a display.
     ///
-    /// - If the virtual anchor is already active, sets the mode directly on the anchor's display ID.
-    /// - If the virtual anchor is not yet active, enables it and schedules a delayed mode set
-    ///   (~3.5 s) to let the polling in `enableVirtualAnchor` complete first.
+    /// - If the virtual anchor is already active, sets the mode directly on the anchor.
+    /// - If the virtual anchor is not yet active, stores the mode as a pending request and
+    ///   enables the anchor. `waitForVirtualDisplay` step3 will pick it up and apply it
+    ///   after the mirror is established — no asyncAfter race condition.
     func selectVirtualMode(_ mode: DisplayMode, for display: DisplayInfo) {
         if hasVirtualAnchor(for: display.name) {
             guard let anchorID = virtualAnchorCGIDs[display.name] else { return }
             setModeOnVirtualAnchor(mode, anchorID: anchorID)
         } else {
+            vdLog.debug("selectVirtualMode: storing pending mode \(mode.width)×\(mode.height) for '\(display.name)' — anchor not yet active")
+            pendingVirtualMode[display.name] = mode
             enableVirtualAnchor(for: display)
-            // Schedule after the max poll window (10 attempts × 0.3 s = 3.0 s + buffer).
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) { [weak self] in
-                guard let self, let anchorID = self.virtualAnchorCGIDs[display.name] else { return }
-                self.setModeOnVirtualAnchor(mode, anchorID: anchorID)
-            }
         }
     }
 
@@ -446,40 +447,42 @@ final class VideoManager: ObservableObject {
     private func setModeOnVirtualAnchor(_ mode: DisplayMode, anchorID: CGDirectDisplayID) {
         guard anchorID != 0 else { return }
 
-        // When a virtual anchor is the mirror master, CGConfigureDisplayWithDisplayMode on the
-        // master's synthetic UUID fails with "invalid display identifier". Instead, target the
-        // physical slave: macOS propagates the mode request up to the master in a mirror set.
-        // We try the slave first; fall back to the master if no slave is found.
-        let slaveID: CGDirectDisplayID = {
-            var count: CGDisplayCount = 0
-            CGGetOnlineDisplayList(0, nil, &count)
-            var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
-            CGGetOnlineDisplayList(count, &ids, &count)
-            // The slave is whichever online display has anchorID as its mirror master.
-            if let s = ids.first(where: { CGDisplayMirrorsDisplay($0) == anchorID }) {
-                vdLog.debug("setModeOnVirtualAnchor: found slave \(s) for master \(anchorID)")
-                return s
-            }
-            vdLog.debug("setModeOnVirtualAnchor: no slave found, targeting master \(anchorID) directly")
-            return anchorID
+        // Target the virtual display (master) directly.
+        //
+        // Targeting the slave instead (the physical display) is tempting but wrong:
+        // the slave's mode list contains the physical panel's native modes (e.g. 60 Hz)
+        // which differ from the virtual display's modes (120 Hz). Applying a 60 Hz mode
+        // to the slave while the master runs at 120 Hz causes a mismatch that tears down
+        // the mirror.
+        //
+        // CGDisplayCopyAllDisplayModes on the virtual display emits "invalid display
+        // identifier" noise for the synthesized UUID, but still returns the correct list.
+        // CGConfigureDisplayWithDisplayMode on the master works the same way.
+        let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
+        guard let modeList = CGDisplayCopyAllDisplayModes(anchorID, options) as? [CGDisplayMode] else {
+            vdLog.error("setModeOnVirtualAnchor: CGDisplayCopyAllDisplayModes returned nil for \(anchorID)")
+            return
+        }
+        vdLog.debug("setModeOnVirtualAnchor: \(modeList.count) modes on master \(anchorID), seeking \(mode.width)×\(mode.height) @\(mode.refreshRate)Hz")
+        for m in modeList { vdLog.debug("  candidate: \(m.pixelWidth)×\(m.pixelHeight) @\(m.refreshRate)Hz") }
+
+        // Match by pixel size; also prefer the rate that matches the DisplayMode if possible.
+        let cgMode: CGDisplayMode? = {
+            // First: exact size + rate match.
+            if let exact = modeList.first(where: {
+                $0.pixelWidth == mode.width &&
+                $0.pixelHeight == mode.height &&
+                abs($0.refreshRate - Double(mode.refreshRate)) < 1.0
+            }) { return exact }
+            // Fallback: size-only match (virtual display may report a slightly different rate).
+            return modeList.first(where: { $0.pixelWidth == mode.width && $0.pixelHeight == mode.height })
         }()
 
-        let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
-        guard let modeList = CGDisplayCopyAllDisplayModes(slaveID, options) as? [CGDisplayMode] else {
-            vdLog.error("setModeOnVirtualAnchor: CGDisplayCopyAllDisplayModes returned nil for \(slaveID)")
+        guard let cgMode else {
+            vdLog.error("setModeOnVirtualAnchor: no mode matching \(mode.width)×\(mode.height) on master \(anchorID)")
             return
         }
-        vdLog.debug("setModeOnVirtualAnchor: \(modeList.count) modes available on \(slaveID), seeking \(mode.width)×\(mode.height)")
-        // Virtual anchor modes have ioModeID == 0 in our DisplayMode struct, so match by pixel size.
-        guard let cgMode = modeList.first(where: {
-            $0.pixelWidth == mode.width && $0.pixelHeight == mode.height
-        }) else {
-            vdLog.error("setModeOnVirtualAnchor: no mode matching \(mode.width)×\(mode.height) in list")
-            // Log available sizes to aid debugging.
-            for m in modeList { vdLog.debug("  available: \(m.pixelWidth)×\(m.pixelHeight) @\(m.refreshRate)Hz") }
-            return
-        }
-        vdLog.debug("setModeOnVirtualAnchor: matched mode \(cgMode.pixelWidth)×\(cgMode.pixelHeight) @\(cgMode.refreshRate)Hz")
+        vdLog.debug("setModeOnVirtualAnchor: applying \(cgMode.pixelWidth)×\(cgMode.pixelHeight) @\(cgMode.refreshRate)Hz on master \(anchorID)")
 
         var config: CGDisplayConfigRef?
         let beginErr = CGBeginDisplayConfiguration(&config)
@@ -487,9 +490,9 @@ final class VideoManager: ObservableObject {
             vdLog.error("setModeOnVirtualAnchor: BeginDisplayConfiguration err=\(beginErr.rawValue)")
             return
         }
-        CGConfigureDisplayWithDisplayMode(cfg, slaveID, cgMode, nil)
+        CGConfigureDisplayWithDisplayMode(cfg, anchorID, cgMode, nil)
         let completeErr = CGCompleteDisplayConfiguration(cfg, .forAppOnly)
-        vdLog.debug("setModeOnVirtualAnchor: CompleteDisplayConfiguration err=\(completeErr.rawValue) on display \(slaveID)")
+        vdLog.debug("setModeOnVirtualAnchor: CompleteDisplayConfiguration err=\(completeErr.rawValue)")
     }
 
     /// Returns the CGDirectDisplayID to use for resolution queries and changes.
@@ -662,24 +665,33 @@ final class VideoManager: ObservableObject {
             let mirrorErr = CGCompleteDisplayConfiguration(cfg, .forAppOnly)
             vdLog.debug("step2: CompleteDisplayConfiguration err=\(mirrorErr.rawValue)")
 
-            // Step 3: let the system settle, then refresh UI and apply default resolution.
+            // Step 3: let the system settle, then refresh UI and apply the requested mode.
+            // Priority: pendingVirtualMode (user clicked a specific res) > default pref.
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                 guard let self else { return }
                 vdLog.debug("step3: mergeDevices + optional resolution apply")
                 self.mergeDevices()
-                if let resString = VisibilityPreferences.defaultVirtualResolution(for: context) {
+
+                // Determine which mode to apply (pending request takes priority).
+                let modeToApply: DisplayMode? = {
+                    if let pending = self.pendingVirtualMode[name] {
+                        vdLog.debug("step3: using pending mode \(pending.width)×\(pending.height)")
+                        self.pendingVirtualMode.removeValue(forKey: name)
+                        return pending
+                    }
+                    guard let resString = VisibilityPreferences.defaultVirtualResolution(for: context) else { return nil }
                     let parts = resString.split(separator: "x").compactMap { Int($0) }
-                    if parts.count == 2 {
-                        let targetW = parts[0], targetH = parts[1]
-                        let matchingMode = VideoManager.virtualModes(for: context).first {
-                            $0.width == targetW && $0.height == targetH
-                        }
-                        if let mode = matchingMode {
-                            vdLog.debug("step3: applying default resolution \(targetW)×\(targetH) on anchorID=\(virtualID)")
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-                                self?.setModeOnVirtualAnchor(mode, anchorID: virtualID)
-                            }
-                        }
+                    guard parts.count == 2 else { return nil }
+                    let targetW = parts[0], targetH = parts[1]
+                    let match = VideoManager.virtualModes(for: context).first { $0.width == targetW && $0.height == targetH }
+                    if let match { vdLog.debug("step3: using default pref \(targetW)×\(targetH)") }
+                    return match
+                }()
+
+                if let mode = modeToApply {
+                    vdLog.debug("step3: scheduling mode \(mode.width)×\(mode.height) on anchorID=\(virtualID) in 1.0 s")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                        self?.setModeOnVirtualAnchor(mode, anchorID: virtualID)
                     }
                 }
             }
@@ -702,6 +714,7 @@ final class VideoManager: ObservableObject {
         }
         virtualAnchorStore.removeValue(forKey: display.name)
         virtualAnchorCGIDs.removeValue(forKey: display.name)
+        pendingVirtualMode.removeValue(forKey: display.name)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             self?.mergeDevices()
         }
