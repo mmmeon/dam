@@ -663,13 +663,6 @@ final class VideoManager: ObservableObject {
         let airPlayIDs = Set(newAirPlay.map(\.cgDisplayID))
         let anchorIDs  = Set(virtualAnchorCGIDs.values)
 
-        // Release virtual anchors whose AirPlay device is no longer online.
-        let connectedAirPlayNames = Set(newAirPlay.filter { $0.isConnected }.map { $0.name })
-        for name in Array(virtualAnchorStore.keys) where !connectedAirPlayNames.contains(name) {
-            virtualAnchorStore.removeValue(forKey: name)
-            virtualAnchorCGIDs.removeValue(forKey: name)
-        }
-
         var physical: [DisplayInfo] = []
         for cgID in onlineIDs {
             guard !airPlayIDs.contains(cgID) else { continue }
@@ -688,6 +681,16 @@ final class VideoManager: ObservableObject {
         let newPhysical = physical.sorted { l, r in
             if l.isBuiltIn != r.isBuiltIn { return l.isBuiltIn }
             return l.name < r.name
+        }
+
+        // Release virtual anchors whose display (AirPlay or physical) is no longer connected.
+        let connectedDisplayNames = Set(
+            newAirPlay.filter { $0.isConnected }.map { $0.name } +
+            newPhysical.filter { $0.isConnected }.map { $0.name }
+        )
+        for name in Array(virtualAnchorStore.keys) where !connectedDisplayNames.contains(name) {
+            virtualAnchorStore.removeValue(forKey: name)
+            virtualAnchorCGIDs.removeValue(forKey: name)
         }
 
         if allAirPlayDevices    != newAirPlay   { allAirPlayDevices    = newAirPlay   }

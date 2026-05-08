@@ -285,6 +285,9 @@ final class ControlStripPresenter: NSObject {
             }
         } else if display.isBuiltIn {
             symbolName = "laptopcomputer"
+        } else if videoManager?.hasVirtualAnchor(for: display.name) ?? false {
+            // External physical display with a virtual anchor active.
+            symbolName = "sparkles"
         } else if display.isMirroring {
             symbolName = "square.on.square"
         } else {
@@ -347,9 +350,10 @@ final class ControlStripPresenter: NSObject {
         let item = NSCustomTouchBarItem(identifier: id)
         let vm = videoManager
 
-        let isAirPlay = vm?.allAirPlayDevices.contains(where: { $0.id == display.id }) ?? false
+        let isAirPlay          = vm?.allAirPlayDevices.contains(where: { $0.id == display.id }) ?? false
+        let isExternalPhysical = !isAirPlay && !display.isBuiltIn
 
-        // Always use the native cgDisplayID for the base native-modes list (Task 4 requirement).
+        // Always use the native cgDisplayID for the base native-modes list.
         let nativeCGID  = display.cgDisplayID
         let allNative   = vm?.availableModesDeduped(for: nativeCGID) ?? []
 
@@ -367,8 +371,8 @@ final class ControlStripPresenter: NSObject {
             filteredNative = []
         }
 
-        // Build virtual modes for AirPlay displays.
-        let virtualModes: [DisplayMode] = isAirPlay ? VideoManager.virtualModes() : []
+        // Build virtual modes for AirPlay and external physical displays.
+        let virtualModes: [DisplayMode] = (isAirPlay || isExternalPhysical) ? VideoManager.virtualModes() : []
 
         // Cap total at 5 segments: take as many native as fit, then fill with virtual.
         let maxTotal = 5
@@ -377,8 +381,8 @@ final class ControlStripPresenter: NSObject {
         let virtualToUse = Array(virtualModes.prefix(remaining))
         let modes        = nativeToUse + virtualToUse
 
-        // Determine current segment based on anchor state.
-        let hasAnchor  = isAirPlay && (vm?.hasVirtualAnchor(for: display.name) ?? false)
+        // Determine current segment based on anchor state (applies to both AirPlay and external physical).
+        let hasAnchor  = (isAirPlay || isExternalPhysical) && (vm?.hasVirtualAnchor(for: display.name) ?? false)
         let anchorCGID = vm?.virtualAnchorCGIDs[display.name] ?? 0
         let current: DisplayMode?
         if hasAnchor && anchorCGID != 0 {
