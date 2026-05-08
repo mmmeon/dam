@@ -472,7 +472,7 @@ final class VideoManager: ObservableObject {
             allAirPlayDevices.contains { $0.id == display.id } ? .airPlay : .external
 
         let descriptor = CGVirtualDisplayDescriptor()
-        descriptor.queue = DispatchQueue(label: "mmmeon.hldm.virtual.\(display.name)")
+        descriptor.setDispatchQueue(.main)
         descriptor.name = "HLDM"
         descriptor.sizeInMillimeters = CGSize(width: 600, height: 340)
         descriptor.maxPixelsWide = 3840
