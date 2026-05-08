@@ -74,19 +74,33 @@ enum VisibilityPreferences {
 
     // MARK: - Virtual Display
 
+    /// Distinguishes AirPlay destinations from wired external displays for
+    /// per-context virtual-display settings.
+    enum DisplayContext: String {
+        case airPlay   = "airplay"
+        case external  = "external"
+    }
+
     /// Refresh rates (Hz) to expose on the virtual anchor display. Defaults to [60].
-    static var virtualRefreshRates: Set<Int> {
-        get { Set((UserDefaults.standard.array(forKey: "hldm.virtual.refreshRates") as? [Int]) ?? [60]) }
-        set { UserDefaults.standard.set(Array(newValue), forKey: "hldm.virtual.refreshRates") }
+    static func virtualRefreshRates(for context: DisplayContext) -> Set<Int> {
+        let key = "hldm.virtual.\(context.rawValue).refreshRates"
+        return Set((UserDefaults.standard.array(forKey: key) as? [Int]) ?? [60])
+    }
+
+    static func setVirtualRefreshRates(_ rates: Set<Int>, for context: DisplayContext) {
+        let key = "hldm.virtual.\(context.rawValue).refreshRates"
+        UserDefaults.standard.set(Array(rates), forKey: key)
     }
 
     /// Default virtual resolution stored as "WIDTHxHEIGHT", e.g. "3840x2160". Nil means no default.
-    static var defaultVirtualResolution: String? {
-        get { UserDefaults.standard.string(forKey: "hldm.virtual.defaultResolution") }
-        set {
-            if let v = newValue { UserDefaults.standard.set(v, forKey: "hldm.virtual.defaultResolution") }
-            else { UserDefaults.standard.removeObject(forKey: "hldm.virtual.defaultResolution") }
-        }
+    static func defaultVirtualResolution(for context: DisplayContext) -> String? {
+        UserDefaults.standard.string(forKey: "hldm.virtual.\(context.rawValue).defaultResolution")
+    }
+
+    static func setDefaultVirtualResolution(_ res: String?, for context: DisplayContext) {
+        let key = "hldm.virtual.\(context.rawValue).defaultResolution"
+        if let v = res { UserDefaults.standard.set(v, forKey: key) }
+        else { UserDefaults.standard.removeObject(forKey: key) }
     }
 
     /// Aspect ratio used to decide whether to show compact "HEIGHTp" labels in the Touch Bar.

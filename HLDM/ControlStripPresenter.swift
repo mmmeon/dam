@@ -372,7 +372,8 @@ final class ControlStripPresenter: NSObject {
         }
 
         // Build virtual modes for AirPlay and external physical displays.
-        let virtualModes: [DisplayMode] = (isAirPlay || isExternalPhysical) ? VideoManager.virtualModes() : []
+        let vContext: VisibilityPreferences.DisplayContext = isAirPlay ? .airPlay : .external
+        let virtualModes: [DisplayMode] = (isAirPlay || isExternalPhysical) ? VideoManager.virtualModes(for: vContext) : []
 
         // Cap total at 5 segments: take as many native as fit, then fill with virtual.
         let maxTotal = 5

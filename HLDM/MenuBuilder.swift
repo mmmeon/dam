@@ -160,7 +160,7 @@ private func buildResolutionSubmenu(display: DisplayInfo, video: VideoManager) -
         submenu.addItem(sectionHeader("Virtual"))
 
         // — Virtual mode items —
-        let virtualModes = VideoManager.virtualModes()
+        let virtualModes = VideoManager.virtualModes(for: .airPlay)
         // Checkmark on the virtual mode matching the anchor's current mode (if anchor active).
         let anchorCurrent: DisplayMode? = hasAnchor ? video.currentMode(for: anchorCGID) : nil
 
@@ -205,7 +205,7 @@ private func buildResolutionSubmenu(display: DisplayInfo, video: VideoManager) -
         }
 
         submenu.addItem(sectionHeader("Virtual"))
-        let virtualModes  = VideoManager.virtualModes()
+        let virtualModes  = VideoManager.virtualModes(for: .external)
         let anchorCurrent: DisplayMode? = hasAnchor ? video.currentMode(for: anchorCGID) : nil
 
         for mode in virtualModes {
