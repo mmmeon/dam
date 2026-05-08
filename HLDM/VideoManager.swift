@@ -508,18 +508,28 @@ final class VideoManager: ObservableObject {
                                        name: String,
                                        airPlayID: CGDirectDisplayID,
                                        attempt: Int) {
+        // Re-read displayID on every attempt — the WindowServer may not assign
+        // the ID synchronously with CGVirtualDisplay initialisation.
         let virtualID = vd.displayID
-        var count: CGDisplayCount = 0
-        CGGetActiveDisplayList(0, nil, &count)
-        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
-        CGGetActiveDisplayList(count, &ids, &count)
 
-        if ids.contains(virtualID) {
+        // Use CGGetOnlineDisplayList: virtual displays appear here first (and this
+        // is the same list mergeDevices uses). CGGetActiveDisplayList may lag
+        // behind, causing spurious timeouts.
+        var onlineCount: CGDisplayCount = 0
+        CGGetOnlineDisplayList(0, nil, &onlineCount)
+        var onlineDisplayIDs = [CGDirectDisplayID](repeating: 0, count: Int(onlineCount))
+        CGGetOnlineDisplayList(onlineCount, &onlineDisplayIDs, &onlineCount)
+
+        if virtualID != 0 && onlineDisplayIDs.contains(virtualID) {
             virtualAnchorCGIDs[name] = virtualID
             var config: CGDisplayConfigRef?
             guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else { return }
             CGConfigureDisplayMirrorOfDisplay(cfg, airPlayID, virtualID)
-            CGCompleteDisplayConfiguration(cfg, .permanently)
+            // Use .forSession — virtual displays don't survive app restarts.
+            // .permanently writes the virtual display's UUID to the system mirror
+            // prefs; on the next launch macOS tries to restore it and logs
+            // "invalid display identifier <UUID>" because the virtual display is gone.
+            CGCompleteDisplayConfiguration(cfg, .forSession)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
                 self?.mergeDevices()
                 // Apply the default virtual resolution, if one is configured.
@@ -558,7 +568,7 @@ final class VideoManager: ObservableObject {
             var config: CGDisplayConfigRef?
             if CGBeginDisplayConfiguration(&config) == .success, let cfg = config {
                 CGConfigureDisplayMirrorOfDisplay(cfg, airPlayCGID, CGDirectDisplayID(0))
-                CGCompleteDisplayConfiguration(cfg, .permanently)
+                CGCompleteDisplayConfiguration(cfg, .forSession)
             }
         }
         virtualAnchorStore.removeValue(forKey: display.name)
@@ -684,11 +694,15 @@ final class VideoManager: ObservableObject {
         }
 
         // Release virtual anchors whose display (AirPlay or physical) is no longer connected.
+        // Guard: skip anchors that are still being established (waitForVirtualDisplay is
+        // in progress and has not yet written virtualAnchorCGIDs). Cleaning them up during
+        // the 3-second poll window would deallocate CGVirtualDisplay prematurely.
         let connectedDisplayNames = Set(
             newAirPlay.filter { $0.isConnected }.map { $0.name } +
             newPhysical.filter { $0.isConnected }.map { $0.name }
         )
         for name in Array(virtualAnchorStore.keys) where !connectedDisplayNames.contains(name) {
+            guard virtualAnchorCGIDs[name] != nil else { continue }
             virtualAnchorStore.removeValue(forKey: name)
             virtualAnchorCGIDs.removeValue(forKey: name)
         }
