@@ -452,7 +452,7 @@ final class VideoManager: ObservableObject {
         var config: CGDisplayConfigRef?
         guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else { return }
         CGConfigureDisplayWithDisplayMode(cfg, anchorID, cgMode, nil)
-        CGCompleteDisplayConfiguration(cfg, .forSession)
+        CGCompleteDisplayConfiguration(cfg, .forAppOnly)
     }
 
     /// Returns the CGDirectDisplayID to use for resolution queries and changes.
@@ -557,13 +557,26 @@ final class VideoManager: ObservableObject {
         }
 
         virtualAnchorCGIDs[name] = virtualID
+
+        // Step 1: if the target display is already in a mirror set, tear it down
+        // first in a separate transaction. Calling CGConfigureDisplayMirrorOfDisplay
+        // on a display that is already a slave can silently fail.
+        if CGDisplayMirrorsDisplay(airPlayID) != CGDirectDisplayID(0) {
+            var teardown: CGDisplayConfigRef?
+            if CGBeginDisplayConfiguration(&teardown) == .success, let tc = teardown {
+                CGConfigureDisplayMirrorOfDisplay(tc, airPlayID, CGDirectDisplayID(0))
+                CGCompleteDisplayConfiguration(tc, .forAppOnly)
+            }
+        }
+
+        // Step 2: mirror the target display onto the virtual anchor.
         var config: CGDisplayConfigRef?
         guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else { return }
         CGConfigureDisplayMirrorOfDisplay(cfg, airPlayID, virtualID)
-        // .forSession: virtual displays don't survive app restarts.
-        // .permanently would write the virtual display's UUID to the system mirror
-        // prefs, causing "invalid display identifier <UUID>" on the next launch.
-        CGCompleteDisplayConfiguration(cfg, .forSession)
+        // .forAppOnly (rawValue 0): config reverts automatically when the app exits,
+        // which is correct — the virtual display only lives for this process lifetime.
+        // (.forSession would persist until logout; .permanently writes a stale UUID.)
+        CGCompleteDisplayConfiguration(cfg, .forAppOnly)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             self?.mergeDevices()
             // Apply the default virtual resolution for this context, if configured.
@@ -595,7 +608,7 @@ final class VideoManager: ObservableObject {
             var config: CGDisplayConfigRef?
             if CGBeginDisplayConfiguration(&config) == .success, let cfg = config {
                 CGConfigureDisplayMirrorOfDisplay(cfg, airPlayCGID, CGDirectDisplayID(0))
-                CGCompleteDisplayConfiguration(cfg, .forSession)
+                CGCompleteDisplayConfiguration(cfg, .forAppOnly)
             }
         }
         virtualAnchorStore.removeValue(forKey: display.name)
