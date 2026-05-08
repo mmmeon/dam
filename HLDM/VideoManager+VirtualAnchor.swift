@@ -32,10 +32,13 @@ extension VideoManager {
     /// selected refresh rate, sorted descending by resolution then rate.
     static func virtualModes(refreshRates: Set<Int>) -> [DisplayMode] {
         let specs: [(Int, Int)] = [(3840, 2160), (2560, 1440), (1920, 1080), (1280, 720)]
-        let rates = refreshRates.isEmpty ? [60] : refreshRates
+        // Mirror enableVirtualAnchor: always include 60 Hz alongside configured rates
+        // so the menu/Touch Bar reflect every mode the virtual display actually advertises.
+        let configured = refreshRates.isEmpty ? [60] : refreshRates
+        let allRates = configured.union([60])
         var modes: [DisplayMode] = []
         for (w, h) in specs {
-            for rate in rates.sorted(by: >) {
+            for rate in allRates.sorted(by: >) {
                 let hz = Double(rate)
                 modes.append(DisplayMode(id: "\(w)x\(h)@\(hz)_virtual",
                                          ioModeID: 0,
