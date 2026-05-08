@@ -112,13 +112,18 @@ extension VideoManager {
         settings.hiDPI = 0
         let resolutions: [(UInt, UInt)] = [(3840, 2160), (2560, 1440), (1920, 1080), (1280, 720)]
         let rates = VisibilityPreferences.virtualRefreshRates(for: context)
-        let effectiveRates = rates.isEmpty ? [60] : rates
+        let configuredRates = rates.isEmpty ? [60] : rates
+        // Always include 60 Hz alongside any custom rates.
+        // The System Settings "Refresh Rate" dropdown only appears when at least two
+        // rates exist for the same resolution — mirroring the reference implementation
+        // which advertises both the target rate and 60 Hz for every mode.
+        let allRates = configuredRates.union([60])
         settings.modes = resolutions.flatMap { w, h in
-            effectiveRates.sorted(by: >).map { rate in
+            allRates.sorted(by: >).map { rate in
                 CGVirtualDisplayMode(width: w, height: h, refreshRate: Double(rate))
             }
         }
-        vdLog.debug("enableVirtualAnchor: applying \(settings.modes.count) modes (\(effectiveRates.sorted(by: >) as [Int]) Hz)")
+        vdLog.debug("enableVirtualAnchor: applying \(settings.modes.count) modes (\(allRates.sorted(by: >) as [Int]) Hz)")
 
         let applied = vd.apply(settings)
         vdLog.debug("enableVirtualAnchor: applySettings returned \(applied) — displayID after apply=\(vd.displayID)")
