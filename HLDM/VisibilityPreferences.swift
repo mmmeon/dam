@@ -7,6 +7,7 @@
 //
 
 import Foundation
+import ServiceManagement
 
 enum VisibilityPreferences {
 
@@ -70,6 +71,46 @@ enum VisibilityPreferences {
             return val == nil ? true : UserDefaults.standard.bool(forKey: autoConnectKey)
         }
         set { UserDefaults.standard.set(newValue, forKey: autoConnectKey) }
+    }
+
+    private static let speechEnabledKey = "hldm.behaviour.speechEnabled"
+
+    /// When true (default), actions such as connecting AirPlay and toggling
+    /// mirror/extend are announced via TTS. Set to false to silence all speech.
+    static var speechEnabled: Bool {
+        get {
+            let val = UserDefaults.standard.object(forKey: speechEnabledKey)
+            return val == nil ? true : UserDefaults.standard.bool(forKey: speechEnabledKey)
+        }
+        set { UserDefaults.standard.set(newValue, forKey: speechEnabledKey) }
+    }
+
+    private static let autoHideVirtualAudioKey = "hldm.behaviour.autoHideVirtualAudio"
+
+    /// When true (default), virtual audio devices (Teams, Zoom, BlackHole, etc.)
+    /// are automatically hidden on first discovery. The user can re-enable them
+    /// in Settings at any time.
+    static var autoHideVirtualAudio: Bool {
+        get {
+            let val = UserDefaults.standard.object(forKey: autoHideVirtualAudioKey)
+            return val == nil ? true : UserDefaults.standard.bool(forKey: autoHideVirtualAudioKey)
+        }
+        set { UserDefaults.standard.set(newValue, forKey: autoHideVirtualAudioKey) }
+    }
+
+    // MARK: - System
+
+    /// Launch the app at login. Backed by SMAppService; UserDefaults is not used.
+    static var launchAtLogin: Bool {
+        get { SMAppService.mainApp.status == .enabled }
+        set {
+            do {
+                if newValue { try SMAppService.mainApp.register() }
+                else        { try SMAppService.mainApp.unregister() }
+            } catch {
+                NSLog("hldm: launch-at-login toggle failed: \(error)")
+            }
+        }
     }
 
     // MARK: - Virtual Display
