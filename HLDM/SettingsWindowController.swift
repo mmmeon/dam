@@ -32,7 +32,7 @@ final class SettingsWindowController: NSWindowController {
         static let general = NSToolbarItem.Identifier("hldm.settings.general")
         static let devices = NSToolbarItem.Identifier("hldm.settings.devices")
         static let virtual = NSToolbarItem.Identifier("hldm.settings.virtual")
-        static let all: [NSToolbarItem.Identifier] = [hotkeys, general, devices, virtual]
+        static let all: [NSToolbarItem.Identifier] = [general, hotkeys, devices, virtual]
     }
 
     // MARK: - Init
@@ -77,7 +77,7 @@ final class SettingsWindowController: NSWindowController {
         win.toolbar      = toolbar
         win.toolbarStyle = .preference   // centres items, Xcode-style
 
-        selectTab(TabID.hotkeys)
+        selectTab(TabID.general)
     }
 
     // MARK: - Tab switching
@@ -595,7 +595,7 @@ extension SettingsWindowController: NSToolbarDelegate {
                                  accessibilityDescription: "Devices")
         case TabID.virtual:
             item.label = "Virtual Display"
-            item.image = NSImage(systemSymbolName: "tv.badge.wifi",
+            item.image = NSImage(systemSymbolName: "rectangle.dashed",
                                  accessibilityDescription: "Virtual Display")
         default:
             return nil
