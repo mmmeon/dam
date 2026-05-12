@@ -147,15 +147,21 @@ extension VideoManager {
         let airPlayCGID = display.cgDisplayID != 0
             ? display.cgDisplayID
             : (cachedAirPlayCGIDs[display.name] ?? 0)
+        virtualAnchorStore.removeValue(forKey: display.name)
+        virtualAnchorCGIDs.removeValue(forKey: display.name)
         if airPlayCGID != 0 {
             var config: CGDisplayConfigRef?
             if CGBeginDisplayConfiguration(&config) == .success, let cfg = config {
                 CGConfigureDisplayMirrorOfDisplay(cfg, airPlayCGID, CGDirectDisplayID(0))
-                CGCompleteDisplayConfiguration(cfg, .forAppOnly)
+                DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                    CGCompleteDisplayConfiguration(cfg, .forAppOnly)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                        self?.mergeDevices()
+                    }
+                }
+                return
             }
         }
-        virtualAnchorStore.removeValue(forKey: display.name)
-        virtualAnchorCGIDs.removeValue(forKey: display.name)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             self?.mergeDevices()
         }
@@ -229,39 +235,54 @@ extension VideoManager {
 
         // Step 1: if the target display is already in a mirror set, tear it down first
         // in a separate transaction — adding a slave to an existing set can silently fail.
+        // CGCompleteDisplayConfiguration can block for several seconds; run it on a
+        // background queue so the Touch Bar and UI stay responsive.
         let existingMirror = CGDisplayMirrorsDisplay(airPlayID)
         vdLog.debug("step1: airPlayID=\(airPlayID) existingMirrorMaster=\(existingMirror)")
-        if existingMirror != CGDirectDisplayID(0) {
+        let hadExistingMirror = existingMirror != CGDirectDisplayID(0)
+        if hadExistingMirror {
             var teardown: CGDisplayConfigRef?
             let tearErr = CGBeginDisplayConfiguration(&teardown)
             vdLog.debug("step1: BeginDisplayConfiguration err=\(tearErr.rawValue)")
             if tearErr == .success, let tc = teardown {
                 CGConfigureDisplayMirrorOfDisplay(tc, airPlayID, CGDirectDisplayID(0))
-                let completeErr = CGCompleteDisplayConfiguration(tc, .forAppOnly)
-                vdLog.debug("step1: teardown complete err=\(completeErr.rawValue) — waiting 1 s before mirror")
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let completeErr = CGCompleteDisplayConfiguration(tc, .forAppOnly)
+                    vdLog.debug("step1: teardown complete err=\(completeErr.rawValue) — waiting 1 s before mirror")
+                    // Step 2 runs after teardown settles.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                        self?.applyMirror(airPlayID: airPlayID, virtualID: virtualID)
+                    }
+                }
+                return   // step2 will be chained from the background completion above
             }
         }
 
-        // Step 2: make the physical display mirror the virtual anchor.
-        // Give macOS 0.5 s to settle (1 s if we just tore down a mirror set).
-        let step2Delay: Double = existingMirror != CGDirectDisplayID(0) ? 1.0 : 0.5
-        DispatchQueue.main.asyncAfter(deadline: .now() + step2Delay) { [weak self] in
-            guard let self else { return }
-            vdLog.debug("step2: configuring mirror airPlayID=\(airPlayID) → virtualID=\(virtualID)")
-            var config: CGDisplayConfigRef?
-            let beginErr = CGBeginDisplayConfiguration(&config)
-            vdLog.debug("step2: BeginDisplayConfiguration err=\(beginErr.rawValue)")
-            guard beginErr == .success, let cfg = config else {
-                vdLog.error("step2: BeginDisplayConfiguration failed — aborting")
-                return
-            }
-            CGConfigureDisplayMirrorOfDisplay(cfg, airPlayID, virtualID)
+        // Step 2 (no prior mirror to tear down): short settle delay then apply.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.applyMirror(airPlayID: airPlayID, virtualID: virtualID)
+        }
+    }
+
+    /// Applies the mirror relationship (airPlay → virtual) and chains step 3.
+    /// Called from both the no-prior-mirror path and the post-teardown background path.
+    private func applyMirror(airPlayID: CGDirectDisplayID, virtualID: CGDirectDisplayID) {
+        vdLog.debug("step2: configuring mirror airPlayID=\(airPlayID) → virtualID=\(virtualID)")
+        var config: CGDisplayConfigRef?
+        let beginErr = CGBeginDisplayConfiguration(&config)
+        vdLog.debug("step2: BeginDisplayConfiguration err=\(beginErr.rawValue)")
+        guard beginErr == .success, let cfg = config else {
+            vdLog.error("step2: BeginDisplayConfiguration failed — aborting")
+            return
+        }
+        CGConfigureDisplayMirrorOfDisplay(cfg, airPlayID, virtualID)
+        // CGCompleteDisplayConfiguration can block for ~10 s on some systems while the
+        // display config settles — run on a background queue to keep the UI responsive.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             // .forAppOnly: config reverts automatically when the app exits.
-            // (.permanently writes a stale UUID to disk that triggers errors on next launch.)
             let mirrorErr = CGCompleteDisplayConfiguration(cfg, .forAppOnly)
             vdLog.debug("step2: CompleteDisplayConfiguration err=\(mirrorErr.rawValue)")
-
-            // Step 3: let the system settle, then refresh the UI.
+            // Step 3: let the system settle, then refresh the UI on the main queue.
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                 vdLog.debug("step3: mergeDevices")
                 self?.mergeDevices()
@@ -310,7 +331,9 @@ extension VideoManager {
             return
         }
         CGConfigureDisplayWithDisplayMode(cfg, anchorID, cgMode, nil)
-        let completeErr = CGCompleteDisplayConfiguration(cfg, .forAppOnly)
-        vdLog.debug("setModeOnVirtualAnchor: CompleteDisplayConfiguration err=\(completeErr.rawValue)")
+        DispatchQueue.global(qos: .userInitiated).async {
+            let completeErr = CGCompleteDisplayConfiguration(cfg, .forAppOnly)
+            vdLog.debug("setModeOnVirtualAnchor: CompleteDisplayConfiguration err=\(completeErr.rawValue)")
+        }
     }
 }
