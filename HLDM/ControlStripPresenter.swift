@@ -488,6 +488,8 @@ final class ControlStripPresenter: NSObject {
     @objc func openModal() {
         audioManager?.refresh()
         videoManager?.refresh()
+        if let existing = resolutionBar { NSTouchBar.dismissSystemModal(existing); resolutionBar = nil }
+        if let existing = modalBar { NSTouchBar.dismissSystemModal(existing) }
         let bar = makeModalBar()
         modalBar = bar
         DFRSystemModalShowsCloseBoxWhenFrontMost(true)
@@ -515,6 +517,7 @@ final class ControlStripPresenter: NSObject {
         }
         let modes = videoManager?.availableModesDeduped(for: display.cgDisplayID) ?? []
         NSLog("HLDM: display '%@' cgDisplayID=%u modes=%d", display.name, display.cgDisplayID, modes.count)
+        if let existing = resolutionBar { NSTouchBar.dismissSystemModal(existing) }
         let bar = makeResolutionBar(for: display)
         NSTouchBar.presentSystemModal(bar, for: Self.stripID)
     }
