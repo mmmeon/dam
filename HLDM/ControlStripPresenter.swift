@@ -385,15 +385,31 @@ final class ControlStripPresenter: NSObject {
         // Determine current segment based on anchor state (applies to both AirPlay and external physical).
         let hasAnchor  = (isAirPlay || isExternalPhysical) && (vm?.hasVirtualAnchor(for: display.name) ?? false)
         let anchorCGID = vm?.virtualAnchorCGIDs[display.name] ?? 0
-        let current: DisplayMode?
-        if hasAnchor && anchorCGID != 0 {
-            current = vm?.currentMode(for: anchorCGID)
-        } else {
-            current = vm?.currentMode(for: nativeCGID)
-        }
+        // Mirror MenuBuilder: when an anchor is active, only match the segment against
+        // virtual modes (by pixel dimensions); otherwise only match native modes (by ioModeID).
+        // Matching against the wrong pool causes native ioModeID collisions to wrongly highlight
+        // a native segment when the anchor is driving a virtual resolution.
+        let anchorCurrent: DisplayMode? = hasAnchor && anchorCGID != 0 ? vm?.currentMode(for: anchorCGID) : nil
+        let nativeCurrent: DisplayMode? = hasAnchor ? nil : vm?.currentMode(for: nativeCGID)
 
-        NSLog("HLDM: makeResolutionSegItem display='%@' nativeModes=%d virtual=%d total=%d",
-              display.name, nativeToUse.count, virtualToUse.count, modes.count)
+        NSLog("HLDM resSegItem: display='%@' isAirPlay=%d hasAnchor=%d anchorCGID=%u nativeCGID=%u",
+              display.name, isAirPlay, hasAnchor, anchorCGID, nativeCGID)
+        if let ac = anchorCurrent {
+            NSLog("HLDM resSegItem: anchorCurrent %dx%d px=%dx%d @%.1fHz ioDMID=%d",
+                  ac.width, ac.height, ac.pixelWidth, ac.pixelHeight, ac.refreshRate, ac.ioModeID)
+        } else {
+            NSLog("HLDM resSegItem: anchorCurrent=nil")
+        }
+        if let nc = nativeCurrent {
+            NSLog("HLDM resSegItem: nativeCurrent %dx%d px=%dx%d @%.1fHz ioModeID=%d",
+                  nc.width, nc.height, nc.pixelWidth, nc.pixelHeight, nc.refreshRate, nc.ioModeID)
+        } else {
+            NSLog("HLDM resSegItem: nativeCurrent=nil")
+        }
+        for (i, m) in modes.enumerated() {
+            NSLog("HLDM resSegItem:   modes[%d] %dx%d px=%dx%d virtual=%d ioModeID=%d label='%@'",
+                  i, m.width, m.height, m.pixelWidth, m.pixelHeight, m.isVirtual, m.ioModeID, m.shortLabel)
+        }
 
         if modes.isEmpty {
             let tf = NSTextField(labelWithString: display.cgDisplayID == 0 ? "No display ID" : "No modes")
@@ -409,17 +425,9 @@ final class ControlStripPresenter: NSObject {
                 action: #selector(resolutionSegmentTapped(_:))
             )
             seg.segmentStyle = .rounded
-            if let cur = current {
-                // For virtual modes match by pixel dimensions; for native match by ioModeID.
-                let idx = modes.firstIndex {
-                    if $0.isVirtual {
-                        return $0.width == cur.pixelWidth && $0.height == cur.pixelHeight
-                    } else {
-                        return $0.ioModeID == cur.ioModeID
-                    }
-                }
-                if let idx { seg.setSelected(true, forSegment: idx) }
-            }
+            let idx = Self.selectedSegmentIndex(
+                in: modes, anchorCurrent: anchorCurrent, nativeCurrent: nativeCurrent)
+            if let idx { seg.setSelected(true, forSegment: idx) }
             resolutionSegMap[ObjectIdentifier(seg)] = (display: display, modes: modes)
             item.view = seg
         }
@@ -559,6 +567,30 @@ final class ControlStripPresenter: NSObject {
                 vm.setMode(mode, for: display.cgDisplayID)
             }
         }
+    }
+
+    // MARK: - Segment index selection (extracted for testability)
+
+    /// Returns the segment index in `modes` that represents the current display state.
+    ///
+    /// When `anchorCurrent` is provided the virtual anchor is driving the display; only
+    /// virtual modes are considered (matched by pixel dimensions).  Otherwise only native
+    /// modes are considered (matched by `ioModeID`).  Keeping the two pools separate
+    /// prevents native `ioModeID` values from colliding with the anchor's mode ID.
+    static func selectedSegmentIndex(in modes: [DisplayMode],
+                                     anchorCurrent: DisplayMode?,
+                                     nativeCurrent: DisplayMode?) -> Int? {
+        if let cur = anchorCurrent {
+            return modes.firstIndex {
+                $0.isVirtual && $0.width == cur.pixelWidth && $0.height == cur.pixelHeight
+            }
+        }
+        if let cur = nativeCurrent {
+            return modes.firstIndex {
+                !$0.isVirtual && $0.ioModeID == cur.ioModeID
+            }
+        }
+        return nil
     }
 }
 
