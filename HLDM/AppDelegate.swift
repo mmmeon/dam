@@ -77,13 +77,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func toggleAirPlayMirror() {
         // Find the first connected AirPlay display that has a real display ID.
         guard let display = videoManager.airPlayDevices.first(where: { $0.isConnected && $0.cgDisplayID != 0 }) else {
-            SpeechSynthesizer.shared.speak("No AirPlay display connected")
+            if VisibilityPreferences.speechEnabled {
+                SpeechSynthesizer.shared.speak("No AirPlay display connected")
+            }
             return
         }
         // Determine current state so we can announce what we're switching TO.
         let isMirroring = display.isMirroring || videoManager.isBeingMirrored(display)
         videoManager.toggleMirroring(for: display)
-        SpeechSynthesizer.shared.speak(isMirroring ? "Extending \(display.name)" : "Mirroring \(display.name)")
+        if VisibilityPreferences.speechEnabled {
+            SpeechSynthesizer.shared.speak(isMirroring ? "Extending \(display.name)" : "Mirroring \(display.name)")
+        }
     }
 
     @objc func refreshAll(_ sender: Any?) {

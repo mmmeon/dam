@@ -29,10 +29,12 @@ final class AudioManager: ObservableObject {
 
     /// On first discovery, virtual devices are hidden by default so they don't
     /// clutter the list. The user can re-enable them in Settings at any time.
+    /// The hiding step is skipped when autoHideVirtualAudio is off, but seen-device
+    /// tracking always runs so toggling the preference later has no retroactive effect.
     private func autoHideNewVirtualDevices(in devices: [AudioDevice]) {
         var seen = VisibilityPreferences.seenAudioDevices
         for device in devices where !seen.contains(device.name) {
-            if !isHardwareDevice(device.id) {
+            if VisibilityPreferences.autoHideVirtualAudio && !isHardwareDevice(device.id) {
                 VisibilityPreferences.setVisible(false, audioDevice: device.name)
             }
             seen.insert(device.name)

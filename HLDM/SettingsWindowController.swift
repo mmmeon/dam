@@ -20,19 +20,19 @@ final class SettingsWindowController: NSWindowController {
     var onRebuild: (() -> Void)?
 
     // Tab content views — built once, reused on every tab switch.
-    private lazy var hotkeyContent:   NSView = buildHotkeysTab()
-    private lazy var audioContent:    NSView = buildAudioTab()
-    private lazy var airPlayContent:  NSView = buildAirPlayTab()
-    private lazy var displayContent:  NSView = buildDisplayTab()
+    private lazy var hotkeyContent:  NSView = buildHotkeysTab()
+    private lazy var generalContent: NSView = buildGeneralTab()
+    private lazy var devicesContent: NSView = buildDevicesTab()
+    private lazy var virtualContent: NSView = buildVirtualTab()
 
     // MARK: - Toolbar identifiers
 
     private enum TabID {
         static let hotkeys = NSToolbarItem.Identifier("hldm.settings.hotkeys")
-        static let audio   = NSToolbarItem.Identifier("hldm.settings.audio")
-        static let airPlay = NSToolbarItem.Identifier("hldm.settings.airplay")
-        static let display = NSToolbarItem.Identifier("hldm.settings.display")
-        static let all: [NSToolbarItem.Identifier] = [hotkeys, audio, airPlay, display]
+        static let general = NSToolbarItem.Identifier("hldm.settings.general")
+        static let devices = NSToolbarItem.Identifier("hldm.settings.devices")
+        static let virtual = NSToolbarItem.Identifier("hldm.settings.virtual")
+        static let all: [NSToolbarItem.Identifier] = [hotkeys, general, devices, virtual]
     }
 
     // MARK: - Init
@@ -86,12 +86,12 @@ final class SettingsWindowController: NSWindowController {
         let content: NSView
         let title: String
         switch id {
-        case TabID.audio:
-            content = audioContent;   title = "Audio"
-        case TabID.airPlay:
-            content = airPlayContent; title = "AirPlay"
-        case TabID.display:
-            content = displayContent; title = "External & Virtual"
+        case TabID.general:
+            content = generalContent; title = "General"
+        case TabID.devices:
+            content = devicesContent; title = "Devices"
+        case TabID.virtual:
+            content = virtualContent; title = "Virtual Display"
         default:
             content = hotkeyContent;  title = "Hotkeys"
         }
@@ -142,18 +142,6 @@ final class SettingsWindowController: NSWindowController {
             )
         )
 
-        stack.addArrangedSubview(
-            settingGroup(
-                control: checkbox(
-                    title: "Auto-connect when one display is available",
-                    isOn: VisibilityPreferences.autoConnectSingleDisplay,
-                    action: { VisibilityPreferences.autoConnectSingleDisplay = $0 }
-                ),
-                description: "When only one AirPlay display is visible, skip the selection " +
-                             "list and connect immediately."
-            )
-        )
-
         stack.addArrangedSubview(separator())
 
         // — Mirror / Extend Toggle —
@@ -175,9 +163,71 @@ final class SettingsWindowController: NSWindowController {
         return scrollView
     }
 
-    // MARK: - Audio tab
+    // MARK: - General tab
 
-    private func buildAudioTab() -> NSView {
+    private func buildGeneralTab() -> NSView {
+        let scrollView = makeScrollView()
+        let stack = scrollStack(in: scrollView)
+
+        // — Behaviour —
+        stack.addArrangedSubview(sectionHeader("Behaviour"))
+
+        stack.addArrangedSubview(
+            settingGroup(
+                control: checkbox(
+                    title: "Auto-connect when one AirPlay display is available",
+                    isOn: VisibilityPreferences.autoConnectSingleDisplay,
+                    action: { VisibilityPreferences.autoConnectSingleDisplay = $0 }
+                ),
+                description: "When only one AirPlay display is visible, skip the selection " +
+                             "list and connect immediately."
+            )
+        )
+
+        stack.addArrangedSubview(
+            settingGroup(
+                control: checkbox(
+                    title: "Announce actions via speech",
+                    isOn: VisibilityPreferences.speechEnabled,
+                    action: { VisibilityPreferences.speechEnabled = $0 }
+                ),
+                description: "Speaks the target device name when connecting to AirPlay and " +
+                             "when toggling mirror / extend mode."
+            )
+        )
+
+        stack.addArrangedSubview(
+            settingGroup(
+                control: checkbox(
+                    title: "Auto-hide virtual audio devices on first discovery",
+                    isOn: VisibilityPreferences.autoHideVirtualAudio,
+                    action: { VisibilityPreferences.autoHideVirtualAudio = $0 }
+                ),
+                description: "Hides virtual audio devices such as Teams, Zoom, BlackHole, " +
+                             "and Loopback when they are first detected. They can be re-enabled " +
+                             "in the Devices tab."
+            )
+        )
+
+        stack.addArrangedSubview(separator())
+
+        // — System —
+        stack.addArrangedSubview(sectionHeader("System"))
+
+        stack.addArrangedSubview(
+            checkbox(
+                title: "Launch at login",
+                isOn: VisibilityPreferences.launchAtLogin,
+                action: { VisibilityPreferences.launchAtLogin = $0 }
+            )
+        )
+
+        return scrollView
+    }
+
+    // MARK: - Devices tab
+
+    private func buildDevicesTab() -> NSView {
         let scrollView = makeScrollView()
         let stack = scrollStack(in: scrollView)
 
@@ -190,6 +240,7 @@ final class SettingsWindowController: NSWindowController {
 
         stack.addArrangedSubview(separator())
 
+        // — Audio Output —
         stack.addArrangedSubview(sectionHeader("Audio Output"))
         let audioDevices = audioManager.allOutputDevices
         if audioDevices.isEmpty {
@@ -210,24 +261,9 @@ final class SettingsWindowController: NSWindowController {
             }
         }
 
-        return scrollView
-    }
-
-    // MARK: - AirPlay tab
-
-    private func buildAirPlayTab() -> NSView {
-        let scrollView = makeScrollView()
-        let stack = scrollStack(in: scrollView)
-
-        stack.addArrangedSubview(
-            descriptionLabel(
-                "Unchecked devices are hidden from the menu bar and Touch Bar. " +
-                "They remain available system-wide."
-            )
-        )
-
         stack.addArrangedSubview(separator())
 
+        // — AirPlay Displays —
         stack.addArrangedSubview(sectionHeader("AirPlay Displays"))
         let airPlayDevices = videoManager.allAirPlayDevices
         if airPlayDevices.isEmpty {
@@ -250,42 +286,7 @@ final class SettingsWindowController: NSWindowController {
 
         stack.addArrangedSubview(separator())
 
-        stack.addArrangedSubview(sectionHeader("Touch Bar Labels"))
-        stack.addArrangedSubview(
-            settingGroup(
-                control: buildAspectRatioRow(),
-                description: "Resolutions matching this ratio use compact \"1080p\" labels in the Touch Bar."
-            )
-        )
-
-        stack.addArrangedSubview(separator())
-
-        stack.addArrangedSubview(sectionHeader("Virtual Display"))
-        buildVirtualDisplayControls(for: .airPlay, into: stack)
-
-        return scrollView
-    }
-
-    // MARK: - External & Virtual tab
-
-    private func buildDisplayTab() -> NSView {
-        let scrollView = makeScrollView()
-        let stack = scrollStack(in: scrollView)
-
-        stack.addArrangedSubview(
-            descriptionLabel(
-                "Unchecked devices are hidden from the menu bar and Touch Bar. " +
-                "They remain available system-wide."
-            )
-        )
-
-        stack.addArrangedSubview(separator())
-
-        stack.addArrangedSubview(sectionHeader("Virtual Display"))
-        buildVirtualDisplayControls(for: .external, into: stack)
-
-        stack.addArrangedSubview(separator())
-
+        // — Connected Displays —
         stack.addArrangedSubview(sectionHeader("Connected Displays"))
         let physicalDisplays = videoManager.allConnectedDisplays
         if physicalDisplays.isEmpty {
@@ -305,6 +306,36 @@ final class SettingsWindowController: NSWindowController {
                 )
             }
         }
+
+        return scrollView
+    }
+
+    // MARK: - Virtual Display tab
+
+    private func buildVirtualTab() -> NSView {
+        let scrollView = makeScrollView()
+        let stack = scrollStack(in: scrollView)
+
+        // — Touch Bar Labels —
+        stack.addArrangedSubview(sectionHeader("Touch Bar Labels"))
+        stack.addArrangedSubview(
+            settingGroup(
+                control: buildAspectRatioRow(),
+                description: "Resolutions matching this ratio use compact \"1080p\" labels in the Touch Bar."
+            )
+        )
+
+        stack.addArrangedSubview(separator())
+
+        // — AirPlay —
+        stack.addArrangedSubview(sectionHeader("AirPlay"))
+        buildVirtualDisplayControls(for: .airPlay, into: stack)
+
+        stack.addArrangedSubview(separator())
+
+        // — External —
+        stack.addArrangedSubview(sectionHeader("External"))
+        buildVirtualDisplayControls(for: .external, into: stack)
 
         return scrollView
     }
@@ -554,18 +585,18 @@ extension SettingsWindowController: NSToolbarDelegate {
             item.label = "Hotkeys"
             item.image = NSImage(systemSymbolName: "keyboard",
                                  accessibilityDescription: "Hotkeys")
-        case TabID.audio:
-            item.label = "Audio"
-            item.image = NSImage(systemSymbolName: "speaker.wave.2",
-                                 accessibilityDescription: "Audio")
-        case TabID.airPlay:
-            item.label = "AirPlay"
-            item.image = NSImage(systemSymbolName: "airplayvideo",
-                                 accessibilityDescription: "AirPlay")
-        case TabID.display:
-            item.label = "External & Virtual"
-            item.image = NSImage(systemSymbolName: "display.2",
-                                 accessibilityDescription: "External & Virtual")
+        case TabID.general:
+            item.label = "General"
+            item.image = NSImage(systemSymbolName: "gearshape",
+                                 accessibilityDescription: "General")
+        case TabID.devices:
+            item.label = "Devices"
+            item.image = NSImage(systemSymbolName: "display",
+                                 accessibilityDescription: "Devices")
+        case TabID.virtual:
+            item.label = "Virtual Display"
+            item.image = NSImage(systemSymbolName: "tv.badge.wifi",
+                                 accessibilityDescription: "Virtual Display")
         default:
             return nil
         }

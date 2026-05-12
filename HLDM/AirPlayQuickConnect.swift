@@ -64,7 +64,9 @@ final class AirPlayQuickConnect: NSObject {
 
         let all = vm.airPlayDevices
         guard !all.isEmpty else {
-            SpeechSynthesizer.shared.speak("No AirPlay displays found")
+            if VisibilityPreferences.speechEnabled {
+                SpeechSynthesizer.shared.speak("No AirPlay displays found")
+            }
             return
         }
 
@@ -72,10 +74,12 @@ final class AirPlayQuickConnect: NSObject {
         // not toggling. Already-active displays are announced and skipped.
         let displays = all.filter { !$0.isConnected }
         guard !displays.isEmpty else {
-            let msg = all.count == 1
-                ? "Already connected to \(all[0].name)"
-                : "All displays already connected"
-            SpeechSynthesizer.shared.speak(msg)
+            if VisibilityPreferences.speechEnabled {
+                let msg = all.count == 1
+                    ? "Already connected to \(all[0].name)"
+                    : "All displays already connected"
+                SpeechSynthesizer.shared.speak(msg)
+            }
             return
         }
 
@@ -96,13 +100,15 @@ final class AirPlayQuickConnect: NSObject {
         installMonitor(displays: displays)
         showSelectingTouchBar(displays: displays)
 
-        let list = displays.enumerated()
-            .map { "\($0.offset + 1). \($0.element.name)" }
-            .joined(separator: ". ")
-        let speech = "Select a display. \(list)"
-        DispatchQueue.main.async {
-            // touchBar: false — the numbered selection buttons must stay tappable.
-            SpeechSynthesizer.shared.speak(speech, touchBar: false)
+        if VisibilityPreferences.speechEnabled {
+            let list = displays.enumerated()
+                .map { "\($0.offset + 1). \($0.element.name)" }
+                .joined(separator: ". ")
+            let speech = "Select a display. \(list)"
+            DispatchQueue.main.async {
+                // touchBar: false — the numbered selection buttons must stay tappable.
+                SpeechSynthesizer.shared.speak(speech, touchBar: false)
+            }
         }
     }
 
@@ -119,11 +125,17 @@ final class AirPlayQuickConnect: NSObject {
         showConfirmingTouchBar(display: display)
 
         SpeechSynthesizer.shared.stop()
-        DispatchQueue.main.async {
-            SpeechSynthesizer.shared.onFinish = { [weak self] in
+        if VisibilityPreferences.speechEnabled {
+            DispatchQueue.main.async {
+                SpeechSynthesizer.shared.onFinish = { [weak self] in
+                    self?.connect(display: display)
+                }
+                SpeechSynthesizer.shared.speak("Connecting to \(display.name)")
+            }
+        } else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
                 self?.connect(display: display)
             }
-            SpeechSynthesizer.shared.speak("Connecting to \(display.name)")
         }
     }
 
