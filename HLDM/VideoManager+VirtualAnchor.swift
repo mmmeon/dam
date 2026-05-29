@@ -52,6 +52,23 @@ extension VideoManager {
         return modes
     }
 
+    /// Generates one DisplayMode per refresh rate for a single resolution.
+    /// Always includes 60 Hz. Used for external displays where the resolution is locked.
+    static func virtualModes(width: Int, height: Int, refreshRates: Set<Int>) -> [DisplayMode] {
+        let configured = refreshRates.isEmpty ? [60] : refreshRates
+        let allRates = configured.union([60])
+        return allRates.sorted(by: >).map { rate in
+            let hz = Double(rate)
+            return DisplayMode(id: "\(width)x\(height)@\(hz)_virtual",
+                               ioModeID: 0,
+                               width: width, height: height,
+                               pixelWidth: width, pixelHeight: height,
+                               refreshRate: hz,
+                               isHiDPI: false,
+                               isVirtual: true)
+        }
+    }
+
     /// Convenience overload that reads refresh rates from `VisibilityPreferences`.
     static func virtualModes(for context: VisibilityPreferences.DisplayContext) -> [DisplayMode] {
         virtualModes(refreshRates: VisibilityPreferences.virtualRefreshRates(for: context))
@@ -113,7 +130,15 @@ extension VideoManager {
 
         let settings = CGVirtualDisplaySettings()
         settings.hiDPI = 0
-        let resolutions: [(UInt, UInt)] = [(3840, 2160), (2560, 1440), (1920, 1080), (1280, 720)]
+        // For external displays, lock the virtual anchor to the display's current resolution
+        // so the user's resolution is preserved and only refresh rate changes are exposed.
+        let resolutions: [(UInt, UInt)]
+        if context == .external, let cur = currentMode(for: airPlayCGID) {
+            resolutions = [(UInt(cur.width), UInt(cur.height))]
+            vdLog.debug("enableVirtualAnchor: external — locking to current resolution \(cur.width)×\(cur.height)")
+        } else {
+            resolutions = [(3840, 2160), (2560, 1440), (1920, 1080), (1280, 720)]
+        }
         let rates = VisibilityPreferences.virtualRefreshRates(for: context)
         let configuredRates = rates.isEmpty ? [60] : rates
         // Always include 60 Hz alongside any custom rates.
