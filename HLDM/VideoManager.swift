@@ -50,7 +50,7 @@ struct DisplayMode: Identifiable, Hashable {
     /// that representation is shorter; otherwise "WIDTHxHEIGHT". Appends "✦" for virtual
     /// modes and "↑" for HiDPI.
     var shortLabel: String {
-        let suffix = isVirtual ? "✦" : (isHiDPI ? "↑" : "")
+        let suffix = isVirtual ? " ✦" : (isHiDPI ? " ↑" : "")
         let ar = VisibilityPreferences.defaultAspectRatio
         if width * ar.h == height * ar.w {
             let pLabel = "\(height)p\(suffix)"

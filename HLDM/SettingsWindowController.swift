@@ -337,6 +337,12 @@ final class SettingsWindowController: NSWindowController {
         stack.addArrangedSubview(sectionHeader("External"))
         buildVirtualDisplayControls(for: .external, into: stack)
 
+        stack.addArrangedSubview(separator())
+
+        // — Built-in —
+        stack.addArrangedSubview(sectionHeader("Built-in"))
+        buildVirtualDisplayControls(for: .builtIn, into: stack)
+
         return scrollView
     }
 

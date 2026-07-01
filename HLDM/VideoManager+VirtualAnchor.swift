@@ -97,7 +97,8 @@ extension VideoManager {
         }
 
         let context: VisibilityPreferences.DisplayContext =
-            allAirPlayDevices.contains { $0.id == display.id } ? .airPlay : .external
+            allAirPlayDevices.contains { $0.id == display.id } ? .airPlay :
+            (display.isBuiltIn ? .builtIn : .external)
         vdLog.debug("enableVirtualAnchor: starting for '\(display.name)' cgID=\(display.cgDisplayID) context=\(context.rawValue)")
 
         let descriptor = CGVirtualDisplayDescriptor()

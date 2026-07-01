@@ -120,6 +120,7 @@ enum VisibilityPreferences {
     enum DisplayContext: String {
         case airPlay   = "airplay"
         case external  = "external"
+        case builtIn   = "builtin"
     }
 
     /// Refresh rates (Hz) to expose on the virtual anchor display. Defaults to [60].

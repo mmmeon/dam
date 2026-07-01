@@ -265,23 +265,81 @@ private func buildResolutionSubmenu(display: DisplayInfo, video: VideoManager) -
             }
         }
     } else {
-        // Built-in display — native modes only.
-        let cgID    = video.resolutionControlID(for: display)
-        let current = video.currentMode(for: cgID)
-        let modes   = video.availableModesDeduped(for: cgID)
+        // Built-in display — same pattern as external: Resolution label (read-only) + Refresh Rate picker.
+        // Native rates use native mode settings; non-native rates activate the virtual anchor.
+        let nativeCGID  = display.cgDisplayID
+        let hasAnchor   = video.hasVirtualAnchor(for: display.name)
+        let anchorCGID  = video.virtualAnchorCGIDs[display.name] ?? 0
 
-        if modes.isEmpty {
-            submenu.addItem(disabledItem("No modes available"))
+        let nativeCurrent: DisplayMode? = hasAnchor ? nil : video.currentMode(for: nativeCGID)
+        let anchorCurrent: DisplayMode? = hasAnchor ? video.currentMode(for: anchorCGID) : nil
+
+        let currentRes = video.currentMode(for: nativeCGID)
+            ?? anchorCurrent
+            ?? DisplayMode(id: "unknown", ioModeID: 0, width: 0, height: 0,
+                           pixelWidth: 0, pixelHeight: 0, refreshRate: 60, isHiDPI: false)
+
+        // — Resolution section (read-only) —
+        submenu.addItem(sectionHeader("Resolution"))
+        let resLabel = currentRes.width > 0
+            ? "\(currentRes.width) × \(currentRes.height)"
+            : "Unknown"
+        submenu.addItem(disabledItem(resLabel))
+
+        // — Refresh Rate section —
+        submenu.addItem(sectionHeader("Refresh Rate"))
+
+        let allNativeAtRes = video.availableModes(for: nativeCGID)
+            .filter { $0.width == currentRes.width && $0.height == currentRes.height }
+        var nativeRateMap: [Int: DisplayMode] = [:]
+        for mode in allNativeAtRes {
+            let rate = Int(mode.refreshRate.rounded())
+            if nativeRateMap[rate] == nil { nativeRateMap[rate] = mode }
+        }
+
+        let configuredRates = VisibilityPreferences.virtualRefreshRates(for: .builtIn)
+        let allRates = Set(nativeRateMap.keys).union(configuredRates).union([60]).sorted(by: >)
+
+        if allRates.isEmpty {
+            submenu.addItem(disabledItem("No rates available"))
         } else {
-            for mode in modes {
-                let item = NSMenuItem(
-                    title: mode.label,
-                    action: #selector(AppDelegate.selectResolution(_:)),
-                    keyEquivalent: ""
-                )
-                item.representedObject = ResolutionSelection(mode: mode, cgDisplayID: cgID)
-                item.state = (mode.ioModeID == current?.ioModeID) ? .on : .off
-                submenu.addItem(item)
+            for rate in allRates {
+                let hz = Double(rate)
+                let hzLabel = hz.truncatingRemainder(dividingBy: 1) == 0
+                    ? String(format: "%.0f Hz", hz)
+                    : String(format: "%.1f Hz", hz)
+
+                if let nativeMode = nativeRateMap[rate] {
+                    let item = NSMenuItem(
+                        title: hzLabel,
+                        action: #selector(AppDelegate.selectResolution(_:)),
+                        keyEquivalent: ""
+                    )
+                    item.representedObject = ResolutionSelection(mode: nativeMode, cgDisplayID: nativeCGID)
+                    item.state = (nativeMode.ioModeID == nativeCurrent?.ioModeID) ? .on : .off
+                    submenu.addItem(item)
+                } else {
+                    let virtualMode = DisplayMode(
+                        id: "\(currentRes.width)x\(currentRes.height)@\(hz)_virtual",
+                        ioModeID: 0,
+                        width: currentRes.width, height: currentRes.height,
+                        pixelWidth: currentRes.width, pixelHeight: currentRes.height,
+                        refreshRate: hz, isHiDPI: false, isVirtual: true
+                    )
+                    let item = NSMenuItem(
+                        title: hzLabel,
+                        action: #selector(AppDelegate.selectVirtualResolution(_:)),
+                        keyEquivalent: ""
+                    )
+                    item.representedObject = VirtualResolutionSelection(mode: virtualMode, display: display)
+                    let isSelected = anchorCurrent.map {
+                        $0.pixelWidth == currentRes.width
+                            && $0.pixelHeight == currentRes.height
+                            && Int($0.refreshRate.rounded()) == rate
+                    } ?? false
+                    item.state = isSelected ? .on : .off
+                    submenu.addItem(item)
+                }
             }
         }
     }
