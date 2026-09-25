@@ -350,20 +350,16 @@ final class ControlStripPresenter: NSObject {
         let item = NSCustomTouchBarItem(identifier: id)
         let vm = videoManager
 
-        let isAirPlay          = vm?.allAirPlayDevices.contains(where: { $0.id == display.id }) ?? false
-        let isExternalPhysical = !isAirPlay && !display.isBuiltIn
-
-        let nativeCGID  = display.cgDisplayID
-        let hasAnchor   = (isAirPlay || isExternalPhysical) && (vm?.hasVirtualAnchor(for: display.name) ?? false)
-        let anchorCGID  = vm?.virtualAnchorCGIDs[display.name] ?? 0
-        let anchorCurrent: DisplayMode? = hasAnchor && anchorCGID != 0 ? vm?.currentMode(for: anchorCGID) : nil
-        let nativeCurrent: DisplayMode? = hasAnchor ? nil : vm?.currentMode(for: nativeCGID)
+        let context = vm?.displayContext(for: display) ?? (display.isBuiltIn ? .builtIn : .external)
+        let current = vm?.currentModes(for: display)
+        let anchorCurrent = current?.anchor
+        let nativeCurrent = current?.native
 
         let modes: [DisplayMode]
         let labels: [String]
 
-        if isExternalPhysical {
-            // External physical display: show refresh-rate segments locked to the current resolution.
+        if context != .airPlay {
+            // External or built-in: refresh-rate segments locked to the current resolution.
             // Smart routing: native rate → native mode; non-native rate → virtual anchor.
             // Cap at 5 segments, keeping the current rate visible.
             let allModes = vm?.refreshRateOptions(for: display)?.modes ?? []
@@ -372,8 +368,8 @@ final class ControlStripPresenter: NSObject {
             modes  = Array(Self.window(allModes, around: currentIdx, limit: 5))
             labels = modes.map { $0.rateLabel }
         } else {
-            // AirPlay or built-in: existing resolution-based segment logic.
-            let allNative = vm?.availableModesDeduped(for: nativeCGID) ?? []
+            // AirPlay: native resolutions matching the native aspect ratio, then virtual modes.
+            let allNative = vm?.availableModesDeduped(for: display.cgDisplayID) ?? []
 
             func gcd(_ a: Int, _ b: Int) -> Int { b == 0 ? a : gcd(b, a % b) }
             let filteredNative: [DisplayMode]
@@ -388,20 +384,15 @@ final class ControlStripPresenter: NSObject {
                 filteredNative = []
             }
 
-            let vContext: VisibilityPreferences.DisplayContext = isAirPlay ? .airPlay : .external
-            let virtualModes: [DisplayMode] = (isAirPlay || isExternalPhysical)
-                ? VideoManager.virtualModes(for: vContext) : []
-
             let maxTotal = 5
             let nativeToUse  = Array(filteredNative.prefix(maxTotal))
-            let remaining    = maxTotal - nativeToUse.count
-            let virtualToUse = Array(virtualModes.prefix(remaining))
+            let virtualToUse = Array(VideoManager.virtualModes(for: .airPlay).prefix(maxTotal - nativeToUse.count))
             modes  = nativeToUse + virtualToUse
             labels = modes.map { $0.shortLabel }
         }
 
-        NSLog("HLDM resSegItem: display='%@' isAirPlay=%d isExternal=%d hasAnchor=%d anchorCGID=%u nativeCGID=%u",
-              display.name, isAirPlay, isExternalPhysical, hasAnchor, anchorCGID, nativeCGID)
+        NSLog("HLDM resSegItem: display='%@' context=%@ anchorCurrent=%d cgID=%u",
+              display.name, context.rawValue, anchorCurrent != nil, display.cgDisplayID)
         for (i, m) in modes.enumerated() {
             NSLog("HLDM resSegItem:   modes[%d] %dx%d @%.1fHz virtual=%d ioModeID=%d label='%@'",
                   i, m.width, m.height, m.refreshRate, m.isVirtual, m.ioModeID, labels[i])
