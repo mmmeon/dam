@@ -162,7 +162,10 @@ private func buildResolutionSubmenu(display: DisplayInfo, video: VideoManager) -
         let options = video.refreshRateOptions(for: display)
 
         submenu.addItem(sectionHeader("Resolution"))
-        submenu.addItem(disabledItem(options.map { "\($0.resolution.width) × \($0.resolution.height)" } ?? "Unknown"))
+        let resLabel = options.map {
+            "\($0.resolution.width) × \($0.resolution.height)" + ($0.resolution.isHiDPI ? "  HiDPI" : "")
+        } ?? "Unknown"
+        submenu.addItem(disabledItem(resLabel))
 
         submenu.addItem(sectionHeader("Refresh Rate"))
         if let options {

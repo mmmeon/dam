@@ -33,14 +33,18 @@ extension VideoManager {
         [(3840, 2160), (2560, 1440), (1920, 1080), (1280, 720)]
 
     /// A synthetic mode for the virtual anchor. `ioModeID` is 0; callers match on size and rate.
-    static func virtualMode(width: Int, height: Int, refreshRate: Int) -> DisplayMode {
+    /// Pixel dimensions default to the logical ones; pass larger ones for a HiDPI mode.
+    static func virtualMode(width: Int, height: Int, refreshRate: Int,
+                            pixelWidth: Int? = nil, pixelHeight: Int? = nil) -> DisplayMode {
         let hz = Double(refreshRate)
-        return DisplayMode(id: "\(width)x\(height)@\(hz)_virtual",
+        let pw = pixelWidth ?? width, ph = pixelHeight ?? height
+        let hiDPI = pw > width
+        return DisplayMode(id: "\(width)x\(height)@\(hz)\(hiDPI ? "@2x" : "")_virtual",
                            ioModeID: 0,
                            width: width, height: height,
-                           pixelWidth: width, pixelHeight: height,
+                           pixelWidth: pw, pixelHeight: ph,
                            refreshRate: hz,
-                           isHiDPI: false,
+                           isHiDPI: hiDPI,
                            isVirtual: true)
     }
 
@@ -72,7 +76,7 @@ extension VideoManager {
     /// Index in `modes` of the one that represents the current display state.
     ///
     /// When `anchorCurrent` is provided the virtual anchor is driving the display; only
-    /// virtual modes are considered (matched by pixel size and rounded rate — the anchor may
+    /// virtual modes are considered (matched by logical size and rounded rate — the anchor may
     /// report e.g. 119.88 Hz for a 120 Hz mode). Otherwise only native modes are considered
     /// (matched by `ioModeID`). Keeping the two pools separate prevents native `ioModeID`
     /// values from colliding with the anchor's mode ID.
@@ -81,7 +85,7 @@ extension VideoManager {
                                  nativeCurrent: DisplayMode?) -> Int? {
         if let cur = anchorCurrent {
             return modes.firstIndex {
-                $0.isVirtual && $0.pixelWidth == cur.pixelWidth && $0.pixelHeight == cur.pixelHeight
+                $0.isVirtual && $0.width == cur.width && $0.height == cur.height
                     && $0.roundedRefreshRate == cur.roundedRefreshRate
             }
         }
@@ -96,7 +100,7 @@ extension VideoManager {
     /// supports it, otherwise to a virtual mode routed through the anchor. Sorted highest
     /// rate first. Returns nil when the current resolution can't be read.
     func refreshRateOptions(for display: DisplayInfo)
-        -> (resolution: (width: Int, height: Int), modes: [DisplayMode])? {
+        -> (resolution: DisplayMode, modes: [DisplayMode])? {
         // While the anchor drives the display it is the source of truth for resolution —
         // the physical display, as a mirror slave, may report a different (scaled) mode.
         let anchorCurrent = currentModes(for: display).anchor
@@ -112,9 +116,10 @@ extension VideoManager {
             .union(VisibilityPreferences.effectiveVirtualRefreshRates(for: displayContext(for: display)))
             .sorted(by: >)
         let modes = rates.map {
-            nativeByRate[$0] ?? Self.virtualMode(width: current.width, height: current.height, refreshRate: $0)
+            nativeByRate[$0] ?? Self.virtualMode(width: current.width, height: current.height, refreshRate: $0,
+                                                 pixelWidth: current.pixelWidth, pixelHeight: current.pixelHeight)
         }
-        return ((current.width, current.height), modes)
+        return (current, modes)
     }
 
     /// Selects a virtual resolution for a display.
@@ -143,14 +148,18 @@ extension VideoManager {
         let context = displayContext(for: display)
         vdLog.debug("enableVirtualAnchor: starting for '\(display.name)' cgID=\(display.cgDisplayID) context=\(context.rawValue)")
 
+        // For external and built-in displays, lock the virtual anchor to the display's current
+        // resolution (including HiDPI backing) so only refresh rate changes are exposed.
+        let locked: DisplayMode? = context == .airPlay ? nil : currentMode(for: display.cgDisplayID)
+
         let descriptor = CGVirtualDisplayDescriptor()
         // Must call setDispatchQueue: — the `queue` property writes a different ivar
         // that the system ignores, causing the virtual display to terminate immediately.
         descriptor.setDispatchQueue(.main)
         descriptor.name = "HLDM"
         descriptor.sizeInMillimeters = CGSize(width: 600, height: 340)
-        descriptor.maxPixelsWide = 3840
-        descriptor.maxPixelsHigh = 2160
+        descriptor.maxPixelsWide = UInt32(max(3840, locked?.pixelWidth ?? 0))
+        descriptor.maxPixelsHigh = UInt32(max(2160, locked?.pixelHeight ?? 0))
         descriptor.vendorID  = 0x3456
         descriptor.productID = 0x1234
         descriptor.serialNum = 0x0002
@@ -172,13 +181,15 @@ extension VideoManager {
         vdLog.debug("enableVirtualAnchor: CGVirtualDisplay created — immediate displayID=\(vd.displayID)")
 
         let settings = CGVirtualDisplaySettings()
-        settings.hiDPI = 0
-        // For external and built-in displays, lock the virtual anchor to the display's current
-        // resolution so the user's resolution is preserved and only refresh rate changes are exposed.
+        settings.hiDPI = locked?.isHiDPI == true ? 1 : 0
         let resolutions: [(width: Int, height: Int)]
-        if context != .airPlay, let cur = currentMode(for: airPlayCGID) {
-            resolutions = [(cur.width, cur.height)]
-            vdLog.debug("enableVirtualAnchor: \(context.rawValue) — locking to current resolution \(cur.width)×\(cur.height)")
+        if let cur = locked {
+            // A HiDPI lock advertises both the backing and the logical size, so the anchor offers
+            // the logical size at 2x backing however the system derives HiDPI variants.
+            resolutions = cur.isHiDPI
+                ? [(cur.pixelWidth, cur.pixelHeight), (cur.width, cur.height)]
+                : [(cur.width, cur.height)]
+            vdLog.debug("enableVirtualAnchor: \(context.rawValue) — locking to current resolution \(cur.width)×\(cur.height) (pixels \(cur.pixelWidth)×\(cur.pixelHeight))")
         } else {
             resolutions = Self.virtualResolutions
         }
@@ -374,19 +385,22 @@ extension VideoManager {
             vdLog.error("setModeOnVirtualAnchor: CGDisplayCopyAllDisplayModes returned nil for \(anchorID)")
             return
         }
-        vdLog.debug("setModeOnVirtualAnchor: \(modeList.count) modes on master \(anchorID), seeking \(mode.width)×\(mode.height) @\(mode.refreshRate)Hz")
-        for m in modeList { vdLog.debug("  candidate: \(m.pixelWidth)×\(m.pixelHeight) @\(m.refreshRate)Hz") }
+        vdLog.debug("setModeOnVirtualAnchor: \(modeList.count) modes on master \(anchorID), seeking \(mode.width)×\(mode.height) (pixels \(mode.pixelWidth)×\(mode.pixelHeight)) @\(mode.refreshRate)Hz")
+        for m in modeList { vdLog.debug("  candidate: \(m.width)×\(m.height) (pixels \(m.pixelWidth)×\(m.pixelHeight)) @\(m.refreshRate)Hz") }
 
-        let cgMode: CGDisplayMode? = {
-            // Prefer exact size + rate match.
-            if let exact = modeList.first(where: {
-                $0.pixelWidth == mode.width &&
-                $0.pixelHeight == mode.height &&
-                abs($0.refreshRate - Double(mode.refreshRate)) < 1.0
-            }) { return exact }
-            // Fallback: size-only (virtual display may report a slightly different rate).
-            return modeList.first(where: { $0.pixelWidth == mode.width && $0.pixelHeight == mode.height })
-        }()
+        let sameSize: (CGDisplayMode) -> Bool = {
+            $0.width == mode.width && $0.height == mode.height
+                && $0.pixelWidth == mode.pixelWidth && $0.pixelHeight == mode.pixelHeight
+        }
+        // Prefer exact size + rate; fall back to size only (the virtual display may report a
+        // slightly different rate); last resort for a HiDPI mode the anchor didn't derive is
+        // the logical size at 1x.
+        let cgMode = modeList.first { sameSize($0) && abs($0.refreshRate - mode.refreshRate) < 1.0 }
+            ?? modeList.first(where: sameSize)
+            ?? modeList.first {
+                $0.pixelWidth == mode.width && $0.pixelHeight == mode.height
+                    && abs($0.refreshRate - mode.refreshRate) < 1.0
+            }
 
         guard let cgMode else {
             vdLog.error("setModeOnVirtualAnchor: no mode matching \(mode.width)×\(mode.height) on master \(anchorID)")
