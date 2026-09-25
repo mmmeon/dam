@@ -365,7 +365,11 @@ final class ControlStripPresenter: NSObject {
         if isExternalPhysical {
             // External physical display: show refresh-rate segments locked to the current resolution.
             // Smart routing: native rate → native mode; non-native rate → virtual anchor.
-            modes  = Array((vm?.refreshRateOptions(for: display)?.modes ?? []).prefix(5))
+            // Cap at 5 segments, keeping the current rate visible.
+            let allModes = vm?.refreshRateOptions(for: display)?.modes ?? []
+            let currentIdx = Self.selectedSegmentIndex(
+                in: allModes, anchorCurrent: anchorCurrent, nativeCurrent: nativeCurrent)
+            modes  = Array(Self.window(allModes, around: currentIdx, limit: 5))
             labels = modes.map { $0.rateLabel }
         } else {
             // AirPlay or built-in: existing resolution-based segment logic.
@@ -564,6 +568,14 @@ final class ControlStripPresenter: NSObject {
     }
 
     // MARK: - Segment index selection (extracted for testability)
+
+    /// Up to `limit` consecutive items, positioned so the item at `current` stays visible
+    /// (centred where possible). With no current item, the first `limit` items are kept.
+    static func window<T>(_ items: [T], around current: Int?, limit: Int) -> ArraySlice<T> {
+        guard items.count > limit else { return items[...] }
+        let start = min(max((current ?? 0) - limit / 2, 0), items.count - limit)
+        return items[start..<start + limit]
+    }
 
     /// Returns the segment index in `modes` that represents the current display state.
     ///

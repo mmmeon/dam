@@ -171,4 +171,24 @@ final class ControlStripPresenterTests: XCTestCase {
         )
         XCTAssertEqual(idx, 1, "720p anchor should select virtual 720p✦, not native 720p")
     }
+
+    // MARK: - window(_:around:limit:)
+
+    func testWindow_shortList_returnsAll() {
+        XCTAssertEqual(Array(ControlStripPresenter.window([1, 2, 3], around: 2, limit: 5)), [1, 2, 3])
+    }
+
+    func testWindow_noCurrent_keepsFirstItems() {
+        XCTAssertEqual(Array(ControlStripPresenter.window(Array(0..<8), around: nil, limit: 5)), [0, 1, 2, 3, 4])
+    }
+
+    func testWindow_currentNearEnd_staysVisible() {
+        // e.g. rates [144, 120, 100, 75, 60, 50, 30] with 50 Hz current (index 5)
+        let w = ControlStripPresenter.window(Array(0..<7), around: 5, limit: 5)
+        XCTAssertEqual(Array(w), [2, 3, 4, 5, 6])
+    }
+
+    func testWindow_currentInMiddle_isCentred() {
+        XCTAssertEqual(Array(ControlStripPresenter.window(Array(0..<9), around: 4, limit: 5)), [2, 3, 4, 5, 6])
+    }
 }
