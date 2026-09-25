@@ -166,9 +166,17 @@ final class VideoManagerFilterTests: XCTestCase {
         VisibilityPreferences.setVirtualRefreshRates([120], for: .airPlay)
 
         let modes = VideoManager.virtualModes(for: .airPlay)
-        XCTAssertEqual(modes.count, VideoManager.virtualResolutions.count * 2)
+        // 4 resolutions at 1x plus HiDPI 1080p (4K-backed) and 720p (1440p-backed), × 2 rates.
+        XCTAssertEqual(modes.count, (VideoManager.virtualResolutions.count + 2) * 2)
         XCTAssertEqual(modes.prefix(2).map { $0.roundedRefreshRate }, [120, 60])
         XCTAssertTrue(modes.allSatisfy { $0.isVirtual && $0.ioModeID == 0 })
+    }
+
+    func testVirtualModes_includeHiDPI720pBackedBy1440p() {
+        let hiDPI = VideoManager.virtualModes(for: .airPlay).filter { $0.isHiDPI }
+        XCTAssertTrue(hiDPI.contains { $0.width == 1280 && $0.pixelWidth == 2560 })
+        XCTAssertTrue(hiDPI.contains { $0.width == 1920 && $0.pixelWidth == 3840 })
+        XCTAssertFalse(hiDPI.contains { $0.width == 2560 }, "No 5K backing is advertised")
     }
 
     // MARK: - DisplayMode.shortLabel
@@ -187,6 +195,12 @@ final class VideoManagerFilterTests: XCTestCase {
         let m = DisplayMode(id: "1920x1080@60.0@2x", ioModeID: 0, width: 1920, height: 1080,
                             pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60, isHiDPI: true)
         XCTAssertEqual(m.shortLabel, "1080p ↑")
+    }
+
+    func testDisplayMode_shortLabel_virtualHiDPI_showsBothMarkers() {
+        let m = VideoManager.virtualMode(width: 1280, height: 720, refreshRate: 60,
+                                         pixelWidth: 2560, pixelHeight: 1440)
+        XCTAssertEqual(m.shortLabel, "720p ↑✦")
     }
 
     func testDisplayMode_shortLabel_16x9_usesPFormat() {

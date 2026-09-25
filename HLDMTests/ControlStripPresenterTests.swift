@@ -186,6 +186,15 @@ final class ControlStripPresenterTests: XCTestCase {
         XCTAssertEqual(idx, 1)
     }
 
+    func testVirtualAnchor_hiDPI_matchesHiDPISegmentNot1x() {
+        let hiDPI720 = VideoManager.virtualMode(width: 1280, height: 720, refreshRate: 60,
+                                                pixelWidth: 2560, pixelHeight: 1440)
+        let modes = [virtualMode(1280, 720), hiDPI720]
+        let anchor = DisplayMode(id: "1280x720@60.0@2x", ioModeID: 99, width: 1280, height: 720,
+                                 pixelWidth: 2560, pixelHeight: 1440, refreshRate: 60, isHiDPI: true)
+        XCTAssertEqual(VideoManager.currentModeIndex(in: modes, anchorCurrent: anchor, nativeCurrent: nil), 1)
+    }
+
     // MARK: - window(_:around:limit:)
 
     func testWindow_shortList_returnsAll() {

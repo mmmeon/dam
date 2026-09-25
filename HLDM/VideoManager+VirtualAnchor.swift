@@ -97,12 +97,20 @@ extension VideoManager {
                            isVirtual: true)
     }
 
-    /// Every mode an AirPlay virtual anchor advertises for `context`, sorted descending by
-    /// resolution then rate.
+    /// Every mode an AirPlay virtual anchor offers for `context`, sorted descending by
+    /// resolution (HiDPI first at equal size) then rate. The anchor has HiDPI enabled, so an
+    /// advertised resolution that is exactly twice another one also backs a HiDPI mode at
+    /// the smaller size (e.g. 2560×1440 backs "1280×720 HiDPI").
     static func virtualModes(for context: VisibilityPreferences.DisplayContext) -> [DisplayMode] {
         let rates = VisibilityPreferences.effectiveVirtualRefreshRates(for: context)
-        return virtualResolutions.flatMap { res in
-            rates.map { virtualMode(width: res.width, height: res.height, refreshRate: $0) }
+        let advertised = Set(virtualResolutions.map { "\($0.width)x\($0.height)" })
+        return virtualResolutions.flatMap { res -> [DisplayMode] in
+            let hiDPI = advertised.contains("\(res.width * 2)x\(res.height * 2)")
+            let hiDPIModes = hiDPI ? rates.map {
+                virtualMode(width: res.width, height: res.height, refreshRate: $0,
+                            pixelWidth: res.width * 2, pixelHeight: res.height * 2)
+            } : []
+            return hiDPIModes + rates.map { virtualMode(width: res.width, height: res.height, refreshRate: $0) }
         }
     }
 
@@ -125,7 +133,7 @@ extension VideoManager {
     /// Index in `modes` of the one that represents the current display state.
     ///
     /// When `anchorCurrent` is provided the virtual anchor is driving the display; only
-    /// virtual modes are considered (matched by logical size and rounded rate — the anchor may
+    /// virtual modes are considered (matched by logical size, HiDPI and rounded rate — the anchor may
     /// report e.g. 119.88 Hz for a 120 Hz mode). Otherwise only native modes are considered
     /// (matched by `ioModeID`). Keeping the two pools separate prevents native `ioModeID`
     /// values from colliding with the anchor's mode ID.
@@ -134,7 +142,7 @@ extension VideoManager {
                                  nativeCurrent: DisplayMode?) -> Int? {
         if let cur = anchorCurrent {
             return modes.firstIndex {
-                $0.isVirtual && $0.width == cur.width && $0.height == cur.height
+                $0.isVirtual && $0.width == cur.width && $0.height == cur.height && $0.isHiDPI == cur.isHiDPI
                     && $0.roundedRefreshRate == cur.roundedRefreshRate
             }
         }
@@ -232,7 +240,9 @@ extension VideoManager {
         vdLog.debug("enableVirtualAnchor: CGVirtualDisplay created — immediate displayID=\(vd.displayID)")
 
         let settings = CGVirtualDisplaySettings()
-        settings.hiDPI = locked?.isHiDPI == true ? 1 : 0
+        // AirPlay anchors always offer HiDPI variants (see virtualModes(for:)); locked anchors
+        // match the display's current mode.
+        settings.hiDPI = (locked?.isHiDPI ?? true) ? 1 : 0
         let resolutions: [(width: Int, height: Int)]
         if let cur = locked {
             // A HiDPI lock advertises both the backing and the logical size, so the anchor offers
@@ -480,6 +490,9 @@ extension VideoManager {
                 $0.pixelWidth == mode.width && $0.pixelHeight == mode.height
                     && abs($0.refreshRate - mode.refreshRate) < 1.0
             }
+        if let cgMode, mode.isHiDPI, cgMode.pixelWidth == cgMode.width {
+            vdLog.error("setModeOnVirtualAnchor: anchor offers no HiDPI \(mode.width)×\(mode.height) — falling back to 1x")
+        }
 
         guard let cgMode else {
             vdLog.error("setModeOnVirtualAnchor: no mode matching \(mode.width)×\(mode.height) on master \(anchorID)")

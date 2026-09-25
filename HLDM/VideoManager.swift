@@ -54,10 +54,11 @@ struct DisplayMode: Identifiable, Hashable {
 
     /// Compact label for Touch Bar.
     /// Uses "HEIGHTp" when the resolution matches the configured default aspect ratio and
-    /// that representation is shorter; otherwise "WIDTHxHEIGHT". Appends "✦" for virtual
-    /// modes and "↑" for HiDPI.
+    /// that representation is shorter; otherwise "WIDTHxHEIGHT". Appends "↑" for HiDPI and
+    /// "✦" for virtual modes.
     var shortLabel: String {
-        let suffix = isVirtual ? " ✦" : (isHiDPI ? " ↑" : "")
+        let markers = (isHiDPI ? "↑" : "") + (isVirtual ? "✦" : "")
+        let suffix = markers.isEmpty ? "" : " " + markers
         let ar = VisibilityPreferences.defaultAspectRatio
         if width * ar.h == height * ar.w {
             let pLabel = "\(height)p\(suffix)"
