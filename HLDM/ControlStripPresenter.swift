@@ -123,10 +123,17 @@ final class ControlStripPresenter: NSObject {
         super.init()
         SpeechSynthesizer.shared.onDisplayTextChanged = { [weak self] in
             DispatchQueue.main.async {
+                let text = SpeechSynthesizer.shared.displayText
+                guard Self.isTouchBarAvailable else {
+                    // No Touch Bar: caption on screen, without taking focus.
+                    CaptionHUD.shared.show(text)
+                    return
+                }
+                CaptionHUD.shared.show(nil)
                 // Bring the app to the foreground so NSApp.touchBar is visible.
                 // Only activate on the leading edge (text just appeared); on clear
                 // we leave focus wherever it ended up.
-                if SpeechSynthesizer.shared.displayText != nil {
+                if text != nil {
                     NSApp.activate(ignoringOtherApps: true)
                 }
                 self?.rebuild()
