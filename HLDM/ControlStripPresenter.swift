@@ -439,11 +439,18 @@ final class ControlStripPresenter: NSObject {
         return ctrl
     }
 
+    /// AirPlay devices offered for connection — connected ones appear as buttons on the
+    /// right side of the bar instead. Segment indices in `videoSegmented()` index this list.
+    private var connectableAirPlayDevices: [DisplayInfo] {
+        (videoManager?.airPlayDevices ?? []).filter { !$0.isConnected }
+    }
+
     private func videoSegmented() -> NSView {
-        // Only show devices that aren't already connected — connected ones appear
-        // as buttons on the right side of the bar.
-        let displays = (videoManager?.airPlayDevices ?? []).filter { !$0.isConnected }
-        guard !displays.isEmpty else { return placeholder("No AirPlay") }
+        let displays = connectableAirPlayDevices
+        guard !displays.isEmpty else {
+            let anyConnected = videoManager?.airPlayDevices.contains { $0.isConnected } ?? false
+            return placeholder(anyConnected ? "AirPlay connected" : "No AirPlay")
+        }
         let ctrl = NSSegmentedControl(
             labels: displays.map { truncated($0.name) },
             trackingMode: .selectAny,
@@ -451,9 +458,6 @@ final class ControlStripPresenter: NSObject {
             action: #selector(videoSegmentTapped(_:))
         )
         ctrl.segmentStyle = .rounded
-        for (i, d) in displays.enumerated() where d.isConnected {
-            ctrl.setSelected(true, forSegment: i)
-        }
         return ctrl
     }
 
@@ -490,7 +494,7 @@ final class ControlStripPresenter: NSObject {
     }
 
     @objc private func videoSegmentTapped(_ ctrl: NSSegmentedControl) {
-        let displays = videoManager?.airPlayDevices ?? []
+        let displays = connectableAirPlayDevices
         let idx = ctrl.selectedSegment
         guard idx >= 0, idx < displays.count else { return }
         videoManager?.connectAirPlay(deviceName: displays[idx].name)
