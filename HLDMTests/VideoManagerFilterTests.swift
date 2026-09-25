@@ -178,6 +178,17 @@ final class VideoManagerFilterTests: XCTestCase {
         XCTAssertFalse(m.shortLabel.contains(" "), "shortLabel should have no spaces: \(m.shortLabel)")
     }
 
+    func testDisplayMode_shortLabel_virtual_appendsSpacedMarker() {
+        let m = VideoManager.virtualMode(width: 1920, height: 1080, refreshRate: 60)
+        XCTAssertEqual(m.shortLabel, "1080p ✦")
+    }
+
+    func testDisplayMode_shortLabel_hiDPI_appendsSpacedMarker() {
+        let m = DisplayMode(id: "1920x1080@60.0@2x", ioModeID: 0, width: 1920, height: 1080,
+                            pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60, isHiDPI: true)
+        XCTAssertEqual(m.shortLabel, "1080p ↑")
+    }
+
     func testDisplayMode_shortLabel_16x9_usesPFormat() {
         // 1920×1080 is 16:9, so the compact "1080p" label is used (shorter than "1920×1080").
         let m = mode(1920, 1080)
