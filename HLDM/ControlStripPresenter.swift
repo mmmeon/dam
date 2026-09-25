@@ -377,8 +377,8 @@ final class ControlStripPresenter: NSObject {
                 if nativeRateMap[rate] == nil { nativeRateMap[rate] = mode }
             }
 
-            let configuredRates = VisibilityPreferences.virtualRefreshRates(for: .external)
-            let allRates = Array(Set(nativeRateMap.keys).union(configuredRates).union([60]))
+            let allRates = Set(nativeRateMap.keys)
+                .union(VisibilityPreferences.effectiveVirtualRefreshRates(for: .external))
                 .sorted(by: >)
                 .prefix(5)
 
@@ -386,11 +386,7 @@ final class ControlStripPresenter: NSObject {
             let h = currentRes?.height ?? 0
             modes = allRates.map { rate -> DisplayMode in
                 if let native = nativeRateMap[rate] { return native }
-                let hz = Double(rate)
-                return DisplayMode(id: "\(w)x\(h)@\(hz)_virtual",
-                                   ioModeID: 0, width: w, height: h,
-                                   pixelWidth: w, pixelHeight: h,
-                                   refreshRate: hz, isHiDPI: false, isVirtual: true)
+                return VideoManager.virtualMode(width: w, height: h, refreshRate: rate)
             }
             labels = modes.map { mode in
                 let hz = mode.refreshRate

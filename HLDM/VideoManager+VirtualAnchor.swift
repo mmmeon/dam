@@ -28,50 +28,29 @@ extension VideoManager {
         virtualAnchorCGIDs[display.name] ?? display.cgDisplayID
     }
 
-    /// Generates one DisplayMode per combination of the 4 fixed resolutions × each
-    /// selected refresh rate, sorted descending by resolution then rate.
-    static func virtualModes(refreshRates: Set<Int>) -> [DisplayMode] {
-        let specs: [(Int, Int)] = [(3840, 2160), (2560, 1440), (1920, 1080), (1280, 720)]
-        // Mirror enableVirtualAnchor: always include 60 Hz alongside configured rates
-        // so the menu/Touch Bar reflect every mode the virtual display actually advertises.
-        let configured = refreshRates.isEmpty ? [60] : refreshRates
-        let allRates = configured.union([60])
-        var modes: [DisplayMode] = []
-        for (w, h) in specs {
-            for rate in allRates.sorted(by: >) {
-                let hz = Double(rate)
-                modes.append(DisplayMode(id: "\(w)x\(h)@\(hz)_virtual",
-                                         ioModeID: 0,
-                                         width: w, height: h,
-                                         pixelWidth: w, pixelHeight: h,
-                                         refreshRate: hz,
-                                         isHiDPI: false,
-                                         isVirtual: true))
-            }
-        }
-        return modes
+    /// Resolutions advertised by an AirPlay virtual anchor, largest first.
+    static let virtualResolutions: [(width: Int, height: Int)] =
+        [(3840, 2160), (2560, 1440), (1920, 1080), (1280, 720)]
+
+    /// A synthetic mode for the virtual anchor. `ioModeID` is 0; callers match on size and rate.
+    static func virtualMode(width: Int, height: Int, refreshRate: Int) -> DisplayMode {
+        let hz = Double(refreshRate)
+        return DisplayMode(id: "\(width)x\(height)@\(hz)_virtual",
+                           ioModeID: 0,
+                           width: width, height: height,
+                           pixelWidth: width, pixelHeight: height,
+                           refreshRate: hz,
+                           isHiDPI: false,
+                           isVirtual: true)
     }
 
-    /// Generates one DisplayMode per refresh rate for a single resolution.
-    /// Always includes 60 Hz. Used for external displays where the resolution is locked.
-    static func virtualModes(width: Int, height: Int, refreshRates: Set<Int>) -> [DisplayMode] {
-        let configured = refreshRates.isEmpty ? [60] : refreshRates
-        let allRates = configured.union([60])
-        return allRates.sorted(by: >).map { rate in
-            let hz = Double(rate)
-            return DisplayMode(id: "\(width)x\(height)@\(hz)_virtual",
-                               ioModeID: 0,
-                               width: width, height: height,
-                               pixelWidth: width, pixelHeight: height,
-                               refreshRate: hz,
-                               isHiDPI: false,
-                               isVirtual: true)
-        }
-    }
-
-    /// Convenience overload that reads refresh rates from `VisibilityPreferences`.
+    /// Every mode an AirPlay virtual anchor advertises for `context`, sorted descending by
+    /// resolution then rate.
     static func virtualModes(for context: VisibilityPreferences.DisplayContext) -> [DisplayMode] {
-        virtualModes(refreshRates: VisibilityPreferences.virtualRefreshRates(for: context))
+        let rates = VisibilityPreferences.effectiveVirtualRefreshRates(for: context)
+        return virtualResolutions.flatMap { res in
+            rates.map { virtualMode(width: res.width, height: res.height, refreshRate: $0) }
+        }
     }
 
     /// Selects a virtual resolution for a display.
@@ -133,26 +112,20 @@ extension VideoManager {
         settings.hiDPI = 0
         // For external and built-in displays, lock the virtual anchor to the display's current
         // resolution so the user's resolution is preserved and only refresh rate changes are exposed.
-        let resolutions: [(UInt, UInt)]
+        let resolutions: [(width: Int, height: Int)]
         if context != .airPlay, let cur = currentMode(for: airPlayCGID) {
-            resolutions = [(UInt(cur.width), UInt(cur.height))]
+            resolutions = [(cur.width, cur.height)]
             vdLog.debug("enableVirtualAnchor: \(context.rawValue) — locking to current resolution \(cur.width)×\(cur.height)")
         } else {
-            resolutions = [(3840, 2160), (2560, 1440), (1920, 1080), (1280, 720)]
+            resolutions = Self.virtualResolutions
         }
-        let rates = VisibilityPreferences.virtualRefreshRates(for: context)
-        let configuredRates = rates.isEmpty ? [60] : rates
-        // Always include 60 Hz alongside any custom rates.
-        // The System Settings "Refresh Rate" dropdown only appears when at least two
-        // rates exist for the same resolution — mirroring the reference implementation
-        // which advertises both the target rate and 60 Hz for every mode.
-        let allRates = configuredRates.union([60])
-        settings.modes = resolutions.flatMap { w, h in
-            allRates.sorted(by: >).map { rate in
-                CGVirtualDisplayMode(width: w, height: h, refreshRate: Double(rate))
+        let allRates = VisibilityPreferences.effectiveVirtualRefreshRates(for: context)
+        settings.modes = resolutions.flatMap { res in
+            allRates.map { rate in
+                CGVirtualDisplayMode(width: UInt(res.width), height: UInt(res.height), refreshRate: Double(rate))
             }
         }
-        vdLog.debug("enableVirtualAnchor: applying \(settings.modes.count) modes (\(allRates.sorted(by: >) as [Int]) Hz)")
+        vdLog.debug("enableVirtualAnchor: applying \(settings.modes.count) modes (\(allRates) Hz)")
 
         let applied = vd.apply(settings)
         vdLog.debug("enableVirtualAnchor: applySettings returned \(applied) — displayID after apply=\(vd.displayID)")

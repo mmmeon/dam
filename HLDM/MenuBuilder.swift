@@ -217,8 +217,9 @@ private func buildResolutionSubmenu(display: DisplayInfo, video: VideoManager) -
             if nativeRateMap[rate] == nil { nativeRateMap[rate] = mode }
         }
 
-        let configuredRates = VisibilityPreferences.virtualRefreshRates(for: .external)
-        let allRates = Set(nativeRateMap.keys).union(configuredRates).union([60]).sorted(by: >)
+        let allRates = Set(nativeRateMap.keys)
+            .union(VisibilityPreferences.effectiveVirtualRefreshRates(for: .external))
+            .sorted(by: >)
 
         if allRates.isEmpty {
             submenu.addItem(disabledItem("No rates available"))
@@ -241,13 +242,8 @@ private func buildResolutionSubmenu(display: DisplayInfo, video: VideoManager) -
                     submenu.addItem(item)
                 } else {
                     // Not native — route through virtual anchor at the current resolution.
-                    let virtualMode = DisplayMode(
-                        id: "\(currentRes.width)x\(currentRes.height)@\(hz)_virtual",
-                        ioModeID: 0,
-                        width: currentRes.width, height: currentRes.height,
-                        pixelWidth: currentRes.width, pixelHeight: currentRes.height,
-                        refreshRate: hz, isHiDPI: false, isVirtual: true
-                    )
+                    let virtualMode = VideoManager.virtualMode(
+                        width: currentRes.width, height: currentRes.height, refreshRate: rate)
                     let item = NSMenuItem(
                         title: hzLabel,
                         action: #selector(AppDelegate.selectVirtualResolution(_:)),
@@ -297,8 +293,9 @@ private func buildResolutionSubmenu(display: DisplayInfo, video: VideoManager) -
             if nativeRateMap[rate] == nil { nativeRateMap[rate] = mode }
         }
 
-        let configuredRates = VisibilityPreferences.virtualRefreshRates(for: .builtIn)
-        let allRates = Set(nativeRateMap.keys).union(configuredRates).union([60]).sorted(by: >)
+        let allRates = Set(nativeRateMap.keys)
+            .union(VisibilityPreferences.effectiveVirtualRefreshRates(for: .builtIn))
+            .sorted(by: >)
 
         if allRates.isEmpty {
             submenu.addItem(disabledItem("No rates available"))
@@ -319,13 +316,8 @@ private func buildResolutionSubmenu(display: DisplayInfo, video: VideoManager) -
                     item.state = (nativeMode.ioModeID == nativeCurrent?.ioModeID) ? .on : .off
                     submenu.addItem(item)
                 } else {
-                    let virtualMode = DisplayMode(
-                        id: "\(currentRes.width)x\(currentRes.height)@\(hz)_virtual",
-                        ioModeID: 0,
-                        width: currentRes.width, height: currentRes.height,
-                        pixelWidth: currentRes.width, pixelHeight: currentRes.height,
-                        refreshRate: hz, isHiDPI: false, isVirtual: true
-                    )
+                    let virtualMode = VideoManager.virtualMode(
+                        width: currentRes.width, height: currentRes.height, refreshRate: rate)
                     let item = NSMenuItem(
                         title: hzLabel,
                         action: #selector(AppDelegate.selectVirtualResolution(_:)),
