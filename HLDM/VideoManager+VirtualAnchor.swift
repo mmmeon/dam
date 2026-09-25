@@ -120,20 +120,21 @@ extension VideoManager {
     /// Selects a virtual resolution for a display.
     ///
     /// - If the virtual anchor is already active, applies the mode immediately.
-    /// - If not yet active, starts the anchor; the user can re-select once it appears.
+    /// - If not yet active, starts the anchor and applies the mode once mirroring is set up.
     func selectVirtualMode(_ mode: DisplayMode, for display: DisplayInfo) {
         if hasVirtualAnchor(for: display.name) {
             guard let anchorID = virtualAnchorCGIDs[display.name] else { return }
             setModeOnVirtualAnchor(mode, anchorID: anchorID)
         } else {
-            vdLog.debug("selectVirtualMode: anchor not yet active for '\(display.name)' — enabling anchor, mode change deferred to user")
-            enableVirtualAnchor(for: display)
+            vdLog.debug("selectVirtualMode: anchor not yet active for '\(display.name)' — enabling anchor, mode applied once mirrored")
+            enableVirtualAnchor(for: display, initialMode: mode)
         }
     }
 
     /// Creates a CGVirtualDisplay as a mirror master for `display`, then polls until
     /// it appears in the system display list and wires up the mirror relationship.
-    func enableVirtualAnchor(for display: DisplayInfo) {
+    /// `initialMode`, if given, is applied to the anchor once mirroring is in place.
+    func enableVirtualAnchor(for display: DisplayInfo, initialMode: DisplayMode? = nil) {
         guard display.cgDisplayID != 0, !hasVirtualAnchor(for: display.name) else {
             vdLog.debug("enableVirtualAnchor: skipped '\(display.name)' cgID=\(display.cgDisplayID) hasAnchor=\(self.hasVirtualAnchor(for: display.name))")
             return
@@ -199,7 +200,8 @@ extension VideoManager {
         // Retain vd so it isn't released before mirroring is wired up.
         virtualAnchorStore[deviceName] = vd
         vdLog.debug("enableVirtualAnchor: stored anchor, beginning poll (attempt 0)")
-        waitForVirtualDisplay(vd, name: deviceName, airPlayID: airPlayCGID, context: context, attempt: 0)
+        waitForVirtualDisplay(vd, name: deviceName, airPlayID: airPlayCGID, context: context,
+                              initialMode: initialMode, attempt: 0)
     }
 
     /// Tears down the mirror and releases the CGVirtualDisplay for `display`.
@@ -236,6 +238,7 @@ extension VideoManager {
                                        name: String,
                                        airPlayID: CGDirectDisplayID,
                                        context: VisibilityPreferences.DisplayContext,
+                                       initialMode: DisplayMode?,
                                        attempt: Int) {
         // Collect both online and active lists — different macOS versions promote
         // CGVirtualDisplay to one or the other first.
@@ -282,7 +285,8 @@ extension VideoManager {
                 vdLog.debug("waitForVirtualDisplay: virtual display not found yet, retrying in 1 s")
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
                     self?.waitForVirtualDisplay(vd, name: name, airPlayID: airPlayID,
-                                               context: context, attempt: attempt + 1)
+                                               context: context, initialMode: initialMode,
+                                               attempt: attempt + 1)
                 }
             } else {
                 vdLog.error("waitForVirtualDisplay: gave up after \(attempt) attempts — removing anchor for '\(name)'")
@@ -312,7 +316,7 @@ extension VideoManager {
                     vdLog.debug("step1: teardown complete err=\(completeErr.rawValue) — waiting 1 s before mirror")
                     // Step 2 runs after teardown settles.
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-                        self?.applyMirror(airPlayID: airPlayID, virtualID: virtualID)
+                        self?.applyMirror(airPlayID: airPlayID, virtualID: virtualID, initialMode: initialMode)
                     }
                 }
                 return   // step2 will be chained from the background completion above
@@ -321,13 +325,14 @@ extension VideoManager {
 
         // Step 2 (no prior mirror to tear down): short settle delay then apply.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            self?.applyMirror(airPlayID: airPlayID, virtualID: virtualID)
+            self?.applyMirror(airPlayID: airPlayID, virtualID: virtualID, initialMode: initialMode)
         }
     }
 
     /// Applies the mirror relationship (airPlay → virtual) and chains step 3.
     /// Called from both the no-prior-mirror path and the post-teardown background path.
-    private func applyMirror(airPlayID: CGDirectDisplayID, virtualID: CGDirectDisplayID) {
+    private func applyMirror(airPlayID: CGDirectDisplayID, virtualID: CGDirectDisplayID,
+                             initialMode: DisplayMode?) {
         vdLog.debug("step2: configuring mirror airPlayID=\(airPlayID) → virtualID=\(virtualID)")
         var config: CGDisplayConfigRef?
         let beginErr = CGBeginDisplayConfiguration(&config)
@@ -345,6 +350,10 @@ extension VideoManager {
             vdLog.debug("step2: CompleteDisplayConfiguration err=\(mirrorErr.rawValue)")
             // Step 3: let the system settle, then refresh the UI on the main queue.
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                if let initialMode {
+                    vdLog.debug("step3: applying initial mode \(initialMode.width)×\(initialMode.height) @\(initialMode.refreshRate)Hz")
+                    self?.setModeOnVirtualAnchor(initialMode, anchorID: virtualID)
+                }
                 vdLog.debug("step3: mergeDevices")
                 self?.mergeDevices()
             }
