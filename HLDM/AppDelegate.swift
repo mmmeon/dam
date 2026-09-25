@@ -34,7 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         AirPlayQuickConnect.shared.configure(videoManager: videoManager)
         hotkey = GlobalHotkey(preference: HotkeyPreference.current) { [weak self] in
-            self?.controlStrip.openModal()
+            self?.openSwitcher()
         }
         airPlayConnectHotkey = GlobalHotkey(preference: HotkeyPreference.currentAirPlayConnect) {
             AirPlayQuickConnect.shared.activate()
@@ -73,6 +73,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - Actions
+
+    /// Opens the Touch Bar switcher, or the menu bar menu when no Touch Bar is available
+    /// (a Mac without one, or with the lid closed).
+    private func openSwitcher() {
+        if ControlStripPresenter.isTouchBarAvailable {
+            controlStrip.openModal()
+        } else {
+            statusItem.button?.performClick(nil)
+        }
+    }
 
     private func toggleAirPlayMirror() {
         // Find the first connected AirPlay display that has a real display ID.
@@ -134,7 +144,7 @@ extension AppDelegate: NSMenuDelegate {
         wc.onSave = { [weak self] pref in
             HotkeyPreference.current = pref
             self?.hotkey = GlobalHotkey(preference: pref) { [weak self] in
-                self?.controlStrip.openModal()
+                self?.openSwitcher()
             }
         }
         wc.onSaveAirPlayConnect = { [weak self] pref in

@@ -30,9 +30,11 @@ private func dfrSym<Fn>(_ name: String) -> Fn? {
 
 private typealias ShowsCloseFn  = @convention(c) (Bool) -> Void
 private typealias SetPresenceFn = @convention(c) (NSString, Bool) -> Void
+private typealias GetStatusFn   = @convention(c) () -> UInt32
 
 private let _showsClose:   ShowsCloseFn?  = dfrSym("DFRSystemModalShowsCloseBoxWhenFrontMost")
 private let _setPresence:  SetPresenceFn? = dfrSym("DFRElementSetControlStripPresenceForIdentifier")
+private let _getStatus:    GetStatusFn?   = dfrSym("DFRGetStatus")
 
 private func DFRSystemModalShowsCloseBoxWhenFrontMost(_ show: Bool) {
     _showsClose?(show)
@@ -130,6 +132,12 @@ final class ControlStripPresenter: NSObject {
                 self?.rebuild()
             }
         }
+    }
+
+    /// True when a Touch Bar is usable right now. DFRGetStatus bit 0 is set while the
+    /// Touch Bar is up; it is clear on Macs without one, and briefly at login and wake.
+    static var isTouchBarAvailable: Bool {
+        (_getStatus?() ?? 0) & 0x1 != 0
     }
 
     // MARK: - Lifecycle

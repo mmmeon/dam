@@ -120,7 +120,8 @@ final class SettingsWindowController: NSWindowController {
             settingGroup(
                 control: hotkeyRow(label: "Hotkey:", recorder: recorder, resetBtn: resetBtn),
                 description: "Opens the Touch Bar switcher panel for changing the audio " +
-                             "output device or AirPlay display."
+                             "output device or AirPlay display. Without a Touch Bar " +
+                             "(or with the lid closed) it opens the menu bar menu instead."
             )
         )
 
