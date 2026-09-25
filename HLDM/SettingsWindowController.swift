@@ -423,7 +423,8 @@ final class SettingsWindowController: NSWindowController {
 
     // MARK: - Virtual Display helpers
 
-    /// Adds refresh-rate checkboxes and the default-resolution popup for one virtual-display context.
+    /// Adds refresh-rate checkboxes (and, for AirPlay, the default-resolution popup) for one
+    /// virtual-display context.
     private func buildVirtualDisplayControls(for context: VisibilityPreferences.DisplayContext,
                                              into stack: NSStackView) {
         let availableRates = [30, 60, 120, 240]
@@ -442,7 +443,10 @@ final class SettingsWindowController: NSWindowController {
                 )
             )
         }
-        stack.addArrangedSubview(buildDefaultResolutionRow(for: context))
+        // External and built-in anchors are locked to the current resolution.
+        if context == .airPlay {
+            stack.addArrangedSubview(buildDefaultResolutionRow(for: context))
+        }
     }
 
     /// Label + popup for choosing the aspect ratio used for compact Touch Bar labels.

@@ -45,12 +45,20 @@ struct DisplayMode: Identifiable, Hashable {
         return isHiDPI ? base + "  HiDPI" : base
     }
 
+    /// Refresh rate rounded to whole Hz — identifies a row in the refresh-rate pickers,
+    /// so 59.94 Hz and 60 Hz modes collapse into one "60 Hz" choice.
+    var roundedRefreshRate: Int { Int(refreshRate.rounded()) }
+
+    /// "60 Hz"-style label for the refresh-rate pickers.
+    var rateLabel: String { "\(roundedRefreshRate) Hz" }
+
     /// Compact label for Touch Bar.
     /// Uses "HEIGHTp" when the resolution matches the configured default aspect ratio and
-    /// that representation is shorter; otherwise "WIDTHxHEIGHT". Appends "✦" for virtual
-    /// modes and "↑" for HiDPI.
+    /// that representation is shorter; otherwise "WIDTHxHEIGHT". Appends "↑" for HiDPI and
+    /// "✦" for virtual modes.
     var shortLabel: String {
-        let suffix = isVirtual ? " ✦" : (isHiDPI ? " ↑" : "")
+        let markers = (isHiDPI ? "↑" : "") + (isVirtual ? "✦" : "")
+        let suffix = markers.isEmpty ? "" : " " + markers
         let ar = VisibilityPreferences.defaultAspectRatio
         if width * ar.h == height * ar.w {
             let pLabel = "\(height)p\(suffix)"
@@ -109,6 +117,8 @@ final class VideoManager: ObservableObject {
     var virtualAnchorStore: [String: AnyObject] = [:]
     /// Maps AirPlay device name → the CGDirectDisplayID of its active virtual anchor.
     var virtualAnchorCGIDs: [String: CGDirectDisplayID] = [:]
+    /// Display layout captured just before each anchor was created, keyed like the above.
+    var virtualAnchorArrangements: [String: DisplayArrangement] = [:]
 
     /// Start continuous Bonjour discovery. Call once on launch; runs until the app quits.
     func startDiscovery() {
@@ -524,6 +534,7 @@ final class VideoManager: ObservableObject {
             if onlineIDs.contains(where: { CGDisplayMirrorsDisplay($0) == anchorID }) { continue }
             virtualAnchorStore.removeValue(forKey: name)
             virtualAnchorCGIDs.removeValue(forKey: name)
+            virtualAnchorArrangements.removeValue(forKey: name)
         }
 
         if allAirPlayDevices    != newAirPlay   { allAirPlayDevices    = newAirPlay   }

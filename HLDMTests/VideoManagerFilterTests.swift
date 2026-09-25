@@ -150,11 +150,57 @@ final class VideoManagerFilterTests: XCTestCase {
         XCTAssertEqual(m.label, "1920 × 1080 — 59.9 Hz")
     }
 
+    // MARK: - DisplayMode.rateLabel
+
+    func testDisplayMode_rateLabel_roundsFractionalRates() {
+        XCTAssertEqual(mode(1920, 1080, hz: 59.94).rateLabel, "60 Hz")
+        XCTAssertEqual(mode(1920, 1080, hz: 119.88).rateLabel, "120 Hz")
+    }
+
+    // MARK: - VideoManager.virtualModes(for:)
+
+    func testVirtualModes_alwaysInclude60Hz_sortedByResolutionThenRate() {
+        let key = "hldm.virtual.airplay.refreshRates"
+        let saved = UserDefaults.standard.object(forKey: key)
+        defer { UserDefaults.standard.set(saved, forKey: key) }
+        VisibilityPreferences.setVirtualRefreshRates([120], for: .airPlay)
+
+        let modes = VideoManager.virtualModes(for: .airPlay)
+        // 4 resolutions at 1x plus HiDPI 1080p (4K-backed) and 720p (1440p-backed), × 2 rates.
+        XCTAssertEqual(modes.count, (VideoManager.virtualResolutions.count + 2) * 2)
+        XCTAssertEqual(modes.prefix(2).map { $0.roundedRefreshRate }, [120, 60])
+        XCTAssertTrue(modes.allSatisfy { $0.isVirtual && $0.ioModeID == 0 })
+    }
+
+    func testVirtualModes_includeHiDPI720pBackedBy1440p() {
+        let hiDPI = VideoManager.virtualModes(for: .airPlay).filter { $0.isHiDPI }
+        XCTAssertTrue(hiDPI.contains { $0.width == 1280 && $0.pixelWidth == 2560 })
+        XCTAssertTrue(hiDPI.contains { $0.width == 1920 && $0.pixelWidth == 3840 })
+        XCTAssertFalse(hiDPI.contains { $0.width == 2560 }, "No 5K backing is advertised")
+    }
+
     // MARK: - DisplayMode.shortLabel
 
     func testDisplayMode_shortLabel_noSpaces() {
         let m = mode(3840, 2160)
         XCTAssertFalse(m.shortLabel.contains(" "), "shortLabel should have no spaces: \(m.shortLabel)")
+    }
+
+    func testDisplayMode_shortLabel_virtual_appendsSpacedMarker() {
+        let m = VideoManager.virtualMode(width: 1920, height: 1080, refreshRate: 60)
+        XCTAssertEqual(m.shortLabel, "1080p ✦")
+    }
+
+    func testDisplayMode_shortLabel_hiDPI_appendsSpacedMarker() {
+        let m = DisplayMode(id: "1920x1080@60.0@2x", ioModeID: 0, width: 1920, height: 1080,
+                            pixelWidth: 3840, pixelHeight: 2160, refreshRate: 60, isHiDPI: true)
+        XCTAssertEqual(m.shortLabel, "1080p ↑")
+    }
+
+    func testDisplayMode_shortLabel_virtualHiDPI_showsBothMarkers() {
+        let m = VideoManager.virtualMode(width: 1280, height: 720, refreshRate: 60,
+                                         pixelWidth: 2560, pixelHeight: 1440)
+        XCTAssertEqual(m.shortLabel, "720p ↑✦")
     }
 
     func testDisplayMode_shortLabel_16x9_usesPFormat() {

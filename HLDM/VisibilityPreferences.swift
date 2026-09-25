@@ -134,6 +134,13 @@ enum VisibilityPreferences {
         UserDefaults.standard.set(Array(rates), forKey: key)
     }
 
+    /// Every rate the virtual anchor advertises for `context`, highest first: the configured
+    /// rates plus 60 Hz, which is always included (System Settings only shows its Refresh Rate
+    /// dropdown when a resolution has at least two rates).
+    static func effectiveVirtualRefreshRates(for context: DisplayContext) -> [Int] {
+        virtualRefreshRates(for: context).union([60]).sorted(by: >)
+    }
+
     /// Default virtual resolution stored as "WIDTHxHEIGHT", e.g. "3840x2160". Nil means no default.
     static func defaultVirtualResolution(for context: DisplayContext) -> String? {
         UserDefaults.standard.string(forKey: "hldm.virtual.\(context.rawValue).defaultResolution")

@@ -131,219 +131,72 @@ private func sectionHeader(_ title: String) -> NSMenuItem {
 
 private func buildResolutionSubmenu(display: DisplayInfo, video: VideoManager) -> NSMenu {
     let submenu = NSMenu()
-    let isAirPlay = video.allAirPlayDevices.contains(where: { $0.id == display.id })
+    let current = video.currentModes(for: display)
 
-    if isAirPlay {
+    if video.displayContext(for: display) == .airPlay {
         // — Native group —
         submenu.addItem(sectionHeader("Native"))
-        let nativeCGID  = display.cgDisplayID
-        let nativeModes = video.availableModesDeduped(for: nativeCGID)
-        let hasAnchor   = video.hasVirtualAnchor(for: display.name)
-        let anchorCGID  = video.virtualAnchorCGIDs[display.name] ?? 0
-
-        // Checkmark: native mode active only when NO virtual anchor is running.
-        let nativeCurrent: DisplayMode? = hasAnchor ? nil : video.currentMode(for: nativeCGID)
+        let nativeModes  = video.availableModesDeduped(for: display.cgDisplayID)
+        let virtualModes = VideoManager.virtualModes(for: .airPlay)
+        let currentIdx   = VideoManager.currentModeIndex(
+            in: nativeModes + virtualModes, anchorCurrent: current.anchor, nativeCurrent: current.native)
 
         if nativeModes.isEmpty {
             submenu.addItem(disabledItem("No modes available"))
         } else {
-            for mode in nativeModes {
-                let item = NSMenuItem(
-                    title: mode.label,
-                    action: #selector(AppDelegate.selectResolution(_:)),
-                    keyEquivalent: ""
-                )
-                item.representedObject = ResolutionSelection(mode: mode, cgDisplayID: nativeCGID)
-                item.state = (mode.ioModeID == nativeCurrent?.ioModeID) ? .on : .off
-                submenu.addItem(item)
+            for (i, mode) in nativeModes.enumerated() {
+                submenu.addItem(modeItem(title: mode.label, mode: mode, display: display,
+                                         isCurrent: i == currentIdx))
             }
         }
 
-        // — Virtual group header —
+        // — Virtual group —
         submenu.addItem(sectionHeader("Virtual"))
-
-        // — Virtual mode items —
-        let virtualModes = VideoManager.virtualModes(for: .airPlay)
-        // Checkmark on the virtual mode matching the anchor's current mode (if anchor active).
-        let anchorCurrent: DisplayMode? = hasAnchor ? video.currentMode(for: anchorCGID) : nil
-
-        for mode in virtualModes {
-            let item = NSMenuItem(
-                title: mode.label,
-                action: #selector(AppDelegate.selectVirtualResolution(_:)),
-                keyEquivalent: ""
-            )
-            item.representedObject = VirtualResolutionSelection(mode: mode, display: display)
-            // Match by pixel dimensions since ioModeID is 0 for our synthetic virtual modes.
-            let isSelected = anchorCurrent.map {
-                $0.pixelWidth == mode.width && $0.pixelHeight == mode.height
-            } ?? false
-            item.state = isSelected ? .on : .off
-            submenu.addItem(item)
-        }
-    } else if !display.isBuiltIn {
-        // External physical display — Resolution label (read-only) + Refresh Rate picker.
-        // Resolution is locked to the display's current resolution; only refresh rate is user-selectable.
-        // Native rates use native mode settings; non-native rates activate the virtual anchor.
-        let nativeCGID  = display.cgDisplayID
-        let hasAnchor   = video.hasVirtualAnchor(for: display.name)
-        let anchorCGID  = video.virtualAnchorCGIDs[display.name] ?? 0
-
-        let nativeCurrent: DisplayMode? = hasAnchor ? nil : video.currentMode(for: nativeCGID)
-        let anchorCurrent: DisplayMode? = hasAnchor ? video.currentMode(for: anchorCGID) : nil
-
-        // Current resolution is from the native display; anchor always runs at the same resolution.
-        let currentRes = video.currentMode(for: nativeCGID)
-            ?? anchorCurrent
-            ?? DisplayMode(id: "unknown", ioModeID: 0, width: 0, height: 0,
-                           pixelWidth: 0, pixelHeight: 0, refreshRate: 60, isHiDPI: false)
-
-        // — Resolution section (read-only) —
-        submenu.addItem(sectionHeader("Resolution"))
-        let resLabel = currentRes.width > 0
-            ? "\(currentRes.width) × \(currentRes.height)"
-            : "Unknown"
-        submenu.addItem(disabledItem(resLabel))
-
-        // — Refresh Rate section —
-        submenu.addItem(sectionHeader("Refresh Rate"))
-
-        // Collect native modes at the current resolution, keyed by rounded Hz.
-        let allNativeAtRes = video.availableModes(for: nativeCGID)
-            .filter { $0.width == currentRes.width && $0.height == currentRes.height }
-        var nativeRateMap: [Int: DisplayMode] = [:]
-        for mode in allNativeAtRes {
-            let rate = Int(mode.refreshRate.rounded())
-            if nativeRateMap[rate] == nil { nativeRateMap[rate] = mode }
-        }
-
-        let configuredRates = VisibilityPreferences.virtualRefreshRates(for: .external)
-        let allRates = Set(nativeRateMap.keys).union(configuredRates).union([60]).sorted(by: >)
-
-        if allRates.isEmpty {
-            submenu.addItem(disabledItem("No rates available"))
-        } else {
-            for rate in allRates {
-                let hz = Double(rate)
-                let hzLabel = hz.truncatingRemainder(dividingBy: 1) == 0
-                    ? String(format: "%.0f Hz", hz)
-                    : String(format: "%.1f Hz", hz)
-
-                if let nativeMode = nativeRateMap[rate] {
-                    // Native mode exists — use native settings directly.
-                    let item = NSMenuItem(
-                        title: hzLabel,
-                        action: #selector(AppDelegate.selectResolution(_:)),
-                        keyEquivalent: ""
-                    )
-                    item.representedObject = ResolutionSelection(mode: nativeMode, cgDisplayID: nativeCGID)
-                    item.state = (nativeMode.ioModeID == nativeCurrent?.ioModeID) ? .on : .off
-                    submenu.addItem(item)
-                } else {
-                    // Not native — route through virtual anchor at the current resolution.
-                    let virtualMode = DisplayMode(
-                        id: "\(currentRes.width)x\(currentRes.height)@\(hz)_virtual",
-                        ioModeID: 0,
-                        width: currentRes.width, height: currentRes.height,
-                        pixelWidth: currentRes.width, pixelHeight: currentRes.height,
-                        refreshRate: hz, isHiDPI: false, isVirtual: true
-                    )
-                    let item = NSMenuItem(
-                        title: hzLabel,
-                        action: #selector(AppDelegate.selectVirtualResolution(_:)),
-                        keyEquivalent: ""
-                    )
-                    item.representedObject = VirtualResolutionSelection(mode: virtualMode, display: display)
-                    let isSelected = anchorCurrent.map {
-                        $0.pixelWidth == currentRes.width
-                            && $0.pixelHeight == currentRes.height
-                            && Int($0.refreshRate.rounded()) == rate
-                    } ?? false
-                    item.state = isSelected ? .on : .off
-                    submenu.addItem(item)
-                }
-            }
+        for (i, mode) in virtualModes.enumerated() {
+            submenu.addItem(modeItem(title: mode.label, mode: mode, display: display,
+                                     isCurrent: nativeModes.count + i == currentIdx))
         }
     } else {
-        // Built-in display — same pattern as external: Resolution label (read-only) + Refresh Rate picker.
+        // External or built-in — Resolution label (read-only) + Refresh Rate picker.
         // Native rates use native mode settings; non-native rates activate the virtual anchor.
-        let nativeCGID  = display.cgDisplayID
-        let hasAnchor   = video.hasVirtualAnchor(for: display.name)
-        let anchorCGID  = video.virtualAnchorCGIDs[display.name] ?? 0
+        let options = video.refreshRateOptions(for: display)
 
-        let nativeCurrent: DisplayMode? = hasAnchor ? nil : video.currentMode(for: nativeCGID)
-        let anchorCurrent: DisplayMode? = hasAnchor ? video.currentMode(for: anchorCGID) : nil
-
-        let currentRes = video.currentMode(for: nativeCGID)
-            ?? anchorCurrent
-            ?? DisplayMode(id: "unknown", ioModeID: 0, width: 0, height: 0,
-                           pixelWidth: 0, pixelHeight: 0, refreshRate: 60, isHiDPI: false)
-
-        // — Resolution section (read-only) —
         submenu.addItem(sectionHeader("Resolution"))
-        let resLabel = currentRes.width > 0
-            ? "\(currentRes.width) × \(currentRes.height)"
-            : "Unknown"
+        let resLabel = options.map {
+            "\($0.resolution.width) × \($0.resolution.height)" + ($0.resolution.isHiDPI ? "  HiDPI" : "")
+        } ?? "Unknown"
         submenu.addItem(disabledItem(resLabel))
 
-        // — Refresh Rate section —
         submenu.addItem(sectionHeader("Refresh Rate"))
-
-        let allNativeAtRes = video.availableModes(for: nativeCGID)
-            .filter { $0.width == currentRes.width && $0.height == currentRes.height }
-        var nativeRateMap: [Int: DisplayMode] = [:]
-        for mode in allNativeAtRes {
-            let rate = Int(mode.refreshRate.rounded())
-            if nativeRateMap[rate] == nil { nativeRateMap[rate] = mode }
-        }
-
-        let configuredRates = VisibilityPreferences.virtualRefreshRates(for: .builtIn)
-        let allRates = Set(nativeRateMap.keys).union(configuredRates).union([60]).sorted(by: >)
-
-        if allRates.isEmpty {
-            submenu.addItem(disabledItem("No rates available"))
-        } else {
-            for rate in allRates {
-                let hz = Double(rate)
-                let hzLabel = hz.truncatingRemainder(dividingBy: 1) == 0
-                    ? String(format: "%.0f Hz", hz)
-                    : String(format: "%.1f Hz", hz)
-
-                if let nativeMode = nativeRateMap[rate] {
-                    let item = NSMenuItem(
-                        title: hzLabel,
-                        action: #selector(AppDelegate.selectResolution(_:)),
-                        keyEquivalent: ""
-                    )
-                    item.representedObject = ResolutionSelection(mode: nativeMode, cgDisplayID: nativeCGID)
-                    item.state = (nativeMode.ioModeID == nativeCurrent?.ioModeID) ? .on : .off
-                    submenu.addItem(item)
-                } else {
-                    let virtualMode = DisplayMode(
-                        id: "\(currentRes.width)x\(currentRes.height)@\(hz)_virtual",
-                        ioModeID: 0,
-                        width: currentRes.width, height: currentRes.height,
-                        pixelWidth: currentRes.width, pixelHeight: currentRes.height,
-                        refreshRate: hz, isHiDPI: false, isVirtual: true
-                    )
-                    let item = NSMenuItem(
-                        title: hzLabel,
-                        action: #selector(AppDelegate.selectVirtualResolution(_:)),
-                        keyEquivalent: ""
-                    )
-                    item.representedObject = VirtualResolutionSelection(mode: virtualMode, display: display)
-                    let isSelected = anchorCurrent.map {
-                        $0.pixelWidth == currentRes.width
-                            && $0.pixelHeight == currentRes.height
-                            && Int($0.refreshRate.rounded()) == rate
-                    } ?? false
-                    item.state = isSelected ? .on : .off
-                    submenu.addItem(item)
-                }
+        if let options {
+            let currentIdx = VideoManager.currentModeIndex(
+                in: options.modes, anchorCurrent: current.anchor, nativeCurrent: current.native)
+            for (i, mode) in options.modes.enumerated() {
+                submenu.addItem(modeItem(title: mode.rateLabel, mode: mode, display: display,
+                                         isCurrent: i == currentIdx))
             }
+        } else {
+            submenu.addItem(disabledItem("No rates available"))
         }
     }
     return submenu
+}
+
+/// A selectable mode row: native modes go through `selectResolution`, virtual modes
+/// through `selectVirtualResolution` (which activates the anchor).
+private func modeItem(title: String, mode: DisplayMode, display: DisplayInfo, isCurrent: Bool) -> NSMenuItem {
+    let item = NSMenuItem(
+        title: title,
+        action: mode.isVirtual
+            ? #selector(AppDelegate.selectVirtualResolution(_:))
+            : #selector(AppDelegate.selectResolution(_:)),
+        keyEquivalent: ""
+    )
+    item.representedObject = mode.isVirtual
+        ? VirtualResolutionSelection(mode: mode, display: display) as Any
+        : ResolutionSelection(mode: mode, cgDisplayID: display.cgDisplayID)
+    item.state = isCurrent ? .on : .off
+    return item
 }
 
 /// True when at least two displays are online — required for mirror/extend to make sense.

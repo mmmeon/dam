@@ -12,6 +12,55 @@ import os.log
 
 private let vdLog = Logger(subsystem: "mmmeon.hldm", category: "VirtualDisplay")
 
+/// Where each online display sat and what it mirrored, captured before an anchor is added.
+///
+/// When the virtual display appears, WindowServer finds no saved configuration for the new
+/// set of displays and applies a default layout — on an AirPlay setup that mirrors the other
+/// displays into one set and can move the main display. Anything else pulled into the
+/// anchor's mirror set also follows every mode change made on the anchor. We put the rest of
+/// the arrangement back whenever we reconfigure the anchor.
+struct DisplayArrangement {
+    let origins: [CGDirectDisplayID: CGPoint]
+    let mirrorMasters: [CGDirectDisplayID: CGDirectDisplayID]
+
+    static func current() -> DisplayArrangement {
+        var origins: [CGDirectDisplayID: CGPoint] = [:]
+        var masters: [CGDirectDisplayID: CGDirectDisplayID] = [:]
+        for id in onlineDisplayIDs() {
+            origins[id] = CGDisplayBounds(id).origin
+            masters[id] = CGDisplayMirrorsDisplay(id)
+        }
+        return DisplayArrangement(origins: origins, mirrorMasters: masters)
+    }
+
+    static func onlineDisplayIDs() -> [CGDirectDisplayID] {
+        var count: CGDisplayCount = 0
+        CGGetOnlineDisplayList(0, nil, &count)
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        CGGetOnlineDisplayList(count, &ids, &count)
+        return Array(ids.prefix(Int(count)))
+    }
+
+    /// Queues changes on `cfg` returning every still-online display — other than those in
+    /// `excluded`, or mirroring one of them — to its captured mirror state and position.
+    func restore(in cfg: CGDisplayConfigRef, excluding excluded: Set<CGDirectDisplayID>) {
+        let online = Set(Self.onlineDisplayIDs())
+        for (id, master) in mirrorMasters
+        where online.contains(id) && !excluded.contains(id) && !excluded.contains(master) {
+            if CGDisplayMirrorsDisplay(id) != master {
+                vdLog.debug("restore: display \(id) mirror master \(CGDisplayMirrorsDisplay(id)) → \(master)")
+                CGConfigureDisplayMirrorOfDisplay(cfg, id, master)
+            }
+        }
+        for (id, origin) in origins
+        where online.contains(id) && !excluded.contains(id) && mirrorMasters[id] == 0
+            && CGDisplayBounds(id).origin != origin {
+            vdLog.debug("restore: display \(id) origin \(CGDisplayBounds(id).origin.debugDescription) → \(origin.debugDescription)")
+            CGConfigureDisplayOrigin(cfg, id, Int32(origin.x), Int32(origin.y))
+        }
+    }
+}
+
 extension VideoManager {
 
     // MARK: - Public API
@@ -28,78 +77,137 @@ extension VideoManager {
         virtualAnchorCGIDs[display.name] ?? display.cgDisplayID
     }
 
-    /// Generates one DisplayMode per combination of the 4 fixed resolutions × each
-    /// selected refresh rate, sorted descending by resolution then rate.
-    static func virtualModes(refreshRates: Set<Int>) -> [DisplayMode] {
-        let specs: [(Int, Int)] = [(3840, 2160), (2560, 1440), (1920, 1080), (1280, 720)]
-        // Mirror enableVirtualAnchor: always include 60 Hz alongside configured rates
-        // so the menu/Touch Bar reflect every mode the virtual display actually advertises.
-        let configured = refreshRates.isEmpty ? [60] : refreshRates
-        let allRates = configured.union([60])
-        var modes: [DisplayMode] = []
-        for (w, h) in specs {
-            for rate in allRates.sorted(by: >) {
-                let hz = Double(rate)
-                modes.append(DisplayMode(id: "\(w)x\(h)@\(hz)_virtual",
-                                         ioModeID: 0,
-                                         width: w, height: h,
-                                         pixelWidth: w, pixelHeight: h,
-                                         refreshRate: hz,
-                                         isHiDPI: false,
-                                         isVirtual: true))
+    /// Resolutions advertised by an AirPlay virtual anchor, largest first.
+    static let virtualResolutions: [(width: Int, height: Int)] =
+        [(3840, 2160), (2560, 1440), (1920, 1080), (1280, 720)]
+
+    /// A synthetic mode for the virtual anchor. `ioModeID` is 0; callers match on size and rate.
+    /// Pixel dimensions default to the logical ones; pass larger ones for a HiDPI mode.
+    static func virtualMode(width: Int, height: Int, refreshRate: Int,
+                            pixelWidth: Int? = nil, pixelHeight: Int? = nil) -> DisplayMode {
+        let hz = Double(refreshRate)
+        let pw = pixelWidth ?? width, ph = pixelHeight ?? height
+        let hiDPI = pw > width
+        return DisplayMode(id: "\(width)x\(height)@\(hz)\(hiDPI ? "@2x" : "")_virtual",
+                           ioModeID: 0,
+                           width: width, height: height,
+                           pixelWidth: pw, pixelHeight: ph,
+                           refreshRate: hz,
+                           isHiDPI: hiDPI,
+                           isVirtual: true)
+    }
+
+    /// Every mode an AirPlay virtual anchor offers for `context`, sorted descending by
+    /// resolution (HiDPI first at equal size) then rate. The anchor has HiDPI enabled, so an
+    /// advertised resolution that is exactly twice another one also backs a HiDPI mode at
+    /// the smaller size (e.g. 2560×1440 backs "1280×720 HiDPI").
+    static func virtualModes(for context: VisibilityPreferences.DisplayContext) -> [DisplayMode] {
+        let rates = VisibilityPreferences.effectiveVirtualRefreshRates(for: context)
+        let advertised = Set(virtualResolutions.map { "\($0.width)x\($0.height)" })
+        return virtualResolutions.flatMap { res -> [DisplayMode] in
+            let hiDPI = advertised.contains("\(res.width * 2)x\(res.height * 2)")
+            let hiDPIModes = hiDPI ? rates.map {
+                virtualMode(width: res.width, height: res.height, refreshRate: $0,
+                            pixelWidth: res.width * 2, pixelHeight: res.height * 2)
+            } : []
+            return hiDPIModes + rates.map { virtualMode(width: res.width, height: res.height, refreshRate: $0) }
+        }
+    }
+
+    /// Which virtual-display settings apply to `display`.
+    func displayContext(for display: DisplayInfo) -> VisibilityPreferences.DisplayContext {
+        if allAirPlayDevices.contains(where: { $0.id == display.id }) { return .airPlay }
+        return display.isBuiltIn ? .builtIn : .external
+    }
+
+    /// The display's current mode, split by what drives it. While a virtual anchor is active
+    /// only `anchor` is set (nil until the anchor is registered), so native choices are never
+    /// marked current; otherwise only `native` is set.
+    func currentModes(for display: DisplayInfo) -> (anchor: DisplayMode?, native: DisplayMode?) {
+        guard hasVirtualAnchor(for: display.name) else {
+            return (nil, currentMode(for: display.cgDisplayID))
+        }
+        return (virtualAnchorCGIDs[display.name].flatMap { currentMode(for: $0) }, nil)
+    }
+
+    /// Index in `modes` of the one that represents the current display state.
+    ///
+    /// When `anchorCurrent` is provided the virtual anchor is driving the display; only
+    /// virtual modes are considered (matched by logical size, HiDPI and rounded rate — the anchor may
+    /// report e.g. 119.88 Hz for a 120 Hz mode). Otherwise only native modes are considered
+    /// (matched by `ioModeID`). Keeping the two pools separate prevents native `ioModeID`
+    /// values from colliding with the anchor's mode ID.
+    static func currentModeIndex(in modes: [DisplayMode],
+                                 anchorCurrent: DisplayMode?,
+                                 nativeCurrent: DisplayMode?) -> Int? {
+        if let cur = anchorCurrent {
+            return modes.firstIndex {
+                $0.isVirtual && $0.width == cur.width && $0.height == cur.height && $0.isHiDPI == cur.isHiDPI
+                    && $0.roundedRefreshRate == cur.roundedRefreshRate
             }
         }
-        return modes
-    }
-
-    /// Generates one DisplayMode per refresh rate for a single resolution.
-    /// Always includes 60 Hz. Used for external displays where the resolution is locked.
-    static func virtualModes(width: Int, height: Int, refreshRates: Set<Int>) -> [DisplayMode] {
-        let configured = refreshRates.isEmpty ? [60] : refreshRates
-        let allRates = configured.union([60])
-        return allRates.sorted(by: >).map { rate in
-            let hz = Double(rate)
-            return DisplayMode(id: "\(width)x\(height)@\(hz)_virtual",
-                               ioModeID: 0,
-                               width: width, height: height,
-                               pixelWidth: width, pixelHeight: height,
-                               refreshRate: hz,
-                               isHiDPI: false,
-                               isVirtual: true)
+        if let cur = nativeCurrent {
+            return modes.firstIndex { !$0.isVirtual && $0.ioModeID == cur.ioModeID }
         }
+        return nil
     }
 
-    /// Convenience overload that reads refresh rates from `VisibilityPreferences`.
-    static func virtualModes(for context: VisibilityPreferences.DisplayContext) -> [DisplayMode] {
-        virtualModes(refreshRates: VisibilityPreferences.virtualRefreshRates(for: context))
+    /// Refresh-rate choices for an external or built-in display, whose resolution is locked
+    /// to the current one. Each rate maps to the native mode at that resolution when the panel
+    /// supports it, otherwise to a virtual mode routed through the anchor. Sorted highest
+    /// rate first. Returns nil when the current resolution can't be read.
+    func refreshRateOptions(for display: DisplayInfo)
+        -> (resolution: DisplayMode, modes: [DisplayMode])? {
+        // While the anchor drives the display it is the source of truth for resolution —
+        // the physical display, as a mirror slave, may report a different (scaled) mode.
+        let anchorCurrent = currentModes(for: display).anchor
+        guard let current = anchorCurrent ?? currentMode(for: display.cgDisplayID) else { return nil }
+
+        var nativeByRate: [Int: DisplayMode] = [:]
+        for mode in availableModes(for: display.cgDisplayID)
+        where mode.width == current.width && mode.height == current.height {
+            if nativeByRate[mode.roundedRefreshRate] == nil { nativeByRate[mode.roundedRefreshRate] = mode }
+        }
+
+        let rates = Set(nativeByRate.keys)
+            .union(VisibilityPreferences.effectiveVirtualRefreshRates(for: displayContext(for: display)))
+            .sorted(by: >)
+        let modes = rates.map {
+            nativeByRate[$0] ?? Self.virtualMode(width: current.width, height: current.height, refreshRate: $0,
+                                                 pixelWidth: current.pixelWidth, pixelHeight: current.pixelHeight)
+        }
+        return (current, modes)
     }
 
     /// Selects a virtual resolution for a display.
     ///
     /// - If the virtual anchor is already active, applies the mode immediately.
-    /// - If not yet active, starts the anchor; the user can re-select once it appears.
+    /// - If not yet active, starts the anchor and applies the mode once mirroring is set up.
     func selectVirtualMode(_ mode: DisplayMode, for display: DisplayInfo) {
         if hasVirtualAnchor(for: display.name) {
             guard let anchorID = virtualAnchorCGIDs[display.name] else { return }
-            setModeOnVirtualAnchor(mode, anchorID: anchorID)
+            setModeOnVirtualAnchor(mode, anchorID: anchorID, name: display.name, slaveID: display.cgDisplayID)
         } else {
-            vdLog.debug("selectVirtualMode: anchor not yet active for '\(display.name)' — enabling anchor, mode change deferred to user")
-            enableVirtualAnchor(for: display)
+            vdLog.debug("selectVirtualMode: anchor not yet active for '\(display.name)' — enabling anchor, mode applied once mirrored")
+            enableVirtualAnchor(for: display, initialMode: mode)
         }
     }
 
     /// Creates a CGVirtualDisplay as a mirror master for `display`, then polls until
     /// it appears in the system display list and wires up the mirror relationship.
-    func enableVirtualAnchor(for display: DisplayInfo) {
+    /// `initialMode`, if given, is applied to the anchor once mirroring is in place.
+    func enableVirtualAnchor(for display: DisplayInfo, initialMode: DisplayMode? = nil) {
         guard display.cgDisplayID != 0, !hasVirtualAnchor(for: display.name) else {
             vdLog.debug("enableVirtualAnchor: skipped '\(display.name)' cgID=\(display.cgDisplayID) hasAnchor=\(self.hasVirtualAnchor(for: display.name))")
             return
         }
 
-        let context: VisibilityPreferences.DisplayContext =
-            allAirPlayDevices.contains { $0.id == display.id } ? .airPlay :
-            (display.isBuiltIn ? .builtIn : .external)
+        let context = displayContext(for: display)
         vdLog.debug("enableVirtualAnchor: starting for '\(display.name)' cgID=\(display.cgDisplayID) context=\(context.rawValue)")
+
+        // For external and built-in displays, lock the virtual anchor to the display's current
+        // resolution (including HiDPI backing) so only refresh rate changes are exposed.
+        let locked: DisplayMode? = context == .airPlay ? nil : currentMode(for: display.cgDisplayID)
 
         let descriptor = CGVirtualDisplayDescriptor()
         // Must call setDispatchQueue: — the `queue` property writes a different ivar
@@ -107,8 +215,8 @@ extension VideoManager {
         descriptor.setDispatchQueue(.main)
         descriptor.name = "HLDM"
         descriptor.sizeInMillimeters = CGSize(width: 600, height: 340)
-        descriptor.maxPixelsWide = 3840
-        descriptor.maxPixelsHigh = 2160
+        descriptor.maxPixelsWide = UInt32(max(3840, locked?.pixelWidth ?? 0))
+        descriptor.maxPixelsHigh = UInt32(max(2160, locked?.pixelHeight ?? 0))
         descriptor.vendorID  = 0x3456
         descriptor.productID = 0x1234
         descriptor.serialNum = 0x0002
@@ -122,37 +230,37 @@ extension VideoManager {
             DispatchQueue.main.async {
                 self?.virtualAnchorStore.removeValue(forKey: deviceName)
                 self?.virtualAnchorCGIDs.removeValue(forKey: deviceName)
+                self?.virtualAnchorArrangements.removeValue(forKey: deviceName)
                 self?.mergeDevices()
             }
         }
 
+        virtualAnchorArrangements[deviceName] = DisplayArrangement.current()
         let vd = CGVirtualDisplay(descriptor: descriptor)
         vdLog.debug("enableVirtualAnchor: CGVirtualDisplay created — immediate displayID=\(vd.displayID)")
 
         let settings = CGVirtualDisplaySettings()
-        settings.hiDPI = 0
-        // For external displays, lock the virtual anchor to the display's current resolution
-        // so the user's resolution is preserved and only refresh rate changes are exposed.
-        let resolutions: [(UInt, UInt)]
-        if context == .external, let cur = currentMode(for: airPlayCGID) {
-            resolutions = [(UInt(cur.width), UInt(cur.height))]
-            vdLog.debug("enableVirtualAnchor: external — locking to current resolution \(cur.width)×\(cur.height)")
+        // AirPlay anchors always offer HiDPI variants (see virtualModes(for:)); locked anchors
+        // match the display's current mode.
+        settings.hiDPI = (locked?.isHiDPI ?? true) ? 1 : 0
+        let resolutions: [(width: Int, height: Int)]
+        if let cur = locked {
+            // A HiDPI lock advertises both the backing and the logical size, so the anchor offers
+            // the logical size at 2x backing however the system derives HiDPI variants.
+            resolutions = cur.isHiDPI
+                ? [(cur.pixelWidth, cur.pixelHeight), (cur.width, cur.height)]
+                : [(cur.width, cur.height)]
+            vdLog.debug("enableVirtualAnchor: \(context.rawValue) — locking to current resolution \(cur.width)×\(cur.height) (pixels \(cur.pixelWidth)×\(cur.pixelHeight))")
         } else {
-            resolutions = [(3840, 2160), (2560, 1440), (1920, 1080), (1280, 720)]
+            resolutions = Self.virtualResolutions
         }
-        let rates = VisibilityPreferences.virtualRefreshRates(for: context)
-        let configuredRates = rates.isEmpty ? [60] : rates
-        // Always include 60 Hz alongside any custom rates.
-        // The System Settings "Refresh Rate" dropdown only appears when at least two
-        // rates exist for the same resolution — mirroring the reference implementation
-        // which advertises both the target rate and 60 Hz for every mode.
-        let allRates = configuredRates.union([60])
-        settings.modes = resolutions.flatMap { w, h in
-            allRates.sorted(by: >).map { rate in
-                CGVirtualDisplayMode(width: w, height: h, refreshRate: Double(rate))
+        let allRates = VisibilityPreferences.effectiveVirtualRefreshRates(for: context)
+        settings.modes = resolutions.flatMap { res in
+            allRates.map { rate in
+                CGVirtualDisplayMode(width: UInt(res.width), height: UInt(res.height), refreshRate: Double(rate))
             }
         }
-        vdLog.debug("enableVirtualAnchor: applying \(settings.modes.count) modes (\(allRates.sorted(by: >) as [Int]) Hz)")
+        vdLog.debug("enableVirtualAnchor: applying \(settings.modes.count) modes (\(allRates) Hz)")
 
         let applied = vd.apply(settings)
         vdLog.debug("enableVirtualAnchor: applySettings returned \(applied) — displayID after apply=\(vd.displayID)")
@@ -164,32 +272,43 @@ extension VideoManager {
         // Retain vd so it isn't released before mirroring is wired up.
         virtualAnchorStore[deviceName] = vd
         vdLog.debug("enableVirtualAnchor: stored anchor, beginning poll (attempt 0)")
-        waitForVirtualDisplay(vd, name: deviceName, airPlayID: airPlayCGID, context: context, attempt: 0)
+        waitForVirtualDisplay(vd, name: deviceName, airPlayID: airPlayCGID, context: context,
+                              initialMode: initialMode, attempt: 0)
     }
 
-    /// Tears down the mirror and releases the CGVirtualDisplay for `display`.
+    /// Tears down the mirror, restores the pre-anchor arrangement, and releases the
+    /// CGVirtualDisplay for `display`.
     func disableVirtualAnchor(for display: DisplayInfo) {
         guard hasVirtualAnchor(for: display.name) else { return }
         let airPlayCGID = display.cgDisplayID != 0
             ? display.cgDisplayID
             : (cachedAirPlayCGIDs[display.name] ?? 0)
-        virtualAnchorStore.removeValue(forKey: display.name)
-        virtualAnchorCGIDs.removeValue(forKey: display.name)
-        if airPlayCGID != 0 {
-            var config: CGDisplayConfigRef?
-            if CGBeginDisplayConfiguration(&config) == .success, let cfg = config {
-                CGConfigureDisplayMirrorOfDisplay(cfg, airPlayCGID, CGDirectDisplayID(0))
-                DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                    CGCompleteDisplayConfiguration(cfg, .forAppOnly)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                        self?.mergeDevices()
-                    }
-                }
-                return
+        let anchorID    = virtualAnchorCGIDs.removeValue(forKey: display.name) ?? 0
+        let arrangement = virtualAnchorArrangements.removeValue(forKey: display.name)
+        // Keep the virtual display alive until the mirror is torn down: destroying the master
+        // first leaves its slaves orphaned and lets WindowServer pick a new layout.
+        let vd = virtualAnchorStore.removeValue(forKey: display.name)
+
+        var config: CGDisplayConfigRef?
+        guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                self?.mergeDevices()
             }
+            return
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            self?.mergeDevices()
+        if airPlayCGID != 0 {
+            CGConfigureDisplayMirrorOfDisplay(cfg, airPlayCGID, CGDirectDisplayID(0))
+        }
+        arrangement?.restore(in: cfg, excluding: [anchorID])
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let err = CGCompleteDisplayConfiguration(cfg, .forAppOnly)
+            vdLog.debug("disableVirtualAnchor: teardown complete err=\(err.rawValue)")
+            DispatchQueue.main.async {
+                withExtendedLifetime(vd) {}
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                    self?.mergeDevices()
+                }
+            }
         }
     }
 
@@ -201,6 +320,7 @@ extension VideoManager {
                                        name: String,
                                        airPlayID: CGDirectDisplayID,
                                        context: VisibilityPreferences.DisplayContext,
+                                       initialMode: DisplayMode?,
                                        attempt: Int) {
         // Collect both online and active lists — different macOS versions promote
         // CGVirtualDisplay to one or the other first.
@@ -247,11 +367,13 @@ extension VideoManager {
                 vdLog.debug("waitForVirtualDisplay: virtual display not found yet, retrying in 1 s")
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
                     self?.waitForVirtualDisplay(vd, name: name, airPlayID: airPlayID,
-                                               context: context, attempt: attempt + 1)
+                                               context: context, initialMode: initialMode,
+                                               attempt: attempt + 1)
                 }
             } else {
                 vdLog.error("waitForVirtualDisplay: gave up after \(attempt) attempts — removing anchor for '\(name)'")
                 virtualAnchorStore.removeValue(forKey: name)
+                virtualAnchorArrangements.removeValue(forKey: name)
             }
             return
         }
@@ -277,7 +399,7 @@ extension VideoManager {
                     vdLog.debug("step1: teardown complete err=\(completeErr.rawValue) — waiting 1 s before mirror")
                     // Step 2 runs after teardown settles.
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-                        self?.applyMirror(airPlayID: airPlayID, virtualID: virtualID)
+                        self?.applyMirror(name: name, airPlayID: airPlayID, virtualID: virtualID, initialMode: initialMode)
                     }
                 }
                 return   // step2 will be chained from the background completion above
@@ -286,13 +408,14 @@ extension VideoManager {
 
         // Step 2 (no prior mirror to tear down): short settle delay then apply.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            self?.applyMirror(airPlayID: airPlayID, virtualID: virtualID)
+            self?.applyMirror(name: name, airPlayID: airPlayID, virtualID: virtualID, initialMode: initialMode)
         }
     }
 
     /// Applies the mirror relationship (airPlay → virtual) and chains step 3.
     /// Called from both the no-prior-mirror path and the post-teardown background path.
-    private func applyMirror(airPlayID: CGDirectDisplayID, virtualID: CGDirectDisplayID) {
+    private func applyMirror(name: String, airPlayID: CGDirectDisplayID, virtualID: CGDirectDisplayID,
+                             initialMode: DisplayMode?) {
         vdLog.debug("step2: configuring mirror airPlayID=\(airPlayID) → virtualID=\(virtualID)")
         var config: CGDisplayConfigRef?
         let beginErr = CGBeginDisplayConfiguration(&config)
@@ -300,6 +423,18 @@ extension VideoManager {
         guard beginErr == .success, let cfg = config else {
             vdLog.error("step2: BeginDisplayConfiguration failed — aborting")
             return
+        }
+        // Undo the default layout WindowServer applied when the virtual display appeared,
+        // and put the new mirror set where the target display used to be.
+        let arrangement = virtualAnchorArrangements[name]
+        arrangement?.restore(in: cfg, excluding: [airPlayID, virtualID])
+        if let origin = arrangement?.origins[airPlayID] {
+            CGConfigureDisplayOrigin(cfg, virtualID, Int32(origin.x), Int32(origin.y))
+        }
+        // The default layout can make the virtual display a slave of the target; it must be
+        // the master.
+        if CGDisplayMirrorsDisplay(virtualID) != 0 {
+            CGConfigureDisplayMirrorOfDisplay(cfg, virtualID, CGDirectDisplayID(0))
         }
         CGConfigureDisplayMirrorOfDisplay(cfg, airPlayID, virtualID)
         // CGCompleteDisplayConfiguration can block for ~10 s on some systems while the
@@ -310,6 +445,10 @@ extension VideoManager {
             vdLog.debug("step2: CompleteDisplayConfiguration err=\(mirrorErr.rawValue)")
             // Step 3: let the system settle, then refresh the UI on the main queue.
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                if let initialMode {
+                    vdLog.debug("step3: applying initial mode \(initialMode.width)×\(initialMode.height) @\(initialMode.refreshRate)Hz")
+                    self?.setModeOnVirtualAnchor(initialMode, anchorID: virtualID, name: name, slaveID: airPlayID)
+                }
                 vdLog.debug("step3: mergeDevices")
                 self?.mergeDevices()
             }
@@ -322,7 +461,12 @@ extension VideoManager {
     /// physical panel's native list (e.g. 60 Hz) which mismatches the virtual master's
     /// rate and tears down the mirror.  The "invalid display identifier" noise emitted
     /// by CoreGraphics for the synthetic UUID is cosmetic; the APIs still work.
-    private func setModeOnVirtualAnchor(_ mode: DisplayMode, anchorID: CGDirectDisplayID) {
+    ///
+    /// Every display in the anchor's mirror set follows the mode change, so any display other
+    /// than `slaveID` that ended up mirroring the anchor is first returned to its captured
+    /// arrangement (or extended, if there's none) in the same transaction.
+    private func setModeOnVirtualAnchor(_ mode: DisplayMode, anchorID: CGDirectDisplayID,
+                                        name: String, slaveID: CGDirectDisplayID) {
         guard anchorID != 0 else { return }
 
         let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
@@ -330,19 +474,25 @@ extension VideoManager {
             vdLog.error("setModeOnVirtualAnchor: CGDisplayCopyAllDisplayModes returned nil for \(anchorID)")
             return
         }
-        vdLog.debug("setModeOnVirtualAnchor: \(modeList.count) modes on master \(anchorID), seeking \(mode.width)×\(mode.height) @\(mode.refreshRate)Hz")
-        for m in modeList { vdLog.debug("  candidate: \(m.pixelWidth)×\(m.pixelHeight) @\(m.refreshRate)Hz") }
+        vdLog.debug("setModeOnVirtualAnchor: \(modeList.count) modes on master \(anchorID), seeking \(mode.width)×\(mode.height) (pixels \(mode.pixelWidth)×\(mode.pixelHeight)) @\(mode.refreshRate)Hz")
+        for m in modeList { vdLog.debug("  candidate: \(m.width)×\(m.height) (pixels \(m.pixelWidth)×\(m.pixelHeight)) @\(m.refreshRate)Hz") }
 
-        let cgMode: CGDisplayMode? = {
-            // Prefer exact size + rate match.
-            if let exact = modeList.first(where: {
-                $0.pixelWidth == mode.width &&
-                $0.pixelHeight == mode.height &&
-                abs($0.refreshRate - Double(mode.refreshRate)) < 1.0
-            }) { return exact }
-            // Fallback: size-only (virtual display may report a slightly different rate).
-            return modeList.first(where: { $0.pixelWidth == mode.width && $0.pixelHeight == mode.height })
-        }()
+        let sameSize: (CGDisplayMode) -> Bool = {
+            $0.width == mode.width && $0.height == mode.height
+                && $0.pixelWidth == mode.pixelWidth && $0.pixelHeight == mode.pixelHeight
+        }
+        // Prefer exact size + rate; fall back to size only (the virtual display may report a
+        // slightly different rate); last resort for a HiDPI mode the anchor didn't derive is
+        // the logical size at 1x.
+        let cgMode = modeList.first { sameSize($0) && abs($0.refreshRate - mode.refreshRate) < 1.0 }
+            ?? modeList.first(where: sameSize)
+            ?? modeList.first {
+                $0.pixelWidth == mode.width && $0.pixelHeight == mode.height
+                    && abs($0.refreshRate - mode.refreshRate) < 1.0
+            }
+        if let cgMode, mode.isHiDPI, cgMode.pixelWidth == cgMode.width {
+            vdLog.error("setModeOnVirtualAnchor: anchor offers no HiDPI \(mode.width)×\(mode.height) — falling back to 1x")
+        }
 
         guard let cgMode else {
             vdLog.error("setModeOnVirtualAnchor: no mode matching \(mode.width)×\(mode.height) on master \(anchorID)")
@@ -356,6 +506,14 @@ extension VideoManager {
             vdLog.error("setModeOnVirtualAnchor: BeginDisplayConfiguration err=\(beginErr.rawValue)")
             return
         }
+        let strays = DisplayArrangement.onlineDisplayIDs().filter {
+            $0 != slaveID && CGDisplayMirrorsDisplay($0) == anchorID
+        }
+        for id in strays {
+            vdLog.debug("setModeOnVirtualAnchor: releasing display \(id) from the anchor's mirror set")
+            CGConfigureDisplayMirrorOfDisplay(cfg, id, CGDirectDisplayID(0))
+        }
+        virtualAnchorArrangements[name]?.restore(in: cfg, excluding: [anchorID, slaveID])
         CGConfigureDisplayWithDisplayMode(cfg, anchorID, cgMode, nil)
         DispatchQueue.global(qos: .userInitiated).async {
             let completeErr = CGCompleteDisplayConfiguration(cfg, .forAppOnly)
