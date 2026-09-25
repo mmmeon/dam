@@ -75,8 +75,10 @@ extension VideoManager {
     /// rate first. Returns nil when the current resolution can't be read.
     func refreshRateOptions(for display: DisplayInfo)
         -> (resolution: (width: Int, height: Int), modes: [DisplayMode])? {
+        // While the anchor drives the display it is the source of truth for resolution —
+        // the physical display, as a mirror slave, may report a different (scaled) mode.
         let anchorCurrent = currentModes(for: display).anchor
-        guard let current = currentMode(for: display.cgDisplayID) ?? anchorCurrent else { return nil }
+        guard let current = anchorCurrent ?? currentMode(for: display.cgDisplayID) else { return nil }
 
         var nativeByRate: [Int: DisplayMode] = [:]
         for mode in availableModes(for: display.cgDisplayID)
