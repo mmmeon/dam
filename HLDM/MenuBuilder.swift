@@ -136,24 +136,25 @@ private func buildResolutionSubmenu(display: DisplayInfo, video: VideoManager) -
     if video.displayContext(for: display) == .airPlay {
         // — Native group —
         submenu.addItem(sectionHeader("Native"))
-        let nativeModes = video.availableModesDeduped(for: display.cgDisplayID)
+        let nativeModes  = video.availableModesDeduped(for: display.cgDisplayID)
+        let virtualModes = VideoManager.virtualModes(for: .airPlay)
+        let currentIdx   = VideoManager.currentModeIndex(
+            in: nativeModes + virtualModes, anchorCurrent: current.anchor, nativeCurrent: current.native)
+
         if nativeModes.isEmpty {
             submenu.addItem(disabledItem("No modes available"))
         } else {
-            for mode in nativeModes {
+            for (i, mode) in nativeModes.enumerated() {
                 submenu.addItem(modeItem(title: mode.label, mode: mode, display: display,
-                                         isCurrent: mode.ioModeID == current.native?.ioModeID))
+                                         isCurrent: i == currentIdx))
             }
         }
 
         // — Virtual group —
         submenu.addItem(sectionHeader("Virtual"))
-        for mode in VideoManager.virtualModes(for: .airPlay) {
-            // Match by pixel dimensions since ioModeID is 0 for our synthetic virtual modes.
-            let isCurrent = current.anchor.map {
-                $0.pixelWidth == mode.width && $0.pixelHeight == mode.height
-            } ?? false
-            submenu.addItem(modeItem(title: mode.label, mode: mode, display: display, isCurrent: isCurrent))
+        for (i, mode) in virtualModes.enumerated() {
+            submenu.addItem(modeItem(title: mode.label, mode: mode, display: display,
+                                     isCurrent: nativeModes.count + i == currentIdx))
         }
     } else {
         // External or built-in — Resolution label (read-only) + Refresh Rate picker.
@@ -165,14 +166,11 @@ private func buildResolutionSubmenu(display: DisplayInfo, video: VideoManager) -
 
         submenu.addItem(sectionHeader("Refresh Rate"))
         if let options {
-            for mode in options.modes {
-                let isCurrent = mode.isVirtual
-                    ? current.anchor.map {
-                        $0.pixelWidth == mode.width && $0.pixelHeight == mode.height
-                            && $0.roundedRefreshRate == mode.roundedRefreshRate
-                    } ?? false
-                    : mode.ioModeID == current.native?.ioModeID
-                submenu.addItem(modeItem(title: mode.rateLabel, mode: mode, display: display, isCurrent: isCurrent))
+            let currentIdx = VideoManager.currentModeIndex(
+                in: options.modes, anchorCurrent: current.anchor, nativeCurrent: current.native)
+            for (i, mode) in options.modes.enumerated() {
+                submenu.addItem(modeItem(title: mode.rateLabel, mode: mode, display: display,
+                                         isCurrent: i == currentIdx))
             }
         } else {
             submenu.addItem(disabledItem("No rates available"))

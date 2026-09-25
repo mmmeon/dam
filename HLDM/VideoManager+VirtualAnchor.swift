@@ -69,6 +69,28 @@ extension VideoManager {
         return (virtualAnchorCGIDs[display.name].flatMap { currentMode(for: $0) }, nil)
     }
 
+    /// Index in `modes` of the one that represents the current display state.
+    ///
+    /// When `anchorCurrent` is provided the virtual anchor is driving the display; only
+    /// virtual modes are considered (matched by pixel size and rounded rate — the anchor may
+    /// report e.g. 119.88 Hz for a 120 Hz mode). Otherwise only native modes are considered
+    /// (matched by `ioModeID`). Keeping the two pools separate prevents native `ioModeID`
+    /// values from colliding with the anchor's mode ID.
+    static func currentModeIndex(in modes: [DisplayMode],
+                                 anchorCurrent: DisplayMode?,
+                                 nativeCurrent: DisplayMode?) -> Int? {
+        if let cur = anchorCurrent {
+            return modes.firstIndex {
+                $0.isVirtual && $0.pixelWidth == cur.pixelWidth && $0.pixelHeight == cur.pixelHeight
+                    && $0.roundedRefreshRate == cur.roundedRefreshRate
+            }
+        }
+        if let cur = nativeCurrent {
+            return modes.firstIndex { !$0.isVirtual && $0.ioModeID == cur.ioModeID }
+        }
+        return nil
+    }
+
     /// Refresh-rate choices for an external or built-in display, whose resolution is locked
     /// to the current one. Each rate maps to the native mode at that resolution when the panel
     /// supports it, otherwise to a virtual mode routed through the anchor. Sorted highest

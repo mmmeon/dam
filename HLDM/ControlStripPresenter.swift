@@ -363,7 +363,7 @@ final class ControlStripPresenter: NSObject {
             // Smart routing: native rate → native mode; non-native rate → virtual anchor.
             // Cap at 5 segments, keeping the current rate visible.
             let allModes = vm?.refreshRateOptions(for: display)?.modes ?? []
-            let currentIdx = Self.selectedSegmentIndex(
+            let currentIdx = VideoManager.currentModeIndex(
                 in: allModes, anchorCurrent: anchorCurrent, nativeCurrent: nativeCurrent)
             modes  = Array(Self.window(allModes, around: currentIdx, limit: 5))
             labels = modes.map { $0.rateLabel }
@@ -411,7 +411,7 @@ final class ControlStripPresenter: NSObject {
                 action: #selector(resolutionSegmentTapped(_:))
             )
             seg.segmentStyle = .rounded
-            let idx = Self.selectedSegmentIndex(
+            let idx = VideoManager.currentModeIndex(
                 in: modes, anchorCurrent: anchorCurrent, nativeCurrent: nativeCurrent)
             if let idx { seg.setSelected(true, forSegment: idx) }
             resolutionSegMap[ObjectIdentifier(seg)] = (display: display, modes: modes)
@@ -558,7 +558,7 @@ final class ControlStripPresenter: NSObject {
         }
     }
 
-    // MARK: - Segment index selection (extracted for testability)
+    // MARK: - Segment windowing (extracted for testability)
 
     /// Up to `limit` consecutive items, positioned so the item at `current` stays visible
     /// (centred where possible). With no current item, the first `limit` items are kept.
@@ -566,29 +566,6 @@ final class ControlStripPresenter: NSObject {
         guard items.count > limit else { return items[...] }
         let start = min(max((current ?? 0) - limit / 2, 0), items.count - limit)
         return items[start..<start + limit]
-    }
-
-    /// Returns the segment index in `modes` that represents the current display state.
-    ///
-    /// When `anchorCurrent` is provided the virtual anchor is driving the display; only
-    /// virtual modes are considered (matched by pixel dimensions).  Otherwise only native
-    /// modes are considered (matched by `ioModeID`).  Keeping the two pools separate
-    /// prevents native `ioModeID` values from colliding with the anchor's mode ID.
-    static func selectedSegmentIndex(in modes: [DisplayMode],
-                                     anchorCurrent: DisplayMode?,
-                                     nativeCurrent: DisplayMode?) -> Int? {
-        if let cur = anchorCurrent {
-            return modes.firstIndex {
-                $0.isVirtual && $0.width == cur.pixelWidth && $0.height == cur.pixelHeight
-                    && $0.refreshRate == cur.refreshRate
-            }
-        }
-        if let cur = nativeCurrent {
-            return modes.firstIndex {
-                !$0.isVirtual && $0.ioModeID == cur.ioModeID
-            }
-        }
-        return nil
     }
 }
 
