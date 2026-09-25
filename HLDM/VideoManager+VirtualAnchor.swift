@@ -131,12 +131,12 @@ extension VideoManager {
 
         let settings = CGVirtualDisplaySettings()
         settings.hiDPI = 0
-        // For external displays, lock the virtual anchor to the display's current resolution
-        // so the user's resolution is preserved and only refresh rate changes are exposed.
+        // For external and built-in displays, lock the virtual anchor to the display's current
+        // resolution so the user's resolution is preserved and only refresh rate changes are exposed.
         let resolutions: [(UInt, UInt)]
-        if context == .external, let cur = currentMode(for: airPlayCGID) {
+        if context != .airPlay, let cur = currentMode(for: airPlayCGID) {
             resolutions = [(UInt(cur.width), UInt(cur.height))]
-            vdLog.debug("enableVirtualAnchor: external — locking to current resolution \(cur.width)×\(cur.height)")
+            vdLog.debug("enableVirtualAnchor: \(context.rawValue) — locking to current resolution \(cur.width)×\(cur.height)")
         } else {
             resolutions = [(3840, 2160), (2560, 1440), (1920, 1080), (1280, 720)]
         }
