@@ -12,6 +12,55 @@ import os.log
 
 private let vdLog = Logger(subsystem: "mmmeon.hldm", category: "VirtualDisplay")
 
+/// Where each online display sat and what it mirrored, captured before an anchor is added.
+///
+/// When the virtual display appears, WindowServer finds no saved configuration for the new
+/// set of displays and applies a default layout — on an AirPlay setup that mirrors the other
+/// displays into one set and can move the main display. Anything else pulled into the
+/// anchor's mirror set also follows every mode change made on the anchor. We put the rest of
+/// the arrangement back whenever we reconfigure the anchor.
+struct DisplayArrangement {
+    let origins: [CGDirectDisplayID: CGPoint]
+    let mirrorMasters: [CGDirectDisplayID: CGDirectDisplayID]
+
+    static func current() -> DisplayArrangement {
+        var origins: [CGDirectDisplayID: CGPoint] = [:]
+        var masters: [CGDirectDisplayID: CGDirectDisplayID] = [:]
+        for id in onlineDisplayIDs() {
+            origins[id] = CGDisplayBounds(id).origin
+            masters[id] = CGDisplayMirrorsDisplay(id)
+        }
+        return DisplayArrangement(origins: origins, mirrorMasters: masters)
+    }
+
+    static func onlineDisplayIDs() -> [CGDirectDisplayID] {
+        var count: CGDisplayCount = 0
+        CGGetOnlineDisplayList(0, nil, &count)
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        CGGetOnlineDisplayList(count, &ids, &count)
+        return Array(ids.prefix(Int(count)))
+    }
+
+    /// Queues changes on `cfg` returning every still-online display — other than those in
+    /// `excluded`, or mirroring one of them — to its captured mirror state and position.
+    func restore(in cfg: CGDisplayConfigRef, excluding excluded: Set<CGDirectDisplayID>) {
+        let online = Set(Self.onlineDisplayIDs())
+        for (id, master) in mirrorMasters
+        where online.contains(id) && !excluded.contains(id) && !excluded.contains(master) {
+            if CGDisplayMirrorsDisplay(id) != master {
+                vdLog.debug("restore: display \(id) mirror master \(CGDisplayMirrorsDisplay(id)) → \(master)")
+                CGConfigureDisplayMirrorOfDisplay(cfg, id, master)
+            }
+        }
+        for (id, origin) in origins
+        where online.contains(id) && !excluded.contains(id) && mirrorMasters[id] == 0
+            && CGDisplayBounds(id).origin != origin {
+            vdLog.debug("restore: display \(id) origin \(CGDisplayBounds(id).origin.debugDescription) → \(origin.debugDescription)")
+            CGConfigureDisplayOrigin(cfg, id, Int32(origin.x), Int32(origin.y))
+        }
+    }
+}
+
 extension VideoManager {
 
     // MARK: - Public API
@@ -129,7 +178,7 @@ extension VideoManager {
     func selectVirtualMode(_ mode: DisplayMode, for display: DisplayInfo) {
         if hasVirtualAnchor(for: display.name) {
             guard let anchorID = virtualAnchorCGIDs[display.name] else { return }
-            setModeOnVirtualAnchor(mode, anchorID: anchorID)
+            setModeOnVirtualAnchor(mode, anchorID: anchorID, name: display.name, slaveID: display.cgDisplayID)
         } else {
             vdLog.debug("selectVirtualMode: anchor not yet active for '\(display.name)' — enabling anchor, mode applied once mirrored")
             enableVirtualAnchor(for: display, initialMode: mode)
@@ -173,10 +222,12 @@ extension VideoManager {
             DispatchQueue.main.async {
                 self?.virtualAnchorStore.removeValue(forKey: deviceName)
                 self?.virtualAnchorCGIDs.removeValue(forKey: deviceName)
+                self?.virtualAnchorArrangements.removeValue(forKey: deviceName)
                 self?.mergeDevices()
             }
         }
 
+        virtualAnchorArrangements[deviceName] = DisplayArrangement.current()
         let vd = CGVirtualDisplay(descriptor: descriptor)
         vdLog.debug("enableVirtualAnchor: CGVirtualDisplay created — immediate displayID=\(vd.displayID)")
 
@@ -215,29 +266,39 @@ extension VideoManager {
                               initialMode: initialMode, attempt: 0)
     }
 
-    /// Tears down the mirror and releases the CGVirtualDisplay for `display`.
+    /// Tears down the mirror, restores the pre-anchor arrangement, and releases the
+    /// CGVirtualDisplay for `display`.
     func disableVirtualAnchor(for display: DisplayInfo) {
         guard hasVirtualAnchor(for: display.name) else { return }
         let airPlayCGID = display.cgDisplayID != 0
             ? display.cgDisplayID
             : (cachedAirPlayCGIDs[display.name] ?? 0)
-        virtualAnchorStore.removeValue(forKey: display.name)
-        virtualAnchorCGIDs.removeValue(forKey: display.name)
-        if airPlayCGID != 0 {
-            var config: CGDisplayConfigRef?
-            if CGBeginDisplayConfiguration(&config) == .success, let cfg = config {
-                CGConfigureDisplayMirrorOfDisplay(cfg, airPlayCGID, CGDirectDisplayID(0))
-                DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                    CGCompleteDisplayConfiguration(cfg, .forAppOnly)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                        self?.mergeDevices()
-                    }
-                }
-                return
+        let anchorID    = virtualAnchorCGIDs.removeValue(forKey: display.name) ?? 0
+        let arrangement = virtualAnchorArrangements.removeValue(forKey: display.name)
+        // Keep the virtual display alive until the mirror is torn down: destroying the master
+        // first leaves its slaves orphaned and lets WindowServer pick a new layout.
+        let vd = virtualAnchorStore.removeValue(forKey: display.name)
+
+        var config: CGDisplayConfigRef?
+        guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                self?.mergeDevices()
             }
+            return
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            self?.mergeDevices()
+        if airPlayCGID != 0 {
+            CGConfigureDisplayMirrorOfDisplay(cfg, airPlayCGID, CGDirectDisplayID(0))
+        }
+        arrangement?.restore(in: cfg, excluding: [anchorID])
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let err = CGCompleteDisplayConfiguration(cfg, .forAppOnly)
+            vdLog.debug("disableVirtualAnchor: teardown complete err=\(err.rawValue)")
+            DispatchQueue.main.async {
+                withExtendedLifetime(vd) {}
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                    self?.mergeDevices()
+                }
+            }
         }
     }
 
@@ -302,6 +363,7 @@ extension VideoManager {
             } else {
                 vdLog.error("waitForVirtualDisplay: gave up after \(attempt) attempts — removing anchor for '\(name)'")
                 virtualAnchorStore.removeValue(forKey: name)
+                virtualAnchorArrangements.removeValue(forKey: name)
             }
             return
         }
@@ -327,7 +389,7 @@ extension VideoManager {
                     vdLog.debug("step1: teardown complete err=\(completeErr.rawValue) — waiting 1 s before mirror")
                     // Step 2 runs after teardown settles.
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-                        self?.applyMirror(airPlayID: airPlayID, virtualID: virtualID, initialMode: initialMode)
+                        self?.applyMirror(name: name, airPlayID: airPlayID, virtualID: virtualID, initialMode: initialMode)
                     }
                 }
                 return   // step2 will be chained from the background completion above
@@ -336,13 +398,13 @@ extension VideoManager {
 
         // Step 2 (no prior mirror to tear down): short settle delay then apply.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            self?.applyMirror(airPlayID: airPlayID, virtualID: virtualID, initialMode: initialMode)
+            self?.applyMirror(name: name, airPlayID: airPlayID, virtualID: virtualID, initialMode: initialMode)
         }
     }
 
     /// Applies the mirror relationship (airPlay → virtual) and chains step 3.
     /// Called from both the no-prior-mirror path and the post-teardown background path.
-    private func applyMirror(airPlayID: CGDirectDisplayID, virtualID: CGDirectDisplayID,
+    private func applyMirror(name: String, airPlayID: CGDirectDisplayID, virtualID: CGDirectDisplayID,
                              initialMode: DisplayMode?) {
         vdLog.debug("step2: configuring mirror airPlayID=\(airPlayID) → virtualID=\(virtualID)")
         var config: CGDisplayConfigRef?
@@ -351,6 +413,18 @@ extension VideoManager {
         guard beginErr == .success, let cfg = config else {
             vdLog.error("step2: BeginDisplayConfiguration failed — aborting")
             return
+        }
+        // Undo the default layout WindowServer applied when the virtual display appeared,
+        // and put the new mirror set where the target display used to be.
+        let arrangement = virtualAnchorArrangements[name]
+        arrangement?.restore(in: cfg, excluding: [airPlayID, virtualID])
+        if let origin = arrangement?.origins[airPlayID] {
+            CGConfigureDisplayOrigin(cfg, virtualID, Int32(origin.x), Int32(origin.y))
+        }
+        // The default layout can make the virtual display a slave of the target; it must be
+        // the master.
+        if CGDisplayMirrorsDisplay(virtualID) != 0 {
+            CGConfigureDisplayMirrorOfDisplay(cfg, virtualID, CGDirectDisplayID(0))
         }
         CGConfigureDisplayMirrorOfDisplay(cfg, airPlayID, virtualID)
         // CGCompleteDisplayConfiguration can block for ~10 s on some systems while the
@@ -363,7 +437,7 @@ extension VideoManager {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                 if let initialMode {
                     vdLog.debug("step3: applying initial mode \(initialMode.width)×\(initialMode.height) @\(initialMode.refreshRate)Hz")
-                    self?.setModeOnVirtualAnchor(initialMode, anchorID: virtualID)
+                    self?.setModeOnVirtualAnchor(initialMode, anchorID: virtualID, name: name, slaveID: airPlayID)
                 }
                 vdLog.debug("step3: mergeDevices")
                 self?.mergeDevices()
@@ -377,7 +451,12 @@ extension VideoManager {
     /// physical panel's native list (e.g. 60 Hz) which mismatches the virtual master's
     /// rate and tears down the mirror.  The "invalid display identifier" noise emitted
     /// by CoreGraphics for the synthetic UUID is cosmetic; the APIs still work.
-    private func setModeOnVirtualAnchor(_ mode: DisplayMode, anchorID: CGDirectDisplayID) {
+    ///
+    /// Every display in the anchor's mirror set follows the mode change, so any display other
+    /// than `slaveID` that ended up mirroring the anchor is first returned to its captured
+    /// arrangement (or extended, if there's none) in the same transaction.
+    private func setModeOnVirtualAnchor(_ mode: DisplayMode, anchorID: CGDirectDisplayID,
+                                        name: String, slaveID: CGDirectDisplayID) {
         guard anchorID != 0 else { return }
 
         let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
@@ -414,6 +493,14 @@ extension VideoManager {
             vdLog.error("setModeOnVirtualAnchor: BeginDisplayConfiguration err=\(beginErr.rawValue)")
             return
         }
+        let strays = DisplayArrangement.onlineDisplayIDs().filter {
+            $0 != slaveID && CGDisplayMirrorsDisplay($0) == anchorID
+        }
+        for id in strays {
+            vdLog.debug("setModeOnVirtualAnchor: releasing display \(id) from the anchor's mirror set")
+            CGConfigureDisplayMirrorOfDisplay(cfg, id, CGDirectDisplayID(0))
+        }
+        virtualAnchorArrangements[name]?.restore(in: cfg, excluding: [anchorID, slaveID])
         CGConfigureDisplayWithDisplayMode(cfg, anchorID, cgMode, nil)
         DispatchQueue.global(qos: .userInitiated).async {
             let completeErr = CGCompleteDisplayConfiguration(cfg, .forAppOnly)

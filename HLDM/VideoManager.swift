@@ -116,6 +116,8 @@ final class VideoManager: ObservableObject {
     var virtualAnchorStore: [String: AnyObject] = [:]
     /// Maps AirPlay device name → the CGDirectDisplayID of its active virtual anchor.
     var virtualAnchorCGIDs: [String: CGDirectDisplayID] = [:]
+    /// Display layout captured just before each anchor was created, keyed like the above.
+    var virtualAnchorArrangements: [String: DisplayArrangement] = [:]
 
     /// Start continuous Bonjour discovery. Call once on launch; runs until the app quits.
     func startDiscovery() {
@@ -531,6 +533,7 @@ final class VideoManager: ObservableObject {
             if onlineIDs.contains(where: { CGDisplayMirrorsDisplay($0) == anchorID }) { continue }
             virtualAnchorStore.removeValue(forKey: name)
             virtualAnchorCGIDs.removeValue(forKey: name)
+            virtualAnchorArrangements.removeValue(forKey: name)
         }
 
         if allAirPlayDevices    != newAirPlay   { allAirPlayDevices    = newAirPlay   }
