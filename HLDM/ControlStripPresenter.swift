@@ -365,35 +365,8 @@ final class ControlStripPresenter: NSObject {
         if isExternalPhysical {
             // External physical display: show refresh-rate segments locked to the current resolution.
             // Smart routing: native rate → native mode; non-native rate → virtual anchor.
-            let currentRes = vm?.currentMode(for: nativeCGID) ?? anchorCurrent
-            let allNativeAtRes = currentRes.map { res in
-                (vm?.availableModes(for: nativeCGID) ?? [])
-                    .filter { $0.width == res.width && $0.height == res.height }
-            } ?? []
-
-            var nativeRateMap: [Int: DisplayMode] = [:]
-            for mode in allNativeAtRes {
-                let rate = Int(mode.refreshRate.rounded())
-                if nativeRateMap[rate] == nil { nativeRateMap[rate] = mode }
-            }
-
-            let allRates = Set(nativeRateMap.keys)
-                .union(VisibilityPreferences.effectiveVirtualRefreshRates(for: .external))
-                .sorted(by: >)
-                .prefix(5)
-
-            let w = currentRes?.width ?? 0
-            let h = currentRes?.height ?? 0
-            modes = allRates.map { rate -> DisplayMode in
-                if let native = nativeRateMap[rate] { return native }
-                return VideoManager.virtualMode(width: w, height: h, refreshRate: rate)
-            }
-            labels = modes.map { mode in
-                let hz = mode.refreshRate
-                return hz.truncatingRemainder(dividingBy: 1) == 0
-                    ? String(format: "%.0f Hz", hz)
-                    : String(format: "%.1f Hz", hz)
-            }
+            modes  = Array((vm?.refreshRateOptions(for: display)?.modes ?? []).prefix(5))
+            labels = modes.map { $0.rateLabel }
         } else {
             // AirPlay or built-in: existing resolution-based segment logic.
             let allNative = vm?.availableModesDeduped(for: nativeCGID) ?? []

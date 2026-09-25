@@ -45,6 +45,13 @@ struct DisplayMode: Identifiable, Hashable {
         return isHiDPI ? base + "  HiDPI" : base
     }
 
+    /// Refresh rate rounded to whole Hz — identifies a row in the refresh-rate pickers,
+    /// so 59.94 Hz and 60 Hz modes collapse into one "60 Hz" choice.
+    var roundedRefreshRate: Int { Int(refreshRate.rounded()) }
+
+    /// "60 Hz"-style label for the refresh-rate pickers.
+    var rateLabel: String { "\(roundedRefreshRate) Hz" }
+
     /// Compact label for Touch Bar.
     /// Uses "HEIGHTp" when the resolution matches the configured default aspect ratio and
     /// that representation is shorter; otherwise "WIDTHxHEIGHT". Appends "✦" for virtual

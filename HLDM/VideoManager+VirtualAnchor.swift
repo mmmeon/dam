@@ -53,6 +53,46 @@ extension VideoManager {
         }
     }
 
+    /// Which virtual-display settings apply to `display`.
+    func displayContext(for display: DisplayInfo) -> VisibilityPreferences.DisplayContext {
+        if allAirPlayDevices.contains(where: { $0.id == display.id }) { return .airPlay }
+        return display.isBuiltIn ? .builtIn : .external
+    }
+
+    /// The display's current mode, split by what drives it. While a virtual anchor is active
+    /// only `anchor` is set (nil until the anchor is registered), so native choices are never
+    /// marked current; otherwise only `native` is set.
+    func currentModes(for display: DisplayInfo) -> (anchor: DisplayMode?, native: DisplayMode?) {
+        guard hasVirtualAnchor(for: display.name) else {
+            return (nil, currentMode(for: display.cgDisplayID))
+        }
+        return (virtualAnchorCGIDs[display.name].flatMap { currentMode(for: $0) }, nil)
+    }
+
+    /// Refresh-rate choices for an external or built-in display, whose resolution is locked
+    /// to the current one. Each rate maps to the native mode at that resolution when the panel
+    /// supports it, otherwise to a virtual mode routed through the anchor. Sorted highest
+    /// rate first. Returns nil when the current resolution can't be read.
+    func refreshRateOptions(for display: DisplayInfo)
+        -> (resolution: (width: Int, height: Int), modes: [DisplayMode])? {
+        let anchorCurrent = currentModes(for: display).anchor
+        guard let current = currentMode(for: display.cgDisplayID) ?? anchorCurrent else { return nil }
+
+        var nativeByRate: [Int: DisplayMode] = [:]
+        for mode in availableModes(for: display.cgDisplayID)
+        where mode.width == current.width && mode.height == current.height {
+            if nativeByRate[mode.roundedRefreshRate] == nil { nativeByRate[mode.roundedRefreshRate] = mode }
+        }
+
+        let rates = Set(nativeByRate.keys)
+            .union(VisibilityPreferences.effectiveVirtualRefreshRates(for: displayContext(for: display)))
+            .sorted(by: >)
+        let modes = rates.map {
+            nativeByRate[$0] ?? Self.virtualMode(width: current.width, height: current.height, refreshRate: $0)
+        }
+        return ((current.width, current.height), modes)
+    }
+
     /// Selects a virtual resolution for a display.
     ///
     /// - If the virtual anchor is already active, applies the mode immediately.
@@ -75,9 +115,7 @@ extension VideoManager {
             return
         }
 
-        let context: VisibilityPreferences.DisplayContext =
-            allAirPlayDevices.contains { $0.id == display.id } ? .airPlay :
-            (display.isBuiltIn ? .builtIn : .external)
+        let context = displayContext(for: display)
         vdLog.debug("enableVirtualAnchor: starting for '\(display.name)' cgID=\(display.cgDisplayID) context=\(context.rawValue)")
 
         let descriptor = CGVirtualDisplayDescriptor()
