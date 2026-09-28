@@ -194,6 +194,8 @@ extension VideoManager {
     /// - sizes of a different aspect ratio (beyond 1%) are dropped;
     /// - HiDPI modes backed by more pixels than the panel has (downsampled) are dropped;
     /// - sizes narrower than a third of the panel's pixel width are dropped;
+    /// - 1x modes sized between the smallest and largest remaining HiDPI modes are dropped —
+    ///   they're upscaled, blurrier versions of a nearby HiDPI size;
     /// - 1x modes whose pixel size backs a HiDPI mode are dropped — the HiDPI mode shows the
     ///   same pixels at a usable UI size (1920×1080 HiDPI replaces 3840×2160) — except that
     ///   1x sizes larger than the largest remaining HiDPI one are kept when `includeLarger1x`
@@ -210,14 +212,18 @@ extension VideoManager {
                 && m.width * 3 >= native.width
         }
         let hiDPI = modes.filter { $0.isHiDPI && fitsPanel($0) }
-        let largestHiDPIArea = hiDPI.map { $0.width * $0.height }.max()
+        let hiDPIAreas = hiDPI.map { $0.width * $0.height }
         let hiDPIBackings = Set(modes.filter(\.isHiDPI).map { "\($0.pixelWidth)x\($0.pixelHeight)" })
 
         return modes.filter { mode in
             if let cur = current, mode.width == cur.width, mode.height == cur.height { return true }
             guard fitsPanel(mode) else { return false }
             if mode.isHiDPI { return true }
-            if let largest = largestHiDPIArea, mode.width * mode.height > largest { return includeLarger1x }
+            if let smallest = hiDPIAreas.min(), let largest = hiDPIAreas.max() {
+                let area = mode.width * mode.height
+                if area > largest { return includeLarger1x }
+                if area >= smallest { return false }
+            }
             return !hiDPIBackings.contains("\(mode.pixelWidth)x\(mode.pixelHeight)")
         }
         // Largest UI size first (the input is ordered by pixel count, which puts 1x modes
