@@ -115,6 +115,8 @@ final class ControlStripPresenter: NSObject {
 
     /// The display whose resolution bar is currently presented (so the delegate can build its items).
     private var activeResolutionDisplay: DisplayInfo?
+    /// External and built-in displays have two pages: pick a resolution, then its refresh rate.
+    private enum DisplayPage { case resolutions, rates }
     private var resolutionBar: NSTouchBar?
 
     init(audioManager: AudioManager, videoManager: VideoManager) {
@@ -319,8 +321,20 @@ final class ControlStripPresenter: NSObject {
         return item
     }
 
-    private func makeResolutionBar(for display: DisplayInfo) -> NSTouchBar {
+    private func makeResolutionBar(for display: DisplayInfo, page: DisplayPage) -> NSTouchBar {
         activeResolutionDisplay = display
+        let bar = NSTouchBar()
+        bar.delegate = self
+        resolutionBar = bar
+
+        if page == .rates {
+            bar.defaultItemIdentifiers = [
+                NSTouchBarItem.Identifier(Self.displayResPrefix + display.id + ".back"),
+                .flexibleSpace,
+                NSTouchBarItem.Identifier(Self.displayResPrefix + display.id + ".rates"),
+            ]
+            return bar
+        }
 
         let isAirPlay    = videoManager?.allAirPlayDevices.contains(where: { $0.id == display.id }) ?? false
         let mirrorID     = NSTouchBarItem.Identifier(Self.displayResPrefix + display.id + ".mirror")
@@ -337,12 +351,14 @@ final class ControlStripPresenter: NSObject {
         if allActive.count >= 2 && isAirPlay && display.isMirroring { ids.append(optimizeID) }
         if isAirPlay { ids.append(disconnectID) }
         ids += [.flexibleSpace, resID]
-
-        let bar = NSTouchBar()
-        bar.delegate = self
         bar.defaultItemIdentifiers = ids
-        resolutionBar = bar
         return bar
+    }
+
+    /// Presents `page` of `display`'s resolution bar, replacing any presented one.
+    private func showDisplayPage(_ display: DisplayInfo, _ page: DisplayPage) {
+        if let existing = resolutionBar { NSTouchBar.dismissSystemModal(existing) }
+        NSTouchBar.presentSystemModal(makeResolutionBar(for: display, page: page), for: Self.stripID)
     }
 
     /// Builds the mirror/extend toggle button for the resolution bar.
@@ -369,79 +385,88 @@ final class ControlStripPresenter: NSObject {
         return item
     }
 
-    /// Builds the segmented-control item showing available resolutions (called by the delegate).
+    /// Builds the resolution segments for a display's first page (called by the delegate).
+    /// AirPlay: native resolutions matching the native aspect ratio, then virtual modes; a tap
+    /// applies the mode. External / built-in: native resolutions; a tap opens the rates page.
     private func makeResolutionSegItem(id: NSTouchBarItem.Identifier,
                                        display: DisplayInfo) -> NSTouchBarItem {
-        let item = NSCustomTouchBarItem(identifier: id)
         let vm = videoManager
-
-        let context = vm?.displayContext(for: display) ?? (display.isBuiltIn ? .builtIn : .external)
-        let current = vm?.currentModes(for: display)
-        let anchorCurrent = current?.anchor
-        let nativeCurrent = current?.native
-
-        let modes: [DisplayMode]
-        let labels: [String]
-
-        if context != .airPlay {
-            // External or built-in: refresh-rate segments locked to the current resolution.
-            // Smart routing: native rate → native mode; non-native rate → virtual anchor.
-            // Cap at 5 segments, keeping the current rate visible.
-            let allModes = vm?.refreshRateOptions(for: display)?.modes ?? []
-            let currentIdx = VideoManager.currentModeIndex(
-                in: allModes, anchorCurrent: anchorCurrent, nativeCurrent: nativeCurrent)
-            modes  = Array(Self.window(allModes, around: currentIdx, limit: 5))
-            labels = modes.map { $0.rateLabel }
-        } else {
-            // AirPlay: native resolutions matching the native aspect ratio, then virtual modes.
-            let allNative = vm?.availableModesDeduped(for: display.cgDisplayID) ?? []
-
-            func gcd(_ a: Int, _ b: Int) -> Int { b == 0 ? a : gcd(b, a % b) }
-            let filteredNative: [DisplayMode]
-            if let first = allNative.first {
-                let g = gcd(first.width, first.height)
-                let arW = first.width / g, arH = first.height / g
-                filteredNative = allNative.filter {
-                    let g2 = gcd($0.width, $0.height)
-                    return $0.width / g2 == arW && $0.height / g2 == arH
-                }
-            } else {
-                filteredNative = []
-            }
-
-            let maxTotal = 5
-            let nativeToUse  = Array(filteredNative.prefix(maxTotal))
-            let virtualToUse = Array(VideoManager.virtualModes(for: .airPlay).prefix(maxTotal - nativeToUse.count))
-            modes  = nativeToUse + virtualToUse
-            labels = modes.map { $0.shortLabel }
+        guard vm?.displayContext(for: display) == .airPlay else {
+            let options = vm?.resolutionOptions(for: display) ?? (modes: [], currentIndex: nil)
+            let window  = Self.window(options.modes, around: options.currentIndex, limit: 5)
+            let selected = options.currentIndex.map { $0 - window.startIndex }
+            return modeSegmentsItem(id: id, display: display, modes: Array(window),
+                                    labels: window.map { $0.shortLabel }, selected: selected,
+                                    action: #selector(resolutionPickTapped(_:)))
         }
 
-        NSLog("HLDM resSegItem: display='%@' context=%@ anchorCurrent=%d cgID=%u",
-              display.name, context.rawValue, anchorCurrent != nil, display.cgDisplayID)
+        let allNative = vm?.availableModesDeduped(for: display.cgDisplayID) ?? []
+        func gcd(_ a: Int, _ b: Int) -> Int { b == 0 ? a : gcd(b, a % b) }
+        let filteredNative: [DisplayMode]
+        if let first = allNative.first {
+            let g = gcd(first.width, first.height)
+            let arW = first.width / g, arH = first.height / g
+            filteredNative = allNative.filter {
+                let g2 = gcd($0.width, $0.height)
+                return $0.width / g2 == arW && $0.height / g2 == arH
+            }
+        } else {
+            filteredNative = []
+        }
+
+        let maxTotal = 5
+        let nativeToUse  = Array(filteredNative.prefix(maxTotal))
+        let virtualToUse = Array(VideoManager.virtualModes(for: .airPlay).prefix(maxTotal - nativeToUse.count))
+        let modes = nativeToUse + virtualToUse
+        let current = vm?.currentModes(for: display)
+        return modeSegmentsItem(id: id, display: display, modes: modes,
+                                labels: modes.map { $0.shortLabel },
+                                selected: VideoManager.currentModeIndex(
+                                    in: modes, anchorCurrent: current?.anchor, nativeCurrent: current?.native),
+                                action: #selector(resolutionSegmentTapped(_:)))
+    }
+
+    /// Builds the refresh-rate segments for an external or built-in display's second page:
+    /// rates at the current resolution, capped at 5 and keeping the current rate visible.
+    /// Native rate → native mode; non-native rate → virtual anchor.
+    private func makeRateSegItem(id: NSTouchBarItem.Identifier,
+                                 display: DisplayInfo) -> NSTouchBarItem {
+        let allModes = videoManager?.refreshRateOptions(for: display)?.modes ?? []
+        let current  = videoManager?.currentModes(for: display)
+        let currentIdx = VideoManager.currentModeIndex(
+            in: allModes, anchorCurrent: current?.anchor, nativeCurrent: current?.native)
+        let window = Self.window(allModes, around: currentIdx, limit: 5)
+        return modeSegmentsItem(id: id, display: display, modes: Array(window),
+                                labels: window.map { $0.rateLabel },
+                                selected: currentIdx.map { $0 - window.startIndex },
+                                action: #selector(resolutionSegmentTapped(_:)))
+    }
+
+    /// A segmented control of `modes` for `display`, or a "No modes" label when empty.
+    /// The action looks the tapped mode up in `resolutionSegMap`.
+    private func modeSegmentsItem(id: NSTouchBarItem.Identifier, display: DisplayInfo,
+                                  modes: [DisplayMode], labels: [String], selected: Int?,
+                                  action: Selector) -> NSTouchBarItem {
+        let item = NSCustomTouchBarItem(identifier: id)
+        NSLog("HLDM segItem: display='%@' id=%@ cgID=%u selected=%d",
+              display.name, id.rawValue, display.cgDisplayID, selected ?? -1)
         for (i, m) in modes.enumerated() {
-            NSLog("HLDM resSegItem:   modes[%d] %dx%d @%.1fHz virtual=%d ioModeID=%d label='%@'",
+            NSLog("HLDM segItem:   modes[%d] %dx%d @%.1fHz virtual=%d ioModeID=%d label='%@'",
                   i, m.width, m.height, m.refreshRate, m.isVirtual, m.ioModeID, labels[i])
         }
-
-        if modes.isEmpty {
+        guard !modes.isEmpty else {
             let tf = NSTextField(labelWithString: display.cgDisplayID == 0 ? "No display ID" : "No modes")
             tf.textColor = .white
             tf.font = .systemFont(ofSize: 12)
             item.view = tf
-        } else {
-            let seg = NSSegmentedControl(
-                labels: labels,
-                trackingMode: .selectOne,
-                target: self,
-                action: #selector(resolutionSegmentTapped(_:))
-            )
-            seg.segmentStyle = .rounded
-            let idx = VideoManager.currentModeIndex(
-                in: modes, anchorCurrent: anchorCurrent, nativeCurrent: nativeCurrent)
-            if let idx { seg.setSelected(true, forSegment: idx) }
-            resolutionSegMap[ObjectIdentifier(seg)] = (display: display, modes: modes)
-            item.view = seg
+            return item
         }
+        let seg = NSSegmentedControl(labels: labels, trackingMode: .selectOne,
+                                     target: self, action: action)
+        seg.segmentStyle = .rounded
+        if let selected { seg.setSelected(true, forSegment: selected) }
+        resolutionSegMap[ObjectIdentifier(seg)] = (display: display, modes: modes)
+        item.view = seg
         return item
     }
 
@@ -530,11 +555,13 @@ final class ControlStripPresenter: NSObject {
             NSLog("HLDM: displayButtonTapped – display not found in map")
             return
         }
-        let modes = videoManager?.availableModesDeduped(for: display.cgDisplayID) ?? []
-        NSLog("HLDM: display '%@' cgDisplayID=%u modes=%d", display.name, display.cgDisplayID, modes.count)
-        if let existing = resolutionBar { NSTouchBar.dismissSystemModal(existing) }
-        let bar = makeResolutionBar(for: display)
-        NSTouchBar.presentSystemModal(bar, for: Self.stripID)
+        NSLog("HLDM: display '%@' cgDisplayID=%u", display.name, display.cgDisplayID)
+        showDisplayPage(display, .resolutions)
+    }
+
+    @objc private func backToResolutionsTapped(_ btn: NSButton) {
+        guard let display = displayButtonMap[ObjectIdentifier(btn)] else { return }
+        showDisplayPage(display, .resolutions)
     }
 
 
@@ -567,24 +594,52 @@ final class ControlStripPresenter: NSObject {
     @objc private func resolutionSegmentTapped(_ seg: NSSegmentedControl) {
         guard let ctx = resolutionSegMap[ObjectIdentifier(seg)] else { return }
         let idx = seg.selectedSegment
-        guard idx >= 0, idx < ctx.modes.count else { return }
-        guard let vm = videoManager else { return }
-        let mode    = ctx.modes[idx]
-        let display = ctx.display
+        guard idx >= 0, idx < ctx.modes.count, let vm = videoManager else { return }
+        let mode = ctx.modes[idx]
         if mode.isVirtual {
             // Virtual mode: enable anchor if needed, then set mode.
-            vm.selectVirtualMode(mode, for: display)
+            vm.selectVirtualMode(mode, for: ctx.display)
         } else {
-            // Native mode: if anchor is active, disable it first, then set the native mode.
-            if vm.hasVirtualAnchor(for: display.name) {
-                vm.disableVirtualAnchor(for: display)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-                    vm.setMode(mode, for: display.cgDisplayID)
-                }
-            } else {
-                vm.setMode(mode, for: display.cgDisplayID)
-            }
+            applyNativeMode(mode, for: ctx.display)
         }
+    }
+
+    /// External / built-in resolution page: tapping the current resolution opens its rates;
+    /// tapping another switches to it, then opens its rates once the change has settled.
+    @objc private func resolutionPickTapped(_ seg: NSSegmentedControl) {
+        guard let ctx = resolutionSegMap[ObjectIdentifier(seg)] else { return }
+        let idx = seg.selectedSegment
+        guard idx >= 0, idx < ctx.modes.count, let vm = videoManager else { return }
+        let mode    = ctx.modes[idx]
+        let display = ctx.display
+        let options = vm.resolutionOptions(for: display)
+        let isCurrent = options.currentIndex.map {
+            options.modes[$0].width == mode.width && options.modes[$0].height == mode.height
+        } ?? false
+        guard !isCurrent else {
+            showDisplayPage(display, .rates)
+            return
+        }
+        let delay = applyNativeMode(mode, for: display)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay + 0.7) { [weak self] in
+            self?.showDisplayPage(display, .rates)
+        }
+    }
+
+    /// Sets a native mode, first tearing down the display's virtual anchor if one is active.
+    /// Returns how long until the mode change is issued.
+    @discardableResult
+    private func applyNativeMode(_ mode: DisplayMode, for display: DisplayInfo) -> TimeInterval {
+        guard let vm = videoManager else { return 0 }
+        guard vm.hasVirtualAnchor(for: display.name) else {
+            vm.setMode(mode, for: display.cgDisplayID)
+            return 0
+        }
+        vm.disableVirtualAnchor(for: display)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+            vm.setMode(mode, for: display.cgDisplayID)
+        }
+        return 0.8
     }
 
     // MARK: - Segment windowing (extracted for testability)
@@ -638,37 +693,29 @@ extension ControlStripPresenter: NSTouchBarDelegate {
                 return makeDisplayButtonItem(id: id, display: display)
             }
 
-            // Resolution bar: mirror/extend toggle button.
-            if id.rawValue.hasSuffix(".mirror"),
-               id.rawValue.hasPrefix(Self.displayResPrefix),
-               let display = activeResolutionDisplay {
+            // Resolution bar items, keyed by suffix after the display's identifier.
+            guard let display = activeResolutionDisplay,
+                  id.rawValue.hasPrefix(Self.displayResPrefix + display.id) else { return nil }
+            switch String(id.rawValue.dropFirst((Self.displayResPrefix + display.id).count)) {
+            case ".mirror":
                 return makeMirrorToggleItem(id: id, display: display)
-            }
-
-            // Resolution bar: "Optimize for this Display" (AirPlay mirror slave only).
-            if id.rawValue.hasSuffix(".optimize"),
-               id.rawValue.hasPrefix(Self.displayResPrefix),
-               let display = activeResolutionDisplay {
+            case ".optimize":
+                // "Optimize for this Display" (AirPlay mirror slave only).
                 return displayActionItem(id: id, title: "Optimize", display: display,
                                          action: #selector(optimizeTapped(_:)))
-            }
-
-            // Resolution bar: disconnect button (AirPlay only).
-            if id.rawValue.hasSuffix(".disconnect"),
-               id.rawValue.hasPrefix(Self.displayResPrefix),
-               let display = activeResolutionDisplay {
+            case ".disconnect":
                 return displayActionItem(id: id, title: "Disconnect", display: display,
                                          action: #selector(disconnectTapped(_:)))
-            }
-
-            // Resolution bar: segmented control for the active display.
-            if id.rawValue.hasPrefix(Self.displayResPrefix),
-               !id.rawValue.hasSuffix(".mirror"),
-               let display = activeResolutionDisplay {
+            case ".back":
+                return displayActionItem(id: id, title: "◀ Resolution", display: display,
+                                         action: #selector(backToResolutionsTapped(_:)))
+            case ".rates":
+                return makeRateSegItem(id: id, display: display)
+            case "":
                 return makeResolutionSegItem(id: id, display: display)
+            default:
+                return nil
             }
-
-            return nil
         }
     }
 }

@@ -157,6 +157,17 @@ final class VideoManagerFilterTests: XCTestCase {
         XCTAssertEqual(mode(1920, 1080, hz: 119.88).rateLabel, "120 Hz")
     }
 
+    func testDisplayMode_rateLabel_marksVirtualRates() {
+        XCTAssertEqual(VideoManager.virtualMode(width: 1920, height: 1080, refreshRate: 120).rateLabel, "120 Hz ✦")
+    }
+
+    func testDisplayMode_resolutionLabel_notesHiDPI() {
+        XCTAssertEqual(mode(1920, 1080).resolutionLabel, "1920 × 1080")
+        let hiDPI = DisplayMode(id: "x", ioModeID: 0, width: 1280, height: 720,
+                                pixelWidth: 2560, pixelHeight: 1440, refreshRate: 60, isHiDPI: true)
+        XCTAssertEqual(hiDPI.resolutionLabel, "1280 × 720  HiDPI")
+    }
+
     // MARK: - VideoManager.virtualModes(for:)
 
     func testVirtualModes_alwaysInclude60Hz_sortedByResolutionThenRate() {

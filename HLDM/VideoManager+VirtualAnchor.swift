@@ -152,6 +152,28 @@ extension VideoManager {
         return nil
     }
 
+    /// Resolution choices for an external or built-in display: one native mode per logical
+    /// size (HiDPI preferred), largest first, each at the current refresh rate when the
+    /// display supports it there and otherwise at its highest rate. `currentIndex` is the
+    /// entry matching the current logical size — the anchor's while one is active.
+    func resolutionOptions(for display: DisplayInfo) -> (modes: [DisplayMode], currentIndex: Int?) {
+        let current = currentModes(for: display).anchor ?? currentMode(for: display.cgDisplayID)
+        var modes = availableModesDeduped(for: display.cgDisplayID)
+        if let rate = current?.roundedRefreshRate {
+            let all = availableModes(for: display.cgDisplayID)
+            modes = modes.map { best in
+                all.first {
+                    $0.width == best.width && $0.height == best.height
+                        && $0.isHiDPI == best.isHiDPI && $0.roundedRefreshRate == rate
+                } ?? best
+            }
+        }
+        let currentIndex = current.flatMap { cur in
+            modes.firstIndex { $0.width == cur.width && $0.height == cur.height }
+        }
+        return (modes, currentIndex)
+    }
+
     /// Refresh-rate choices for an external or built-in display, whose resolution is locked
     /// to the current one. Each rate maps to the native mode at that resolution when the panel
     /// supports it, otherwise to a virtual mode routed through the anchor. Sorted highest

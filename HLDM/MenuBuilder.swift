@@ -157,18 +157,22 @@ private func buildResolutionSubmenu(display: DisplayInfo, video: VideoManager) -
                                      isCurrent: nativeModes.count + i == currentIdx))
         }
     } else {
-        // External or built-in — Resolution label (read-only) + Refresh Rate picker.
-        // Native rates use native mode settings; non-native rates activate the virtual anchor.
-        let options = video.refreshRateOptions(for: display)
-
+        // External or built-in — Resolution picker + Refresh Rate picker for the current
+        // resolution. Native rates use native mode settings; non-native rates activate the
+        // virtual anchor.
         submenu.addItem(sectionHeader("Resolution"))
-        let resLabel = options.map {
-            "\($0.resolution.width) × \($0.resolution.height)" + ($0.resolution.isHiDPI ? "  HiDPI" : "")
-        } ?? "Unknown"
-        submenu.addItem(disabledItem(resLabel))
+        let resolutions = video.resolutionOptions(for: display)
+        if resolutions.modes.isEmpty {
+            submenu.addItem(disabledItem("No modes available"))
+        } else {
+            for (i, mode) in resolutions.modes.enumerated() {
+                submenu.addItem(modeItem(title: mode.resolutionLabel, mode: mode, display: display,
+                                         isCurrent: i == resolutions.currentIndex))
+            }
+        }
 
         submenu.addItem(sectionHeader("Refresh Rate"))
-        if let options {
+        if let options = video.refreshRateOptions(for: display) {
             let currentIdx = VideoManager.currentModeIndex(
                 in: options.modes, anchorCurrent: current.anchor, nativeCurrent: current.native)
             for (i, mode) in options.modes.enumerated() {
