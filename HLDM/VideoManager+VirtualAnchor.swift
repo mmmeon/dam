@@ -160,8 +160,11 @@ extension VideoManager {
     func resolutionOptions(for display: DisplayInfo) -> (modes: [DisplayMode], currentIndex: Int?) {
         let current = currentModes(for: display).anchor ?? currentMode(for: display.cgDisplayID)
         let all = availableModes(for: display.cgDisplayID)
-        var modes = Self.pickerResolutions(availableModesDeduped(for: display.cgDisplayID),
-                                           native: Self.nativeSize(of: all), current: current)
+        // Native size from the one-per-size list: availableModes() de-duplicates by pixel
+        // size, so a 1x mode sharing pixels with a HiDPI one (3840×2160 vs 1920×1080 HiDPI)
+        // is missing there, and the largest remaining 1x mode can be the wrong shape.
+        let perSize = availableModesDeduped(for: display.cgDisplayID)
+        var modes = Self.pickerResolutions(perSize, native: Self.nativeSize(of: perSize), current: current)
         if let rate = current?.roundedRefreshRate {
             modes = modes.map { best in
                 all.first {
