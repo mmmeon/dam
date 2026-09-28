@@ -157,6 +157,17 @@ final class VideoManagerFilterTests: XCTestCase {
         XCTAssertEqual(mode(1920, 1080, hz: 119.88).rateLabel, "120 Hz")
     }
 
+    func testDisplayMode_rateLabel_marksVirtualRates() {
+        XCTAssertEqual(VideoManager.virtualMode(width: 1920, height: 1080, refreshRate: 120).rateLabel, "120 Hz ✦")
+    }
+
+    func testDisplayMode_resolutionLabel_notesHiDPI() {
+        XCTAssertEqual(mode(1920, 1080).resolutionLabel, "1920 × 1080")
+        let hiDPI = DisplayMode(id: "x", ioModeID: 0, width: 1280, height: 720,
+                                pixelWidth: 2560, pixelHeight: 1440, refreshRate: 60, isHiDPI: true)
+        XCTAssertEqual(hiDPI.resolutionLabel, "1280 × 720  HiDPI")
+    }
+
     // MARK: - VideoManager.virtualModes(for:)
 
     func testVirtualModes_alwaysInclude60Hz_sortedByResolutionThenRate() {
@@ -177,6 +188,69 @@ final class VideoManagerFilterTests: XCTestCase {
         XCTAssertTrue(hiDPI.contains { $0.width == 1280 && $0.pixelWidth == 2560 })
         XCTAssertTrue(hiDPI.contains { $0.width == 1920 && $0.pixelWidth == 3840 })
         XCTAssertFalse(hiDPI.contains { $0.width == 2560 }, "No 5K backing is advertised")
+    }
+
+    // MARK: - VideoManager.pickerResolutions(_:native:current:)
+
+    private func hiDPI(_ w: Int, _ h: Int) -> DisplayMode {
+        DisplayMode(id: "\(w)x\(h)@2x", ioModeID: 0, width: w, height: h,
+                    pixelWidth: w * 2, pixelHeight: h * 2, refreshRate: 60, isHiDPI: true)
+    }
+
+    private func names(_ modes: [DisplayMode]) -> [String] {
+        modes.map { "\($0.width)x\($0.height)\($0.isHiDPI ? "H" : "")" }
+    }
+
+    /// The 4K HISENSE's one-per-size list (subset), largest first.
+    private var fourK: [DisplayMode] {
+        [hiDPI(3360, 1890), hiDPI(2560, 1440), hiDPI(2048, 1080), mode(3840, 2160), hiDPI(1920, 1080),
+         hiDPI(1680, 945), hiDPI(1280, 720), hiDPI(1152, 648), mode(1600, 1200), hiDPI(800, 600),
+         mode(1344, 756), mode(1024, 768)]
+    }
+
+    func testPickerResolutions_4K_touchBarList() {
+        // Downsampled HiDPI (2560×1440+), other ratios, tiny sizes, and 1x 4K all go.
+        let kept = VideoManager.pickerResolutions(fourK, native: (3840, 2160), current: nil)
+        XCTAssertEqual(names(kept), ["1920x1080H", "1680x945H", "1280x720H"])
+    }
+
+    func testPickerResolutions_4K_menuAddsLarger1x() {
+        let kept = VideoManager.pickerResolutions(fourK, native: (3840, 2160), current: nil,
+                                                  includeLarger1x: true)
+        XCTAssertEqual(names(kept), ["3840x2160", "1920x1080H", "1680x945H", "1280x720H"])
+    }
+
+    func testPickerResolutions_1xMatchingHiDPIBacking_isDropped() {
+        // A 1x 2560×1440 duplicates 1280×720 HiDPI's pixels and is below 1920×1080 HiDPI.
+        let modes = [hiDPI(1920, 1080), mode(2560, 1440), hiDPI(1280, 720)]
+        let kept = VideoManager.pickerResolutions(modes, native: (3840, 2160), current: nil)
+        XCTAssertEqual(names(kept), ["1920x1080H", "1280x720H"])
+    }
+
+    func testPickerResolutions_1xBelowSmallestHiDPI_isKept() {
+        // 1x sizes between the smallest and largest HiDPI go; a smaller one stays.
+        let modes = [hiDPI(1920, 1080), mode(1600, 900), hiDPI(1504, 846), mode(1344, 756)]
+        let kept = VideoManager.pickerResolutions(modes, native: (3840, 2160), current: nil)
+        XCTAssertEqual(names(kept), ["1920x1080H", "1504x846H", "1344x756"])
+    }
+
+    func testPickerResolutions_keepsCurrentEvenWhenFiltered() {
+        let kept = VideoManager.pickerResolutions(fourK, native: (3840, 2160), current: mode(3840, 2160))
+        XCTAssertTrue(names(kept).contains("3840x2160"))
+    }
+
+    func testPickerResolutions_noHiDPI_keeps1xModes() {
+        // A 1080p panel: no HiDPI modes, so no 1x mode is "larger than HiDPI".
+        let modes = [mode(1920, 1080), mode(1600, 900), mode(1280, 720), mode(640, 360)]
+        let kept = VideoManager.pickerResolutions(modes, native: (1920, 1080), current: nil)
+        XCTAssertEqual(names(kept), ["1920x1080", "1600x900", "1280x720", "640x360"])
+    }
+
+    func testNativeSize_isLargest1xMode() {
+        let modes = [hiDPI(3360, 1890), mode(3840, 2160), hiDPI(1920, 1080), mode(1600, 1200)]
+        let native = VideoManager.nativeSize(of: modes)
+        XCTAssertEqual(native?.width, 3840)
+        XCTAssertEqual(native?.height, 2160)
     }
 
     // MARK: - DisplayMode.shortLabel
