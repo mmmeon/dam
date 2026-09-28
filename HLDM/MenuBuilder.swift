@@ -161,7 +161,7 @@ private func buildResolutionSubmenu(display: DisplayInfo, video: VideoManager) -
         // resolution. Native rates use native mode settings; non-native rates activate the
         // virtual anchor.
         submenu.addItem(sectionHeader("Resolution"))
-        let resolutions = video.resolutionOptions(for: display)
+        let resolutions = video.resolutionOptions(for: display, includeLarger1x: true)
         if resolutions.modes.isEmpty {
             submenu.addItem(disabledItem("No modes available"))
         } else {
