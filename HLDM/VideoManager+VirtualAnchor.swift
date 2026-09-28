@@ -153,14 +153,16 @@ extension VideoManager {
     }
 
     /// Resolution choices for an external or built-in display: one native mode per logical
-    /// size (HiDPI preferred), largest first, each at the current refresh rate when the
-    /// display supports it there and otherwise at its highest rate. `currentIndex` is the
-    /// entry matching the current logical size — the anchor's while one is active.
+    /// size (HiDPI preferred), trimmed by `pickerResolutions`, largest first. Each is at the
+    /// current refresh rate when the display supports it there, otherwise its highest rate.
+    /// `currentIndex` is the entry matching the current logical size — the anchor's while
+    /// one is active.
     func resolutionOptions(for display: DisplayInfo) -> (modes: [DisplayMode], currentIndex: Int?) {
         let current = currentModes(for: display).anchor ?? currentMode(for: display.cgDisplayID)
-        var modes = availableModesDeduped(for: display.cgDisplayID)
+        let all = availableModes(for: display.cgDisplayID)
+        var modes = Self.pickerResolutions(availableModesDeduped(for: display.cgDisplayID),
+                                           native: Self.nativeSize(of: all), current: current)
         if let rate = current?.roundedRefreshRate {
-            let all = availableModes(for: display.cgDisplayID)
             modes = modes.map { best in
                 all.first {
                     $0.width == best.width && $0.height == best.height
@@ -172,6 +174,33 @@ extension VideoManager {
             modes.firstIndex { $0.width == cur.width && $0.height == cur.height }
         }
         return (modes, currentIndex)
+    }
+
+    /// The panel's native size: its largest 1x mode (HiDPI modes can be backed by more pixels
+    /// than the panel has, so they don't count).
+    static func nativeSize(of modes: [DisplayMode]) -> (width: Int, height: Int)? {
+        modes.filter { !$0.isHiDPI }
+            .max { $0.pixelWidth * $0.pixelHeight < $1.pixelWidth * $1.pixelHeight }
+            .map { ($0.pixelWidth, $0.pixelHeight) }
+    }
+
+    /// Trims a one-per-size resolution list for the pickers:
+    /// - drops sizes whose aspect ratio differs from the native one (within 1%);
+    /// - drops 1x modes whose pixel size backs a HiDPI mode in the list — the HiDPI mode
+    ///   shows the same pixels at a usable UI size, so it replaces the 1x alternative
+    ///   (e.g. 1920×1080 HiDPI replaces 3840×2160).
+    /// The current resolution is always kept so it can be shown as selected.
+    static func pickerResolutions(_ modes: [DisplayMode], native: (width: Int, height: Int)?,
+                                  current: DisplayMode?) -> [DisplayMode] {
+        let hiDPIBackings = Set(modes.filter(\.isHiDPI).map { "\($0.pixelWidth)x\($0.pixelHeight)" })
+        return modes.filter { mode in
+            if let cur = current, mode.width == cur.width, mode.height == cur.height { return true }
+            if let native {
+                let ratio = Double(mode.width) * Double(native.height) / (Double(mode.height) * Double(native.width))
+                if abs(ratio - 1) > 0.01 { return false }
+            }
+            return mode.isHiDPI || !hiDPIBackings.contains("\(mode.pixelWidth)x\(mode.pixelHeight)")
+        }
     }
 
     /// Refresh-rate choices for an external or built-in display, whose resolution is locked
