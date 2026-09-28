@@ -190,6 +190,44 @@ final class VideoManagerFilterTests: XCTestCase {
         XCTAssertFalse(hiDPI.contains { $0.width == 2560 }, "No 5K backing is advertised")
     }
 
+    // MARK: - VideoManager.pickerResolutions(_:native:current:)
+
+    private func hiDPI(_ w: Int, _ h: Int) -> DisplayMode {
+        DisplayMode(id: "\(w)x\(h)@2x", ioModeID: 0, width: w, height: h,
+                    pixelWidth: w * 2, pixelHeight: h * 2, refreshRate: 60, isHiDPI: true)
+    }
+
+    func testPickerResolutions_hiDPIReplacesMatching1xMode() {
+        // 4K panel: 1920×1080 HiDPI is backed by 3840×2160, so the 1x 3840×2160 goes.
+        let modes = [hiDPI(2560, 1440), mode(3840, 2160), hiDPI(1920, 1080), mode(1344, 756)]
+        let kept = VideoManager.pickerResolutions(modes, native: (3840, 2160), current: nil)
+        XCTAssertEqual(kept.map { "\($0.width)x\($0.height)" }, ["2560x1440", "1920x1080", "1344x756"])
+    }
+
+    func testPickerResolutions_dropsOtherAspectRatios() {
+        let modes = [hiDPI(1920, 1080), mode(1600, 1200), hiDPI(2048, 1080), mode(1024, 768), hiDPI(1680, 945)]
+        let kept = VideoManager.pickerResolutions(modes, native: (3840, 2160), current: nil)
+        XCTAssertEqual(kept.map { "\($0.width)x\($0.height)" }, ["1920x1080", "1680x945"])
+    }
+
+    func testPickerResolutions_keepsCurrentEvenWhenFiltered() {
+        let modes = [hiDPI(1920, 1080), mode(3840, 2160), mode(1024, 768)]
+        let kept = VideoManager.pickerResolutions(modes, native: (3840, 2160), current: mode(1024, 768))
+        XCTAssertEqual(kept.map { "\($0.width)x\($0.height)" }, ["1920x1080", "1024x768"])
+    }
+
+    func testPickerResolutions_noHiDPI_keeps1xModes() {
+        let modes = [mode(1920, 1080), mode(1600, 900), mode(1280, 720)]
+        XCTAssertEqual(VideoManager.pickerResolutions(modes, native: (1920, 1080), current: nil).count, 3)
+    }
+
+    func testNativeSize_isLargest1xMode() {
+        let modes = [hiDPI(3360, 1890), mode(3840, 2160), hiDPI(1920, 1080), mode(1600, 1200)]
+        let native = VideoManager.nativeSize(of: modes)
+        XCTAssertEqual(native?.width, 3840)
+        XCTAssertEqual(native?.height, 2160)
+    }
+
     // MARK: - DisplayMode.shortLabel
 
     func testDisplayMode_shortLabel_noSpaces() {
