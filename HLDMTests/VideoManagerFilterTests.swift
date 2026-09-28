@@ -211,13 +211,13 @@ final class VideoManagerFilterTests: XCTestCase {
     func testPickerResolutions_4K_touchBarList() {
         // Downsampled HiDPI (2560×1440+), other ratios, tiny sizes, and 1x 4K all go.
         let kept = VideoManager.pickerResolutions(fourK, native: (3840, 2160), current: nil)
-        XCTAssertEqual(names(kept), ["1920x1080H", "1680x945H", "1344x756", "1280x720H"])
+        XCTAssertEqual(names(kept), ["1920x1080H", "1680x945H", "1280x720H"])
     }
 
     func testPickerResolutions_4K_menuAddsLarger1x() {
         let kept = VideoManager.pickerResolutions(fourK, native: (3840, 2160), current: nil,
                                                   includeLarger1x: true)
-        XCTAssertEqual(names(kept), ["3840x2160", "1920x1080H", "1680x945H", "1344x756", "1280x720H"])
+        XCTAssertEqual(names(kept), ["3840x2160", "1920x1080H", "1680x945H", "1280x720H"])
     }
 
     func testPickerResolutions_1xMatchingHiDPIBacking_isDropped() {
@@ -225,6 +225,13 @@ final class VideoManagerFilterTests: XCTestCase {
         let modes = [hiDPI(1920, 1080), mode(2560, 1440), hiDPI(1280, 720)]
         let kept = VideoManager.pickerResolutions(modes, native: (3840, 2160), current: nil)
         XCTAssertEqual(names(kept), ["1920x1080H", "1280x720H"])
+    }
+
+    func testPickerResolutions_1xBelowSmallestHiDPI_isKept() {
+        // 1x sizes between the smallest and largest HiDPI go; a smaller one stays.
+        let modes = [hiDPI(1920, 1080), mode(1600, 900), hiDPI(1504, 846), mode(1344, 756)]
+        let kept = VideoManager.pickerResolutions(modes, native: (3840, 2160), current: nil)
+        XCTAssertEqual(names(kept), ["1920x1080H", "1504x846H", "1344x756"])
     }
 
     func testPickerResolutions_keepsCurrentEvenWhenFiltered() {
