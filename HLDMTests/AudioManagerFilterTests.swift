@@ -136,4 +136,29 @@ final class AudioManagerFilterTests: XCTestCase {
         VisibilityPreferences.seenAudioDevices = seen
         XCTAssertEqual(VisibilityPreferences.seenAudioDevices.count, countBefore)
     }
+
+    // MARK: - AudioManager.device(after:in:)
+
+    func testDeviceAfter_advancesToNext() {
+        let devices = [device("Speakers", id: 1), device("Headphones", id: 2), device("TV", id: 3)]
+        XCTAssertEqual(AudioManager.device(after: 1, in: devices)?.name, "Headphones")
+    }
+
+    func testDeviceAfter_wrapsFromLastToFirst() {
+        let devices = [device("Speakers", id: 1), device("Headphones", id: 2)]
+        XCTAssertEqual(AudioManager.device(after: 2, in: devices)?.name, "Speakers")
+    }
+
+    func testDeviceAfter_currentHidden_startsAtFirst() {
+        let devices = [device("Speakers", id: 1), device("Headphones", id: 2)]
+        XCTAssertEqual(AudioManager.device(after: 99, in: devices)?.name, "Speakers")
+    }
+
+    func testDeviceAfter_singleDevice_returnsItself() {
+        XCTAssertEqual(AudioManager.device(after: 1, in: [device("Speakers", id: 1)])?.name, "Speakers")
+    }
+
+    func testDeviceAfter_noDevices_returnsNil() {
+        XCTAssertNil(AudioManager.device(after: 1, in: []))
+    }
 }

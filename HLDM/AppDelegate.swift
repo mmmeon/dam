@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotkey: GlobalHotkey!
     private var airPlayConnectHotkey: GlobalHotkey!
     private var mirrorToggleHotkey: GlobalHotkey!
+    private var audioCycleHotkey: GlobalHotkey!
     private var settingsWindow: SettingsWindowController?
     private var cancellables = Set<AnyCancellable>()
 
@@ -41,6 +42,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         mirrorToggleHotkey = GlobalHotkey(preference: HotkeyPreference.currentMirrorToggle) { [weak self] in
             self?.toggleAirPlayMirror()
+        }
+        audioCycleHotkey = GlobalHotkey(preference: HotkeyPreference.currentAudioCycle) { [weak self] in
+            self?.cycleAudioOutput()
         }
 
         // Rebuild menu and Control Strip whenever either manager publishes a change
@@ -82,6 +86,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             statusItem.button?.performClick(nil)
         }
+    }
+
+    /// Switches to the next enabled audio output and announces it.
+    private func cycleAudioOutput() {
+        guard let device = audioManager.cycleDefaultDevice() else {
+            SpeechSynthesizer.shared.announce("No audio outputs enabled")
+            return
+        }
+        SpeechSynthesizer.shared.announce(device.name)
     }
 
     private func toggleAirPlayMirror() {
@@ -134,6 +147,7 @@ extension AppDelegate: NSMenuDelegate {
             current: HotkeyPreference.current,
             currentAirPlayConnect: HotkeyPreference.currentAirPlayConnect,
             currentMirrorToggle: HotkeyPreference.currentMirrorToggle,
+            currentAudioCycle: HotkeyPreference.currentAudioCycle,
             audioManager: audioManager,
             videoManager: videoManager
         )
@@ -153,6 +167,12 @@ extension AppDelegate: NSMenuDelegate {
             HotkeyPreference.currentMirrorToggle = pref
             self?.mirrorToggleHotkey = GlobalHotkey(preference: pref) { [weak self] in
                 self?.toggleAirPlayMirror()
+            }
+        }
+        wc.onSaveAudioCycle = { [weak self] pref in
+            HotkeyPreference.currentAudioCycle = pref
+            self?.audioCycleHotkey = GlobalHotkey(preference: pref) { [weak self] in
+                self?.cycleAudioOutput()
             }
         }
         wc.onRebuild = { [weak self] in self?.rebuild() }

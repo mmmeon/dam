@@ -8,10 +8,11 @@ final class HotkeyPreferenceTests: XCTestCase {
     private let key1 = "mmmeon.hldm.hotkey"
     private let key2 = "mmmeon.hldm.hotkeyAirPlayConnect"
     private let key3 = "mmmeon.hldm.hotkeyMirrorToggle"
+    private let key4 = "mmmeon.hldm.hotkeyAudioCycle"
 
     override func tearDown() {
         super.tearDown()
-        [key1, key2, key3].forEach { UserDefaults.standard.removeObject(forKey: $0) }
+        [key1, key2, key3, key4].forEach { UserDefaults.standard.removeObject(forKey: $0) }
     }
 
     // MARK: - modifierString
@@ -155,11 +156,22 @@ final class HotkeyPreferenceTests: XCTestCase {
         XCTAssertEqual(HotkeyPreference.currentMirrorToggle, custom)
     }
 
+    func testPersistence_currentAudioCycle_defaultWhenNeverSet() {
+        XCTAssertEqual(HotkeyPreference.currentAudioCycle, HotkeyPreference.defaultAudioCycle)
+    }
+
+    func testPersistence_currentAudioCycle_roundTrip() {
+        let custom = HotkeyPreference(keyCode: UInt32(kVK_ANSI_P), modifiers: UInt32(optionKey | cmdKey))
+        HotkeyPreference.currentAudioCycle = custom
+        XCTAssertEqual(HotkeyPreference.currentAudioCycle, custom)
+    }
+
     func testPersistence_writeOneKey_doesNotAffectOthers() {
         let customMain = HotkeyPreference(keyCode: UInt32(kVK_ANSI_Z), modifiers: UInt32(cmdKey))
         HotkeyPreference.current = customMain
         // The other two should still return their defaults
         XCTAssertEqual(HotkeyPreference.currentAirPlayConnect, HotkeyPreference.defaultAirPlayConnect)
         XCTAssertEqual(HotkeyPreference.currentMirrorToggle,   HotkeyPreference.defaultMirrorToggle)
+        XCTAssertEqual(HotkeyPreference.currentAudioCycle,     HotkeyPreference.defaultAudioCycle)
     }
 }
