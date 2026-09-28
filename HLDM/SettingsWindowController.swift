@@ -10,12 +10,14 @@ final class SettingsWindowController: NSWindowController {
     private let recorder: KeyRecorderView
     private let recorderAirPlay: KeyRecorderView
     private let recorderMirrorToggle: KeyRecorderView
+    private let recorderAudioCycle: KeyRecorderView
     private let audioManager: AudioManager
     private let videoManager: VideoManager
 
     var onSave: ((HotkeyPreference) -> Void)?
     var onSaveAirPlayConnect: ((HotkeyPreference) -> Void)?
     var onSaveMirrorToggle: ((HotkeyPreference) -> Void)?
+    var onSaveAudioCycle: ((HotkeyPreference) -> Void)?
     /// Called whenever a visibility checkbox is toggled so the menu/Touch Bar rebuild.
     var onRebuild: (() -> Void)?
 
@@ -40,11 +42,13 @@ final class SettingsWindowController: NSWindowController {
     init(current: HotkeyPreference,
          currentAirPlayConnect: HotkeyPreference,
          currentMirrorToggle: HotkeyPreference,
+         currentAudioCycle: HotkeyPreference,
          audioManager: AudioManager,
          videoManager: VideoManager) {
         recorder              = KeyRecorderView(preference: current)
         recorderAirPlay       = KeyRecorderView(preference: currentAirPlayConnect)
         recorderMirrorToggle  = KeyRecorderView(preference: currentMirrorToggle)
+        recorderAudioCycle    = KeyRecorderView(preference: currentAudioCycle)
         self.audioManager     = audioManager
         self.videoManager     = videoManager
 
@@ -120,7 +124,8 @@ final class SettingsWindowController: NSWindowController {
             settingGroup(
                 control: hotkeyRow(label: "Hotkey:", recorder: recorder, resetBtn: resetBtn),
                 description: "Opens the Touch Bar switcher panel for changing the audio " +
-                             "output device or AirPlay display."
+                             "output device or AirPlay display. Without a Touch Bar " +
+                             "(or with the lid closed) it opens the menu bar menu instead."
             )
         )
 
@@ -157,6 +162,24 @@ final class SettingsWindowController: NSWindowController {
                                    resetBtn: resetMirrorBtn),
                 description: "Toggles the connected AirPlay display between mirror and " +
                              "extend mode. Announces the new mode via speech."
+            )
+        )
+
+        stack.addArrangedSubview(separator())
+
+        // — Audio Output Cycle —
+        stack.addArrangedSubview(sectionHeader("Cycle Audio Output"))
+
+        recorderAudioCycle.onChanged = { [weak self] pref in self?.onSaveAudioCycle?(pref) }
+        let resetAudioCycleBtn = NSButton(title: "Reset", target: self,
+                                          action: #selector(resetAudioCycleToDefault))
+        resetAudioCycleBtn.bezelStyle = .rounded
+        stack.addArrangedSubview(
+            settingGroup(
+                control: hotkeyRow(label: "Hotkey:", recorder: recorderAudioCycle,
+                                   resetBtn: resetAudioCycleBtn),
+                description: "Switches to the next enabled audio output device. Devices " +
+                             "unchecked on the Devices tab are skipped. Announces the device."
             )
         )
 
@@ -364,6 +387,12 @@ final class SettingsWindowController: NSWindowController {
         let pref = HotkeyPreference.defaultMirrorToggle
         recorderMirrorToggle.preference = pref
         onSaveMirrorToggle?(pref)
+    }
+
+    @objc private func resetAudioCycleToDefault() {
+        let pref = HotkeyPreference.defaultAudioCycle
+        recorderAudioCycle.preference = pref
+        onSaveAudioCycle?(pref)
     }
 
     // MARK: - Layout helpers

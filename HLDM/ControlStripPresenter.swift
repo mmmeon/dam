@@ -30,9 +30,11 @@ private func dfrSym<Fn>(_ name: String) -> Fn? {
 
 private typealias ShowsCloseFn  = @convention(c) (Bool) -> Void
 private typealias SetPresenceFn = @convention(c) (NSString, Bool) -> Void
+private typealias GetStatusFn   = @convention(c) () -> UInt32
 
 private let _showsClose:   ShowsCloseFn?  = dfrSym("DFRSystemModalShowsCloseBoxWhenFrontMost")
 private let _setPresence:  SetPresenceFn? = dfrSym("DFRElementSetControlStripPresenceForIdentifier")
+private let _getStatus:    GetStatusFn?   = dfrSym("DFRGetStatus")
 
 private func DFRSystemModalShowsCloseBoxWhenFrontMost(_ show: Bool) {
     _showsClose?(show)
@@ -121,15 +123,28 @@ final class ControlStripPresenter: NSObject {
         super.init()
         SpeechSynthesizer.shared.onDisplayTextChanged = { [weak self] in
             DispatchQueue.main.async {
+                let text = SpeechSynthesizer.shared.displayText
+                guard Self.isTouchBarAvailable else {
+                    // No Touch Bar: caption on screen, without taking focus.
+                    CaptionHUD.shared.show(text)
+                    return
+                }
+                CaptionHUD.shared.show(nil)
                 // Bring the app to the foreground so NSApp.touchBar is visible.
                 // Only activate on the leading edge (text just appeared); on clear
                 // we leave focus wherever it ended up.
-                if SpeechSynthesizer.shared.displayText != nil {
+                if text != nil {
                     NSApp.activate(ignoringOtherApps: true)
                 }
                 self?.rebuild()
             }
         }
+    }
+
+    /// True when a Touch Bar is usable right now. DFRGetStatus bit 0 is set while the
+    /// Touch Bar is up; it is clear on Macs without one, and briefly at login and wake.
+    static var isTouchBarAvailable: Bool {
+        (_getStatus?() ?? 0) & 0x1 != 0
     }
 
     // MARK: - Lifecycle
@@ -309,6 +324,7 @@ final class ControlStripPresenter: NSObject {
 
         let isAirPlay    = videoManager?.allAirPlayDevices.contains(where: { $0.id == display.id }) ?? false
         let mirrorID     = NSTouchBarItem.Identifier(Self.displayResPrefix + display.id + ".mirror")
+        let optimizeID   = NSTouchBarItem.Identifier(Self.displayResPrefix + display.id + ".optimize")
         let disconnectID = NSTouchBarItem.Identifier(Self.displayResPrefix + display.id + ".disconnect")
         let resID        = NSTouchBarItem.Identifier(Self.displayResPrefix + display.id)
 
@@ -316,6 +332,9 @@ final class ControlStripPresenter: NSObject {
             .filter { $0.cgDisplayID != 0 }
         var ids: [NSTouchBarItem.Identifier] = []
         if allActive.count >= 2 { ids.append(mirrorID) }
+        // Mirrors the menu: when AirPlay is the slave, offer promoting it to master
+        // without leaving mirror mode.
+        if allActive.count >= 2 && isAirPlay && display.isMirroring { ids.append(optimizeID) }
         if isAirPlay { ids.append(disconnectID) }
         ids += [.flexibleSpace, resID]
 
@@ -329,15 +348,21 @@ final class ControlStripPresenter: NSObject {
     /// Builds the mirror/extend toggle button for the resolution bar.
     private func makeMirrorToggleItem(id: NSTouchBarItem.Identifier,
                                       display: DisplayInfo) -> NSTouchBarItem {
-        let item = NSCustomTouchBarItem(identifier: id)
         // For AirPlay displays the relevant state is whether something is mirroring
         // them (they are the master). For physical displays use their own isMirroring flag.
         let isAirPlay = videoManager?.allAirPlayDevices.contains(where: { $0.id == display.id }) ?? false
         let isMirroring = isAirPlay
             ? (display.isMirroring || (videoManager?.isBeingMirrored(display) ?? false))
             : display.isMirroring
-        let title = isMirroring ? "Extend" : "Mirror"
-        let btn = NSButton(title: title, target: self, action: #selector(mirrorToggleTapped(_:)))
+        return displayActionItem(id: id, title: isMirroring ? "Extend" : "Mirror", display: display,
+                                 action: #selector(mirrorToggleTapped(_:)))
+    }
+
+    /// A button acting on `display`; the action looks the display up in `displayButtonMap`.
+    private func displayActionItem(id: NSTouchBarItem.Identifier, title: String,
+                                   display: DisplayInfo, action: Selector) -> NSTouchBarItem {
+        let item = NSCustomTouchBarItem(identifier: id)
+        let btn  = NSButton(title: title, target: self, action: action)
         btn.bezelStyle = .rounded
         displayButtonMap[ObjectIdentifier(btn)] = display
         item.view = btn
@@ -512,15 +537,6 @@ final class ControlStripPresenter: NSObject {
         NSTouchBar.presentSystemModal(bar, for: Self.stripID)
     }
 
-    private func makeDisconnectItem(id: NSTouchBarItem.Identifier,
-                                    display: DisplayInfo) -> NSTouchBarItem {
-        let item = NSCustomTouchBarItem(identifier: id)
-        let btn  = NSButton(title: "Disconnect", target: self, action: #selector(disconnectTapped(_:)))
-        btn.bezelStyle = .rounded
-        displayButtonMap[ObjectIdentifier(btn)] = display
-        item.view = btn
-        return item
-    }
 
     @objc private func disconnectTapped(_ btn: NSButton) {
         guard let display = displayButtonMap[ObjectIdentifier(btn)] else { return }
@@ -528,6 +544,15 @@ final class ControlStripPresenter: NSObject {
         // Close the modal — the display is going away.
         if let bar = modalBar { NSTouchBar.dismissSystemModal(bar) }
         modalBar = nil
+    }
+
+    @objc private func optimizeTapped(_ btn: NSButton) {
+        guard let display = displayButtonMap[ObjectIdentifier(btn)] else { return }
+        videoManager?.setAsOptimizedDisplay(display)
+        // Re-present the modal after the display config settles so the buttons refresh.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
+            self?.openModal()
+        }
     }
 
     @objc private func mirrorToggleTapped(_ btn: NSButton) {
@@ -620,11 +645,20 @@ extension ControlStripPresenter: NSTouchBarDelegate {
                 return makeMirrorToggleItem(id: id, display: display)
             }
 
+            // Resolution bar: "Optimize for this Display" (AirPlay mirror slave only).
+            if id.rawValue.hasSuffix(".optimize"),
+               id.rawValue.hasPrefix(Self.displayResPrefix),
+               let display = activeResolutionDisplay {
+                return displayActionItem(id: id, title: "Optimize", display: display,
+                                         action: #selector(optimizeTapped(_:)))
+            }
+
             // Resolution bar: disconnect button (AirPlay only).
             if id.rawValue.hasSuffix(".disconnect"),
                id.rawValue.hasPrefix(Self.displayResPrefix),
                let display = activeResolutionDisplay {
-                return makeDisconnectItem(id: id, display: display)
+                return displayActionItem(id: id, title: "Disconnect", display: display,
+                                         action: #selector(disconnectTapped(_:)))
             }
 
             // Resolution bar: segmented control for the active display.

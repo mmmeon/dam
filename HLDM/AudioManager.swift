@@ -52,6 +52,23 @@ final class AudioManager: ObservableObject {
         devices.filter { !hidden.contains($0.name) }
     }
 
+    /// The device after the one with `currentID` in `devices`, wrapping around; the first
+    /// device when `currentID` isn't listed (e.g. the current output is hidden). Nil if empty.
+    static func device(after currentID: AudioDeviceID, in devices: [AudioDevice]) -> AudioDevice? {
+        guard let idx = devices.firstIndex(where: { $0.id == currentID }) else { return devices.first }
+        return devices[(idx + 1) % devices.count]
+    }
+
+    /// Switches the default output to the next enabled device and returns it, or nil when
+    /// no devices are enabled.
+    @discardableResult
+    func cycleDefaultDevice() -> AudioDevice? {
+        refresh()
+        guard let next = Self.device(after: defaultDeviceID, in: devices) else { return nil }
+        setDefaultDevice(next)
+        return next
+    }
+
     func setDefaultDevice(_ device: AudioDevice) {
         var propAddr = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDefaultOutputDevice,

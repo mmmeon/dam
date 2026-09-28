@@ -64,9 +64,7 @@ final class AirPlayQuickConnect: NSObject {
 
         let all = vm.airPlayDevices
         guard !all.isEmpty else {
-            if VisibilityPreferences.speechEnabled {
-                SpeechSynthesizer.shared.speak("No AirPlay displays found")
-            }
+            SpeechSynthesizer.shared.announce("No AirPlay displays found")
             return
         }
 
@@ -74,12 +72,9 @@ final class AirPlayQuickConnect: NSObject {
         // not toggling. Already-active displays are announced and skipped.
         let displays = all.filter { !$0.isConnected }
         guard !displays.isEmpty else {
-            if VisibilityPreferences.speechEnabled {
-                let msg = all.count == 1
-                    ? "Already connected to \(all[0].name)"
-                    : "All displays already connected"
-                SpeechSynthesizer.shared.speak(msg)
-            }
+            SpeechSynthesizer.shared.announce(all.count == 1
+                ? "Already connected to \(all[0].name)"
+                : "All displays already connected")
             return
         }
 
@@ -106,8 +101,9 @@ final class AirPlayQuickConnect: NSObject {
                 .joined(separator: ". ")
             let speech = "Select a display. \(list)"
             DispatchQueue.main.async {
-                // touchBar: false — the numbered selection buttons must stay tappable.
-                SpeechSynthesizer.shared.speak(speech, touchBar: false)
+                // caption: false — the numbered selection buttons must stay tappable,
+                // and the HUD already lists the displays.
+                SpeechSynthesizer.shared.speak(speech, caption: false)
             }
         }
     }
@@ -130,7 +126,8 @@ final class AirPlayQuickConnect: NSObject {
                 SpeechSynthesizer.shared.onFinish = { [weak self] in
                     self?.connect(display: display)
                 }
-                SpeechSynthesizer.shared.speak("Connecting to \(display.name)")
+                // caption: false — the HUD and Touch Bar already show "Connecting to…".
+                SpeechSynthesizer.shared.speak("Connecting to \(display.name)", caption: false)
             }
         } else {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
@@ -251,44 +248,81 @@ final class AirPlayQuickConnect: NSObject {
     // MARK: - HUD
 
     private func showHUD(lines: [String], subtitle: String) {
-        if panel == nil {
-            let p = HUDPanel()
-            p.isFloatingPanel    = true
-            p.level              = .modalPanel
-            p.backgroundColor    = .clear
-            p.isOpaque           = false
-            p.hasShadow          = true
-            p.alphaValue         = 0.97
-            p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-            p.styleMask          = [.borderless]
-            panel = p
-        }
-
-        let width:   CGFloat = 320
-        let padding: CGFloat = 20
-        let lineH:   CGFloat = 22
-        let subH:    CGFloat = subtitle.isEmpty ? 0 : 30
-        let height = padding * 2
-                     + CGFloat(lines.count) * lineH
-                     + (lines.count > 1 ? CGFloat(lines.count - 1) * 6 : 0)
-                     + subH
-        let sz = NSSize(width: width, height: height)
-
-        let content = HUDContentView(lines: lines, subtitle: subtitle)
-        content.frame = NSRect(origin: .zero, size: sz)
-        panel?.contentView = content
-        panel?.setContentSize(sz)
-
-        let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) }
-                     ?? NSScreen.main
-        if let screen {
-            let ox = screen.visibleFrame.midX - sz.width  / 2
-            let oy = screen.visibleFrame.midY + sz.height / 2
-            panel?.setFrameOrigin(NSPoint(x: ox, y: oy))
-        }
-
+        let p = panel ?? makeHUDPanel()
+        panel = p
+        layoutHUD(p, lines: lines, subtitle: subtitle) { frame, size in frame.midY + size.height / 2 }
         NSApp.activate(ignoringOtherApps: true)
-        panel?.makeKeyAndOrderFront(nil)
+        p.makeKeyAndOrderFront(nil)
+    }
+}
+
+// MARK: - CaptionHUD
+
+/// On-screen stand-in for the Touch Bar caption on Macs without a Touch Bar: a small
+/// panel near the bottom of the screen under the mouse. It never takes focus or clicks.
+final class CaptionHUD {
+
+    static let shared = CaptionHUD()
+
+    private var panel: HUDPanel?
+
+    private init() {}
+
+    /// Shows `text`, or hides the caption when nil.
+    func show(_ text: String?) {
+        guard let text else {
+            panel?.orderOut(nil)
+            return
+        }
+        let p = panel ?? makeHUDPanel()
+        panel = p
+        p.ignoresMouseEvents = true
+        layoutHUD(p, lines: [text], subtitle: "") { frame, _ in frame.minY + frame.height * 0.12 }
+        p.orderFrontRegardless()
+    }
+}
+
+// MARK: - HUD helpers
+
+/// The borderless floating panel shared by the quick-connect HUD and captions.
+private func makeHUDPanel() -> HUDPanel {
+    let p = HUDPanel()
+    p.isFloatingPanel    = true
+    p.level              = .modalPanel
+    p.backgroundColor    = .clear
+    p.isOpaque           = false
+    p.hasShadow          = true
+    p.alphaValue         = 0.97
+    p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+    p.styleMask          = [.borderless]
+    return p
+}
+
+/// Fills `panel` with `lines` and `subtitle`, sizes it, and centres it horizontally on the
+/// screen under the mouse; `originY` picks the bottom edge from that screen's visible frame
+/// and the panel size.
+private func layoutHUD(_ panel: NSPanel, lines: [String], subtitle: String,
+                       originY: (NSRect, NSSize) -> CGFloat) {
+    let width:   CGFloat = 320
+    let padding: CGFloat = 20
+    let lineH:   CGFloat = 22
+    let subH:    CGFloat = subtitle.isEmpty ? 0 : 30
+    let height = padding * 2
+                 + CGFloat(lines.count) * lineH
+                 + (lines.count > 1 ? CGFloat(lines.count - 1) * 6 : 0)
+                 + subH
+    let sz = NSSize(width: width, height: height)
+
+    let content = HUDContentView(lines: lines, subtitle: subtitle)
+    content.frame = NSRect(origin: .zero, size: sz)
+    panel.contentView = content
+    panel.setContentSize(sz)
+
+    let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) }
+                 ?? NSScreen.main
+    if let screen {
+        let frame = screen.visibleFrame
+        panel.setFrameOrigin(NSPoint(x: frame.midX - sz.width / 2, y: originY(frame, sz)))
     }
 }
 

@@ -31,49 +31,48 @@ struct HotkeyPreference: Codable, Equatable {
         modifiers: UInt32(controlKey | optionKey | cmdKey)
     )
 
+    /// Default shortcut for cycling through the enabled audio outputs (⌃⌥⌘O).
+    static let defaultAudioCycle = HotkeyPreference(
+        keyCode:   UInt32(kVK_ANSI_O),
+        modifiers: UInt32(controlKey | optionKey | cmdKey)
+    )
+
     // MARK: - Persistence
 
     private static let defaultsKey               = "mmmeon.hldm.hotkey"
     private static let airPlayConnectDefaultsKey  = "mmmeon.hldm.hotkeyAirPlayConnect"
     private static let mirrorToggleDefaultsKey    = "mmmeon.hldm.hotkeyMirrorToggle"
+    private static let audioCycleDefaultsKey      = "mmmeon.hldm.hotkeyAudioCycle"
 
     static var current: HotkeyPreference {
-        get {
-            guard let data = UserDefaults.standard.data(forKey: defaultsKey),
-                  let pref = try? JSONDecoder().decode(HotkeyPreference.self, from: data)
-            else { return .default }
-            return pref
-        }
-        set {
-            UserDefaults.standard.set(try? JSONEncoder().encode(newValue),
-                                      forKey: defaultsKey)
-        }
+        get { load(defaultsKey, fallback: .default) }
+        set { store(newValue, defaultsKey) }
     }
 
     static var currentAirPlayConnect: HotkeyPreference {
-        get {
-            guard let data = UserDefaults.standard.data(forKey: airPlayConnectDefaultsKey),
-                  let pref = try? JSONDecoder().decode(HotkeyPreference.self, from: data)
-            else { return .defaultAirPlayConnect }
-            return pref
-        }
-        set {
-            UserDefaults.standard.set(try? JSONEncoder().encode(newValue),
-                                      forKey: airPlayConnectDefaultsKey)
-        }
+        get { load(airPlayConnectDefaultsKey, fallback: .defaultAirPlayConnect) }
+        set { store(newValue, airPlayConnectDefaultsKey) }
     }
 
     static var currentMirrorToggle: HotkeyPreference {
-        get {
-            guard let data = UserDefaults.standard.data(forKey: mirrorToggleDefaultsKey),
-                  let pref = try? JSONDecoder().decode(HotkeyPreference.self, from: data)
-            else { return .defaultMirrorToggle }
-            return pref
-        }
-        set {
-            UserDefaults.standard.set(try? JSONEncoder().encode(newValue),
-                                      forKey: mirrorToggleDefaultsKey)
-        }
+        get { load(mirrorToggleDefaultsKey, fallback: .defaultMirrorToggle) }
+        set { store(newValue, mirrorToggleDefaultsKey) }
+    }
+
+    static var currentAudioCycle: HotkeyPreference {
+        get { load(audioCycleDefaultsKey, fallback: .defaultAudioCycle) }
+        set { store(newValue, audioCycleDefaultsKey) }
+    }
+
+    private static func load(_ key: String, fallback: HotkeyPreference) -> HotkeyPreference {
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let pref = try? JSONDecoder().decode(HotkeyPreference.self, from: data)
+        else { return fallback }
+        return pref
+    }
+
+    private static func store(_ pref: HotkeyPreference, _ key: String) {
+        UserDefaults.standard.set(try? JSONEncoder().encode(pref), forKey: key)
     }
 
     // MARK: - Display

@@ -7,10 +7,10 @@
 //  on first use, which can stall the main thread for several seconds on Intel
 //  Macs. NSSpeechSynthesizer does not have this problem.
 //
-//  When touchBar: true (the default) the spoken text is published via
-//  displayText / onDisplayTextChanged so the Touch Bar can show it inline
-//  without presenting a separate system-modal overlay. The text is cleared
-//  automatically: immediately on stop(), after a short linger on natural finish.
+//  When caption: true (the default) the spoken text is published via
+//  displayText / onDisplayTextChanged so it can be shown as a caption — inline on
+//  the Touch Bar, or on screen without one. The text is cleared automatically:
+//  immediately on stop(), after a short linger on natural finish.
 //
 
 import AppKit
@@ -23,11 +23,10 @@ final class SpeechSynthesizer {
     private let synthDel = SynthDelegate()
     private var clearTimer: Timer?
 
-    /// The text currently being spoken, or nil when silent / after the linger timeout.
-    /// Observed by the Touch Bar to display a status label.
+    /// The caption currently shown, or nil when silent / after the linger timeout.
     private(set) var displayText: String?
 
-    /// Called on the main thread whenever displayText changes so the Touch Bar can rebuild.
+    /// Called on the main thread whenever displayText changes so the caption can update.
     var onDisplayTextChanged: (() -> Void)?
 
     private init() {
@@ -49,16 +48,27 @@ final class SpeechSynthesizer {
     }
 
     /// Speak `text`, interrupting any in-progress speech.
-    /// Pass `touchBar: false` to suppress the Touch Bar label — useful when the
-    /// caller is managing its own interactive Touch Bar that must not be rebuilt.
-    func speak(_ text: String, touchBar: Bool = true) {
+    /// Pass `caption: false` to suppress the caption — useful when the caller shows the
+    /// text itself or manages its own interactive Touch Bar that must not be rebuilt.
+    func speak(_ text: String, caption: Bool = true) {
         clearTimer?.invalidate()
         if synth.isSpeaking { synth.stopSpeaking() }
         synth.startSpeaking(text)
-        setDisplayText(touchBar ? text : nil)
+        setDisplayText(caption ? text : nil)
     }
 
-    /// Stop any in-progress speech. Clears onFinish and removes the Touch Bar label immediately.
+    /// Reports a status message: always captioned, and also spoken when speech is enabled.
+    func announce(_ text: String) {
+        if VisibilityPreferences.speechEnabled {
+            speak(text)
+        } else {
+            stop()
+            setDisplayText(text)
+            scheduleClear(after: 3.5)
+        }
+    }
+
+    /// Stop any in-progress speech. Clears onFinish and removes the caption immediately.
     func stop() {
         synthDel.onFinish = nil
         clearTimer?.invalidate()
