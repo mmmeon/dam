@@ -46,6 +46,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.cycleAudioOutput()
         }
 
+        #if DEBUG
+        // `-DAMDebugHUD YES` on launch shows the quick-connect and caption HUD previews;
+        // `connecting` shows the connecting HUD instead, and `select` plays the select
+        // animation.
+        if let mode = UserDefaults.standard.string(forKey: "DAMDebugHUD") {
+            switch mode {
+            case "connecting": debugPreviewConnectingHUD(nil)
+            case "select":     debugPlaySelectAnimation(nil)
+            default:           debugPreviewQuickConnectHUD(nil)
+            }
+            debugPreviewCaptionHUD(nil)
+        }
+        #endif
+
         // Rebuild menu and Control Strip whenever either manager publishes a change
         audioManager.objectWillChange
             .merge(with: videoManager.objectWillChange)
@@ -123,6 +137,29 @@ extension AppDelegate: NSMenuDelegate {
         videoManager.refresh()
         rebuild()
     }
+
+    #if DEBUG
+    @objc func debugPreviewQuickConnectHUD(_ sender: Any?) {
+        AirPlayQuickConnect.shared.showDebugPreview()
+    }
+
+    @objc func debugPlaySelectAnimation(_ sender: Any?) {
+        AirPlayQuickConnect.shared.playDebugSelect()
+    }
+
+    @objc func debugPreviewConnectingHUD(_ sender: Any?) {
+        AirPlayQuickConnect.shared.showDebugPreview(connecting: true)
+    }
+
+    @objc func debugPreviewCaptionHUD(_ sender: Any?) {
+        CaptionHUD.shared.show("Connecting to Living Room TV")
+    }
+
+    @objc func debugHideHUDPreviews(_ sender: Any?) {
+        AirPlayQuickConnect.shared.hideDebugPreview()
+        CaptionHUD.shared.show(nil)
+    }
+    #endif
 
     @objc func selectAudioDevice(_ sender: NSMenuItem) {
         guard let device = sender.representedObject as? AudioDevice else { return }

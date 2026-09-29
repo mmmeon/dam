@@ -107,6 +107,9 @@ func buildStatusMenu(audio: AudioManager,
     menu.addItem(withTitle: "Refresh",
                  action: #selector(AppDelegate.refreshAll(_:)),
                  keyEquivalent: "r")
+    #if DEBUG
+    menu.addItem(debugMenuItem())
+    #endif
     menu.addItem(.separator())
     menu.addItem(withTitle: "Quit \(AppIdentity.name)",
                  action: #selector(NSApplication.terminate(_:)),
@@ -114,6 +117,30 @@ func buildStatusMenu(audio: AudioManager,
 
     return menu
 }
+
+#if DEBUG
+private func debugMenuItem() -> NSMenuItem {
+    let submenu = NSMenu()
+    submenu.addItem(withTitle: "Preview Quick-Connect HUD",
+                    action: #selector(AppDelegate.debugPreviewQuickConnectHUD(_:)),
+                    keyEquivalent: "")
+    submenu.addItem(withTitle: "Play Select Animation",
+                    action: #selector(AppDelegate.debugPlaySelectAnimation(_:)),
+                    keyEquivalent: "")
+    submenu.addItem(withTitle: "Preview Connecting HUD",
+                    action: #selector(AppDelegate.debugPreviewConnectingHUD(_:)),
+                    keyEquivalent: "")
+    submenu.addItem(withTitle: "Preview Caption HUD",
+                    action: #selector(AppDelegate.debugPreviewCaptionHUD(_:)),
+                    keyEquivalent: "")
+    submenu.addItem(withTitle: "Hide HUD Previews",
+                    action: #selector(AppDelegate.debugHideHUDPreviews(_:)),
+                    keyEquivalent: "")
+    let item = NSMenuItem(title: "Debug", action: nil, keyEquivalent: "")
+    item.submenu = submenu
+    return item
+}
+#endif
 
 private func sectionHeader(_ title: String) -> NSMenuItem {
     let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
