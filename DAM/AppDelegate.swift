@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private let audioManager = AudioManager()
     private let videoManager = VideoManager()
+    private let sidecarManager = SidecarManager()
     private var controlStrip: ControlStripPresenter!
     private var hotkey: GlobalHotkey!
     private var airPlayConnectHotkey: GlobalHotkey!
@@ -47,12 +48,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             AudioOutputPicker.shared.advance()
         }
 
+        // Once the menu bar item is up, and not while a debug mode drives the app.
+        var debugMode = false
+        #if DEBUG
+        debugMode = UserDefaults.standard.string(forKey: "DAMDebugHUD") != nil
+        #endif
+        if !debugMode {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                self?.offerScreenMirroringExtra()
+            }
+        }
+
         #if DEBUG
         // `-DAMDebugHUD YES` on launch shows the quick-connect HUD preview; `connecting`
         // shows the connecting HUD instead, `select` plays the select animation, `audio`
         // plays the audio output picker, `caption` announces an example message, and
-        // `switcher` and `airplay` act as their hotkeys do; `disconnect-airplay` disconnects
-        // the connected AirPlay display.
+        // `switcher` and `airplay` act as their hotkeys do; `connect-airplay` connects the
+        // first available AirPlay display without the HUD, and `disconnect-airplay`
+        // disconnects the connected one.
         if let mode = UserDefaults.standard.string(forKey: "DAMDebugHUD") {
             switch mode {
             case "connecting": debugPreviewConnectingHUD(nil)
@@ -63,6 +76,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case "airplay":    // after discovery has had time to find displays
                 DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
                     AirPlayQuickConnect.shared.activate()
+                }
+            case "connect-airplay":
+                DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+                    guard let vm = self?.videoManager,
+                          let display = vm.airPlayDevices.first(where: { !$0.isConnected }) else { return }
+                    vm.connectAirPlay(deviceName: display.name)
                 }
             case "disconnect-airplay":
                 DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
@@ -75,9 +94,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         #endif
 
-        // Rebuild menu and Control Strip whenever either manager publishes a change
+        // Rebuild menu and Control Strip whenever a manager publishes a change
         audioManager.objectWillChange
-            .merge(with: videoManager.objectWillChange)
+            .merge(with: videoManager.objectWillChange, sidecarManager.objectWillChange)
             .debounce(for: .milliseconds(200), scheduler: RunLoop.main)
             .sink { [weak self] in self?.rebuild() }
             .store(in: &cancellables)
@@ -97,6 +116,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = buildStatusMenu(
             audio: audioManager,
             video: videoManager,
+            sidecar: sidecarManager,
             onRefresh: { [weak self] in self?.refreshAll(nil) }
         )
         menu.delegate = self
@@ -126,9 +146,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         SpeechSynthesizer.shared.announce(isMirroring ? "Extending \(display.name)" : "Mirroring \(display.name)")
     }
 
+    /// Offers, once, to show Control Center's Screen Mirroring item in the menu bar, which
+    /// is the quickest path for connecting an AirPlay display.
+    private func offerScreenMirroringExtra() {
+        guard !VisibilityPreferences.screenMirroringExtraOfferDismissed,
+              !ScreenMirroringPanel.isExtraVisible else { return }
+        let alert = NSAlert()
+        alert.messageText = "Show Screen Mirroring in the menu bar?"
+        alert.informativeText =
+            "\(AppIdentity.name) connects AirPlay displays fastest through Control Center's " +
+            "Screen Mirroring menu bar item. In Control Center settings, set Screen Mirroring " +
+            "to “Always Show in Menu Bar”."
+        alert.addButton(withTitle: "Open Control Center Settings")
+        alert.addButton(withTitle: "Not Now")
+        alert.addButton(withTitle: "Don't Ask Again")
+        NSApp.activate(ignoringOtherApps: true)
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: ScreenMirroringPanel.openControlCenterSettings()
+        case .alertThirdButtonReturn: VisibilityPreferences.screenMirroringExtraOfferDismissed = true
+        default: break
+        }
+    }
+
     @objc func refreshAll(_ sender: Any?) {
         audioManager.refresh()
         videoManager.refresh()
+        sidecarManager.refresh()
         rebuild()
     }
 }
@@ -139,6 +182,7 @@ extension AppDelegate: NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         audioManager.refresh()
         videoManager.refresh()
+        sidecarManager.refresh()
         rebuild()
     }
 
@@ -228,6 +272,16 @@ extension AppDelegate: NSMenuDelegate {
     @objc func optimizeForDisplay(_ sender: NSMenuItem) {
         guard let display = sender.representedObject as? DisplayInfo else { return }
         videoManager.setAsOptimizedDisplay(display)
+    }
+
+    @objc func selectSidecarDevice(_ sender: NSMenuItem) {
+        guard let device = sender.representedObject as? SidecarDevice else { return }
+        SpeechSynthesizer.shared.announce(device.isConnected
+            ? "Disconnecting \(device.name)" : "Connecting to \(device.name)")
+        sidecarManager.toggle(device) { [weak self] error in
+            if let error { SpeechSynthesizer.shared.announce(error.localizedDescription) }
+            self?.rebuild()
+        }
     }
 
     @objc func disconnectAirPlayDevice(_ sender: NSMenuItem) {
