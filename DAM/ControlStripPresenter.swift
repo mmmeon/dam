@@ -93,7 +93,7 @@ extension NSTouchBar {
 final class ControlStripPresenter: NSObject {
 
     // Stable identifier — the system uses this to remember the button's slot.
-    private static let stripID       = NSTouchBarItem.Identifier("\(AppIdentity.bundleID).strip")
+    static let stripID               = NSTouchBarItem.Identifier("\(AppIdentity.bundleID).strip")
     private static let modalAudioID  = NSTouchBarItem.Identifier("\(AppIdentity.bundleID).modal.audio")
     private static let modalVideoID  = NSTouchBarItem.Identifier("\(AppIdentity.bundleID).modal.video")
     private static let speechStatusID = NSTouchBarItem.Identifier("\(AppIdentity.bundleID).speechStatus")
@@ -123,18 +123,15 @@ final class ControlStripPresenter: NSObject {
         self.videoManager = videoManager
         super.init()
         SpeechSynthesizer.shared.onSpokenLengthChanged = {
-            guard !Self.isTouchBarAvailable else { return }
             CaptionHUD.shared.setSpoken(SpeechSynthesizer.shared.spokenLength)
         }
         SpeechSynthesizer.shared.onDisplayTextChanged = { [weak self] in
             DispatchQueue.main.async {
                 let text = SpeechSynthesizer.shared.displayText
-                guard Self.isTouchBarAvailable else {
-                    // No Touch Bar: caption on screen, without taking focus.
-                    CaptionHUD.shared.show(text, spoken: SpeechSynthesizer.shared.spokenLength)
-                    return
-                }
-                CaptionHUD.shared.show(nil, spoken: nil)
+                // On screen, without taking focus.
+                CaptionHUD.shared.show(Feedback.screen ? text : nil,
+                                       spoken: SpeechSynthesizer.shared.spokenLength)
+                guard Feedback.touchBar else { return }
                 // Bring the app to the foreground so NSApp.touchBar is visible.
                 // Only activate on the leading edge (text just appeared); on clear
                 // we leave focus wherever it ended up.
@@ -144,6 +141,11 @@ final class ControlStripPresenter: NSObject {
                 self?.rebuild()
             }
         }
+    }
+
+    /// The caption to show on the Touch Bar, unless Touch Bar feedback is off.
+    private static var captionText: String? {
+        VisibilityPreferences.touchBarFeedback ? SpeechSynthesizer.shared.displayText : nil
     }
 
     /// True when a Touch Bar is usable right now. DFRGetStatus bit 0 is set while the
@@ -197,7 +199,7 @@ final class ControlStripPresenter: NSObject {
         stripItem.view = btn
 
         let bar = NSTouchBar()
-        if let text = SpeechSynthesizer.shared.displayText {
+        if let text = Self.captionText {
             let speechItem = makeSpeechStatusItem(text: text)
             bar.templateItems  = [stripItem, speechItem]
             bar.defaultItemIdentifiers = [Self.stripID, .flexibleSpace, Self.speechStatusID]
@@ -679,7 +681,7 @@ extension ControlStripPresenter: NSTouchBarDelegate {
             return item
 
         case Self.speechStatusID:
-            if let text = SpeechSynthesizer.shared.displayText {
+            if let text = Self.captionText {
                 return makeSpeechStatusItem(text: text)
             }
             return nil

@@ -8,6 +8,19 @@
 import AppKit
 import Carbon.HIToolbox
 
+// MARK: - Feedback
+
+/// Where hotkey feedback goes right now. Every enabled surface is used: the Touch Bar when
+/// one is available, the screen, and speech. The screen is used regardless when the Touch
+/// Bar wouldn't show anything, so a hotkey never goes without visible feedback.
+enum Feedback {
+    static var touchBar: Bool {
+        VisibilityPreferences.touchBarFeedback && ControlStripPresenter.isTouchBarAvailable
+    }
+    static var screen: Bool { VisibilityPreferences.screenFeedback || !touchBar }
+    static var voice:  Bool { VisibilityPreferences.speechEnabled }
+}
+
 // MARK: - CaptionHUD
 
 /// On-screen stand-in for the Touch Bar caption on Macs without a Touch Bar: a panel near
@@ -647,6 +660,24 @@ final class GridLine: FillView {
         super.viewDidChangeBackingProperties()
         invalidateIntrinsicContentSize()
     }
+}
+
+// MARK: - Focus
+
+/// DAM's system-modal Touch Bar doesn't show while a DAM window is on screen unless DAM is
+/// the active app. When a HUD pairs with the Touch Bar this activates DAM, returning the
+/// app that was active so `restoreFocus(to:)` can hand focus back when the HUD closes.
+func activateForHUDTouchBar() -> NSRunningApplication? {
+    guard !NSApp.isActive else { return nil }
+    let previous = NSWorkspace.shared.frontmostApplication
+    NSApp.activate(ignoringOtherApps: true)
+    return previous
+}
+
+/// Hands focus back to `app`, unless the user has moved on from DAM meanwhile.
+func restoreFocus(to app: NSRunningApplication?) {
+    guard let app, NSApp.isActive else { return }
+    app.activate(options: [])
 }
 
 // MARK: - Keys

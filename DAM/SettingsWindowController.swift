@@ -209,12 +209,36 @@ final class SettingsWindowController: NSWindowController {
         stack.addArrangedSubview(
             settingGroup(
                 control: checkbox(
+                    title: "Show hotkey feedback on the Touch Bar",
+                    isOn: VisibilityPreferences.touchBarFeedback,
+                    action: { VisibilityPreferences.touchBarFeedback = $0 }
+                ),
+                description: "Shows pickers and status messages on the Touch Bar, on Macs " +
+                             "that have one."
+            )
+        )
+
+        stack.addArrangedSubview(
+            settingGroup(
+                control: checkbox(
+                    title: "Show hotkey feedback on screen",
+                    isOn: VisibilityPreferences.screenFeedback,
+                    action: { VisibilityPreferences.screenFeedback = $0 }
+                ),
+                description: "Shows pickers and status messages on screen. Used regardless " +
+                             "when the Touch Bar isn't showing them."
+            )
+        )
+
+        stack.addArrangedSubview(
+            settingGroup(
+                control: checkbox(
                     title: "Announce actions via speech",
                     isOn: VisibilityPreferences.speechEnabled,
                     action: { VisibilityPreferences.speechEnabled = $0 }
                 ),
-                description: "Speaks the target device name when connecting to AirPlay and " +
-                             "when toggling mirror / extend mode."
+                description: "Speaks the target device name when connecting to AirPlay, " +
+                             "picking an audio output, and toggling mirror / extend mode."
             )
         )
 

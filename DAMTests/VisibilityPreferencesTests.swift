@@ -8,10 +8,12 @@ final class VisibilityPreferencesTests: XCTestCase {
     private let airPlayKey   = "\(AppIdentity.shortID).hidden.airplay"
     private let displayKey   = "\(AppIdentity.shortID).hidden.displays"
     private let autoConnKey  = "\(AppIdentity.shortID).behaviour.autoConnectSingle"
+    private let touchBarKey  = "\(AppIdentity.shortID).behaviour.touchBarFeedback"
+    private let screenKey    = "\(AppIdentity.shortID).behaviour.screenFeedback"
 
     override func tearDown() {
         super.tearDown()
-        [audioKey, audioSeenKey, airPlayKey, displayKey, autoConnKey].forEach {
+        [audioKey, audioSeenKey, airPlayKey, displayKey, autoConnKey, touchBarKey, screenKey].forEach {
             UserDefaults.standard.removeObject(forKey: $0)
         }
     }
@@ -149,5 +151,25 @@ final class VisibilityPreferencesTests: XCTestCase {
         VisibilityPreferences.autoConnectSingleDisplay = false
         VisibilityPreferences.autoConnectSingleDisplay = true
         XCTAssertTrue(VisibilityPreferences.autoConnectSingleDisplay)
+    }
+
+    // MARK: - Feedback surfaces
+
+    func testTouchBarFeedback_defaultsToTrue() {
+        XCTAssertTrue(VisibilityPreferences.touchBarFeedback)
+    }
+
+    func testTouchBarFeedback_canBeSetFalse() {
+        VisibilityPreferences.touchBarFeedback = false
+        XCTAssertFalse(VisibilityPreferences.touchBarFeedback)
+    }
+
+    func testScreenFeedback_defaultsToTrue() {
+        XCTAssertTrue(VisibilityPreferences.screenFeedback)
+    }
+
+    func testScreenFeedback_canBeSetFalse() {
+        VisibilityPreferences.screenFeedback = false
+        XCTAssertFalse(VisibilityPreferences.screenFeedback)
     }
 }
