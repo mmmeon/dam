@@ -88,6 +88,7 @@ final class ScreenMirroringPanel {
     /// Covers the popover opening and its device list filling in.
     private static let deviceTimeout: TimeInterval = 6
     private static let closeTimeout: TimeInterval  = 2
+    private static let closeAttempts               = 2
     /// Lets the press register before the panel is closed.
     private static let settle: TimeInterval        = 0.5
 
@@ -134,8 +135,20 @@ final class ScreenMirroringPanel {
         let via = viaControlCenter ? "Control Center" : "the Screen Mirroring extra"
         smLog.debug("opening via \(via, privacy: .public) for \(self.deviceName, privacy: .public)")
 
-        if let error = opener!.press() { return finish(.failure(.pressFailed(error))) }
+        // A panel left open (say, by an interrupted toggle) would be closed by the press.
+        if !isPanelShowing() {
+            if let error = opener!.press() { return finish(.failure(.pressFailed(error))) }
+        }
         if viaControlCenter { openTile() } else { pressDevice() }
+    }
+
+    /// Whether any of Control Center's windows shows Screen Mirroring content — the tile
+    /// or the device list. When nothing is showing, Control Center has no windows at all
+    /// (unless its Screen Mirroring extra is visible, which keeps one).
+    private func isPanelShowing() -> Bool {
+        app.windows.contains { window in
+            window.descendant(maxDepth: 5) { $0.identifier?.contains("screen-mirroring") == true } != nil
+        }
     }
 
     /// Opens Screen Mirroring from its tile inside Control Center.
@@ -182,13 +195,21 @@ final class ScreenMirroringPanel {
         }
     }
 
-    private func close(_ popover: AXUIElement) {
+    /// Presses the opener until the panel is gone. From inside Control Center the first
+    /// press only backs out of the Screen Mirroring view to the main panel; the second
+    /// closes it.
+    private func close(_ popover: AXUIElement, attempt: Int = 1) {
         let isOpen = { [app] in app!.windows.contains { CFEqual($0, popover) } }
         guard isOpen() else { return finish(.success(())) }
+        guard attempt <= Self.closeAttempts else {
+            smLog.error("the panel stayed open")
+            return finish(.success(()))
+        }
         wait(for: [kAXUIElementDestroyedNotification], on: popover, timeout: Self.closeTimeout,
              probe: { !isOpen() }) { [weak self] closed in
-            if !closed { smLog.error("the panel stayed open") }
-            self?.finish(.success(()))
+            guard let self else { return }
+            if closed { return self.finish(.success(())) }
+            self.close(popover, attempt: attempt + 1)
         }
         if let error = opener?.press() { smLog.error("closing the panel failed: \(error.rawValue)") }
     }
