@@ -51,8 +51,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // `-DAMDebugHUD YES` on launch shows the quick-connect HUD preview; `connecting`
         // shows the connecting HUD instead, `select` plays the select animation, `audio`
         // plays the audio output picker, `caption` announces an example message, and
-        // `switcher` and `airplay` act as their hotkeys do; `disconnect-airplay` disconnects
-        // the connected AirPlay display.
+        // `switcher` and `airplay` act as their hotkeys do; `connect-airplay` connects the
+        // first available AirPlay display without the HUD, and `disconnect-airplay`
+        // disconnects the connected one.
         if let mode = UserDefaults.standard.string(forKey: "DAMDebugHUD") {
             switch mode {
             case "connecting": debugPreviewConnectingHUD(nil)
@@ -63,6 +64,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case "airplay":    // after discovery has had time to find displays
                 DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
                     AirPlayQuickConnect.shared.activate()
+                }
+            case "connect-airplay":
+                DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+                    guard let vm = self?.videoManager,
+                          let display = vm.airPlayDevices.first(where: { !$0.isConnected }) else { return }
+                    vm.connectAirPlay(deviceName: display.name)
                 }
             case "disconnect-airplay":
                 DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
