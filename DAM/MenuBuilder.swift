@@ -127,6 +127,9 @@ private func debugMenuItem() -> NSMenuItem {
     submenu.addItem(withTitle: "Play Select Animation",
                     action: #selector(AppDelegate.debugPlaySelectAnimation(_:)),
                     keyEquivalent: "")
+    submenu.addItem(withTitle: "Play Audio Output Picker",
+                    action: #selector(AppDelegate.debugPlayAudioPicker(_:)),
+                    keyEquivalent: "")
     submenu.addItem(withTitle: "Preview Connecting HUD",
                     action: #selector(AppDelegate.debugPreviewConnectingHUD(_:)),
                     keyEquivalent: "")
