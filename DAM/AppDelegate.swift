@@ -48,17 +48,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         #if DEBUG
-        // `-DAMDebugHUD YES` on launch shows the quick-connect and caption HUD previews;
-        // `connecting` shows the connecting HUD instead, `select` plays the select
-        // animation, and `audio` plays the audio output picker.
+        // `-DAMDebugHUD YES` on launch shows the quick-connect HUD preview; `connecting`
+        // shows the connecting HUD instead, `select` plays the select animation, `audio`
+        // plays the audio output picker, and `caption` announces an example message.
         if let mode = UserDefaults.standard.string(forKey: "DAMDebugHUD") {
             switch mode {
             case "connecting": debugPreviewConnectingHUD(nil)
             case "select":     debugPlaySelectAnimation(nil)
             case "audio":      debugPlayAudioPicker(nil)
+            case "caption":    debugPreviewCaptionHUD(nil)
             default:           debugPreviewQuickConnectHUD(nil)
             }
-            debugPreviewCaptionHUD(nil)
         }
         #endif
 
@@ -148,13 +148,14 @@ extension AppDelegate: NSMenuDelegate {
         AirPlayQuickConnect.shared.showDebugPreview(connecting: true)
     }
 
+    /// Announces an example status message through the normal speech and caption path.
     @objc func debugPreviewCaptionHUD(_ sender: Any?) {
-        CaptionHUD.shared.show("Connecting to Living Room TV")
+        SpeechSynthesizer.shared.announce("Mirroring Living Room TV")
     }
 
     @objc func debugHideHUDPreviews(_ sender: Any?) {
         AirPlayQuickConnect.shared.hideDebugPreview()
-        CaptionHUD.shared.show(nil)
+        SpeechSynthesizer.shared.stop()
     }
     #endif
 
