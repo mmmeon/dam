@@ -50,13 +50,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #if DEBUG
         // `-DAMDebugHUD YES` on launch shows the quick-connect HUD preview; `connecting`
         // shows the connecting HUD instead, `select` plays the select animation, `audio`
-        // plays the audio output picker, and `caption` announces an example message.
+        // plays the audio output picker, `caption` announces an example message, and
+        // `switcher` and `airplay` act as their hotkeys do.
         if let mode = UserDefaults.standard.string(forKey: "DAMDebugHUD") {
             switch mode {
             case "connecting": debugPreviewConnectingHUD(nil)
             case "select":     debugPlaySelectAnimation(nil)
             case "audio":      debugPlayAudioPicker(nil)
             case "caption":    debugPreviewCaptionHUD(nil)
+            case "switcher":   DispatchQueue.main.async { self.openSwitcher() }
+            case "airplay":    // after discovery has had time to find displays
+                DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+                    AirPlayQuickConnect.shared.activate()
+                }
             default:           debugPreviewQuickConnectHUD(nil)
             }
         }
@@ -93,14 +99,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Actions
 
-    /// Opens the Touch Bar switcher, or the menu bar menu when no Touch Bar is available
-    /// (a Mac without one, or with the lid closed).
+    /// Opens the switcher on each enabled surface: the Touch Bar switcher when a Touch Bar
+    /// is available, and the menu bar menu on screen.
     private func openSwitcher() {
-        if ControlStripPresenter.isTouchBarAvailable {
-            controlStrip.openModal()
-        } else {
-            statusItem.button?.performClick(nil)
-        }
+        if Feedback.touchBar { controlStrip.openModal() }
+        // Last: the menu tracks modally until it closes.
+        if Feedback.screen { statusItem.button?.performClick(nil) }
     }
 
     private func toggleAirPlayMirror() {
