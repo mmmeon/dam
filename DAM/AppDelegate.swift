@@ -48,6 +48,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             AudioOutputPicker.shared.advance()
         }
 
+        // Once the menu bar item is up, and not while a debug mode drives the app.
+        var debugMode = false
+        #if DEBUG
+        debugMode = UserDefaults.standard.string(forKey: "DAMDebugHUD") != nil
+        #endif
+        if !debugMode {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                self?.offerScreenMirroringExtra()
+            }
+        }
+
         #if DEBUG
         // `-DAMDebugHUD YES` on launch shows the quick-connect HUD preview; `connecting`
         // shows the connecting HUD instead, `select` plays the select animation, `audio`
@@ -133,6 +144,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let isMirroring = display.isMirroring || videoManager.isBeingMirrored(display)
         videoManager.toggleMirroring(for: display)
         SpeechSynthesizer.shared.announce(isMirroring ? "Extending \(display.name)" : "Mirroring \(display.name)")
+    }
+
+    /// Offers, once, to show Control Center's Screen Mirroring item in the menu bar, which
+    /// is the quickest path for connecting an AirPlay display.
+    private func offerScreenMirroringExtra() {
+        guard !VisibilityPreferences.screenMirroringExtraOfferDismissed,
+              !ScreenMirroringPanel.isExtraVisible else { return }
+        let alert = NSAlert()
+        alert.messageText = "Show Screen Mirroring in the menu bar?"
+        alert.informativeText =
+            "\(AppIdentity.name) connects AirPlay displays fastest through Control Center's " +
+            "Screen Mirroring menu bar item. In Control Center settings, set Screen Mirroring " +
+            "to “Always Show in Menu Bar”."
+        alert.addButton(withTitle: "Open Control Center Settings")
+        alert.addButton(withTitle: "Not Now")
+        alert.addButton(withTitle: "Don't Ask Again")
+        NSApp.activate(ignoringOtherApps: true)
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: ScreenMirroringPanel.openControlCenterSettings()
+        case .alertThirdButtonReturn: VisibilityPreferences.screenMirroringExtraOfferDismissed = true
+        default: break
+        }
     }
 
     @objc func refreshAll(_ sender: Any?) {

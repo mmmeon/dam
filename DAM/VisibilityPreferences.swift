@@ -106,6 +106,15 @@ enum VisibilityPreferences {
         set { UserDefaults.standard.set(newValue, forKey: screenFeedbackKey) }
     }
 
+    private static let extraOfferDismissedKey = "\(AppIdentity.shortID).behaviour.screenMirroringExtraOfferDismissed"
+
+    /// True once the user has declined, for good, the offer to show Control Center's
+    /// Screen Mirroring item in the menu bar.
+    static var screenMirroringExtraOfferDismissed: Bool {
+        get { UserDefaults.standard.bool(forKey: extraOfferDismissedKey) }
+        set { UserDefaults.standard.set(newValue, forKey: extraOfferDismissedKey) }
+    }
+
     private static let autoHideVirtualAudioKey = "\(AppIdentity.shortID).behaviour.autoHideVirtualAudio"
 
     /// When true (default), virtual audio devices (Teams, Zoom, BlackHole, etc.)

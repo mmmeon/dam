@@ -268,7 +268,30 @@ final class SettingsWindowController: NSWindowController {
             )
         )
 
+        let extraShown = ScreenMirroringPanel.isExtraVisible
+        let extraStatus = NSTextField(labelWithString:
+            "Screen Mirroring menu bar item: \(extraShown ? "shown" : "hidden")")
+        extraStatus.font = .systemFont(ofSize: NSFont.systemFontSize)
+        let openCC = NSButton(title: "Open Control Center Settings…", target: self,
+                              action: #selector(openControlCenterSettings))
+        openCC.bezelStyle = .rounded
+        let extraRow = NSStackView(views: [extraStatus, openCC])
+        extraRow.orientation = .horizontal
+        extraRow.spacing = 8
+        stack.addArrangedSubview(
+            settingGroup(
+                control: extraRow,
+                description: "AirPlay displays connect fastest when the item is shown. " +
+                             "Set Screen Mirroring to “Always Show in Menu Bar” in " +
+                             "Control Center settings."
+            )
+        )
+
         return scrollView
+    }
+
+    @objc private func openControlCenterSettings() {
+        ScreenMirroringPanel.openControlCenterSettings()
     }
 
     // MARK: - Devices tab
