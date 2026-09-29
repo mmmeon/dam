@@ -28,6 +28,14 @@ private enum QCState {
     case confirming(DisplayInfo)
 }
 
+// MARK: - Hints
+
+private extension HUDHint {
+    static let selecting  = HUDHint(leading: "Press a number to connect", trailing: "Esc to cancel")
+    static let connecting = HUDHint(leading: "Connecting", trailing: "Press any key to cancel",
+                                    animatesDots: true)
+}
+
 // MARK: - AirPlayQuickConnect
 
 final class AirPlayQuickConnect: NSObject {
@@ -89,8 +97,7 @@ final class AirPlayQuickConnect: NSObject {
     private func startSelecting(displays: [DisplayInfo]) {
         state = .selecting(displays)
 
-        let lines = displays.enumerated().map { "\($0.offset + 1).  \($0.element.name)" }
-        showHUD(lines: lines, subtitle: "Press a number to connect  •  Esc to cancel")
+        showHUD(.choices(displays.map(\.name), numbered: true), hint: .selecting)
         installMonitor(displays: displays)
         showSelectingTouchBar(displays: displays)
 
@@ -109,9 +116,29 @@ final class AirPlayQuickConnect: NSObject {
 
     // MARK: - Confirming
 
-    private func startConfirming(display: DisplayInfo) {
+    /// `choice` is the row picked in the selection HUD; that HUD then animates into the
+    /// connecting state. Without it, the HUD opens on the display and highlights it.
+    private func startConfirming(display: DisplayInfo, choice: Int? = nil) {
         state = .confirming(display)
-        showHUD(lines: ["Connecting to \(display.name)…"], subtitle: "Press any key to cancel")
+
+        // Without speech, connect shortly after the HUD settles unless cancelled first.
+        let speech = VisibilityPreferences.speechEnabled
+        let settled = { [weak self] in
+            guard !speech else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                guard let self, case .confirming(let d) = self.state, d.name == display.name
+                else { return }
+                self.connect(display: display)
+            }
+        }
+        if choice == nil {
+            showHUD(.choices([display.name], numbered: false), hint: .connecting)
+        }
+        if let content = panel?.contentView as? HUDContentView {
+            content.select(choice ?? 0, hint: .connecting, completion: settled)
+        } else {
+            settled()
+        }
 
         if localMonitor == nil {
             installMonitor(displays: [])
@@ -120,17 +147,13 @@ final class AirPlayQuickConnect: NSObject {
         showConfirmingTouchBar(display: display)
 
         SpeechSynthesizer.shared.stop()
-        if VisibilityPreferences.speechEnabled {
+        if speech {
             DispatchQueue.main.async {
                 SpeechSynthesizer.shared.onFinish = { [weak self] in
                     self?.connect(display: display)
                 }
-                // caption: false — the HUD and Touch Bar already show "Connecting to…".
+                // caption: false — the HUD and Touch Bar already show "Connecting…".
                 SpeechSynthesizer.shared.speak("Connecting to \(display.name)", caption: false)
-            }
-        } else {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-                self?.connect(display: display)
             }
         }
     }
@@ -175,9 +198,9 @@ final class AirPlayQuickConnect: NSObject {
         switch state {
         case .selecting(let ds):
             if Int(event.keyCode) == kVK_Escape { cancel(); return true }
-            if let n = digitValue(event), n >= 1, n <= ds.count {
+            if let n = hudDigit(event), n >= 1, n <= ds.count {
                 SpeechSynthesizer.shared.stop()
-                startConfirming(display: ds[n - 1])
+                startConfirming(display: ds[n - 1], choice: n - 1)
                 return true
             }
 
@@ -193,23 +216,6 @@ final class AirPlayQuickConnect: NSObject {
     private func removeMonitors() {
         if let m = localMonitor  { NSEvent.removeMonitor(m); localMonitor  = nil }
         if let m = globalMonitor { NSEvent.removeMonitor(m); globalMonitor = nil }
-    }
-
-    // MARK: - Digit helper
-
-    private func digitValue(_ event: NSEvent) -> Int? {
-        switch Int(event.keyCode) {
-        case kVK_ANSI_1: return 1
-        case kVK_ANSI_2: return 2
-        case kVK_ANSI_3: return 3
-        case kVK_ANSI_4: return 4
-        case kVK_ANSI_5: return 5
-        case kVK_ANSI_6: return 6
-        case kVK_ANSI_7: return 7
-        case kVK_ANSI_8: return 8
-        case kVK_ANSI_9: return 9
-        default:         return nil
-        }
     }
 
     // MARK: - Touch Bar
@@ -246,84 +252,56 @@ final class AirPlayQuickConnect: NSObject {
 
     // MARK: - HUD
 
-    private func showHUD(lines: [String], subtitle: String) {
-        let p = panel ?? makeHUDPanel()
+    private func showHUD(_ body: HUDBody, hint: HUDHint) {
+        // Non-activating, so the previous app keeps focus once the HUD closes.
+        let p = panel ?? makeHUDPanel(nonactivating: true)
         panel = p
-        layoutHUD(p, lines: lines, subtitle: subtitle) { frame, size in frame.midY + size.height / 2 }
-        NSApp.activate(ignoringOtherApps: true)
+        layoutHUD(p, body: body, hint: hint) { frame, size in frame.midY + size.height / 2 }
         p.makeKeyAndOrderFront(nil)
     }
 }
 
-// MARK: - CaptionHUD
+#if DEBUG
+// MARK: - Debug preview
 
-/// On-screen stand-in for the Touch Bar caption on Macs without a Touch Bar: a small
-/// panel near the bottom of the screen under the mouse. It never takes focus or clicks.
-final class CaptionHUD {
+extension AirPlayQuickConnect {
 
-    static let shared = CaptionHUD()
-
-    private var panel: HUDPanel?
-
-    private init() {}
-
-    /// Shows `text`, or hides the caption when nil.
-    func show(_ text: String?) {
-        guard let text else {
-            panel?.orderOut(nil)
-            return
-        }
-        let p = panel ?? makeHUDPanel()
+    /// Shows the selection HUD (or, with `connecting`, the single-display connecting HUD,
+    /// playing its highlight) with sample displays, without key monitors, Touch Bar or
+    /// speech, so its look can be checked (e.g. across light/dark) without real devices.
+    func showDebugPreview(connecting: Bool = false) {
+        let names = ["Living Room TV", "Office Apple TV", "Bedroom TV"]
+        let body: HUDBody = .choices(connecting ? [names[1]] : names, numbered: !connecting)
+        let hint: HUDHint = connecting ? .connecting : .selecting
+        let p = panel ?? makeHUDPanel(nonactivating: true)
         panel = p
         p.ignoresMouseEvents = true
-        layoutHUD(p, lines: [text], subtitle: "") { frame, _ in frame.minY + frame.height * 0.12 }
+        layoutHUD(p, body: body, hint: hint) { frame, size in
+            frame.midY + size.height / 2
+        }
         p.orderFrontRegardless()
+        if connecting {
+            (p.contentView as? HUDContentView)?.select(0, hint: hint) {}
+        }
+    }
+
+    /// Plays the select animation on the selection preview, choosing row `index`.
+    func playDebugSelect(_ index: Int = 1) {
+        guard case .idle = state else { return }
+        showDebugPreview()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+            (self?.panel?.contentView as? HUDContentView)?
+                .select(index, hint: .connecting) {}
+        }
+    }
+
+    func hideDebugPreview() {
+        guard case .idle = state else { return }
+        panel?.orderOut(nil)
+        panel = nil
     }
 }
-
-// MARK: - HUD helpers
-
-/// The borderless floating panel shared by the quick-connect HUD and captions.
-private func makeHUDPanel() -> HUDPanel {
-    let p = HUDPanel()
-    p.isFloatingPanel    = true
-    p.level              = .modalPanel
-    p.backgroundColor    = .clear
-    p.isOpaque           = false
-    p.hasShadow          = true
-    p.alphaValue         = 0.97
-    p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-    p.styleMask          = [.borderless]
-    return p
-}
-
-/// Fills `panel` with `lines` and `subtitle`, sizes it, and centres it horizontally on the
-/// screen under the mouse; `originY` picks the bottom edge from that screen's visible frame
-/// and the panel size.
-private func layoutHUD(_ panel: NSPanel, lines: [String], subtitle: String,
-                       originY: (NSRect, NSSize) -> CGFloat) {
-    let width:   CGFloat = 320
-    let padding: CGFloat = 20
-    let lineH:   CGFloat = 22
-    let subH:    CGFloat = subtitle.isEmpty ? 0 : 30
-    let height = padding * 2
-                 + CGFloat(lines.count) * lineH
-                 + (lines.count > 1 ? CGFloat(lines.count - 1) * 6 : 0)
-                 + subH
-    let sz = NSSize(width: width, height: height)
-
-    let content = HUDContentView(lines: lines, subtitle: subtitle)
-    content.frame = NSRect(origin: .zero, size: sz)
-    panel.contentView = content
-    panel.setContentSize(sz)
-
-    let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) }
-                 ?? NSScreen.main
-    if let screen {
-        let frame = screen.visibleFrame
-        panel.setFrameOrigin(NSPoint(x: frame.midX - sz.width / 2, y: originY(frame, sz)))
-    }
-}
+#endif
 
 // MARK: - NSTouchBarDelegate
 
@@ -377,83 +355,10 @@ extension AirPlayQuickConnect: NSTouchBarDelegate {
     @objc private func touchBarDisplayTapped(_ sender: NSButton) {
         guard case .selecting(let displays) = state, sender.tag < displays.count else { return }
         SpeechSynthesizer.shared.stop()
-        startConfirming(display: displays[sender.tag])
+        startConfirming(display: displays[sender.tag], choice: sender.tag)
     }
 
     private func truncated(_ s: String, maxLength: Int = 16) -> String {
         s.count > maxLength ? String(s.prefix(maxLength - 1)) + "…" : s
-    }
-}
-
-// MARK: - HUDPanel
-
-private final class HUDPanel: NSPanel {
-    override var canBecomeKey: Bool  { true  }
-    override var canBecomeMain: Bool { false }
-}
-
-// MARK: - HUDContentView
-
-private final class HUDContentView: NSView {
-
-    private static let padding:     CGFloat = 20
-    private static let lineSpacing: CGFloat = 6
-    private static let bodySize:    CGFloat = 15
-    private static let subSize:     CGFloat = 11
-
-    init(lines: [String], subtitle: String) {
-        super.init(frame: .zero)
-
-        wantsLayer = true
-        layer?.backgroundColor = NSColor(white: 0.12, alpha: 0.92).cgColor
-        layer?.cornerRadius    = 12
-        layer?.masksToBounds   = true
-
-        let stack = NSStackView()
-        stack.orientation = .vertical
-        stack.alignment   = .leading
-        stack.spacing     = Self.lineSpacing
-        stack.edgeInsets  = NSEdgeInsets(top: Self.padding, left: Self.padding,
-                                         bottom: Self.padding, right: Self.padding)
-        stack.translatesAutoresizingMaskIntoConstraints = false
-
-        for line in lines {
-            stack.addArrangedSubview(
-                label(line, size: Self.bodySize, weight: .medium,
-                      color: NSColor(white: 0.95, alpha: 1))
-            )
-        }
-
-        if !subtitle.isEmpty {
-            let sep = NSBox()
-            sep.boxType    = .separator
-            sep.borderColor = NSColor(white: 0.4, alpha: 0.6)
-            stack.addArrangedSubview(sep)
-            stack.addArrangedSubview(
-                label(subtitle, size: Self.subSize, weight: .regular,
-                      color: NSColor(white: 0.65, alpha: 1))
-            )
-        }
-
-        addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
-            stack.topAnchor.constraint(equalTo: topAnchor),
-            stack.bottomAnchor.constraint(equalTo: bottomAnchor),
-        ])
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-
-    private func label(_ text: String, size: CGFloat,
-                       weight: NSFont.Weight, color: NSColor) -> NSTextField {
-        let tf = NSTextField(labelWithString: text)
-        tf.font                    = .monospacedDigitSystemFont(ofSize: size, weight: weight)
-        tf.textColor               = color
-        tf.lineBreakMode           = .byWordWrapping
-        tf.maximumNumberOfLines    = 0
-        tf.preferredMaxLayoutWidth = 280
-        return tf
     }
 }

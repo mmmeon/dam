@@ -33,6 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controlStrip.install()
 
         AirPlayQuickConnect.shared.configure(videoManager: videoManager)
+        AudioOutputPicker.shared.configure(audioManager: audioManager)
         hotkey = GlobalHotkey(preference: HotkeyPreference.current) { [weak self] in
             self?.openSwitcher()
         }
@@ -42,9 +43,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mirrorToggleHotkey = GlobalHotkey(preference: HotkeyPreference.currentMirrorToggle) { [weak self] in
             self?.toggleAirPlayMirror()
         }
-        audioCycleHotkey = GlobalHotkey(preference: HotkeyPreference.currentAudioCycle) { [weak self] in
-            self?.cycleAudioOutput()
+        audioCycleHotkey = GlobalHotkey(preference: HotkeyPreference.currentAudioCycle) {
+            AudioOutputPicker.shared.advance()
         }
+
+        #if DEBUG
+        // `-DAMDebugHUD YES` on launch shows the quick-connect HUD preview; `connecting`
+        // shows the connecting HUD instead, `select` plays the select animation, `audio`
+        // plays the audio output picker, and `caption` announces an example message.
+        if let mode = UserDefaults.standard.string(forKey: "DAMDebugHUD") {
+            switch mode {
+            case "connecting": debugPreviewConnectingHUD(nil)
+            case "select":     debugPlaySelectAnimation(nil)
+            case "audio":      debugPlayAudioPicker(nil)
+            case "caption":    debugPreviewCaptionHUD(nil)
+            default:           debugPreviewQuickConnectHUD(nil)
+            }
+        }
+        #endif
 
         // Rebuild menu and Control Strip whenever either manager publishes a change
         audioManager.objectWillChange
@@ -87,15 +103,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Switches to the next enabled audio output and announces it.
-    private func cycleAudioOutput() {
-        guard let device = audioManager.cycleDefaultDevice() else {
-            SpeechSynthesizer.shared.announce("No audio outputs enabled")
-            return
-        }
-        SpeechSynthesizer.shared.announce(device.name)
-    }
-
     private func toggleAirPlayMirror() {
         // Find the first connected AirPlay display that has a real display ID.
         guard let display = videoManager.airPlayDevices.first(where: { $0.isConnected && $0.cgDisplayID != 0 }) else {
@@ -123,6 +130,34 @@ extension AppDelegate: NSMenuDelegate {
         videoManager.refresh()
         rebuild()
     }
+
+    #if DEBUG
+    @objc func debugPreviewQuickConnectHUD(_ sender: Any?) {
+        AirPlayQuickConnect.shared.showDebugPreview()
+    }
+
+    @objc func debugPlaySelectAnimation(_ sender: Any?) {
+        AirPlayQuickConnect.shared.playDebugSelect()
+    }
+
+    @objc func debugPlayAudioPicker(_ sender: Any?) {
+        AudioOutputPicker.shared.playDebugPreview()
+    }
+
+    @objc func debugPreviewConnectingHUD(_ sender: Any?) {
+        AirPlayQuickConnect.shared.showDebugPreview(connecting: true)
+    }
+
+    /// Announces an example status message through the normal speech and caption path.
+    @objc func debugPreviewCaptionHUD(_ sender: Any?) {
+        SpeechSynthesizer.shared.announce("Mirroring Living Room TV")
+    }
+
+    @objc func debugHideHUDPreviews(_ sender: Any?) {
+        AirPlayQuickConnect.shared.hideDebugPreview()
+        SpeechSynthesizer.shared.stop()
+    }
+    #endif
 
     @objc func selectAudioDevice(_ sender: NSMenuItem) {
         guard let device = sender.representedObject as? AudioDevice else { return }
@@ -170,8 +205,8 @@ extension AppDelegate: NSMenuDelegate {
         }
         wc.onSaveAudioCycle = { [weak self] pref in
             HotkeyPreference.currentAudioCycle = pref
-            self?.audioCycleHotkey = GlobalHotkey(preference: pref) { [weak self] in
-                self?.cycleAudioOutput()
+            self?.audioCycleHotkey = GlobalHotkey(preference: pref) {
+                AudioOutputPicker.shared.advance()
             }
         }
         wc.onRebuild = { [weak self] in self?.rebuild() }

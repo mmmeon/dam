@@ -29,6 +29,8 @@
 		BB0008002F8D60780090E796 /* VisibilityPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0007002F8D60780090E796 /* VisibilityPreferences.swift */; };
 		BB000A002F8D60780090E796 /* SpeechSynthesizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0009002F8D60780090E796 /* SpeechSynthesizer.swift */; };
 		CC000C002F8D60780090E796 /* AirPlayQuickConnect.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B002F8D60780090E796 /* AirPlayQuickConnect.swift */; };
+		CC000C022F8D60780090E796 /* AudioOutputPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B022F8D60780090E796 /* AudioOutputPicker.swift */; };
+		CC000C012F8D60780090E796 /* HUD.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B012F8D60780090E796 /* HUD.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -67,6 +69,8 @@
 		BB0007002F8D60780090E796 /* VisibilityPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisibilityPreferences.swift; sourceTree = "<group>"; };
 		BB0009002F8D60780090E796 /* SpeechSynthesizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechSynthesizer.swift; sourceTree = "<group>"; };
 		CC000B002F8D60780090E796 /* AirPlayQuickConnect.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AirPlayQuickConnect.swift; sourceTree = "<group>"; };
+		CC000B022F8D60780090E796 /* AudioOutputPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioOutputPicker.swift; sourceTree = "<group>"; };
+		CC000B012F8D60780090E796 /* HUD.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HUD.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -123,6 +127,8 @@
 				BB0007002F8D60780090E796 /* VisibilityPreferences.swift */,
 				BB0009002F8D60780090E796 /* SpeechSynthesizer.swift */,
 				CC000B002F8D60780090E796 /* AirPlayQuickConnect.swift */,
+				CC000B022F8D60780090E796 /* AudioOutputPicker.swift */,
+				CC000B012F8D60780090E796 /* HUD.swift */,
 				8BFD3BE22F8D607B0090E796 /* Assets.xcassets */,
 				8BFD3BE72F8D607B0090E796 /* DAM.entitlements */,
 				8BFD3BE42F8D607B0090E796 /* Preview Content */,
@@ -265,6 +271,8 @@
 				BB0008002F8D60780090E796 /* VisibilityPreferences.swift in Sources */,
 				BB000A002F8D60780090E796 /* SpeechSynthesizer.swift in Sources */,
 				CC000C002F8D60780090E796 /* AirPlayQuickConnect.swift in Sources */,
+				CC000C022F8D60780090E796 /* AudioOutputPicker.swift in Sources */,
+				CC000C012F8D60780090E796 /* HUD.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

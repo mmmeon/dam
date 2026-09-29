@@ -122,15 +122,19 @@ final class ControlStripPresenter: NSObject {
         self.audioManager = audioManager
         self.videoManager = videoManager
         super.init()
+        SpeechSynthesizer.shared.onSpokenLengthChanged = {
+            guard !Self.isTouchBarAvailable else { return }
+            CaptionHUD.shared.setSpoken(SpeechSynthesizer.shared.spokenLength)
+        }
         SpeechSynthesizer.shared.onDisplayTextChanged = { [weak self] in
             DispatchQueue.main.async {
                 let text = SpeechSynthesizer.shared.displayText
                 guard Self.isTouchBarAvailable else {
                     // No Touch Bar: caption on screen, without taking focus.
-                    CaptionHUD.shared.show(text)
+                    CaptionHUD.shared.show(text, spoken: SpeechSynthesizer.shared.spokenLength)
                     return
                 }
-                CaptionHUD.shared.show(nil)
+                CaptionHUD.shared.show(nil, spoken: nil)
                 // Bring the app to the foreground so NSApp.touchBar is visible.
                 // Only activate on the leading edge (text just appeared); on clear
                 // we leave focus wherever it ended up.
@@ -145,7 +149,11 @@ final class ControlStripPresenter: NSObject {
     /// True when a Touch Bar is usable right now. DFRGetStatus bit 0 is set while the
     /// Touch Bar is up; it is clear on Macs without one, and briefly at login and wake.
     static var isTouchBarAvailable: Bool {
-        (_getStatus?() ?? 0) & 0x1 != 0
+        #if DEBUG
+        // `-DAMDebugNoTouchBar YES` behaves as a Mac without one, e.g. to see captions.
+        if UserDefaults.standard.bool(forKey: "DAMDebugNoTouchBar") { return false }
+        #endif
+        return (_getStatus?() ?? 0) & 0x1 != 0
     }
 
     // MARK: - Lifecycle
