@@ -1,10 +1,11 @@
 //
 //  AudioOutputPicker.swift
 //
-//  A hotkey-triggered HUD listing the enabled audio outputs. The first press opens it on
-//  the output after the current one; each further press moves on. Pressing a number picks
-//  that output, Return picks the tinted one, and pausing picks it too — so a single press
-//  still cycles to the next output. Esc cancels.
+//  A hotkey-triggered picker for the enabled audio outputs, shown on screen and on the
+//  Touch Bar, and spoken, as enabled. The first press opens it on the output after the
+//  current one; each further press moves on. Pressing a number (or tapping an output on
+//  the Touch Bar) picks that output, Return picks the tinted one, and pausing picks it
+//  too — so a single press still cycles to the next output. Esc cancels.
 //
 
 import AppKit
@@ -17,7 +18,14 @@ private extension HUDHint {
     static let audioSwitched = HUDHint(leading: "Audio output switched", trailing: "")
 }
 
-final class AudioOutputPicker {
+private extension NSTouchBarItem.Identifier {
+    static let audioCancel = NSTouchBarItem.Identifier("\(AppIdentity.shortID).audio.cancel")
+    static func audioOutput(_ i: Int) -> NSTouchBarItem.Identifier {
+        .init("\(AppIdentity.shortID).audio.output.\(i)")
+    }
+}
+
+final class AudioOutputPicker: NSObject {
 
     static let shared = AudioOutputPicker()
 
@@ -27,16 +35,22 @@ final class AudioOutputPicker {
     private weak var audioManager: AudioManager?
     private var devices: [AudioDevice] = []
     private var cursor = 0
+    private var isOpen = false
+    /// Set while the switch animation plays; the picker no longer takes input.
+    private var isFinishing = false
+    /// Debug previews show sample outputs, stay silent and don't switch.
+    private var isPreview = false
+    /// The output last spoken, so a pick doesn't repeat it.
+    private var spokenIndex: Int?
+
     private var panel: HUDPanel?
+    private var touchBar: NSTouchBar?
+    private var touchBarButtons: [NSButton] = []
     private var pickTimer: Timer?
     private var localMonitor: Any?
     private var globalMonitor: Any?
-    /// Set while the switch animation plays; the panel no longer takes input.
-    private var isFinishing = false
-    /// Debug previews show sample outputs and don't switch.
-    private var isPreview = false
 
-    private init() {}
+    private override init() { super.init() }
 
     func configure(audioManager: AudioManager) {
         self.audioManager = audioManager
@@ -47,7 +61,7 @@ final class AudioOutputPicker {
     /// Opens the picker on the output after the current one, or moves to the next output
     /// when already open.
     func advance() {
-        if panel != nil && !isFinishing {
+        if isOpen && !isFinishing {
             move(to: (cursor + 1) % devices.count)
             return
         }
@@ -68,13 +82,19 @@ final class AudioOutputPicker {
     private func open(devices: [AudioDevice], cursor: Int) {
         self.devices = devices
         self.cursor  = cursor
-        let p = makeHUDPanel(nonactivating: true)
-        panel = p
-        layoutHUD(p, body: .choices(devices.map(\.name), numbered: true),
-                  hint: .audioPicking) { frame, size in frame.midY + size.height / 2 }
-        content?.setCursor(cursor)
-        p.makeKeyAndOrderFront(nil)
-        installMonitors()
+        isOpen = true
+
+        if Feedback.screen {
+            let p = makeHUDPanel(nonactivating: true)
+            panel = p
+            layoutHUD(p, body: .choices(devices.map(\.name), numbered: true),
+                      hint: .audioPicking) { frame, size in frame.midY + size.height / 2 }
+            content?.setCursor(cursor)
+            p.makeKeyAndOrderFront(nil)
+            installMonitors()
+        }
+        if Feedback.touchBar { showTouchBar() }
+        speakCursor()
         restartPickTimer()
     }
 
@@ -83,7 +103,15 @@ final class AudioOutputPicker {
     private func move(to index: Int) {
         cursor = index
         content?.setCursor(index)
+        updateTouchBar()
+        speakCursor()
         restartPickTimer()
+    }
+
+    private func speakCursor() {
+        guard Feedback.voice, !isPreview else { return }
+        SpeechSynthesizer.shared.speak(devices[cursor].name, caption: false)
+        spokenIndex = cursor
     }
 
     private func restartPickTimer() {
@@ -97,19 +125,21 @@ final class AudioOutputPicker {
     // MARK: - Picking
 
     private func pick(_ index: Int) {
-        guard !isFinishing, devices.indices.contains(index) else { return }
+        guard isOpen, !isFinishing, devices.indices.contains(index) else { return }
         isFinishing = true
         pickTimer?.invalidate()
         removeMonitors()
+        dismissTouchBar()
 
         let device = devices[index]
         if !isPreview {
             audioManager?.setDefaultDevice(device)
-            if VisibilityPreferences.speechEnabled {
+            if Feedback.voice && spokenIndex != index {
                 SpeechSynthesizer.shared.speak(device.name, caption: false)
             }
         }
-        content?.select(index, hint: .audioSwitched, pulses: false) { [weak self] in
+        guard let content else { close(); return }
+        content.select(index, hint: .audioSwitched, pulses: false) { [weak self] in
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { self?.fadeOut() }
         }
     }
@@ -128,10 +158,67 @@ final class AudioOutputPicker {
         pickTimer?.invalidate()
         pickTimer = nil
         removeMonitors()
+        dismissTouchBar()
         panel?.orderOut(nil)
         panel = nil
+        isOpen = false
         isFinishing = false
         isPreview = false
+        spokenIndex = nil
+    }
+
+    // MARK: - Touch Bar
+
+    /// A button per output, numbered, with the tinted one highlighted, then Cancel.
+    private func showTouchBar() {
+        dismissTouchBar()
+        let bar = NSTouchBar()
+        var items: Set<NSTouchBarItem> = []
+        touchBarButtons = devices.enumerated().map { i, device in
+            let btn = NSButton(title: "\(i + 1).  \(truncated(device.name))",
+                               target: self, action: #selector(touchBarOutputTapped(_:)))
+            btn.tag = i
+            let item = NSCustomTouchBarItem(identifier: .audioOutput(i))
+            item.view = btn
+            items.insert(item)
+            return btn
+        }
+        let cancel = NSButton(title: "Cancel", target: self, action: #selector(touchBarCancelTapped))
+        cancel.bezelColor = .systemRed
+        let cancelItem = NSCustomTouchBarItem(identifier: .audioCancel)
+        cancelItem.view = cancel
+        items.insert(cancelItem)
+
+        bar.templateItems = items
+        bar.defaultItemIdentifiers = devices.indices.map { .audioOutput($0) }
+                                     + [.flexibleSpace, .audioCancel]
+        touchBar = bar
+        updateTouchBar()
+        NSTouchBar.presentSystemModal(bar)
+    }
+
+    private func updateTouchBar() {
+        for (i, btn) in touchBarButtons.enumerated() {
+            btn.bezelColor = i == cursor ? .controlAccentColor : nil
+        }
+    }
+
+    private func dismissTouchBar() {
+        if let bar = touchBar { NSTouchBar.dismissSystemModal(bar) }
+        touchBar = nil
+        touchBarButtons = []
+    }
+
+    @objc private func touchBarOutputTapped(_ sender: NSButton) {
+        pick(sender.tag)
+    }
+
+    @objc private func touchBarCancelTapped() {
+        close()
+    }
+
+    private func truncated(_ s: String, maxLength: Int = 16) -> String {
+        s.count > maxLength ? String(s.prefix(maxLength - 1)) + "…" : s
     }
 
     // MARK: - Keys
@@ -154,7 +241,7 @@ final class AudioOutputPicker {
 
     /// Returns `true` if the event was consumed.
     private func handleKey(_ event: NSEvent) -> Bool {
-        guard panel != nil, !isFinishing else { return false }
+        guard isOpen, !isFinishing else { return false }
         switch Int(event.keyCode) {
         case kVK_Escape:
             close()
@@ -174,7 +261,7 @@ final class AudioOutputPicker {
 extension AudioOutputPicker {
 
     /// Opens the picker on sample outputs, steps the cursor once, then lets it pick after
-    /// the pause — without switching the real output.
+    /// the pause — silently, without switching the real output.
     func playDebugPreview() {
         close()
         isPreview = true

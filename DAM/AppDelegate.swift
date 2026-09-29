@@ -93,14 +93,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Actions
 
-    /// Opens the Touch Bar switcher, or the menu bar menu when no Touch Bar is available
-    /// (a Mac without one, or with the lid closed).
+    /// Opens the switcher on each enabled surface: the Touch Bar switcher when a Touch Bar
+    /// is available, and the menu bar menu on screen.
     private func openSwitcher() {
-        if ControlStripPresenter.isTouchBarAvailable {
-            controlStrip.openModal()
-        } else {
-            statusItem.button?.performClick(nil)
-        }
+        if Feedback.touchBar { controlStrip.openModal() }
+        // Last: the menu tracks modally until it closes.
+        if Feedback.screen { statusItem.button?.performClick(nil) }
     }
 
     private func toggleAirPlayMirror() {

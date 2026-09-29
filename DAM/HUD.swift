@@ -8,6 +8,19 @@
 import AppKit
 import Carbon.HIToolbox
 
+// MARK: - Feedback
+
+/// Where hotkey feedback goes right now. Every enabled surface is used: the Touch Bar when
+/// one is available, the screen, and speech. The screen is used regardless when the Touch
+/// Bar wouldn't show anything, so a hotkey never goes without visible feedback.
+enum Feedback {
+    static var touchBar: Bool {
+        VisibilityPreferences.touchBarFeedback && ControlStripPresenter.isTouchBarAvailable
+    }
+    static var screen: Bool { VisibilityPreferences.screenFeedback || !touchBar }
+    static var voice:  Bool { VisibilityPreferences.speechEnabled }
+}
+
 // MARK: - CaptionHUD
 
 /// On-screen stand-in for the Touch Bar caption on Macs without a Touch Bar: a panel near
