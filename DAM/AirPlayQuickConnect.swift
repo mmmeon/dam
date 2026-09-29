@@ -47,6 +47,8 @@ final class AirPlayQuickConnect: NSObject {
 
     // HUD
     private var panel: HUDPanel?
+    /// The app to hand focus back to on dismiss, when DAM was activated for the Touch Bar.
+    private var previousApp: NSRunningApplication?
 
     // Key monitors
     private var localMonitor: Any?
@@ -176,6 +178,8 @@ final class AirPlayQuickConnect: NSObject {
         dismissTouchBar()
         panel?.orderOut(nil)
         panel = nil
+        restoreFocus(to: previousApp)
+        previousApp = nil
     }
 
     // MARK: - Key Monitors
@@ -256,10 +260,12 @@ final class AirPlayQuickConnect: NSObject {
 
     private func showHUD(_ body: HUDBody, hint: HUDHint) {
         guard Feedback.screen else { return }
-        // Non-activating, so the previous app keeps focus once the HUD closes.
+        // Non-activating, so the previous app keeps focus — unless the Touch Bar is also
+        // showing, which needs DAM active; focus is handed back on dismiss.
         let p = panel ?? makeHUDPanel(nonactivating: true)
         panel = p
         layoutHUD(p, body: body, hint: hint) { frame, size in frame.midY + size.height / 2 }
+        if Feedback.touchBar && previousApp == nil { previousApp = activateForHUDTouchBar() }
         p.makeKeyAndOrderFront(nil)
     }
 }

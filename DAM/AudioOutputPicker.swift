@@ -42,10 +42,13 @@ final class AudioOutputPicker: NSObject {
     private var isPreview = false
     /// The output last spoken, so a pick doesn't repeat it.
     private var spokenIndex: Int?
+    /// The app to hand focus back to on close, when DAM was activated for the Touch Bar.
+    private var previousApp: NSRunningApplication?
 
     private var panel: HUDPanel?
     private var touchBar: NSTouchBar?
-    private var touchBarButtons: [NSButton] = []
+    /// The output buttons by index, as the Touch Bar creates them.
+    private var touchBarButtons: [Int: NSButton] = [:]
     private var pickTimer: Timer?
     private var localMonitor: Any?
     private var globalMonitor: Any?
@@ -84,16 +87,17 @@ final class AudioOutputPicker: NSObject {
         self.cursor  = cursor
         isOpen = true
 
+        if Feedback.touchBar { showTouchBar() }
         if Feedback.screen {
             let p = makeHUDPanel(nonactivating: true)
             panel = p
             layoutHUD(p, body: .choices(devices.map(\.name), numbered: true),
                       hint: .audioPicking) { frame, size in frame.midY + size.height / 2 }
             content?.setCursor(cursor)
+            if Feedback.touchBar { previousApp = activateForHUDTouchBar() }
             p.makeKeyAndOrderFront(nil)
             installMonitors()
         }
-        if Feedback.touchBar { showTouchBar() }
         speakCursor()
         restartPickTimer()
     }
@@ -165,6 +169,8 @@ final class AudioOutputPicker: NSObject {
         isFinishing = false
         isPreview = false
         spokenIndex = nil
+        restoreFocus(to: previousApp)
+        previousApp = nil
     }
 
     // MARK: - Touch Bar
@@ -173,32 +179,15 @@ final class AudioOutputPicker: NSObject {
     private func showTouchBar() {
         dismissTouchBar()
         let bar = NSTouchBar()
-        var items: Set<NSTouchBarItem> = []
-        touchBarButtons = devices.enumerated().map { i, device in
-            let btn = NSButton(title: "\(i + 1).  \(truncated(device.name))",
-                               target: self, action: #selector(touchBarOutputTapped(_:)))
-            btn.tag = i
-            let item = NSCustomTouchBarItem(identifier: .audioOutput(i))
-            item.view = btn
-            items.insert(item)
-            return btn
-        }
-        let cancel = NSButton(title: "Cancel", target: self, action: #selector(touchBarCancelTapped))
-        cancel.bezelColor = .systemRed
-        let cancelItem = NSCustomTouchBarItem(identifier: .audioCancel)
-        cancelItem.view = cancel
-        items.insert(cancelItem)
-
-        bar.templateItems = items
+        bar.delegate = self
         bar.defaultItemIdentifiers = devices.indices.map { .audioOutput($0) }
                                      + [.flexibleSpace, .audioCancel]
         touchBar = bar
-        updateTouchBar()
-        NSTouchBar.presentSystemModal(bar)
+        NSTouchBar.presentSystemModal(bar, for: ControlStripPresenter.stripID)
     }
 
     private func updateTouchBar() {
-        for (i, btn) in touchBarButtons.enumerated() {
+        for (i, btn) in touchBarButtons {
             btn.bezelColor = i == cursor ? .controlAccentColor : nil
         }
     }
@@ -206,7 +195,7 @@ final class AudioOutputPicker: NSObject {
     private func dismissTouchBar() {
         if let bar = touchBar { NSTouchBar.dismissSystemModal(bar) }
         touchBar = nil
-        touchBarButtons = []
+        touchBarButtons = [:]
     }
 
     @objc private func touchBarOutputTapped(_ sender: NSButton) {
@@ -252,6 +241,32 @@ final class AudioOutputPicker: NSObject {
             pick(n - 1)
         }
         return true
+    }
+}
+
+// MARK: - NSTouchBarDelegate
+
+extension AudioOutputPicker: NSTouchBarDelegate {
+
+    func touchBar(_ touchBar: NSTouchBar,
+                  makeItemForIdentifier identifier: NSTouchBarItem.Identifier) -> NSTouchBarItem? {
+        let item = NSCustomTouchBarItem(identifier: identifier)
+        if identifier == .audioCancel {
+            let btn = NSButton(title: "Cancel", target: self, action: #selector(touchBarCancelTapped))
+            btn.bezelColor = .systemRed
+            item.view = btn
+            return item
+        }
+        guard let i = devices.indices.first(where: { .audioOutput($0) == identifier }) else {
+            return nil
+        }
+        let btn = NSButton(title: "\(i + 1).  \(truncated(devices[i].name))",
+                           target: self, action: #selector(touchBarOutputTapped(_:)))
+        btn.tag = i
+        btn.bezelColor = i == cursor ? .controlAccentColor : nil
+        touchBarButtons[i] = btn
+        item.view = btn
+        return item
     }
 }
 
