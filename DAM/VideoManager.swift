@@ -215,7 +215,15 @@ final class VideoManager: ObservableObject {
         connectAirPlay(deviceName: deviceName)
     }
 
+    /// Connects (or, for a connected device, disconnects) by scripting the Screen Mirroring
+    /// panel through System Events, which needs Accessibility access and permission to
+    /// control System Events. A missing permission is announced rather than failing silently.
     func connectAirPlay(deviceName: String) {
+        guard Self.hasAccessibilityAccess(prompting: true) else {
+            SpeechSynthesizer.shared.announce(
+                "\(AppIdentity.name) needs Accessibility access to connect AirPlay")
+            return
+        }
         let safe = deviceName
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
@@ -227,13 +235,26 @@ final class VideoManager: ObservableObject {
                     -- Step 1: open the Screen Mirroring popover.
                     -- Capture the target window title immediately after opening so
                     -- Step 2 can reference the exact same window — mirroring tv.scpt.
+                    -- `opener` is the menu bar item that opened it, clicked again to close.
                     if exists (first UI element of menu bar 1 whose value of attribute "AXIdentifier" contains "screen-mirroring") then
-                        click (first UI element of menu bar 1 whose value of attribute "AXIdentifier" contains "screen-mirroring")
-                        delay 1
+                        set opener to (first UI element of menu bar 1 whose value of attribute "AXIdentifier" contains "screen-mirroring")
+                        click opener
+                        -- Wait for the popover rather than a fixed delay: it can take
+                        -- longer than a second to appear.
+                        repeat 30 times
+                            if exists window 1 then exit repeat
+                            delay 0.1
+                        end repeat
                         set window_ to title of (first window) as text
                     else
-                        click (first UI element of menu bar 1 whose value of attribute "AXIdentifier" contains "controlcenter")
-                        delay 1
+                        set opener to (first UI element of menu bar 1 whose value of attribute "AXIdentifier" contains "controlcenter")
+                        click opener
+                        -- Wait for the popover rather than a fixed delay: it can take
+                        -- longer than a second to appear.
+                        repeat 30 times
+                            if exists window 1 then exit repeat
+                            delay 0.1
+                        end repeat
                         set window_ to title of (first window) as text
                         -- "click" does not work on the Screen Mirroring tile inside
                         -- Control Center — only "perform action 1" works on Ventura.
@@ -252,13 +273,17 @@ final class VideoManager: ObservableObject {
                     set frontmost to true
                     delay 1
 
-                    -- Step 2: exact tv.scpt logic for Ventura.
-                    -- Everything runs inside tell window window_ just like the original.
-                    -- Uses "ends with" and AXChildren traversal verbatim from tv.scpt.
+                    -- Step 2: tv.scpt logic for Ventura, inside tell window window_.
+                    -- Uses "ends with" and AXChildren traversal from tv.scpt. Each device
+                    -- also has a disclosure triangle with the same identifier, listed
+                    -- before its checkbox; clicking that only expands the device's
+                    -- options, so it is skipped.
+                    set clicked to false
                     try
                         tell window window_
                             set screenMirroringDropDown to UI elements of group 1
                             repeat with anItem in screenMirroringDropDown
+                                if clicked then exit repeat
                                 try
                                     set itemsOfScreenMirroringMenu to value of attribute "AXChildren" of anItem
                                     repeat with childItem in itemsOfScreenMirroringMenu
@@ -267,9 +292,11 @@ final class VideoManager: ObservableObject {
                                         else
                                             set aScreenMirroringItem to title of childItem
                                         end if
-                                        if aScreenMirroringItem ends with "\(safe)" then
+                                        if aScreenMirroringItem ends with "\(safe)" and ¬
+                                            (value of attribute "AXRole" of childItem) is not "AXDisclosureTriangle" then
                                             click childItem
-                                            return
+                                            set clicked to true
+                                            exit repeat
                                         end if
                                     end repeat
                                 on error
@@ -278,6 +305,10 @@ final class VideoManager: ObservableObject {
                         end tell
                     on error
                     end try
+
+                    -- Step 3: close the popover, whether or not the device was found.
+                    delay 0.5
+                    if exists window window_ then click opener
 
                 end tell
             end tell
@@ -288,11 +319,24 @@ final class VideoManager: ObservableObject {
             NSAppleScript(source: src)?.executeAndReturnError(&errors)
             if let errors = errors {
                 NSLog("\(AppIdentity.name): connectAirPlay error: %@", errors.description)
+                if errors[NSAppleScript.errorNumber] as? Int == -1743 {   // errAEEventNotPermitted
+                    DispatchQueue.main.async {
+                        SpeechSynthesizer.shared.announce(
+                            "Allow \(AppIdentity.name) to control System Events, in Privacy and Security, Automation")
+                    }
+                }
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                 self?.mergeDevices()
             }
         }
+    }
+
+    /// Whether the app may script other apps' UI. With `prompting`, macOS offers to open
+    /// Accessibility settings when it may not.
+    static func hasAccessibilityAccess(prompting: Bool) -> Bool {
+        let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
+        return AXIsProcessTrustedWithOptions([key: prompting] as CFDictionary)
     }
 
     // MARK: - Resolution
