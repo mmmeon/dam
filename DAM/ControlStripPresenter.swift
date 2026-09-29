@@ -93,7 +93,7 @@ extension NSTouchBar {
 final class ControlStripPresenter: NSObject {
 
     // Stable identifier — the system uses this to remember the button's slot.
-    private static let stripID       = NSTouchBarItem.Identifier("\(AppIdentity.bundleID).strip")
+    static let stripID               = NSTouchBarItem.Identifier("\(AppIdentity.bundleID).strip")
     private static let modalAudioID  = NSTouchBarItem.Identifier("\(AppIdentity.bundleID).modal.audio")
     private static let modalVideoID  = NSTouchBarItem.Identifier("\(AppIdentity.bundleID).modal.video")
     private static let speechStatusID = NSTouchBarItem.Identifier("\(AppIdentity.bundleID).speechStatus")

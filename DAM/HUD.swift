@@ -662,6 +662,24 @@ final class GridLine: FillView {
     }
 }
 
+// MARK: - Focus
+
+/// DAM's system-modal Touch Bar doesn't show while a DAM window is on screen unless DAM is
+/// the active app. When a HUD pairs with the Touch Bar this activates DAM, returning the
+/// app that was active so `restoreFocus(to:)` can hand focus back when the HUD closes.
+func activateForHUDTouchBar() -> NSRunningApplication? {
+    guard !NSApp.isActive else { return nil }
+    let previous = NSWorkspace.shared.frontmostApplication
+    NSApp.activate(ignoringOtherApps: true)
+    return previous
+}
+
+/// Hands focus back to `app`, unless the user has moved on from DAM meanwhile.
+func restoreFocus(to app: NSRunningApplication?) {
+    guard let app, NSApp.isActive else { return }
+    app.activate(options: [])
+}
+
 // MARK: - Keys
 
 /// The number 1–9 for a digit key press, else nil.
