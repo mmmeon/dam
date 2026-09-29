@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private let audioManager = AudioManager()
     private let videoManager = VideoManager()
+    private let sidecarManager = SidecarManager()
     private var controlStrip: ControlStripPresenter!
     private var hotkey: GlobalHotkey!
     private var airPlayConnectHotkey: GlobalHotkey!
@@ -82,9 +83,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         #endif
 
-        // Rebuild menu and Control Strip whenever either manager publishes a change
+        // Rebuild menu and Control Strip whenever a manager publishes a change
         audioManager.objectWillChange
-            .merge(with: videoManager.objectWillChange)
+            .merge(with: videoManager.objectWillChange, sidecarManager.objectWillChange)
             .debounce(for: .milliseconds(200), scheduler: RunLoop.main)
             .sink { [weak self] in self?.rebuild() }
             .store(in: &cancellables)
@@ -104,6 +105,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = buildStatusMenu(
             audio: audioManager,
             video: videoManager,
+            sidecar: sidecarManager,
             onRefresh: { [weak self] in self?.refreshAll(nil) }
         )
         menu.delegate = self
@@ -136,6 +138,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func refreshAll(_ sender: Any?) {
         audioManager.refresh()
         videoManager.refresh()
+        sidecarManager.refresh()
         rebuild()
     }
 }
@@ -146,6 +149,7 @@ extension AppDelegate: NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         audioManager.refresh()
         videoManager.refresh()
+        sidecarManager.refresh()
         rebuild()
     }
 
@@ -235,6 +239,16 @@ extension AppDelegate: NSMenuDelegate {
     @objc func optimizeForDisplay(_ sender: NSMenuItem) {
         guard let display = sender.representedObject as? DisplayInfo else { return }
         videoManager.setAsOptimizedDisplay(display)
+    }
+
+    @objc func selectSidecarDevice(_ sender: NSMenuItem) {
+        guard let device = sender.representedObject as? SidecarDevice else { return }
+        SpeechSynthesizer.shared.announce(device.isConnected
+            ? "Disconnecting \(device.name)" : "Connecting to \(device.name)")
+        sidecarManager.toggle(device) { [weak self] error in
+            if let error { SpeechSynthesizer.shared.announce(error.localizedDescription) }
+            self?.rebuild()
+        }
     }
 
     @objc func disconnectAirPlayDevice(_ sender: NSMenuItem) {
