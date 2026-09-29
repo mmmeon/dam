@@ -58,16 +58,6 @@ final class AudioManager: ObservableObject {
         return devices[(idx + 1) % devices.count]
     }
 
-    /// Switches the default output to the next enabled device and returns it, or nil when
-    /// no devices are enabled.
-    @discardableResult
-    func cycleDefaultDevice() -> AudioDevice? {
-        refresh()
-        guard let next = Self.device(after: defaultDeviceID, in: devices) else { return nil }
-        setDefaultDevice(next)
-        return next
-    }
-
     func setDefaultDevice(_ device: AudioDevice) {
         var propAddr = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDefaultOutputDevice,
