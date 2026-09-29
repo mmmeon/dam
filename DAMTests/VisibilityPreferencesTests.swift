@@ -1,13 +1,13 @@
 import XCTest
-@testable import HLDM
+@testable import DAM
 
 final class VisibilityPreferencesTests: XCTestCase {
 
-    private let audioKey     = "hldm.hidden.audio"
-    private let audioSeenKey = "hldm.seen.audio"
-    private let airPlayKey   = "hldm.hidden.airplay"
-    private let displayKey   = "hldm.hidden.displays"
-    private let autoConnKey  = "hldm.behaviour.autoConnectSingle"
+    private let audioKey     = "\(AppIdentity.shortID).hidden.audio"
+    private let audioSeenKey = "\(AppIdentity.shortID).seen.audio"
+    private let airPlayKey   = "\(AppIdentity.shortID).hidden.airplay"
+    private let displayKey   = "\(AppIdentity.shortID).hidden.displays"
+    private let autoConnKey  = "\(AppIdentity.shortID).behaviour.autoConnectSingle"
 
     override func tearDown() {
         super.tearDown()

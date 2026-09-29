@@ -7,7 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		8BFD3BDF2F8D60780090E796 /* boarApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BFD3BDE2F8D60780090E796 /* boarApp.swift */; };
+		A0A1D0000000000000000002 /* AppIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0A1D0000000000000000001 /* AppIdentity.swift */; };
+		8BFD3BDF2F8D60780090E796 /* MainApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BFD3BDE2F8D60780090E796 /* MainApp.swift */; };
 		8BFD3BE32F8D607B0090E796 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 8BFD3BE22F8D607B0090E796 /* Assets.xcassets */; };
 		8BFD3BE62F8D607B0090E796 /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 8BFD3BE52F8D607B0090E796 /* Preview Assets.xcassets */; };
 		8BFD3C0B2F8D60780090E796 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BFD3C0A2F8D60780090E796 /* AppDelegate.swift */; };
@@ -36,17 +37,18 @@
 			containerPortal = 8BFD3BD32F8D60780090E796 /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = 8BFD3BDA2F8D60780090E796;
-			remoteInfo = boar;
+			remoteInfo = DAM;
 		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		8BFD3BDB2F8D60780090E796 /* HLDM.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = HLDM.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		8BFD3BDE2F8D60780090E796 /* boarApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = boarApp.swift; sourceTree = "<group>"; };
+		8BFD3BDB2F8D60780090E796 /* DAM.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DAM.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A0A1D0000000000000000001 /* AppIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIdentity.swift; sourceTree = "<group>"; };
+		8BFD3BDE2F8D60780090E796 /* MainApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainApp.swift; sourceTree = "<group>"; };
 		8BFD3BE22F8D607B0090E796 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		8BFD3BE52F8D607B0090E796 /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
-		8BFD3BE72F8D607B0090E796 /* HLDM.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = HLDM.entitlements; sourceTree = "<group>"; };
-		8BFD3BEC2F8D607C0090E796 /* HLDM Tests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "HLDM Tests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		8BFD3BE72F8D607B0090E796 /* DAM.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = DAM.entitlements; sourceTree = "<group>"; };
+		8BFD3BEC2F8D607C0090E796 /* DAM Tests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "DAM Tests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		8BFD3C0A2F8D60780090E796 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		8BFD3C0C2F8D60780090E796 /* AudioManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioManager.swift; sourceTree = "<group>"; };
 		8BFD3C0E2F8D60780090E796 /* VideoManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoManager.swift; sourceTree = "<group>"; };
@@ -88,8 +90,8 @@
 		8BFD3BD22F8D60780090E796 = {
 			isa = PBXGroup;
 			children = (
-				8BFD3BDD2F8D60780090E796 /* HLDM */,
-				8BFD3BEF2F8D607C0090E796 /* HLDMTests */,
+				8BFD3BDD2F8D60780090E796 /* DAM */,
+				8BFD3BEF2F8D607C0090E796 /* DAMTests */,
 				8BFD3BDC2F8D60780090E796 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -97,16 +99,17 @@
 		8BFD3BDC2F8D60780090E796 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				8BFD3BDB2F8D60780090E796 /* HLDM.app */,
-				8BFD3BEC2F8D607C0090E796 /* HLDM Tests.xctest */,
+				8BFD3BDB2F8D60780090E796 /* DAM.app */,
+				8BFD3BEC2F8D607C0090E796 /* DAM Tests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
 		};
-		8BFD3BDD2F8D60780090E796 /* HLDM */ = {
+		8BFD3BDD2F8D60780090E796 /* DAM */ = {
 			isa = PBXGroup;
 			children = (
-				8BFD3BDE2F8D60780090E796 /* boarApp.swift */,
+				8BFD3BDE2F8D60780090E796 /* MainApp.swift */,
+				A0A1D0000000000000000001 /* AppIdentity.swift */,
 				8BFD3C0A2F8D60780090E796 /* AppDelegate.swift */,
 				8BFD3C0C2F8D60780090E796 /* AudioManager.swift */,
 				8BFD3C0E2F8D60780090E796 /* VideoManager.swift */,
@@ -121,10 +124,10 @@
 				BB0009002F8D60780090E796 /* SpeechSynthesizer.swift */,
 				CC000B002F8D60780090E796 /* AirPlayQuickConnect.swift */,
 				8BFD3BE22F8D607B0090E796 /* Assets.xcassets */,
-				8BFD3BE72F8D607B0090E796 /* HLDM.entitlements */,
+				8BFD3BE72F8D607B0090E796 /* DAM.entitlements */,
 				8BFD3BE42F8D607B0090E796 /* Preview Content */,
 			);
-			path = HLDM;
+			path = DAM;
 			sourceTree = "<group>";
 		};
 		8BFD3BE42F8D607B0090E796 /* Preview Content */ = {
@@ -135,7 +138,7 @@
 			path = "Preview Content";
 			sourceTree = "<group>";
 		};
-		8BFD3BEF2F8D607C0090E796 /* HLDMTests */ = {
+		8BFD3BEF2F8D607C0090E796 /* DAMTests */ = {
 			isa = PBXGroup;
 			children = (
 				AA100A002F8D607C0090E796 /* VisibilityPreferencesTests.swift */,
@@ -144,15 +147,15 @@
 				AA400A002F8D607C0090E796 /* HotkeyPreferenceTests.swift */,
 				AA500A002F8D607C0090E796 /* ControlStripPresenterTests.swift */,
 			);
-			path = HLDMTests;
+			path = DAMTests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		8BFD3BDA2F8D60780090E796 /* HLDM */ = {
+		8BFD3BDA2F8D60780090E796 /* DAM */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 8BFD3C002F8D607C0090E796 /* Build configuration list for PBXNativeTarget "HLDM" */;
+			buildConfigurationList = 8BFD3C002F8D607C0090E796 /* Build configuration list for PBXNativeTarget "DAM" */;
 			buildPhases = (
 				8BFD3BD72F8D60780090E796 /* Sources */,
 				8BFD3BD82F8D60780090E796 /* Frameworks */,
@@ -162,14 +165,14 @@
 			);
 			dependencies = (
 			);
-			name = HLDM;
-			productName = boar;
-			productReference = 8BFD3BDB2F8D60780090E796 /* HLDM.app */;
+			name = DAM;
+			productName = DAM;
+			productReference = 8BFD3BDB2F8D60780090E796 /* DAM.app */;
 			productType = "com.apple.product-type.application";
 		};
-		8BFD3BEB2F8D607C0090E796 /* HLDM Tests */ = {
+		8BFD3BEB2F8D607C0090E796 /* DAM Tests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 8BFD3C032F8D607C0090E796 /* Build configuration list for PBXNativeTarget "HLDM Tests" */;
+			buildConfigurationList = 8BFD3C032F8D607C0090E796 /* Build configuration list for PBXNativeTarget "DAM Tests" */;
 			buildPhases = (
 				8BFD3BE82F8D607C0090E796 /* Sources */,
 				8BFD3BE92F8D607C0090E796 /* Frameworks */,
@@ -180,9 +183,9 @@
 			dependencies = (
 				8BFD3BEE2F8D607C0090E796 /* PBXTargetDependency */,
 			);
-			name = "HLDM Tests";
-			productName = HLDMTests;
-			productReference = 8BFD3BEC2F8D607C0090E796 /* HLDM Tests.xctest */;
+			name = "DAM Tests";
+			productName = DAMTests;
+			productReference = 8BFD3BEC2F8D607C0090E796 /* DAM Tests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
@@ -204,7 +207,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 8BFD3BD62F8D60780090E796 /* Build configuration list for PBXProject "HLDM" */;
+			buildConfigurationList = 8BFD3BD62F8D60780090E796 /* Build configuration list for PBXProject "DAM" */;
 			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
@@ -217,8 +220,8 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				8BFD3BDA2F8D60780090E796 /* HLDM */,
-				8BFD3BEB2F8D607C0090E796 /* HLDM Tests */,
+				8BFD3BDA2F8D60780090E796 /* DAM */,
+				8BFD3BEB2F8D607C0090E796 /* DAM Tests */,
 			);
 		};
 /* End PBXProject section */
@@ -247,7 +250,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				8BFD3BDF2F8D60780090E796 /* boarApp.swift in Sources */,
+				8BFD3BDF2F8D60780090E796 /* MainApp.swift in Sources */,
+				A0A1D0000000000000000002 /* AppIdentity.swift in Sources */,
 				8BFD3C0B2F8D60780090E796 /* AppDelegate.swift in Sources */,
 				8BFD3C0D2F8D60780090E796 /* AudioManager.swift in Sources */,
 				8BFD3C0F2F8D60780090E796 /* VideoManager.swift in Sources */,
@@ -281,7 +285,7 @@
 /* Begin PBXTargetDependency section */
 		8BFD3BEE2F8D607C0090E796 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = 8BFD3BDA2F8D60780090E796 /* HLDM */;
+			target = 8BFD3BDA2F8D60780090E796 /* DAM */;
 			targetProxy = 8BFD3BED2F8D607C0090E796 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
@@ -291,6 +295,9 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				APP_BUNDLE_ID = "$(APP_BUNDLE_PREFIX).$(APP_NAME:rfc1034identifier:lower)";
+				APP_BUNDLE_PREFIX = mmmeon;
+				APP_NAME = DAM;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
@@ -351,6 +358,9 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				APP_BUNDLE_ID = "$(APP_BUNDLE_PREFIX).$(APP_NAME:rfc1034identifier:lower)";
+				APP_BUNDLE_PREFIX = mmmeon;
+				APP_NAME = DAM;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
@@ -405,12 +415,12 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = HLDM/HLDM.entitlements;
+				CODE_SIGN_ENTITLEMENTS = DAM/DAM.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_ASSET_PATHS = "\"HLDM/Preview Content\"";
+				DEVELOPMENT_ASSET_PATHS = "\"DAM/Preview Content\"";
 				DEVELOPMENT_TEAM = MHRJT395RA;
 				ENABLE_PREVIEWS = YES;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -418,21 +428,22 @@
 					/System/Library/PrivateFrameworks,
 				);
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = HLDM;
+				INFOPLIST_KEY_CFBundleDisplayName = "$(APP_NAME)";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_LSUIElement = YES;
-				INFOPLIST_KEY_NSAppleEventsUsageDescription = "HLDM controls System Events to connect AirPlay displays.";
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "$(APP_NAME) controls System Events to connect AirPlay displays.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 0.1;
-				PRODUCT_BUNDLE_IDENTIFIER = mmmeon.hldm;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = "$(APP_BUNDLE_ID)";
+				PRODUCT_MODULE_NAME = DAM;
+				PRODUCT_NAME = "$(APP_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = "HLDM/HLDM-Bridging-Header.h";
+				SWIFT_OBJC_BRIDGING_HEADER = "DAM/DAM-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 			};
 			name = Debug;
@@ -442,12 +453,12 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = HLDM/HLDM.entitlements;
+				CODE_SIGN_ENTITLEMENTS = DAM/DAM.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_ASSET_PATHS = "\"HLDM/Preview Content\"";
+				DEVELOPMENT_ASSET_PATHS = "\"DAM/Preview Content\"";
 				DEVELOPMENT_TEAM = MHRJT395RA;
 				ENABLE_PREVIEWS = YES;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -455,21 +466,22 @@
 					/System/Library/PrivateFrameworks,
 				);
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = HLDM;
+				INFOPLIST_KEY_CFBundleDisplayName = "$(APP_NAME)";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_LSUIElement = YES;
-				INFOPLIST_KEY_NSAppleEventsUsageDescription = "HLDM controls System Events to connect AirPlay displays.";
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "$(APP_NAME) controls System Events to connect AirPlay displays.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 0.1;
-				PRODUCT_BUNDLE_IDENTIFIER = mmmeon.hldm;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = "$(APP_BUNDLE_ID)";
+				PRODUCT_MODULE_NAME = DAM;
+				PRODUCT_NAME = "$(APP_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = "HLDM/HLDM-Bridging-Header.h";
+				SWIFT_OBJC_BRIDGING_HEADER = "DAM/DAM-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 			};
 			name = Release;
@@ -484,11 +496,11 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 13.3;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = mmmeon.hldmTests;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(APP_BUNDLE_ID)Tests";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/HLDM.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/HLDM";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/$(APP_NAME).app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/$(APP_NAME)";
 			};
 			name = Debug;
 		};
@@ -502,18 +514,18 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 13.3;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = mmmeon.hldmTests;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(APP_BUNDLE_ID)Tests";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/HLDM.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/HLDM";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/$(APP_NAME).app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/$(APP_NAME)";
 			};
 			name = Release;
 		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		8BFD3BD62F8D60780090E796 /* Build configuration list for PBXProject "HLDM" */ = {
+		8BFD3BD62F8D60780090E796 /* Build configuration list for PBXProject "DAM" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				8BFD3BFE2F8D607C0090E796 /* Debug */,
@@ -522,7 +534,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		8BFD3C002F8D607C0090E796 /* Build configuration list for PBXNativeTarget "HLDM" */ = {
+		8BFD3C002F8D607C0090E796 /* Build configuration list for PBXNativeTarget "DAM" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				8BFD3C012F8D607C0090E796 /* Debug */,
@@ -531,7 +543,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		8BFD3C032F8D607C0090E796 /* Build configuration list for PBXNativeTarget "HLDM Tests" */ = {
+		8BFD3C032F8D607C0090E796 /* Build configuration list for PBXNativeTarget "DAM Tests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				8BFD3C042F8D607C0090E796 /* Debug */,

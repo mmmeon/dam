@@ -1,11 +1,11 @@
 import XCTest
 import CoreAudio
-@testable import HLDM
+@testable import DAM
 
 final class AudioManagerFilterTests: XCTestCase {
 
-    private let audioKey     = "hldm.hidden.audio"
-    private let audioSeenKey = "hldm.seen.audio"
+    private let audioKey     = "\(AppIdentity.shortID).hidden.audio"
+    private let audioSeenKey = "\(AppIdentity.shortID).seen.audio"
 
     override func tearDown() {
         super.tearDown()

@@ -1,6 +1,5 @@
 //
 //  VideoManager+VirtualAnchor.swift
-//  boar
 //
 //  Virtual display anchor: creates a CGVirtualDisplay as a mirror master so the
 //  physical display can run refresh rates not in its native mode list.
@@ -10,7 +9,7 @@ import CoreGraphics
 import Foundation
 import os.log
 
-private let vdLog = Logger(subsystem: "mmmeon.hldm", category: "VirtualDisplay")
+private let vdLog = Logger(subsystem: AppIdentity.bundleID, category: "VirtualDisplay")
 
 /// Where each online display sat and what it mirrored, captured before an anchor is added.
 ///
@@ -292,7 +291,7 @@ extension VideoManager {
         // Must call setDispatchQueue: — the `queue` property writes a different ivar
         // that the system ignores, causing the virtual display to terminate immediately.
         descriptor.setDispatchQueue(.main)
-        descriptor.name = "HLDM"
+        descriptor.name = AppIdentity.name
         descriptor.sizeInMillimeters = CGSize(width: 600, height: 340)
         descriptor.maxPixelsWide = UInt32(max(3840, locked?.pixelWidth ?? 0))
         descriptor.maxPixelsHigh = UInt32(max(2160, locked?.pixelHeight ?? 0))

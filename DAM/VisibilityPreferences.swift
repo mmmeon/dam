@@ -1,6 +1,5 @@
 //
 //  VisibilityPreferences.swift
-//  boar
 //
 //  Persists the user's choice to hide specific audio/video devices from
 //  the menu and Touch Bar. Uses device names as stable keys.
@@ -13,8 +12,8 @@ enum VisibilityPreferences {
 
     // MARK: - Audio
 
-    private static let audioKey     = "hldm.hidden.audio"
-    private static let audioSeenKey = "hldm.seen.audio"
+    private static let audioKey     = "\(AppIdentity.shortID).hidden.audio"
+    private static let audioSeenKey = "\(AppIdentity.shortID).seen.audio"
 
     static var hiddenAudioDevices: Set<String> {
         get { Set(UserDefaults.standard.stringArray(forKey: audioKey) ?? []) }
@@ -41,7 +40,7 @@ enum VisibilityPreferences {
 
     // MARK: - AirPlay displays
 
-    private static let airPlayKey = "hldm.hidden.airplay"
+    private static let airPlayKey = "\(AppIdentity.shortID).hidden.airplay"
 
     static var hiddenAirPlayDevices: Set<String> {
         get { Set(UserDefaults.standard.stringArray(forKey: airPlayKey) ?? []) }
@@ -60,7 +59,7 @@ enum VisibilityPreferences {
 
     // MARK: - Behaviour
 
-    private static let autoConnectKey = "hldm.behaviour.autoConnectSingle"
+    private static let autoConnectKey = "\(AppIdentity.shortID).behaviour.autoConnectSingle"
 
     /// When true (default), pressing the AirPlay Connect hotkey with exactly one
     /// visible AirPlay display skips the selection list and goes straight to the
@@ -73,7 +72,7 @@ enum VisibilityPreferences {
         set { UserDefaults.standard.set(newValue, forKey: autoConnectKey) }
     }
 
-    private static let speechEnabledKey = "hldm.behaviour.speechEnabled"
+    private static let speechEnabledKey = "\(AppIdentity.shortID).behaviour.speechEnabled"
 
     /// When true (default), actions such as connecting AirPlay and toggling
     /// mirror/extend are announced via TTS. Set to false to silence all speech.
@@ -85,7 +84,7 @@ enum VisibilityPreferences {
         set { UserDefaults.standard.set(newValue, forKey: speechEnabledKey) }
     }
 
-    private static let autoHideVirtualAudioKey = "hldm.behaviour.autoHideVirtualAudio"
+    private static let autoHideVirtualAudioKey = "\(AppIdentity.shortID).behaviour.autoHideVirtualAudio"
 
     /// When true (default), virtual audio devices (Teams, Zoom, BlackHole, etc.)
     /// are automatically hidden on first discovery. The user can re-enable them
@@ -108,7 +107,7 @@ enum VisibilityPreferences {
                 if newValue { try SMAppService.mainApp.register() }
                 else        { try SMAppService.mainApp.unregister() }
             } catch {
-                NSLog("hldm: launch-at-login toggle failed: \(error)")
+                NSLog("\(AppIdentity.name): launch-at-login toggle failed: \(error)")
             }
         }
     }
@@ -125,12 +124,12 @@ enum VisibilityPreferences {
 
     /// Refresh rates (Hz) to expose on the virtual anchor display. Defaults to [60].
     static func virtualRefreshRates(for context: DisplayContext) -> Set<Int> {
-        let key = "hldm.virtual.\(context.rawValue).refreshRates"
+        let key = "\(AppIdentity.shortID).virtual.\(context.rawValue).refreshRates"
         return Set((UserDefaults.standard.array(forKey: key) as? [Int]) ?? [60])
     }
 
     static func setVirtualRefreshRates(_ rates: Set<Int>, for context: DisplayContext) {
-        let key = "hldm.virtual.\(context.rawValue).refreshRates"
+        let key = "\(AppIdentity.shortID).virtual.\(context.rawValue).refreshRates"
         UserDefaults.standard.set(Array(rates), forKey: key)
     }
 
@@ -143,11 +142,11 @@ enum VisibilityPreferences {
 
     /// Default virtual resolution stored as "WIDTHxHEIGHT", e.g. "3840x2160". Nil means no default.
     static func defaultVirtualResolution(for context: DisplayContext) -> String? {
-        UserDefaults.standard.string(forKey: "hldm.virtual.\(context.rawValue).defaultResolution")
+        UserDefaults.standard.string(forKey: "\(AppIdentity.shortID).virtual.\(context.rawValue).defaultResolution")
     }
 
     static func setDefaultVirtualResolution(_ res: String?, for context: DisplayContext) {
-        let key = "hldm.virtual.\(context.rawValue).defaultResolution"
+        let key = "\(AppIdentity.shortID).virtual.\(context.rawValue).defaultResolution"
         if let v = res { UserDefaults.standard.set(v, forKey: key) }
         else { UserDefaults.standard.removeObject(forKey: key) }
     }
@@ -156,17 +155,17 @@ enum VisibilityPreferences {
     /// Stored as "W:H", e.g. "16:9". Defaults to 16:9.
     static var defaultAspectRatio: (w: Int, h: Int) {
         get {
-            let stored = UserDefaults.standard.string(forKey: "hldm.display.aspectRatio") ?? "16:9"
+            let stored = UserDefaults.standard.string(forKey: "\(AppIdentity.shortID).display.aspectRatio") ?? "16:9"
             let parts = stored.split(separator: ":").compactMap { Int($0) }
             guard parts.count == 2, parts[0] > 0, parts[1] > 0 else { return (16, 9) }
             return (parts[0], parts[1])
         }
-        set { UserDefaults.standard.set("\(newValue.w):\(newValue.h)", forKey: "hldm.display.aspectRatio") }
+        set { UserDefaults.standard.set("\(newValue.w):\(newValue.h)", forKey: "\(AppIdentity.shortID).display.aspectRatio") }
     }
 
     // MARK: - Connected (physical) displays
 
-    private static let displayKey = "hldm.hidden.displays"
+    private static let displayKey = "\(AppIdentity.shortID).hidden.displays"
 
     static var hiddenDisplays: Set<String> {
         get { Set(UserDefaults.standard.stringArray(forKey: displayKey) ?? []) }

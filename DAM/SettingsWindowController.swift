@@ -1,6 +1,5 @@
 //
 //  SettingsWindowController.swift
-//  boar
 //
 
 import AppKit
@@ -30,10 +29,10 @@ final class SettingsWindowController: NSWindowController {
     // MARK: - Toolbar identifiers
 
     private enum TabID {
-        static let hotkeys = NSToolbarItem.Identifier("hldm.settings.hotkeys")
-        static let general = NSToolbarItem.Identifier("hldm.settings.general")
-        static let devices = NSToolbarItem.Identifier("hldm.settings.devices")
-        static let virtual = NSToolbarItem.Identifier("hldm.settings.virtual")
+        static let hotkeys = NSToolbarItem.Identifier("\(AppIdentity.shortID).settings.hotkeys")
+        static let general = NSToolbarItem.Identifier("\(AppIdentity.shortID).settings.general")
+        static let devices = NSToolbarItem.Identifier("\(AppIdentity.shortID).settings.devices")
+        static let virtual = NSToolbarItem.Identifier("\(AppIdentity.shortID).settings.virtual")
         static let all: [NSToolbarItem.Identifier] = [general, hotkeys, devices, virtual]
     }
 
@@ -73,7 +72,7 @@ final class SettingsWindowController: NSWindowController {
     private func buildUI() {
         guard let win = window else { return }
 
-        let toolbar = NSToolbar(identifier: "hldm.settings.toolbar")
+        let toolbar = NSToolbar(identifier: "\(AppIdentity.shortID).settings.toolbar")
         toolbar.delegate                = self
         toolbar.displayMode             = .iconAndLabel
         toolbar.allowsUserCustomization = false

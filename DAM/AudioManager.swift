@@ -1,6 +1,5 @@
 //
 //  AudioManager.swift
-//  boar
 //
 
 import CoreAudio

@@ -1,5 +1,5 @@
 import XCTest
-@testable import HLDM
+@testable import DAM
 
 final class ControlStripPresenterTests: XCTestCase {
 

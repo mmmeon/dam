@@ -1,12 +1,12 @@
 import XCTest
 import CoreGraphics
-@testable import HLDM
+@testable import DAM
 
 final class VideoManagerFilterTests: XCTestCase {
 
-    private let airPlayKey      = "hldm.hidden.airplay"
-    private let displayKey      = "hldm.hidden.displays"
-    private let aspectRatioKey  = "hldm.display.aspectRatio"
+    private let airPlayKey      = "\(AppIdentity.shortID).hidden.airplay"
+    private let displayKey      = "\(AppIdentity.shortID).hidden.displays"
+    private let aspectRatioKey  = "\(AppIdentity.shortID).display.aspectRatio"
 
     override func tearDown() {
         super.tearDown()
@@ -171,7 +171,7 @@ final class VideoManagerFilterTests: XCTestCase {
     // MARK: - VideoManager.virtualModes(for:)
 
     func testVirtualModes_alwaysInclude60Hz_sortedByResolutionThenRate() {
-        let key = "hldm.virtual.airplay.refreshRates"
+        let key = "\(AppIdentity.shortID).virtual.airplay.refreshRates"
         let saved = UserDefaults.standard.object(forKey: key)
         defer { UserDefaults.standard.set(saved, forKey: key) }
         VisibilityPreferences.setVirtualRefreshRates([120], for: .airPlay)

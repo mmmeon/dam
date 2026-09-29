@@ -1,6 +1,5 @@
 //
 //  VideoManager.swift
-//  boar
 //
 
 import AppKit
@@ -288,7 +287,7 @@ final class VideoManager: ObservableObject {
             var errors: NSDictionary?
             NSAppleScript(source: src)?.executeAndReturnError(&errors)
             if let errors = errors {
-                NSLog("HLDM: connectAirPlay error: %@", errors.description)
+                NSLog("\(AppIdentity.name): connectAirPlay error: %@", errors.description)
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                 self?.mergeDevices()

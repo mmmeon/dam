@@ -1,6 +1,5 @@
 //
 //  HotkeyPreference.swift
-//  boar
 //
 
 import AppKit
@@ -39,10 +38,10 @@ struct HotkeyPreference: Codable, Equatable {
 
     // MARK: - Persistence
 
-    private static let defaultsKey               = "mmmeon.hldm.hotkey"
-    private static let airPlayConnectDefaultsKey  = "mmmeon.hldm.hotkeyAirPlayConnect"
-    private static let mirrorToggleDefaultsKey    = "mmmeon.hldm.hotkeyMirrorToggle"
-    private static let audioCycleDefaultsKey      = "mmmeon.hldm.hotkeyAudioCycle"
+    private static let defaultsKey               = "\(AppIdentity.bundleID).hotkey"
+    private static let airPlayConnectDefaultsKey  = "\(AppIdentity.bundleID).hotkeyAirPlayConnect"
+    private static let mirrorToggleDefaultsKey    = "\(AppIdentity.bundleID).hotkeyMirrorToggle"
+    private static let audioCycleDefaultsKey      = "\(AppIdentity.bundleID).hotkeyAudioCycle"
 
     static var current: HotkeyPreference {
         get { load(defaultsKey, fallback: .default) }

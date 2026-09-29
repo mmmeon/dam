@@ -1,6 +1,5 @@
 //
 //  AppDelegate.swift
-//  boar
 //
 
 import AppKit

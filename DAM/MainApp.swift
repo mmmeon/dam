@@ -1,12 +1,11 @@
 //
-//  boarApp.swift
-//  boar
+//  MainApp.swift
 //
 
 import SwiftUI
 
 @main
-struct boarApp: App {
+struct MainApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
