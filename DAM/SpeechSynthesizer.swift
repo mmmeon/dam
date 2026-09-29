@@ -1,6 +1,5 @@
 //
 //  SpeechSynthesizer.swift
-//  boar
 //
 //  Uses NSSpeechSynthesizer — the native macOS speech API. AVSpeechSynthesizer
 //  is an iOS API ported to macOS and initialises its audio session synchronously

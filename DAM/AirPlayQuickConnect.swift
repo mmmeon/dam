@@ -1,6 +1,5 @@
 //
 //  AirPlayQuickConnect.swift
-//  boar
 //
 //  A hotkey-triggered HUD that lets the user pick an AirPlay display by
 //  pressing its number (keyboard) or tapping a Touch Bar button, then
@@ -14,10 +13,10 @@ import Carbon.HIToolbox
 // MARK: - Touch Bar identifiers
 
 private extension NSTouchBarItem.Identifier {
-    static let qcCancel = NSTouchBarItem.Identifier("hldm.qc.cancel")
-    static let qcStatus = NSTouchBarItem.Identifier("hldm.qc.status")
+    static let qcCancel = NSTouchBarItem.Identifier("\(AppIdentity.shortID).qc.cancel")
+    static let qcStatus = NSTouchBarItem.Identifier("\(AppIdentity.shortID).qc.status")
     static func qcDisplay(_ i: Int) -> NSTouchBarItem.Identifier {
-        .init("hldm.qc.display.\(i)")
+        .init("\(AppIdentity.shortID).qc.display.\(i)")
     }
 }
 
@@ -354,7 +353,7 @@ extension AirPlayQuickConnect: NSTouchBarDelegate {
         }
 
         // Numbered display button — selecting state
-        let prefix = "hldm.qc.display."
+        let prefix = "\(AppIdentity.shortID).qc.display."
         if identifier.rawValue.hasPrefix(prefix),
            let idx = Int(identifier.rawValue.dropFirst(prefix.count)),
            idx < touchBarDisplays.count {

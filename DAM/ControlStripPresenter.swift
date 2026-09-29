@@ -1,6 +1,5 @@
 //
 //  ControlStripPresenter.swift
-//  boar
 //
 //  Injects a persistent button into the macOS Control Strip (right side of the
 //  Touch Bar) using private DFRFoundation APIs. The button stays visible
@@ -94,14 +93,14 @@ extension NSTouchBar {
 final class ControlStripPresenter: NSObject {
 
     // Stable identifier — the system uses this to remember the button's slot.
-    private static let stripID       = NSTouchBarItem.Identifier("mmmeon.hldm.strip")
-    private static let modalAudioID  = NSTouchBarItem.Identifier("mmmeon.hldm.modal.audio")
-    private static let modalVideoID  = NSTouchBarItem.Identifier("mmmeon.hldm.modal.video")
-    private static let speechStatusID = NSTouchBarItem.Identifier("mmmeon.hldm.speechStatus")
+    private static let stripID       = NSTouchBarItem.Identifier("\(AppIdentity.bundleID).strip")
+    private static let modalAudioID  = NSTouchBarItem.Identifier("\(AppIdentity.bundleID).modal.audio")
+    private static let modalVideoID  = NSTouchBarItem.Identifier("\(AppIdentity.bundleID).modal.video")
+    private static let speechStatusID = NSTouchBarItem.Identifier("\(AppIdentity.bundleID).speechStatus")
 
     // Prefixes for per-display dynamic identifiers.
-    private static let displayPopoverPrefix = "mmmeon.hldm.modal.display."
-    private static let displayResPrefix     = "mmmeon.hldm.modal.res."
+    private static let displayPopoverPrefix = "\(AppIdentity.bundleID).modal.display."
+    private static let displayResPrefix     = "\(AppIdentity.bundleID).modal.res."
 
     private weak var audioManager: AudioManager?
     private weak var videoManager: VideoManager?
@@ -182,7 +181,7 @@ final class ControlStripPresenter: NSObject {
         let stripItem = NSCustomTouchBarItem(identifier: Self.stripID)
         let btn = NSButton(
             image: NSImage(systemSymbolName: "airplayvideo",
-                           accessibilityDescription: "HLDM") ?? NSImage(),
+                           accessibilityDescription: AppIdentity.name) ?? NSImage(),
             target: self,
             action: #selector(openModal)
         )
@@ -448,10 +447,10 @@ final class ControlStripPresenter: NSObject {
                                   modes: [DisplayMode], labels: [String], selected: Int?,
                                   action: Selector) -> NSTouchBarItem {
         let item = NSCustomTouchBarItem(identifier: id)
-        NSLog("HLDM segItem: display='%@' id=%@ cgID=%u selected=%d",
+        NSLog("\(AppIdentity.name) segItem: display='%@' id=%@ cgID=%u selected=%d",
               display.name, id.rawValue, display.cgDisplayID, selected ?? -1)
         for (i, m) in modes.enumerated() {
-            NSLog("HLDM segItem:   modes[%d] %dx%d @%.1fHz virtual=%d ioModeID=%d label='%@'",
+            NSLog("\(AppIdentity.name) segItem:   modes[%d] %dx%d @%.1fHz virtual=%d ioModeID=%d label='%@'",
                   i, m.width, m.height, m.refreshRate, m.isVirtual, m.ioModeID, labels[i])
         }
         guard !modes.isEmpty else {
@@ -552,10 +551,10 @@ final class ControlStripPresenter: NSObject {
 
     @objc private func displayButtonTapped(_ btn: NSButton) {
         guard let display = displayButtonMap[ObjectIdentifier(btn)] else {
-            NSLog("HLDM: displayButtonTapped – display not found in map")
+            NSLog("\(AppIdentity.name): displayButtonTapped – display not found in map")
             return
         }
-        NSLog("HLDM: display '%@' cgDisplayID=%u", display.name, display.cgDisplayID)
+        NSLog("\(AppIdentity.name): display '%@' cgDisplayID=%u", display.name, display.cgDisplayID)
         showDisplayPage(display, .resolutions)
     }
 
@@ -663,7 +662,7 @@ extension ControlStripPresenter: NSTouchBarDelegate {
             let item = NSCustomTouchBarItem(identifier: id)
             let btn = NSButton(
                 image: NSImage(systemSymbolName: "airplayvideo",
-                               accessibilityDescription: "HLDM") ?? NSImage(),
+                               accessibilityDescription: AppIdentity.name) ?? NSImage(),
                 target: self,
                 action: #selector(openModal)
             )

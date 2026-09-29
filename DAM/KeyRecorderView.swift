@@ -1,6 +1,5 @@
 //
 //  KeyRecorderView.swift
-//  boar
 //
 //  Click to enter recording mode, then press the desired key combination.
 //  Escape cancels. At least one modifier key (⌃ ⌥ ⇧ ⌘) is required.

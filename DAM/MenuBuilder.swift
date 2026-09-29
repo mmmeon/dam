@@ -1,6 +1,5 @@
 //
 //  MenuBuilder.swift
-//  boar
 //
 
 import AppKit
@@ -109,7 +108,7 @@ func buildStatusMenu(audio: AudioManager,
                  action: #selector(AppDelegate.refreshAll(_:)),
                  keyEquivalent: "r")
     menu.addItem(.separator())
-    menu.addItem(withTitle: "Quit HLDM",
+    menu.addItem(withTitle: "Quit \(AppIdentity.name)",
                  action: #selector(NSApplication.terminate(_:)),
                  keyEquivalent: "q")
 

@@ -1,6 +1,5 @@
 //
 //  GlobalHotkey.swift
-//  boar
 //
 //  Registers system-wide hotkeys via Carbon's RegisterEventHotKey.
 //  No Accessibility permission required. Supports multiple simultaneous
@@ -71,7 +70,7 @@ final class GlobalHotkey {
 
     private func register(_ pref: HotkeyPreference) {
         if let ref = hotKeyRef { UnregisterEventHotKey(ref); hotKeyRef = nil }
-        let sig  = FourCharCode(0x484C_444D)   // "HLDM"
+        let sig  = AppIdentity.fourCharCode
         let hkID = EventHotKeyID(signature: sig, id: id)
         RegisterEventHotKey(pref.keyCode, pref.modifiers, hkID,
                             GetApplicationEventTarget(), 0, &hotKeyRef)

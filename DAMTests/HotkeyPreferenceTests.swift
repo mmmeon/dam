@@ -1,14 +1,14 @@
 import AppKit
 import Carbon.HIToolbox
 import XCTest
-@testable import HLDM
+@testable import DAM
 
 final class HotkeyPreferenceTests: XCTestCase {
 
-    private let key1 = "mmmeon.hldm.hotkey"
-    private let key2 = "mmmeon.hldm.hotkeyAirPlayConnect"
-    private let key3 = "mmmeon.hldm.hotkeyMirrorToggle"
-    private let key4 = "mmmeon.hldm.hotkeyAudioCycle"
+    private let key1 = "\(AppIdentity.bundleID).hotkey"
+    private let key2 = "\(AppIdentity.bundleID).hotkeyAirPlayConnect"
+    private let key3 = "\(AppIdentity.bundleID).hotkeyMirrorToggle"
+    private let key4 = "\(AppIdentity.bundleID).hotkeyAudioCycle"
 
     override func tearDown() {
         super.tearDown()
