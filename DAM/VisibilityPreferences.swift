@@ -84,6 +84,28 @@ enum VisibilityPreferences {
         set { UserDefaults.standard.set(newValue, forKey: speechEnabledKey) }
     }
 
+    private static let touchBarFeedbackKey = "\(AppIdentity.shortID).behaviour.touchBarFeedback"
+
+    /// When true (default), hotkeys show their feedback on the Touch Bar when one is available.
+    static var touchBarFeedback: Bool {
+        get {
+            let val = UserDefaults.standard.object(forKey: touchBarFeedbackKey)
+            return val == nil ? true : UserDefaults.standard.bool(forKey: touchBarFeedbackKey)
+        }
+        set { UserDefaults.standard.set(newValue, forKey: touchBarFeedbackKey) }
+    }
+
+    private static let screenFeedbackKey = "\(AppIdentity.shortID).behaviour.screenFeedback"
+
+    /// When true (default), hotkeys show their feedback on screen.
+    static var screenFeedback: Bool {
+        get {
+            let val = UserDefaults.standard.object(forKey: screenFeedbackKey)
+            return val == nil ? true : UserDefaults.standard.bool(forKey: screenFeedbackKey)
+        }
+        set { UserDefaults.standard.set(newValue, forKey: screenFeedbackKey) }
+    }
+
     private static let autoHideVirtualAudioKey = "\(AppIdentity.shortID).behaviour.autoHideVirtualAudio"
 
     /// When true (default), virtual audio devices (Teams, Zoom, BlackHole, etc.)

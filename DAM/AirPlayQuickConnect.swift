@@ -223,6 +223,7 @@ final class AirPlayQuickConnect: NSObject {
     private func showSelectingTouchBar(displays: [DisplayInfo]) {
         touchBarDisplays = displays
         dismissTouchBar()
+        guard Feedback.touchBar else { return }
 
         let bar = NSTouchBar()
         bar.delegate = self
@@ -235,6 +236,7 @@ final class AirPlayQuickConnect: NSObject {
 
     private func showConfirmingTouchBar(display: DisplayInfo) {
         dismissTouchBar()
+        guard Feedback.touchBar else { return }
 
         let bar = NSTouchBar()
         bar.delegate = self
@@ -253,6 +255,7 @@ final class AirPlayQuickConnect: NSObject {
     // MARK: - HUD
 
     private func showHUD(_ body: HUDBody, hint: HUDHint) {
+        guard Feedback.screen else { return }
         // Non-activating, so the previous app keeps focus once the HUD closes.
         let p = panel ?? makeHUDPanel(nonactivating: true)
         panel = p
