@@ -131,7 +131,12 @@ Verified: discovery and the empty state on a MacBookPro14,2. Not verified: conne
 - Opening the panel via the extra → device checkbox pressed: 100–190 ms.
 - Press → mirroring actually on: **~10–15 s** (the TV wakes up). A fixed wait shorter
   than that will read "not connected" and, if it presses again, toggle it back off.
-- Press → mirroring off: within 5 s.
+- Press → mirroring off: within 5 s. A reconnect 30 s after a disconnect engaged
+  normally.
+- One miss seen: a press ~6 s after `killall ControlCenter` (the relaunched Control
+  Center's panel listed the device and the checkbox press succeeded, but nothing
+  connected). Not reproduced in normal use; if it shows up after login, the driver
+  should retry the press once when the device stays disconnected.
 - `mergeDevices` 1.5 s after the toggle therefore still shows the old state for a
   connect; the Bonjour/NSScreen merge on the next refresh catches up.
 
