@@ -133,7 +133,7 @@ private func debugMenuItem() -> NSMenuItem {
     submenu.addItem(withTitle: "Preview Connecting HUD",
                     action: #selector(AppDelegate.debugPreviewConnectingHUD(_:)),
                     keyEquivalent: "")
-    submenu.addItem(withTitle: "Preview Caption HUD",
+    submenu.addItem(withTitle: "Play Caption Example",
                     action: #selector(AppDelegate.debugPreviewCaptionHUD(_:)),
                     keyEquivalent: "")
     submenu.addItem(withTitle: "Hide HUD Previews",

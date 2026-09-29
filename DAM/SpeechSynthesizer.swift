@@ -9,7 +9,8 @@
 //  When caption: true (the default) the spoken text is published via
 //  displayText / onDisplayTextChanged so it can be shown as a caption — inline on
 //  the Touch Bar, or on screen without one. The text is cleared automatically:
-//  immediately on stop(), after a short linger on natural finish.
+//  immediately on stop(), after a short linger on natural finish. While captioned text
+//  is spoken, spokenLength / onSpokenLengthChanged track progress word by word.
 //
 
 import AppKit
@@ -28,12 +29,25 @@ final class SpeechSynthesizer {
     /// Called on the main thread whenever displayText changes so the caption can update.
     var onDisplayTextChanged: (() -> Void)?
 
+    /// How many characters (UTF-16) of displayText have been spoken, through the end of the
+    /// word being spoken; nil when displayText isn't being spoken.
+    private(set) var spokenLength: Int?
+
+    /// Called on the main thread whenever spokenLength changes.
+    var onSpokenLengthChanged: (() -> Void)?
+
     private init() {
         synth.delegate = synthDel
         synthDel.didFinish = { [weak self] in
+            guard let self else { return }
+            if let text = self.displayText { self.setSpokenLength(text.utf16.count) }
             // After natural completion keep the text visible briefly so the
             // user can finish reading, then fade it out.
-            self?.scheduleClear(after: 3.5)
+            self.scheduleClear(after: 3.5)
+        }
+        synthDel.willSpeakWord = { [weak self] range in
+            guard let self, self.displayText != nil else { return }
+            self.setSpokenLength(range.location + range.length)
         }
     }
 
@@ -53,6 +67,7 @@ final class SpeechSynthesizer {
         clearTimer?.invalidate()
         if synth.isSpeaking { synth.stopSpeaking() }
         synth.startSpeaking(text)
+        spokenLength = caption ? 0 : nil
         setDisplayText(caption ? text : nil)
     }
 
@@ -62,7 +77,7 @@ final class SpeechSynthesizer {
             speak(text)
         } else {
             stop()
-            setDisplayText(text)
+            setDisplayText(text)   // not spoken: spokenLength stays nil
             scheduleClear(after: 3.5)
         }
     }
@@ -77,9 +92,17 @@ final class SpeechSynthesizer {
 
     // MARK: - Internal
 
+    /// Sets the caption. Clearing it also clears spokenLength.
     private func setDisplayText(_ text: String?) {
+        if text == nil { spokenLength = nil }
         displayText = text
         onDisplayTextChanged?()
+    }
+
+    private func setSpokenLength(_ length: Int) {
+        guard spokenLength != length else { return }
+        spokenLength = length
+        onSpokenLengthChanged?()
     }
 
     private func scheduleClear(after delay: TimeInterval) {
@@ -98,6 +121,15 @@ private final class SynthDelegate: NSObject, NSSpeechSynthesizerDelegate {
     var didFinish: (() -> Void)?
     /// External one-shot callback set by callers via SpeechSynthesizer.onFinish.
     var onFinish: (() -> Void)?
+    /// Fired on the main thread just before each word, with its range in the spoken text.
+    var willSpeakWord: ((NSRange) -> Void)?
+
+    func speechSynthesizer(_ sender: NSSpeechSynthesizer,
+                            willSpeakWord characterRange: NSRange, of string: String) {
+        DispatchQueue.main.async { [weak self] in
+            self?.willSpeakWord?(characterRange)
+        }
+    }
 
     func speechSynthesizer(_ sender: NSSpeechSynthesizer,
                             didFinishSpeaking finishedSpeaking: Bool) {

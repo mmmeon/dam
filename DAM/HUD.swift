@@ -10,27 +10,115 @@ import Carbon.HIToolbox
 
 // MARK: - CaptionHUD
 
-/// On-screen stand-in for the Touch Bar caption on Macs without a Touch Bar: a small
-/// panel near the bottom of the screen under the mouse. It never takes focus or clicks.
+/// On-screen stand-in for the Touch Bar caption on Macs without a Touch Bar: a panel near
+/// the bottom of the screen under the mouse, sized to its text. While the text is spoken,
+/// words light up as they are said. It never takes focus or clicks.
 final class CaptionHUD {
 
     static let shared = CaptionHUD()
 
+    private static let alpha: CGFloat = 0.97
+
     private var panel: HUDPanel?
+    private var view:  CaptionView?
 
     private init() {}
 
-    /// Shows `text`, or hides the caption when nil.
-    func show(_ text: String?) {
+    /// Shows `text`, or fades the caption out when nil. `spoken` is how many characters
+    /// have been spoken so far, or nil when the text isn't being spoken.
+    func show(_ text: String?, spoken: Int?) {
         guard let text else {
-            panel?.orderOut(nil)
+            fadeOut()
             return
         }
         let p = panel ?? makeHUDPanel()
         panel = p
         p.ignoresMouseEvents = true
-        layoutHUD(p, body: .message(text), hint: nil) { frame, _ in frame.minY + frame.height * 0.12 }
+
+        let v = CaptionView(text: text, spoken: spoken)
+        view = v
+        let size = v.fittingSize
+        v.frame = NSRect(origin: .zero, size: size)
+        p.contentView = v
+        p.setContentSize(size)
+        let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) }
+                     ?? NSScreen.main
+        if let frame = screen?.visibleFrame {
+            p.setFrameOrigin(NSPoint(x: frame.midX - size.width / 2,
+                                     y: frame.minY + frame.height * 0.12))
+        }
+
+        if !p.isVisible { p.alphaValue = 0 }
         p.orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.15
+            p.animator().alphaValue = Self.alpha
+        }
+    }
+
+    /// Updates how many characters of the shown text have been spoken.
+    func setSpoken(_ spoken: Int?) {
+        view?.spoken = spoken
+    }
+
+    private func fadeOut() {
+        guard let p = panel, p.isVisible else { return }
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.25
+            p.animator().alphaValue = 0
+        }, completionHandler: {
+            // Unless shown again meanwhile.
+            if p.alphaValue == 0 { p.orderOut(nil) }
+        })
+    }
+}
+
+/// The caption's content: the text, with words not yet spoken dimmed.
+private final class CaptionView: NSVisualEffectView {
+
+    private static let padding:  CGFloat = 12
+    private static let maxWidth: CGFloat = 440
+    private static let font = NSFont.systemFont(ofSize: 17, weight: .medium)
+
+    private let text:  String
+    private let label: NSTextField
+
+    var spoken: Int? { didSet { updateText() } }
+
+    init(text: String, spoken: Int?) {
+        self.text   = text
+        self.spoken = spoken
+        label = NSTextField(wrappingLabelWithString: text)
+        label.preferredMaxLayoutWidth = Self.maxWidth
+        super.init(frame: .zero)
+
+        material     = .hudWindow
+        blendingMode = .behindWindow
+        state        = .active
+
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+        let pad = Self.padding
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: pad),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -pad),
+            label.topAnchor.constraint(equalTo: topAnchor, constant: pad - 2),
+            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -(pad - 2)),
+        ])
+        updateText()
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    private func updateText() {
+        let s = NSMutableAttributedString(string: text, attributes: [
+            .font: Self.font, .foregroundColor: NSColor.labelColor,
+        ])
+        if let spoken, spoken < text.utf16.count {
+            s.addAttribute(.foregroundColor, value: NSColor.tertiaryLabelColor,
+                           range: NSRange(location: spoken, length: text.utf16.count - spoken))
+        }
+        label.attributedStringValue = s
     }
 }
 
@@ -64,8 +152,6 @@ struct HUDHint: Equatable {
 
 /// What a HUD shows above its hint.
 enum HUDBody {
-    /// A single centred message.
-    case message(String)
     /// Choices drawn as grid rows. `numbered` adds a number column, which slides in from the
     /// left when the HUD appears.
     case choices([String], numbered: Bool)
@@ -140,10 +226,6 @@ final class HUDContentView: NSVisualEffectView {
         ])
 
         switch body {
-        case .message(let text):
-            let tf = Self.label(text, size: Self.bodySize, weight: .medium, color: .labelColor,
-                                alignment: .center, width: Self.width - 2 * Self.padding)
-            addSection(Self.padded(tf, vertical: Self.padding))
         case .choices(let names, let numbered):
             for (i, name) in names.enumerated() {
                 if i > 0 {
@@ -250,19 +332,6 @@ final class HUDContentView: NSVisualEffectView {
         }, completionHandler: completion)
     }
 
-    /// Wraps `view` with the standard horizontal padding and `vertical` padding.
-    private static func padded(_ view: NSView, vertical: CGFloat) -> NSView {
-        let box = NSView()
-        view.translatesAutoresizingMaskIntoConstraints = false
-        box.addSubview(view)
-        NSLayoutConstraint.activate([
-            view.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: padding),
-            view.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -padding),
-            view.topAnchor.constraint(equalTo: box.topAnchor, constant: vertical),
-            view.bottomAnchor.constraint(equalTo: box.bottomAnchor, constant: -vertical),
-        ])
-        return box
-    }
 
     fileprivate static func label(_ text: String, size: CGFloat, weight: NSFont.Weight,
                                   color: NSColor, alignment: NSTextAlignment,
