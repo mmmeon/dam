@@ -56,6 +56,24 @@ final class ScreenMirroringPanel {
         panel.start()
     }
 
+    /// Whether Control Center currently shows its Screen Mirroring item in the menu bar,
+    /// as Control Center itself records it. The item is the quick path: one press opens
+    /// the device list. Hidden — Control Center's "Show When Active" default — means the
+    /// slower route through the Screen Mirroring tile inside Control Center.
+    static var isExtraVisible: Bool {
+        CFPreferencesCopyAppValue("NSStatusItem Visible ScreenMirroring" as CFString,
+                                  "com.apple.controlcenter" as CFString) as? Bool ?? false
+    }
+
+    /// Opens Control Center's settings, where Screen Mirroring can be set to "Always
+    /// Show in Menu Bar". Control Center only reads that setting itself, so the app
+    /// cannot change it directly.
+    static func openControlCenterSettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.ControlCenter-Settings.extension")
+        else { return }
+        NSWorkspace.shared.open(url)
+    }
+
     /// The row's identifier (or its title, when it has none) ends with the device name.
     /// Each device also has a disclosure triangle with the same identifier, which only
     /// expands the device's options, so that role is skipped.
