@@ -87,7 +87,7 @@ nothing checks the caller. That's why it works with ordinary signing and no enti
 | MediaRemote routing | Wraps the same `AVOutputContext`; same daemon check. |
 | Public `AVRoutePickerView` / `AVPlayer` external playback | Routes *the app's media* to an Apple TV via URL handoff. LAN-only is fine (TV fetches the URL from the Mac; use the `.local` hostname; macOS firewall will prompt). `file://` assets are served by AVPlayer's internal HTTP server. Cannot mirror the desktop: no `AVSampleBufferDisplayLayer` / generated frames. Screen → HLS → handoff is possible but multi-second latency, mirror-only, no input. |
 | `AVRouteDetector` (public) | Only `multipleRoutesDetected` bool, scoped to the app's player. No names. |
-| CoreAudio | AirPlay **speakers** are public output devices (`kAudioDeviceTransportTypeAirPlay` = `'airp'`). Audio only; clean if ever wanted. |
+| CoreAudio | **Dead end on Ventura.** `kAudioDeviceTransportTypeAirPlay` (`'airp'`) exists, but AirPlay receivers are *not* listed by the HAL: with the "tv" on the network — and while mirroring to it — `kAudioHardwarePropertyDevices` returned only Built-in, DisplayPort and a virtual device. Sound settings lists AirPlay speakers through the private audio routing context (`sharedSystemAudioContext`, nil for us — same wall). Selecting an AirPlay speaker would need the same Accessibility route through Control Center's Sound panel. |
 | Shortcuts | No screen-mirroring action on macOS 13 (audio "Set Playback Destination" is iOS-only). |
 | Own AirPlay sender | Mirroring to a real Apple TV needs FairPlay pairing; no open-source sender does it. OSS projects are receivers. |
 | CLI / `defaults` / URL scheme | Nothing initiates a connection. `"NSStatusItem Visible ScreenMirroring"` in `com.apple.controlcenter` only shows/hides the menu-bar extra (which is DAM's fast path). |
@@ -105,10 +105,35 @@ nothing checks the caller. That's why it works with ordinary signing and no enti
    of fixed `delay`s. Gotcha found on the way: Control Center keeps a window open even
    when nothing is showing, so "wait for a window" is wrong — each step searches every
    window for the thing it needs (tile, device checkbox) instead.
-3. Not done: detect when the Screen Mirroring menu-bar extra is hidden and offer to
-   enable it (the extra is a shorter, more reliable path than the Control Center tile).
-   The tile path is implemented (first action on the tile, as before) but was not
-   exercised in testing — the extra was visible.
+3. **Done**: `ScreenMirroringPanel.isExtraVisible` reads Control Center's own record
+   (`NSStatusItem Visible ScreenMirroring` in `com.apple.controlcenter`); the app
+   offers once at launch to open Control Center settings ("Always Show in Menu Bar"),
+   with "Don't Ask Again" remembered, and General › System shows the state with the
+   same shortcut. The app cannot flip the setting itself: writing that key does nothing
+   live, and Control Center rewrites it from its own setting on relaunch
+   (`killall ControlCenter` → key back to 1). The tile path (first action on the
+   Screen Mirroring tile inside Control Center) is implemented as before but still not
+   exercised — the extra is set to always show here and only System Settings can
+   change that.
+
+## Sidecar (done)
+
+`SidecarManager.swift` loads `SidecarCore` at run time: `SidecarDisplayManager`
+(`+isSupported`, `+sharedManager`, `devices`, `recentDevices`, `connectedDevices`,
+`connectToDevice:completion:`, `disconnectFromDevice:completion:`) and `SidecarDevice`
+(`identifier`, `name`, `model`, `status`, `localizedDeviceType`). No entitlement is
+checked — `isSupported` is true and the lists come back for a plainly signed process.
+Verified: discovery and the empty state on a MacBookPro14,2. Not verified: connecting
+(no iPad nearby); the completion block is assumed to be `void (^)(NSError *)`.
+
+## Timing observed (Ventura 13.7.8, "tv")
+
+- Opening the panel via the extra → device checkbox pressed: 100–190 ms.
+- Press → mirroring actually on: **~10–15 s** (the TV wakes up). A fixed wait shorter
+  than that will read "not connected" and, if it presses again, toggle it back off.
+- Press → mirroring off: within 5 s.
+- `mergeDevices` 1.5 s after the toggle therefore still shows the old state for a
+  connect; the Bonjour/NSScreen merge on the next refresh catches up.
 
 ## Scratch tooling used
 
