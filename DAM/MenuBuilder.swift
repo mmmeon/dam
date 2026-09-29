@@ -6,6 +6,7 @@ import AppKit
 
 func buildStatusMenu(audio: AudioManager,
                      video: VideoManager,
+                     sidecar: SidecarManager,
                      onRefresh: @escaping () -> Void) -> NSMenu {
     let menu = NSMenu()
 
@@ -65,6 +66,26 @@ func buildStatusMenu(audio: AudioManager,
             }
 
             menu.addItem(item)
+        }
+    }
+
+    // — Sidecar section — only on Macs that support it
+    if sidecar.isSupported {
+        menu.addItem(.separator())
+        menu.addItem(sectionHeader("Sidecar"))
+        if sidecar.devices.isEmpty {
+            menu.addItem(disabledItem("No iPads nearby"))
+        } else {
+            for device in sidecar.devices {
+                let item = NSMenuItem(
+                    title: device.name,
+                    action: #selector(AppDelegate.selectSidecarDevice(_:)),
+                    keyEquivalent: ""
+                )
+                item.representedObject = device
+                item.state = device.isConnected ? .on : .off
+                menu.addItem(item)
+            }
         }
     }
 
