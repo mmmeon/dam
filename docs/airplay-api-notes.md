@@ -128,7 +128,8 @@ Verified: discovery and the empty state on a MacBookPro14,2. Not verified: conne
 
 ## Timing observed (Ventura 13.7.8, "tv")
 
-- Opening the panel via the extra → device checkbox pressed: 100–190 ms.
+- Opening the panel via the extra → device checkbox pressed: 100–190 ms; via the
+  Control Center tile: 1–1.6 s.
 - Press → mirroring actually on: **~10–15 s** (the TV wakes up). A fixed wait shorter
   than that will read "not connected" and, if it presses again, toggle it back off.
 - Press → mirroring off: within 5 s. A reconnect 30 s after a disconnect engaged
