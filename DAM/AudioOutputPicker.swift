@@ -30,7 +30,7 @@ final class AudioOutputPicker: NSObject {
     static let shared = AudioOutputPicker()
 
     /// How long after the last hotkey press the tinted output is picked.
-    private static let pickDelay: TimeInterval = 1.5
+    private static let pickDelay: TimeInterval = 2.0
 
     private weak var audioManager: AudioManager?
     private var devices: [AudioDevice] = []
