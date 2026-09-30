@@ -77,6 +77,8 @@ struct DisplayInfo: Identifiable, Hashable {
     let isMirroring: Bool
     /// True for the Mac's own built-in panel.
     let isBuiltIn: Bool
+    /// True for the main display: the one with the menu bar, at the origin.
+    var isMain: Bool = false
 }
 
 struct ResolutionSelection: Hashable {
@@ -396,6 +398,70 @@ final class VideoManager: ObservableObject {
         }) { completion?($0) }
     }
 
+    // MARK: - Main display
+
+    /// Whether `display` can be made the main display: it shows its own desktop, on its
+    /// own or through an anchor, and another display does too.
+    func canBeMain(_ display: DisplayInfo) -> Bool {
+        guard display.cgDisplayID != 0, userMirrorMaster(of: display.cgDisplayID) == nil else { return false }
+        let independent = DisplayArrangement.onlineDisplayIDs().filter { CGDisplayMirrorsDisplay($0) == 0 }
+        return independent.count >= 2
+    }
+
+    /// The displays that can be made main, as listed: built-in, externals, then AirPlay.
+    func mainDisplayCandidates() -> [DisplayInfo] {
+        (connectedDisplays + airPlayDevices).filter { canBeMain($0) }
+    }
+
+    /// Makes `display` the main display (menu bar, Dock, window origin) by sliding the whole
+    /// arrangement so its top-left corner is the origin. A display driven by an anchor is
+    /// positioned through the anchor, which owns its set's origin, and the arrangement each
+    /// anchor will restore on release is re-based on the display too, so the change outlives it.
+    func setMainDisplay(_ display: DisplayInfo, completion: ((Result<Void, MirrorError>) -> Void)? = nil) {
+        guard display.cgDisplayID != 0 else { completion?(.failure(.notConnected)); return }
+        let master = CGDisplayMirrorsDisplay(display.cgDisplayID)
+        let mainID = master != CGDirectDisplayID(0) ? master : display.cgDisplayID
+        // An anchor's default layout can have made the display main already; the captured
+        // arrangements still need re-basing, or releasing the anchor would undo it.
+        let rebase = { [weak self] in
+            guard let self else { return }
+            for (name, arrangement) in self.virtualAnchorArrangements {
+                self.virtualAnchorArrangements[name] = arrangement.makingMain(display.cgDisplayID)
+            }
+        }
+        guard CGDisplayIsMain(mainID) == 0 else { rebase(); completion?(.success(())); return }
+        let online  = DisplayArrangement.onlineDisplayIDs()
+        let bounds  = Dictionary(uniqueKeysWithValues: online.map { ($0, CGDisplayBounds($0)) })
+        let slaves  = Set(online.filter { CGDisplayMirrorsDisplay($0) != CGDirectDisplayID(0) })
+        let origins = Self.origins(makingMain: mainID, bounds: bounds, slaves: slaves)
+        guard !origins.isEmpty else { completion?(.failure(.notConnected)); return }
+        mirrorLog.debug("setMainDisplay: \(mainID) for '\(display.name)'")
+        commitDisplayChange({ cfg in
+            for (id, origin) in origins {
+                CGConfigureDisplayOrigin(cfg, id, Int32(origin.x), Int32(origin.y))
+            }
+        }) { result in
+            if case .failure(let error) = result {
+                mirrorLog.error("setMainDisplay '\(display.name)': \(String(describing: error))")
+            } else {
+                rebase()
+            }
+            completion?(result)
+        }
+    }
+
+    /// The origin every display that shows its own desktop gets so that `main` sits at the
+    /// origin and the arrangement keeps its shape. Mirror slaves follow their master.
+    static func origins(makingMain main: CGDirectDisplayID, bounds: [CGDirectDisplayID: CGRect],
+                        slaves: Set<CGDirectDisplayID>) -> [CGDirectDisplayID: CGPoint] {
+        guard let shift = bounds[main]?.origin else { return [:] }
+        var origins: [CGDirectDisplayID: CGPoint] = [:]
+        for (id, rect) in bounds where !slaves.contains(id) {
+            origins[id] = CGPoint(x: rect.origin.x - shift.x, y: rect.origin.y - shift.y)
+        }
+        return origins
+    }
+
     /// Applies a "Mirror on" pick: a target already mirroring the display is taken out of
     /// the set, another is brought in alongside the current slaves, and no target means
     /// every other display.
@@ -699,7 +765,8 @@ final class VideoManager: ObservableObject {
             }
             return DisplayInfo(id: name, name: name,
                                isConnected: true, cgDisplayID: cgID,
-                               isMirroring: userMirrorMaster(of: cgID) != nil, isBuiltIn: false)
+                               isMirroring: userMirrorMaster(of: cgID) != nil, isBuiltIn: false,
+                               isMain: CGDisplayIsMain(cgID) != 0)
         }
 
         // Physical: all online displays not in the Bonjour list.
@@ -721,7 +788,8 @@ final class VideoManager: ObservableObject {
                                         isConnected: isConnected,
                                         cgDisplayID: cgID,
                                         isMirroring: userMirrorMaster(of: cgID) != nil,
-                                        isBuiltIn: isBuiltIn))
+                                        isBuiltIn: isBuiltIn,
+                                        isMain: CGDisplayIsMain(cgID) != 0))
         }
         // Built-in first, then external sorted by name.
         let newPhysical = physical.sorted { l, r in
