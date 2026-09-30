@@ -109,3 +109,58 @@ final class MirrorPlanTests: XCTestCase {
         XCTAssertTrue(result.isEmpty)
     }
 }
+
+/// The arrangement a change of main display produces.
+final class MainDisplayTests: XCTestCase {
+
+    private let a: CGDirectDisplayID = 1, b: CGDirectDisplayID = 2, c: CGDirectDisplayID = 3
+
+    func testOrigins_slideEveryDisplaySoTheMainOneIsAtTheOrigin() {
+        let bounds: [CGDirectDisplayID: CGRect] = [
+            a: CGRect(x: 0, y: 0, width: 1920, height: 1080),
+            b: CGRect(x: 1920, y: -200, width: 2560, height: 1440),
+        ]
+        let origins = VideoManager.origins(makingMain: b, bounds: bounds, slaves: [])
+        XCTAssertEqual(origins[b], .zero)
+        XCTAssertEqual(origins[a], CGPoint(x: -1920, y: 200))
+    }
+
+    func testOrigins_leaveMirrorSlavesToTheirMaster() {
+        let bounds: [CGDirectDisplayID: CGRect] = [
+            a: CGRect(x: 0, y: 0, width: 1920, height: 1080),
+            b: CGRect(x: 1920, y: 0, width: 1920, height: 1080),
+            c: CGRect(x: 1920, y: 0, width: 1920, height: 1080),
+        ]
+        let origins = VideoManager.origins(makingMain: b, bounds: bounds, slaves: [c])
+        XCTAssertEqual(Set(origins.keys), [a, b])
+        XCTAssertEqual(origins[a], CGPoint(x: -1920, y: 0))
+    }
+
+    func testOrigins_unknownMain_changesNothing() {
+        let bounds: [CGDirectDisplayID: CGRect] = [a: CGRect(x: 0, y: 0, width: 1920, height: 1080)]
+        XCTAssertTrue(VideoManager.origins(makingMain: c, bounds: bounds, slaves: []).isEmpty)
+    }
+}
+
+/// Re-basing a captured arrangement on a new main display.
+final class ArrangementMainTests: XCTestCase {
+
+    func testMakingMain_rebasesOnTheDisplaysCapturedOrigin() {
+        let captured = DisplayArrangement(origins: [1: .zero, 2: CGPoint(x: 1920, y: 0)],
+                                          mirrorMasters: [1: 0, 2: 0])
+        let rebased = captured.makingMain(2)
+        XCTAssertEqual(rebased.origins[2], .zero)
+        XCTAssertEqual(rebased.origins[1], CGPoint(x: -1920, y: 0))
+    }
+
+    func testMakingMain_slaveUsesItsMastersOrigin() {
+        let captured = DisplayArrangement(origins: [1: .zero, 2: CGPoint(x: 1920, y: 0), 3: CGPoint(x: 1920, y: 0)],
+                                          mirrorMasters: [1: 0, 2: 0, 3: 2])
+        XCTAssertEqual(captured.makingMain(3).origins[1], CGPoint(x: -1920, y: 0))
+    }
+
+    func testMakingMain_unknownDisplay_isUnchanged() {
+        let captured = DisplayArrangement(origins: [1: .zero], mirrorMasters: [1: 0])
+        XCTAssertEqual(captured.makingMain(9).origins, captured.origins)
+    }
+}

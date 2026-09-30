@@ -62,6 +62,7 @@ func buildStatusMenu(audio: AudioManager,
                         submenu.addItem(optimizeItem(for: display))
                     }
                 }
+                if let item = mainDisplayItem(for: display, video: video) { submenu.addItem(item) }
                 submenu.addItem(disconnectItem(for: display))
                 item.submenu = submenu
             }
@@ -115,6 +116,7 @@ func buildStatusMenu(audio: AudioManager,
                     submenu.addItem(.separator())
                     addMirrorItems(to: submenu, for: display, video: video)
                 }
+                if let item = mainDisplayItem(for: display, video: video) { submenu.addItem(item) }
                 item.submenu = submenu
             } else {
                 item.submenu = buildResolutionSubmenu(display: display, video: video)
@@ -155,6 +157,9 @@ private func debugMenuItem() -> NSMenuItem {
                     keyEquivalent: "")
     submenu.addItem(withTitle: "Play Mirror Picker",
                     action: #selector(AppDelegate.debugPlayMirrorPicker(_:)),
+                    keyEquivalent: "")
+    submenu.addItem(withTitle: "Play Main Display Picker",
+                    action: #selector(AppDelegate.debugPlayMainDisplayPicker(_:)),
                     keyEquivalent: "")
     submenu.addItem(withTitle: "Preview Connecting HUD",
                     action: #selector(AppDelegate.debugPreviewConnectingHUD(_:)),
@@ -319,6 +324,18 @@ private func addMirrorItems(to submenu: NSMenu, for display: DisplayInfo, video:
     let parent = NSMenuItem(title: "Mirror on", action: nil, keyEquivalent: "")
     parent.submenu = mirrorOn
     submenu.addItem(parent)
+}
+
+/// "Use as Main Display", checked while the display is the main one; nil when it cannot be
+/// (it mirrors another display, or nothing else shows its own desktop).
+private func mainDisplayItem(for display: DisplayInfo, video: VideoManager) -> NSMenuItem? {
+    guard video.canBeMain(display) else { return nil }
+    let item = NSMenuItem(title: "Use as Main Display",
+                          action: #selector(AppDelegate.useAsMainDisplay(_:)),
+                          keyEquivalent: "")
+    item.representedObject = display
+    item.state = display.isMain ? .on : .off
+    return item
 }
 
 private func mirrorToggleItem(for display: DisplayInfo, isMirroring: Bool) -> NSMenuItem {

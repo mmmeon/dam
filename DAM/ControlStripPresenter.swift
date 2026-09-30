@@ -407,6 +407,7 @@ final class ControlStripPresenter: NSObject {
         let isAirPlay    = videoManager?.allAirPlayDevices.contains(where: { $0.id == display.id }) ?? false
         let mirrorID     = NSTouchBarItem.Identifier(Self.displayResPrefix + display.id + ".mirror")
         let mirrorOnID   = NSTouchBarItem.Identifier(Self.displayResPrefix + display.id + ".mirroron")
+        let mainID       = NSTouchBarItem.Identifier(Self.displayResPrefix + display.id + ".main")
         let optimizeID   = NSTouchBarItem.Identifier(Self.displayResPrefix + display.id + ".optimize")
         let disconnectID = NSTouchBarItem.Identifier(Self.displayResPrefix + display.id + ".disconnect")
         let resID        = NSTouchBarItem.Identifier(Self.displayResPrefix + display.id)
@@ -420,6 +421,7 @@ final class ControlStripPresenter: NSObject {
         // page, with "Extend" alongside while this display has slaves.
         if !targets.isEmpty && (inSet || targets.count == 1) { ids.append(mirrorID) }
         if targets.count >= 2 && !display.isMirroring { ids.append(mirrorOnID) }
+        if videoManager?.canBeMain(display) ?? false { ids.append(mainID) }
         // Mirrors the menu: when AirPlay is the slave, offer promoting it to master
         // without leaving mirror mode.
         if allActive.count >= 2 && isAirPlay && display.isMirroring { ids.append(optimizeID) }
@@ -686,6 +688,17 @@ final class ControlStripPresenter: NSObject {
         }
     }
 
+    @objc private func mainTapped(_ btn: NSButton) {
+        guard let display = tappedDisplay(btn) else { return }
+        // Re-present the modal once the arrangement has settled so the tint refreshes.
+        videoManager?.setMainDisplay(display) { [weak self] result in
+            if case .failure(let error) = result {
+                SpeechSynthesizer.shared.announce(error.localizedDescription)
+            }
+            self?.openModal()
+        }
+    }
+
     @objc private func mirrorOnTapped(_ btn: NSButton) {
         guard let display = tappedDisplay(btn) else { return }
         showDisplayPage(display, .mirrorTargets)
@@ -830,6 +843,12 @@ extension ControlStripPresenter: NSTouchBarDelegate {
             case ".mirroron":
                 return displayActionItem(id: id, title: "Mirror…", display: display,
                                          action: #selector(mirrorOnTapped(_:)))
+            case ".main":
+                // "Main", tinted while this is the main display.
+                let item = displayActionItem(id: id, title: "Main", display: display,
+                                             action: #selector(mainTapped(_:)))
+                (item.view as? NSButton)?.bezelColor = display.isMain ? .controlAccentColor : nil
+                return item
             case ".optimize":
                 // "Optimize for this Display" (AirPlay mirror slave only).
                 return displayActionItem(id: id, title: "Optimize", display: display,

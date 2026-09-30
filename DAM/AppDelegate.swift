@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var airPlayConnectHotkey: GlobalHotkey!
     private var mirrorToggleHotkey: GlobalHotkey!
     private var audioCycleHotkey: GlobalHotkey!
+    private var mainDisplayHotkey: GlobalHotkey!
     private var settingsWindow: SettingsWindowController?
     private var cancellables = Set<AnyCancellable>()
 
@@ -36,6 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AirPlayQuickConnect.shared.configure(videoManager: videoManager)
         AudioOutputPicker.shared.configure(audioManager: audioManager)
         MirrorPicker.shared.configure(videoManager: videoManager)
+        MainDisplayPicker.shared.configure(videoManager: videoManager)
         hotkey = GlobalHotkey(preference: HotkeyPreference.current) { [weak self] in
             self?.openSwitcher()
         }
@@ -47,6 +49,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         audioCycleHotkey = GlobalHotkey(preference: HotkeyPreference.currentAudioCycle) {
             AudioOutputPicker.shared.advance()
+        }
+        mainDisplayHotkey = GlobalHotkey(preference: HotkeyPreference.currentMainDisplay) {
+            MainDisplayPicker.shared.advance()
         }
 
         redirectSwiftUISettingsWindow()
@@ -65,8 +70,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #if DEBUG
         // `-DAMDebugHUD YES` on launch shows the quick-connect HUD preview; `connecting`
         // shows the connecting HUD instead, `select` plays the select animation, `audio`
-        // plays the audio output picker, `mirror` the mirror picker, `caption` announces an
-        // example message, and
+        // plays the audio output picker, `mirror` the mirror picker, `main` the main display
+        // picker, `caption` announces an example message, and
         // `switcher` and `airplay` act as their hotkeys do; `connect-airplay` connects the
         // first available AirPlay display without the HUD, and `disconnect-airplay`
         // disconnects the connected one.
@@ -76,6 +81,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case "select":     debugPlaySelectAnimation(nil)
             case "audio":      debugPlayAudioPicker(nil)
             case "mirror":     debugPlayMirrorPicker(nil)
+            case "main":       debugPlayMainDisplayPicker(nil)
             case "caption":    debugPreviewCaptionHUD(nil)
             case "switcher":   DispatchQueue.main.async { self.openSwitcher() }
             case "airplay":    // after discovery has had time to find displays
@@ -233,6 +239,10 @@ extension AppDelegate: NSMenuDelegate {
         MirrorPicker.shared.playDebugPreview()
     }
 
+    @objc func debugPlayMainDisplayPicker(_ sender: Any?) {
+        MainDisplayPicker.shared.playDebugPreview()
+    }
+
     @objc func debugPreviewConnectingHUD(_ sender: Any?) {
         AirPlayQuickConnect.shared.showDebugPreview(connecting: true)
     }
@@ -274,6 +284,7 @@ extension AppDelegate: NSMenuDelegate {
             currentAirPlayConnect: HotkeyPreference.currentAirPlayConnect,
             currentMirrorToggle: HotkeyPreference.currentMirrorToggle,
             currentAudioCycle: HotkeyPreference.currentAudioCycle,
+            currentMainDisplay: HotkeyPreference.currentMainDisplay,
             audioManager: audioManager,
             videoManager: videoManager
         )
@@ -299,6 +310,12 @@ extension AppDelegate: NSMenuDelegate {
             HotkeyPreference.currentAudioCycle = pref
             self?.audioCycleHotkey = GlobalHotkey(preference: pref) {
                 AudioOutputPicker.shared.advance()
+            }
+        }
+        wc.onSaveMainDisplay = { [weak self] pref in
+            HotkeyPreference.currentMainDisplay = pref
+            self?.mainDisplayHotkey = GlobalHotkey(preference: pref) {
+                MainDisplayPicker.shared.advance()
             }
         }
         wc.onRebuild = { [weak self] in self?.rebuild() }
@@ -337,6 +354,16 @@ extension AppDelegate: NSMenuDelegate {
     @objc func mirrorOnDisplay(_ sender: NSMenuItem) {
         guard let selection = sender.representedObject as? MirrorSelection else { return }
         videoManager.applyMirrorSelection(selection) { [weak self] result in
+            if case .failure(let error) = result {
+                SpeechSynthesizer.shared.announce(error.localizedDescription)
+            }
+            self?.rebuild()
+        }
+    }
+
+    @objc func useAsMainDisplay(_ sender: NSMenuItem) {
+        guard let display = sender.representedObject as? DisplayInfo else { return }
+        videoManager.setMainDisplay(display) { [weak self] result in
             if case .failure(let error) = result {
                 SpeechSynthesizer.shared.announce(error.localizedDescription)
             }

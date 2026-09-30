@@ -32,6 +32,15 @@ struct DisplayArrangement {
         return DisplayArrangement(origins: origins, mirrorMasters: masters)
     }
 
+    /// The same arrangement with display `id` (or, if it was a mirror slave, its master) at
+    /// the origin, so that restoring it keeps a change of main display made meanwhile.
+    func makingMain(_ id: CGDirectDisplayID) -> DisplayArrangement {
+        let master = mirrorMasters[id] ?? 0
+        guard let origin = origins[master != 0 ? master : id] else { return self }
+        return DisplayArrangement(origins: origins.mapValues { CGPoint(x: $0.x - origin.x, y: $0.y - origin.y) },
+                                  mirrorMasters: mirrorMasters)
+    }
+
     static func onlineDisplayIDs() -> [CGDirectDisplayID] {
         var count: CGDisplayCount = 0
         CGGetOnlineDisplayList(0, nil, &count)
@@ -51,11 +60,40 @@ struct DisplayArrangement {
                 CGConfigureDisplayMirrorOfDisplay(cfg, id, master)
             }
         }
+        restoreOrigins(in: cfg, excluding: excluded)
+    }
+
+    /// Queues changes on `cfg` returning every still-online display that showed its own
+    /// desktop — other than those in `excluded` — to its captured position. Returns whether
+    /// any display was out of place.
+    @discardableResult
+    func restoreOrigins(in cfg: CGDisplayConfigRef, excluding excluded: Set<CGDirectDisplayID>) -> Bool {
+        let online = Set(Self.onlineDisplayIDs())
+        var moved = false
         for (id, origin) in origins
         where online.contains(id) && !excluded.contains(id) && mirrorMasters[id] == 0
             && CGDisplayBounds(id).origin != origin {
             vdLog.debug("restore: display \(id) origin \(CGDisplayBounds(id).origin.debugDescription) → \(origin.debugDescription)")
             CGConfigureDisplayOrigin(cfg, id, Int32(origin.x), Int32(origin.y))
+            moved = true
+        }
+        return moved
+    }
+
+    /// Puts the captured positions back once more, permanently, after the display set has
+    /// changed. Releasing an anchor shrinks the set, and WindowServer then applies the layout
+    /// it last saved for that smaller set, which can undo a main display chosen meanwhile.
+    func reapplyOriginsPermanently() {
+        var config: CGDisplayConfigRef?
+        guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else { return }
+        guard restoreOrigins(in: cfg, excluding: []) else {
+            CGCancelDisplayConfiguration(cfg)
+            return
+        }
+        vdLog.debug("reapply: positions differ from the captured arrangement; committing them")
+        DispatchQueue.global(qos: .userInitiated).async {
+            let err = CGCompleteDisplayConfiguration(cfg, .permanently)
+            vdLog.debug("reapply: CompleteDisplayConfiguration err=\(err.rawValue)")
         }
     }
 }
@@ -420,6 +458,12 @@ extension VideoManager {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
                     self?.mergeDevices()
                     completion?()
+                }
+                // Once the set has settled without the anchor, put the positions back if
+                // WindowServer's saved layout for that set moved them.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                    arrangement?.reapplyOriginsPermanently()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self?.mergeDevices() }
                 }
             }
         }

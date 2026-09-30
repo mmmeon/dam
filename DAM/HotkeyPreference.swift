@@ -36,12 +36,19 @@ struct HotkeyPreference: Codable, Equatable {
         modifiers: UInt32(controlKey | optionKey | cmdKey)
     )
 
+    /// Default shortcut for choosing the main display (⌃⌥⌘D).
+    static let defaultMainDisplay = HotkeyPreference(
+        keyCode:   UInt32(kVK_ANSI_D),
+        modifiers: UInt32(controlKey | optionKey | cmdKey)
+    )
+
     // MARK: - Persistence
 
     private static let defaultsKey               = "\(AppIdentity.bundleID).hotkey"
     private static let airPlayConnectDefaultsKey  = "\(AppIdentity.bundleID).hotkeyAirPlayConnect"
     private static let mirrorToggleDefaultsKey    = "\(AppIdentity.bundleID).hotkeyMirrorToggle"
     private static let audioCycleDefaultsKey      = "\(AppIdentity.bundleID).hotkeyAudioCycle"
+    private static let mainDisplayDefaultsKey     = "\(AppIdentity.bundleID).hotkeyMainDisplay"
 
     static var current: HotkeyPreference {
         get { load(defaultsKey, fallback: .default) }
@@ -61,6 +68,11 @@ struct HotkeyPreference: Codable, Equatable {
     static var currentAudioCycle: HotkeyPreference {
         get { load(audioCycleDefaultsKey, fallback: .defaultAudioCycle) }
         set { store(newValue, audioCycleDefaultsKey) }
+    }
+
+    static var currentMainDisplay: HotkeyPreference {
+        get { load(mainDisplayDefaultsKey, fallback: .defaultMainDisplay) }
+        set { store(newValue, mainDisplayDefaultsKey) }
     }
 
     private static func load(_ key: String, fallback: HotkeyPreference) -> HotkeyPreference {

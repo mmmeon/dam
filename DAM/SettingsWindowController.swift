@@ -10,6 +10,7 @@ final class SettingsWindowController: NSWindowController {
     private let recorderAirPlay: KeyRecorderView
     private let recorderMirrorToggle: KeyRecorderView
     private let recorderAudioCycle: KeyRecorderView
+    private let recorderMainDisplay: KeyRecorderView
     private let audioManager: AudioManager
     private let videoManager: VideoManager
 
@@ -17,6 +18,7 @@ final class SettingsWindowController: NSWindowController {
     var onSaveAirPlayConnect: ((HotkeyPreference) -> Void)?
     var onSaveMirrorToggle: ((HotkeyPreference) -> Void)?
     var onSaveAudioCycle: ((HotkeyPreference) -> Void)?
+    var onSaveMainDisplay: ((HotkeyPreference) -> Void)?
     /// Called whenever a visibility checkbox is toggled so the menu/Touch Bar rebuild.
     var onRebuild: (() -> Void)?
 
@@ -42,12 +44,14 @@ final class SettingsWindowController: NSWindowController {
          currentAirPlayConnect: HotkeyPreference,
          currentMirrorToggle: HotkeyPreference,
          currentAudioCycle: HotkeyPreference,
+         currentMainDisplay: HotkeyPreference,
          audioManager: AudioManager,
          videoManager: VideoManager) {
         recorder              = KeyRecorderView(preference: current)
         recorderAirPlay       = KeyRecorderView(preference: currentAirPlayConnect)
         recorderMirrorToggle  = KeyRecorderView(preference: currentMirrorToggle)
         recorderAudioCycle    = KeyRecorderView(preference: currentAudioCycle)
+        recorderMainDisplay   = KeyRecorderView(preference: currentMainDisplay)
         self.audioManager     = audioManager
         self.videoManager     = videoManager
 
@@ -140,6 +144,7 @@ final class SettingsWindowController: NSWindowController {
         recorderAirPlay.onChanged      = { [weak self] pref in self?.onSaveAirPlayConnect?(pref) }
         recorderMirrorToggle.onChanged = { [weak self] pref in self?.onSaveMirrorToggle?(pref) }
         recorderAudioCycle.onChanged   = { [weak self] pref in self?.onSaveAudioCycle?(pref) }
+        recorderMainDisplay.onChanged  = { [weak self] pref in self?.onSaveMainDisplay?(pref) }
 
         return formTab([
             ("Switcher:", [hotkeyRow(
@@ -151,10 +156,14 @@ final class SettingsWindowController: NSWindowController {
                 help: "Connects to an AirPlay display from any application.")]),
             ("Mirror / Extend:", [hotkeyRow(
                 recorderMirrorToggle, reset: #selector(resetMirrorToggleToDefault),
-                help: "Toggles the connected AirPlay display between mirror and extend mode.")]),
+                help: "Picks where the connected AirPlay display is mirrored: nowhere, " +
+                      "on one of the other displays, or on all of them.")]),
             ("Cycle Audio:", [hotkeyRow(
                 recorderAudioCycle, reset: #selector(resetAudioCycleToDefault),
-                help: "Switches to the next audio output checked on the Devices tab.")]),
+                help: "Picks an audio output among those checked on the Devices tab.")]),
+            ("Main Display:", [hotkeyRow(
+                recorderMainDisplay, reset: #selector(resetMainDisplayToDefault),
+                help: "Picks the display that has the menu bar.")]),
         ])
     }
 
@@ -296,6 +305,12 @@ final class SettingsWindowController: NSWindowController {
         let pref = HotkeyPreference.defaultAudioCycle
         recorderAudioCycle.preference = pref
         onSaveAudioCycle?(pref)
+    }
+
+    @objc private func resetMainDisplayToDefault() {
+        let pref = HotkeyPreference.defaultMainDisplay
+        recorderMainDisplay.preference = pref
+        onSaveMainDisplay?(pref)
     }
 
     // MARK: - Layout helpers
