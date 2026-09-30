@@ -1,8 +1,9 @@
 //
 //  KeyRecorderView.swift
 //
-//  Click to enter recording mode, then press the desired key combination.
-//  Escape cancels. At least one modifier key (⌃ ⌥ ⇧ ⌘) is required.
+//  Click to enter recording mode, then press the desired key combination. Escape, the
+//  ⓧ at the right of the field, clicking anywhere else, or the window losing focus
+//  cancels. At least one modifier key (⌃ ⌥ ⇧ ⌘) is required.
 //
 
 import AppKit
@@ -13,7 +14,22 @@ final class KeyRecorderView: NSView {
     var preference: HotkeyPreference { didSet { needsDisplay = true } }
     var onChanged: ((HotkeyPreference) -> Void)?
 
-    private var isRecording = false { didSet { needsDisplay = true } }
+    private var isRecording = false {
+        didSet {
+            needsDisplay = true
+            toolTip = isRecording ? "Press the new shortcut. Esc cancels." : nil
+            isRecording ? installOutsideClickMonitor() : removeOutsideClickMonitor()
+        }
+    }
+    /// Cancels recording on a click anywhere but this field.
+    private var outsideClickMonitor: Any?
+    private var windowObserver: Any?
+
+    /// The ⓧ shown at the right edge while recording.
+    private var cancelRect: NSRect {
+        let side: CGFloat = 14
+        return NSRect(x: bounds.maxX - side - 5, y: (bounds.height - side) / 2, width: side, height: side)
+    }
 
     init(preference: HotkeyPreference) {
         self.preference = preference
@@ -22,15 +38,17 @@ final class KeyRecorderView: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    override var intrinsicContentSize: NSSize { NSSize(width: 160, height: 22) }
+    override var intrinsicContentSize: NSSize { NSSize(width: 140, height: 22) }
     override var acceptsFirstResponder: Bool  { true }
     override var isOpaque: Bool               { false }
 
     // MARK: - Events
 
     override func mouseDown(with event: NSEvent) {
-        if window?.makeFirstResponder(self) == true {
-            isRecording.toggle()
+        if isRecording {
+            cancel()   // the ⓧ, or a second click on the field
+        } else if window?.makeFirstResponder(self) == true {
+            isRecording = true
         }
     }
 
@@ -39,11 +57,51 @@ final class KeyRecorderView: NSView {
         return super.resignFirstResponder()
     }
 
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let o = windowObserver { NotificationCenter.default.removeObserver(o) }
+        windowObserver = nil
+        guard let window else { return }
+        windowObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didResignKeyNotification, object: window, queue: .main
+        ) { [weak self] _ in self?.cancel() }
+    }
+
+    deinit {
+        if let o = windowObserver { NotificationCenter.default.removeObserver(o) }
+        removeOutsideClickMonitor()
+    }
+
+    /// Leaves recording mode, keeping the current shortcut.
+    func cancel() {
+        guard isRecording else { return }
+        isRecording = false
+        if window?.firstResponder === self { window?.makeFirstResponder(nil) }
+    }
+
+    private func installOutsideClickMonitor() {
+        removeOutsideClickMonitor()
+        outsideClickMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+        ) { [weak self] event in
+            guard let self else { return event }
+            let inField = event.window === self.window
+                && self.bounds.contains(self.convert(event.locationInWindow, from: nil))
+            if !inField { self.cancel() }
+            return event
+        }
+    }
+
+    private func removeOutsideClickMonitor() {
+        if let m = outsideClickMonitor { NSEvent.removeMonitor(m) }
+        outsideClickMonitor = nil
+    }
+
     override func keyDown(with event: NSEvent) {
         guard isRecording else { super.keyDown(with: event); return }
 
         if event.keyCode == UInt16(kVK_Escape) {
-            isRecording = false
+            cancel()
             return
         }
 
@@ -83,7 +141,18 @@ final class KeyRecorderView: NSView {
         ]
         let str = NSAttributedString(string: label, attributes: attrs)
         let sz  = str.size()
-        str.draw(at: CGPoint(x: (bounds.width  - sz.width)  / 2,
+        // While recording the text is centred in the space left of the ⓧ.
+        let textWidth = isRecording ? cancelRect.minX : bounds.width
+        str.draw(at: CGPoint(x: (textWidth - sz.width) / 2,
                              y: (bounds.height - sz.height) / 2))
+
+        if isRecording, let glyph = NSImage(systemSymbolName: "xmark.circle.fill",
+                                            accessibilityDescription: "Cancel") {
+            let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
+                .applying(.init(paletteColors: [.secondaryLabelColor]))
+            glyph.withSymbolConfiguration(config)?
+                .draw(in: cancelRect, from: .zero, operation: .sourceOver, fraction: 1,
+                      respectFlipped: true, hints: nil)
+        }
     }
 }

@@ -257,6 +257,38 @@ extension VideoManager {
         return (current, modes)
     }
 
+    /// The default virtual resolution for `context` as a mode the anchor offers: 1x, at
+    /// 60 Hz when that rate is enabled, else the highest enabled rate. Nil when none is set.
+    static func defaultVirtualMode(for context: VisibilityPreferences.DisplayContext) -> DisplayMode? {
+        guard let stored = VisibilityPreferences.defaultVirtualResolution(for: context) else { return nil }
+        let size = stored.split(separator: "x").compactMap { Int($0) }
+        guard size.count == 2,
+              virtualResolutions.contains(where: { $0.width == size[0] && $0.height == size[1] })
+        else { return nil }
+        let rates = VisibilityPreferences.effectiveVirtualRefreshRates(for: context)
+        let rate = rates.contains(60) ? 60 : (rates.first ?? 60)
+        return virtualMode(width: size[0], height: size[1], refreshRate: rate)
+    }
+
+    /// Drives an AirPlay display that has just connected through a virtual anchor at the
+    /// default resolution, when one is set. The display gets a moment to settle first, and
+    /// is left alone if it has gone away or gained an anchor meanwhile.
+    func applyDefaultVirtualMode(to display: DisplayInfo) {
+        let context = displayContext(for: display)
+        guard context == .airPlay, let mode = Self.defaultVirtualMode(for: context),
+              !hasVirtualAnchor(for: display.name)
+        else { return }
+        vdLog.debug("applyDefaultVirtualMode: '\(display.name)' connected — \(mode.width)×\(mode.height) @\(mode.refreshRate)Hz in 2 s")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            guard let self,
+                  let current = self.allAirPlayDevices.first(where: { $0.id == display.id }),
+                  current.isConnected, current.cgDisplayID != 0,
+                  !self.hasVirtualAnchor(for: current.name)
+            else { return }
+            self.selectVirtualMode(mode, for: current)
+        }
+    }
+
     /// Selects a virtual resolution for a display.
     ///
     /// - If the virtual anchor is already active, applies the mode immediately.

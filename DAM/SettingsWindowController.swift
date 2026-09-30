@@ -52,14 +52,13 @@ final class SettingsWindowController: NSWindowController {
         self.videoManager     = videoManager
 
         let win = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 420, height: 440),
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 280),
             styleMask: [.titled, .closable, .resizable],
             backing: .buffered,
             defer: false
         )
         win.isReleasedWhenClosed = false
         win.hidesOnDeactivate    = false
-        win.minSize              = NSSize(width: 340, height: 280)
 
         super.init(window: win)
         buildUI()
@@ -101,318 +100,176 @@ final class SettingsWindowController: NSWindowController {
         window?.contentView                     = content
         window?.toolbar?.selectedItemIdentifier = id
         window?.title                           = title
+        fitWindow(to: content)
+    }
+
+    /// Wide enough for the toolbar's four items.
+    private static let minContentWidth: CGFloat = 420
+
+    /// Sizes the window to the tab's content, keeping its top edge in place. The height
+    /// is fixed at that; the width stays adjustable. A tab taller than the screen scrolls.
+    private func fitWindow(to content: NSView) {
+        guard let win = window, let stack = (content as? NSScrollView)?.documentView else { return }
+        stack.layoutSubtreeIfNeeded()
+        var height = stack.fittingSize.height
+        if let screen = win.screen ?? NSScreen.main {
+            let chrome = win.frame.height - win.contentLayoutRect.height
+            height = min(height, screen.visibleFrame.height - chrome - 40)
+        }
+        let minWidth = max(Self.minContentWidth, stack.fittingSize.width)
+        let width = max(win.contentLayoutRect.width, minWidth)
+        win.contentMinSize = NSSize(width: minWidth, height: height)
+        win.contentMaxSize = NSSize(width: .greatestFiniteMagnitude, height: height)
+        var frame = win.frameRect(forContentRect: NSRect(x: 0, y: 0, width: width, height: height))
+        frame.origin = NSPoint(x: win.frame.minX, y: win.frame.maxY - frame.height)
+        win.setFrame(frame, display: true, animate: win.isVisible)
     }
 
     @objc private func toolbarItemTapped(_ item: NSToolbarItem) {
         selectTab(item.itemIdentifier)
     }
 
-    // MARK: - Hotkeys tab
+    // MARK: - Tabs
+    //
+    // Each tab is a form like the system settings panes: a right-aligned label column,
+    // the controls beside it, the form centred in the window. A group is one label with
+    // one or more controls under it; groups are set apart by spacing, not headers.
 
     private func buildHotkeysTab() -> NSView {
-        let scrollView = makeScrollView()
-        let stack = scrollStack(in: scrollView)
-
-        // — Switcher —
-        stack.addArrangedSubview(sectionHeader("Switcher"))
-
-        recorder.onChanged = { [weak self] pref in self?.onSave?(pref) }
-        let resetBtn = NSButton(title: "Reset", target: self, action: #selector(resetToDefault))
-        resetBtn.bezelStyle = .rounded
-        stack.addArrangedSubview(
-            settingGroup(
-                control: hotkeyRow(label: "Hotkey:", recorder: recorder, resetBtn: resetBtn),
-                description: "Opens the Touch Bar switcher panel for changing the audio " +
-                             "output device or AirPlay display. Without a Touch Bar " +
-                             "(or with the lid closed) it opens the menu bar menu instead."
-            )
-        )
-
-        stack.addArrangedSubview(separator())
-
-        // — AirPlay Quick Connect —
-        stack.addArrangedSubview(sectionHeader("AirPlay Quick Connect"))
-
-        recorderAirPlay.onChanged = { [weak self] pref in self?.onSaveAirPlayConnect?(pref) }
-        let resetAirPlayBtn = NSButton(title: "Reset", target: self,
-                                       action: #selector(resetAirPlayConnectToDefault))
-        resetAirPlayBtn.bezelStyle = .rounded
-        stack.addArrangedSubview(
-            settingGroup(
-                control: hotkeyRow(label: "Hotkey:", recorder: recorderAirPlay,
-                                   resetBtn: resetAirPlayBtn),
-                description: "Connects to an AirPlay display from any application. " +
-                             "Announces the target display via speech."
-            )
-        )
-
-        stack.addArrangedSubview(separator())
-
-        // — Mirror / Extend Toggle —
-        stack.addArrangedSubview(sectionHeader("Mirror / Extend Toggle"))
-
+        recorder.onChanged             = { [weak self] pref in self?.onSave?(pref) }
+        recorderAirPlay.onChanged      = { [weak self] pref in self?.onSaveAirPlayConnect?(pref) }
         recorderMirrorToggle.onChanged = { [weak self] pref in self?.onSaveMirrorToggle?(pref) }
-        let resetMirrorBtn = NSButton(title: "Reset", target: self,
-                                      action: #selector(resetMirrorToggleToDefault))
-        resetMirrorBtn.bezelStyle = .rounded
-        stack.addArrangedSubview(
-            settingGroup(
-                control: hotkeyRow(label: "Hotkey:", recorder: recorderMirrorToggle,
-                                   resetBtn: resetMirrorBtn),
-                description: "Toggles the connected AirPlay display between mirror and " +
-                             "extend mode. Announces the new mode via speech."
-            )
-        )
+        recorderAudioCycle.onChanged   = { [weak self] pref in self?.onSaveAudioCycle?(pref) }
 
-        stack.addArrangedSubview(separator())
-
-        // — Audio Output Cycle —
-        stack.addArrangedSubview(sectionHeader("Cycle Audio Output"))
-
-        recorderAudioCycle.onChanged = { [weak self] pref in self?.onSaveAudioCycle?(pref) }
-        let resetAudioCycleBtn = NSButton(title: "Reset", target: self,
-                                          action: #selector(resetAudioCycleToDefault))
-        resetAudioCycleBtn.bezelStyle = .rounded
-        stack.addArrangedSubview(
-            settingGroup(
-                control: hotkeyRow(label: "Hotkey:", recorder: recorderAudioCycle,
-                                   resetBtn: resetAudioCycleBtn),
-                description: "Switches to the next enabled audio output device. Devices " +
-                             "unchecked on the Devices tab are skipped. Announces the device."
-            )
-        )
-
-        return scrollView
+        return formTab([
+            ("Switcher:", [hotkeyRow(
+                recorder, reset: #selector(resetToDefault),
+                help: "Opens the Touch Bar switcher for the audio output and AirPlay display. " +
+                      "Without a Touch Bar (or with the lid closed) it opens the menu bar menu.")]),
+            ("Quick Connect:", [hotkeyRow(
+                recorderAirPlay, reset: #selector(resetAirPlayConnectToDefault),
+                help: "Connects to an AirPlay display from any application.")]),
+            ("Mirror / Extend:", [hotkeyRow(
+                recorderMirrorToggle, reset: #selector(resetMirrorToggleToDefault),
+                help: "Toggles the connected AirPlay display between mirror and extend mode.")]),
+            ("Cycle Audio:", [hotkeyRow(
+                recorderAudioCycle, reset: #selector(resetAudioCycleToDefault),
+                help: "Switches to the next audio output checked on the Devices tab.")]),
+        ])
     }
 
-    // MARK: - General tab
-
     private func buildGeneralTab() -> NSView {
-        let scrollView = makeScrollView()
-        let stack = scrollStack(in: scrollView)
-
-        // — Behaviour —
-        stack.addArrangedSubview(sectionHeader("Behaviour"))
-
-        stack.addArrangedSubview(
-            settingGroup(
-                control: checkbox(
-                    title: "Auto-connect when one AirPlay display is available",
-                    isOn: VisibilityPreferences.autoConnectSingleDisplay,
-                    action: { VisibilityPreferences.autoConnectSingleDisplay = $0 }
-                ),
-                description: "When only one AirPlay display is visible, skip the selection " +
-                             "list and connect immediately."
-            )
-        )
-
-        stack.addArrangedSubview(
-            settingGroup(
-                control: checkbox(
-                    title: "Show hotkey feedback on the Touch Bar",
-                    isOn: VisibilityPreferences.touchBarFeedback,
-                    action: { VisibilityPreferences.touchBarFeedback = $0 }
-                ),
-                description: "Shows pickers and status messages on the Touch Bar, on Macs " +
-                             "that have one."
-            )
-        )
-
-        stack.addArrangedSubview(
-            settingGroup(
-                control: checkbox(
-                    title: "Show hotkey feedback on screen",
-                    isOn: VisibilityPreferences.screenFeedback,
-                    action: { VisibilityPreferences.screenFeedback = $0 }
-                ),
-                description: "Shows pickers and status messages on screen. Used regardless " +
-                             "when the Touch Bar isn't showing them."
-            )
-        )
-
-        stack.addArrangedSubview(
-            settingGroup(
-                control: checkbox(
-                    title: "Announce actions via speech",
-                    isOn: VisibilityPreferences.speechEnabled,
-                    action: { VisibilityPreferences.speechEnabled = $0 }
-                ),
-                description: "Speaks the target device name when connecting to AirPlay, " +
-                             "picking an audio output, and toggling mirror / extend mode."
-            )
-        )
-
-        stack.addArrangedSubview(
-            settingGroup(
-                control: checkbox(
-                    title: "Auto-hide virtual audio devices on first discovery",
-                    isOn: VisibilityPreferences.autoHideVirtualAudio,
-                    action: { VisibilityPreferences.autoHideVirtualAudio = $0 }
-                ),
-                description: "Hides virtual audio devices such as Teams, Zoom, BlackHole, " +
-                             "and Loopback when they are first detected. They can be re-enabled " +
-                             "in the Devices tab."
-            )
-        )
-
-        stack.addArrangedSubview(separator())
-
-        // — System —
-        stack.addArrangedSubview(sectionHeader("System"))
-
-        stack.addArrangedSubview(
-            checkbox(
-                title: "Launch at login",
-                isOn: VisibilityPreferences.launchAtLogin,
-                action: { VisibilityPreferences.launchAtLogin = $0 }
-            )
-        )
-
         let extraShown = ScreenMirroringPanel.isExtraVisible
         let extraStatus = NSTextField(labelWithString:
-            "Screen Mirroring menu bar item: \(extraShown ? "shown" : "hidden")")
+            extraShown ? "Menu bar item shown" : "Menu bar item hidden")
         extraStatus.font = .systemFont(ofSize: NSFont.systemFontSize)
-        let openCC = NSButton(title: "Open Control Center Settings…", target: self,
+        let openCC = NSButton(title: "Control Center…", target: self,
                               action: #selector(openControlCenterSettings))
-        openCC.bezelStyle = .rounded
+        openCC.bezelStyle  = .rounded
+        openCC.controlSize = .small
+        openCC.font        = .systemFont(ofSize: NSFont.smallSystemFontSize)
         let extraRow = NSStackView(views: [extraStatus, openCC])
         extraRow.orientation = .horizontal
         extraRow.spacing = 8
-        stack.addArrangedSubview(
-            settingGroup(
-                control: extraRow,
-                description: "AirPlay displays connect fastest when the item is shown. " +
-                             "Set Screen Mirroring to “Always Show in Menu Bar” in " +
-                             "Control Center settings."
-            )
-        )
+        extraRow.toolTip = "AirPlay displays connect fastest when Control Center shows " +
+                           "Screen Mirroring in the menu bar (“Always Show in Menu Bar”)."
 
-        return scrollView
+        return formTab([
+            ("AirPlay:", [
+                checkbox(title: "Auto-connect when only one display is available",
+                         isOn: VisibilityPreferences.autoConnectSingleDisplay,
+                         help: "When only one AirPlay display is visible, skip the selection " +
+                               "list and connect immediately.",
+                         action: { VisibilityPreferences.autoConnectSingleDisplay = $0 }),
+            ]),
+            ("Hotkey Feedback:", [
+                checkbox(title: "On the Touch Bar",
+                         isOn: VisibilityPreferences.touchBarFeedback,
+                         help: "Shows pickers and status messages on the Touch Bar, on Macs " +
+                               "that have one.",
+                         action: { VisibilityPreferences.touchBarFeedback = $0 }),
+                checkbox(title: "On screen",
+                         isOn: VisibilityPreferences.screenFeedback,
+                         help: "Shows pickers and status messages on screen. Used regardless " +
+                               "when the Touch Bar isn't showing them.",
+                         action: { VisibilityPreferences.screenFeedback = $0 }),
+                checkbox(title: "Spoken",
+                         isOn: VisibilityPreferences.speechEnabled,
+                         help: "Speaks the target device name when connecting to AirPlay, " +
+                               "picking an audio output, and toggling mirror / extend mode.",
+                         action: { VisibilityPreferences.speechEnabled = $0 }),
+            ]),
+            ("Audio Devices:", [
+                checkbox(title: "Hide virtual devices when first discovered",
+                         isOn: VisibilityPreferences.autoHideVirtualAudio,
+                         help: "Hides virtual audio devices such as Teams, Zoom, BlackHole, " +
+                               "and Loopback when they are first detected. They can be " +
+                               "re-enabled in the Devices tab.",
+                         action: { VisibilityPreferences.autoHideVirtualAudio = $0 }),
+            ]),
+            ("Startup:", [
+                checkbox(title: "Launch at login",
+                         isOn: VisibilityPreferences.launchAtLogin,
+                         action: { VisibilityPreferences.launchAtLogin = $0 }),
+            ]),
+            ("Screen Mirroring:", [extraRow]),
+        ])
     }
 
     @objc private func openControlCenterSettings() {
         ScreenMirroringPanel.openControlCenterSettings()
     }
 
-    // MARK: - Devices tab
-
+    /// Unchecked devices are hidden from the menu bar and Touch Bar; they remain
+    /// available system-wide.
     private func buildDevicesTab() -> NSView {
-        let scrollView = makeScrollView()
-        let stack = scrollStack(in: scrollView)
-
-        stack.addArrangedSubview(
-            descriptionLabel(
-                "Unchecked devices are hidden from the menu bar and Touch Bar. " +
-                "They remain available system-wide."
-            )
-        )
-
-        stack.addArrangedSubview(separator())
-
-        // — Audio Output —
-        stack.addArrangedSubview(sectionHeader("Audio Output"))
-        let audioDevices = audioManager.allOutputDevices
-        if audioDevices.isEmpty {
-            stack.addArrangedSubview(placeholderLabel("No output devices found"))
-        } else {
-            for device in audioDevices {
-                stack.addArrangedSubview(
-                    checkbox(
-                        title: device.name,
-                        isOn: VisibilityPreferences.isVisible(audioDevice: device.name),
-                        action: { [weak self] visible in
-                            VisibilityPreferences.setVisible(visible, audioDevice: device.name)
-                            self?.audioManager.applyVisibility()
-                            self?.onRebuild?()
-                        }
-                    )
-                )
-            }
+        let audio = audioManager.allOutputDevices.map { device in
+            checkbox(title: device.name,
+                     isOn: VisibilityPreferences.isVisible(audioDevice: device.name),
+                     help: "Unchecked: hidden from the menu bar and Touch Bar",
+                     action: { [weak self] visible in
+                         VisibilityPreferences.setVisible(visible, audioDevice: device.name)
+                         self?.audioManager.applyVisibility()
+                         self?.onRebuild?()
+                     })
         }
-
-        stack.addArrangedSubview(separator())
-
-        // — AirPlay Displays —
-        stack.addArrangedSubview(sectionHeader("AirPlay Displays"))
-        let airPlayDevices = videoManager.allAirPlayDevices
-        if airPlayDevices.isEmpty {
-            stack.addArrangedSubview(placeholderLabel("No AirPlay devices discovered yet"))
-        } else {
-            for device in airPlayDevices {
-                stack.addArrangedSubview(
-                    checkbox(
-                        title: device.name,
-                        isOn: VisibilityPreferences.isVisible(airPlayDevice: device.name),
-                        action: { [weak self] visible in
-                            VisibilityPreferences.setVisible(visible, airPlayDevice: device.name)
-                            self?.videoManager.applyVisibility()
-                            self?.onRebuild?()
-                        }
-                    )
-                )
-            }
+        let airPlay = videoManager.allAirPlayDevices.map { device in
+            checkbox(title: device.name,
+                     isOn: VisibilityPreferences.isVisible(airPlayDevice: device.name),
+                     help: "Unchecked: hidden from the menu bar and Touch Bar",
+                     action: { [weak self] visible in
+                         VisibilityPreferences.setVisible(visible, airPlayDevice: device.name)
+                         self?.videoManager.applyVisibility()
+                         self?.onRebuild?()
+                     })
         }
-
-        stack.addArrangedSubview(separator())
-
-        // — Connected Displays —
-        stack.addArrangedSubview(sectionHeader("Connected Displays"))
-        let physicalDisplays = videoManager.allConnectedDisplays
-        if physicalDisplays.isEmpty {
-            stack.addArrangedSubview(placeholderLabel("No external displays connected"))
-        } else {
-            for display in physicalDisplays {
-                stack.addArrangedSubview(
-                    checkbox(
-                        title: display.name,
-                        isOn: VisibilityPreferences.isVisible(display: display.name),
-                        action: { [weak self] visible in
-                            VisibilityPreferences.setVisible(visible, display: display.name)
-                            self?.videoManager.applyVisibility()
-                            self?.onRebuild?()
-                        }
-                    )
-                )
-            }
+        let displays = videoManager.allConnectedDisplays.map { display in
+            checkbox(title: display.name,
+                     isOn: VisibilityPreferences.isVisible(display: display.name),
+                     help: "Unchecked: hidden from the menu bar and Touch Bar",
+                     action: { [weak self] visible in
+                         VisibilityPreferences.setVisible(visible, display: display.name)
+                         self?.videoManager.applyVisibility()
+                         self?.onRebuild?()
+                     })
         }
-
-        return scrollView
+        return formTab([
+            ("Audio Output:",       audio.isEmpty    ? [placeholderLabel("No output devices found")] : audio),
+            ("AirPlay Displays:",   airPlay.isEmpty  ? [placeholderLabel("None discovered yet")] : airPlay),
+            ("Connected Displays:", displays.isEmpty ? [placeholderLabel("No external displays")] : displays),
+        ])
     }
 
-    // MARK: - Virtual Display tab
-
     private func buildVirtualTab() -> NSView {
-        let scrollView = makeScrollView()
-        let stack = scrollStack(in: scrollView)
-
-        // — Touch Bar Labels —
-        stack.addArrangedSubview(sectionHeader("Touch Bar Labels"))
-        stack.addArrangedSubview(
-            settingGroup(
-                control: buildAspectRatioRow(),
-                description: "Resolutions matching this ratio use compact \"1080p\" labels in the Touch Bar."
-            )
-        )
-
-        stack.addArrangedSubview(separator())
-
-        // — AirPlay —
-        stack.addArrangedSubview(sectionHeader("AirPlay"))
-        buildVirtualDisplayControls(for: .airPlay, into: stack)
-
-        stack.addArrangedSubview(separator())
-
-        // — External —
-        stack.addArrangedSubview(sectionHeader("External"))
-        buildVirtualDisplayControls(for: .external, into: stack)
-
-        stack.addArrangedSubview(separator())
-
-        // — Built-in —
-        stack.addArrangedSubview(sectionHeader("Built-in"))
-        buildVirtualDisplayControls(for: .builtIn, into: stack)
-
-        return scrollView
+        let rates = buildRefreshRateGrid()
+        rates.toolTip = "Rates the virtual display offers for each kind of display."
+        let airPlayDefault = buildDefaultResolutionPopup(for: .airPlay)
+        airPlayDefault.toolTip = "When an AirPlay display connects, drive it through the virtual " +
+                                 "display at this resolution. “Display's own” leaves it as it is."
+        return formTab([
+            ("Refresh Rates:", [rates]),
+            ("On AirPlay Connect:", [airPlayDefault]),
+        ])
     }
 
     // MARK: - Actions
@@ -455,42 +312,61 @@ final class SettingsWindowController: NSWindowController {
         return sv
     }
 
-    private func scrollStack(in scrollView: NSScrollView) -> NSStackView {
-        let stack = NSStackView()
-        stack.orientation = .vertical
-        stack.alignment   = .leading
-        stack.spacing     = 8
-        stack.edgeInsets  = NSEdgeInsets(top: 20, left: 24, bottom: 20, right: 24)
-        stack.translatesAutoresizingMaskIntoConstraints = false
+    private static let formInsets = NSEdgeInsets(top: 16, left: 20, bottom: 16, right: 20)
 
+    /// A scrolling tab holding one form. Each group is a label and the controls listed
+    /// under it, one per row; the label sits on the group's first row.
+    private func formTab(_ groups: [(label: String, controls: [NSView])]) -> NSView {
+        let grid = NSGridView()
+        grid.rowSpacing    = 6
+        grid.columnSpacing = 8
+        grid.rowAlignment  = .firstBaseline
+        for (g, group) in groups.enumerated() {
+            for (i, control) in group.controls.enumerated() {
+                let label = i == 0 ? formLabel(group.label) : NSGridCell.emptyContentView
+                let row = grid.addRow(with: [label, control])
+                if i == 0 && g > 0 { row.topPadding = 10 }
+            }
+        }
+        grid.column(at: 0).xPlacement = .trailing
+        grid.column(at: 1).xPlacement = .leading
+
+        let scrollView = makeScrollView()
+        let stack = SettingsStack()
+        stack.orientation = .vertical
+        stack.alignment   = .centerX
+        stack.edgeInsets  = Self.formInsets
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        stack.addArrangedSubview(grid)
         scrollView.documentView = stack
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: scrollView.contentView.trailingAnchor),
             stack.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor),
+            // The clip view's width follows the document, so the document's width has to
+            // come from the scroll view itself for the form to centre in the window.
+            stack.widthAnchor.constraint(equalTo: scrollView.widthAnchor),
         ])
-        return stack
+        return scrollView
     }
 
-    private func settingGroup(control: NSView, description: String) -> NSView {
-        let desc = descriptionLabel(description)
-        let group = NSStackView(views: [control, desc])
-        group.orientation = .vertical
-        group.alignment   = .leading
-        group.spacing     = 3
-        return group
+    private func formLabel(_ title: String) -> NSView {
+        let tf = NSTextField(labelWithString: title)
+        tf.font      = .systemFont(ofSize: NSFont.systemFontSize)
+        tf.alignment = .right
+        return tf
     }
 
-    private func hotkeyRow(label: String,
-                            recorder: KeyRecorderView,
-                            resetBtn: NSButton) -> NSView {
-        let lbl = NSTextField(labelWithString: label)
-        lbl.font = .systemFont(ofSize: NSFont.systemFontSize)
-        let row = NSStackView(views: [lbl, recorder, resetBtn])
+    private func hotkeyRow(_ recorder: KeyRecorderView, reset: Selector, help: String) -> NSView {
+        let resetBtn = NSButton(title: "Reset", target: self, action: reset)
+        resetBtn.bezelStyle  = .rounded
+        resetBtn.controlSize = .small
+        resetBtn.font        = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        let row = NSStackView(views: [recorder, resetBtn])
         row.orientation = .horizontal
-        row.spacing     = 10
+        row.spacing     = 8
+        row.toolTip     = help
         NSLayoutConstraint.activate([
-            recorder.widthAnchor.constraint(equalToConstant: 160),
+            recorder.widthAnchor.constraint(equalToConstant: 140),
             recorder.heightAnchor.constraint(equalToConstant: 22),
         ])
         return row
@@ -498,68 +374,53 @@ final class SettingsWindowController: NSWindowController {
 
     // MARK: - Virtual Display helpers
 
-    /// Adds refresh-rate checkboxes (and, for AirPlay, the default-resolution popup) for one
-    /// virtual-display context.
-    private func buildVirtualDisplayControls(for context: VisibilityPreferences.DisplayContext,
-                                             into stack: NSStackView) {
-        let availableRates = [30, 60, 120, 240]
-        for rate in availableRates {
-            stack.addArrangedSubview(
-                checkbox(
-                    title: "\(rate) Hz",
-                    isOn: VisibilityPreferences.virtualRefreshRates(for: context).contains(rate),
-                    action: { [weak self] isOn in
-                        var rates = VisibilityPreferences.virtualRefreshRates(for: context)
-                        if isOn { rates.insert(rate) } else { rates.remove(rate) }
-                        if rates.isEmpty { rates = [60] }
-                        VisibilityPreferences.setVirtualRefreshRates(rates, for: context)
-                        self?.onRebuild?()
-                    }
-                )
-            )
-        }
-        // External and built-in anchors are locked to the current resolution.
-        if context == .airPlay {
-            stack.addArrangedSubview(buildDefaultResolutionRow(for: context))
-        }
-    }
+    /// A grid with a row per display kind and a column per refresh rate.
+    private func buildRefreshRateGrid() -> NSView {
+        let contexts: [(name: String, context: VisibilityPreferences.DisplayContext)] = [
+            ("AirPlay", .airPlay), ("External", .external), ("Built-in", .builtIn),
+        ]
+        let rates = [30, 60, 120, 240]
 
-    /// Label + popup for choosing the aspect ratio used for compact Touch Bar labels.
-    private func buildAspectRatioRow() -> NSView {
-        let label = NSTextField(labelWithString: "Compact label ratio:")
-        label.font = .systemFont(ofSize: NSFont.systemFontSize)
-
-        let popup = AspectRatioPopup(onSelect: { [weak self] key in
-            let parts = key.split(separator: ":").compactMap { Int($0) }
-            if parts.count == 2 {
-                VisibilityPreferences.defaultAspectRatio = (parts[0], parts[1])
-                self?.onRebuild?()
+        var rows: [[NSView]] = [[NSGridCell.emptyContentView] + rates.map { columnHeader("\($0) Hz") }]
+        for entry in contexts {
+            var row: [NSView] = [rowLabel(entry.name)]
+            let enabled = VisibilityPreferences.virtualRefreshRates(for: entry.context)
+            for rate in rates {
+                row.append(checkbox(title: "", isOn: enabled.contains(rate)) { [weak self] isOn in
+                    var rates = VisibilityPreferences.virtualRefreshRates(for: entry.context)
+                    if isOn { rates.insert(rate) } else { rates.remove(rate) }
+                    if rates.isEmpty { rates = [60] }
+                    VisibilityPreferences.setVirtualRefreshRates(rates, for: entry.context)
+                    self?.onRebuild?()
+                })
             }
-        })
-        popup.font = .systemFont(ofSize: NSFont.systemFontSize)
-
-        let options = ["16:9", "16:10", "4:3", "21:9"]
-        for key in options {
-            let item = NSMenuItem(title: key, action: nil, keyEquivalent: "")
-            item.representedObject = key
-            popup.menu?.addItem(item)
+            rows.append(row)
         }
 
-        let ar = VisibilityPreferences.defaultAspectRatio
-        let stored = "\(ar.w):\(ar.h)"
-        popup.selectItem(at: options.firstIndex(of: stored) ?? 0)
-
-        let row = NSStackView(views: [label, popup])
-        row.orientation = .horizontal
-        row.spacing = 10
-        return row
+        let grid = NSGridView(views: rows)
+        grid.rowSpacing    = 2
+        grid.columnSpacing = 10
+        grid.column(at: 0).xPlacement = .leading
+        for c in 1...rates.count { grid.column(at: c).xPlacement = .center }
+        for r in 0..<grid.numberOfRows { grid.row(at: r).yPlacement = .center }
+        return grid
     }
 
-    /// Label + popup for choosing the default virtual resolution for a given context.
-    private func buildDefaultResolutionRow(for context: VisibilityPreferences.DisplayContext) -> NSView {
-        let label = NSTextField(labelWithString: "Default resolution:")
-        label.font = .systemFont(ofSize: NSFont.systemFontSize)
+    private func columnHeader(_ title: String) -> NSView {
+        let tf = NSTextField(labelWithString: title)
+        tf.font      = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        tf.textColor = .secondaryLabelColor
+        return tf
+    }
 
+    private func rowLabel(_ title: String) -> NSView {
+        let tf = NSTextField(labelWithString: title)
+        tf.font = .systemFont(ofSize: NSFont.systemFontSize)
+        return tf
+    }
+
+    /// Popup for choosing the default virtual resolution for a given context.
+    private func buildDefaultResolutionPopup(for context: VisibilityPreferences.DisplayContext) -> NSView {
         let popup = DefaultResolutionPopup(onSelect: { [weak self] key in
             VisibilityPreferences.setDefaultVirtualResolution(key, for: context)
             self?.onRebuild?()
@@ -568,7 +429,7 @@ final class SettingsWindowController: NSWindowController {
 
         // Options: (title, stored key or nil)
         let options: [(String, String?)] = [
-            ("None",  nil),
+            ("Display's own", nil),
             ("720p",  "1280x720"),
             ("1080p", "1920x1080"),
             ("1440p", "2560x1440"),
@@ -584,37 +445,10 @@ final class SettingsWindowController: NSWindowController {
         let stored = VisibilityPreferences.defaultVirtualResolution(for: context)
         let matchIndex = options.firstIndex { $0.1 == stored } ?? 0
         popup.selectItem(at: matchIndex)
-
-        let row = NSStackView(views: [label, popup])
-        row.orientation = .horizontal
-        row.spacing     = 10
-        return row
+        return popup
     }
 
     // MARK: - View factories
-
-    private func sectionHeader(_ title: String) -> NSView {
-        let tf = NSTextField(labelWithString: title)
-        tf.font      = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .semibold)
-        tf.textColor = .secondaryLabelColor
-        return tf
-    }
-
-    private func descriptionLabel(_ text: String) -> NSView {
-        let tf = NSTextField(labelWithString: text)
-        tf.font                    = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        tf.textColor               = .secondaryLabelColor
-        tf.lineBreakMode           = .byWordWrapping
-        tf.maximumNumberOfLines    = 0
-        tf.preferredMaxLayoutWidth = 360
-        return tf
-    }
-
-    private func separator() -> NSView {
-        let box = NSBox()
-        box.boxType = .separator
-        return box
-    }
 
     private func placeholderLabel(_ text: String) -> NSView {
         let tf = NSTextField(labelWithString: text)
@@ -625,11 +459,13 @@ final class SettingsWindowController: NSWindowController {
 
     private func checkbox(title: String,
                           isOn: Bool,
+                          help: String? = nil,
                           action: @escaping (Bool) -> Void) -> NSView {
         let cb = ClosureButton(title: title, action: action)
         cb.setButtonType(.switch)
-        cb.state = isOn ? .on : .off
-        cb.font  = .systemFont(ofSize: NSFont.systemFontSize)
+        cb.state   = isOn ? .on : .off
+        cb.font    = .systemFont(ofSize: NSFont.systemFontSize)
+        cb.toolTip = help
         return cb
     }
 
@@ -689,32 +525,24 @@ extension SettingsWindowController: NSToolbarDelegate {
     }
 }
 
+// MARK: - SettingsStack
+
+/// A leading-aligned vertical stack whose rows keep their own width but may not extend
+/// past the right inset.
+private final class SettingsStack: NSStackView {
+    override func addArrangedSubview(_ view: NSView) {
+        super.addArrangedSubview(view)
+        trailingAnchor.anchorWithOffset(to: view.trailingAnchor)
+            .constraint(lessThanOrEqualToConstant: -edgeInsets.right).isActive = true
+    }
+}
+
 // MARK: - FlippedClipView
 
 /// NSClipView with a flipped coordinate system so scroll views display their
 /// document from the top-left rather than the bottom-left.
 private final class FlippedClipView: NSClipView {
     override var isFlipped: Bool { true }
-}
-
-// MARK: - AspectRatioPopup
-
-/// NSPopUpButton that fires a closure with the selected "W:H" string.
-private final class AspectRatioPopup: NSPopUpButton {
-    private let handler: (String) -> Void
-
-    init(onSelect: @escaping (String) -> Void) {
-        handler = onSelect
-        super.init(frame: .zero, pullsDown: false)
-        target = self
-        action = #selector(selectionChanged)
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-
-    @objc private func selectionChanged() {
-        if let key = selectedItem?.representedObject as? String { handler(key) }
-    }
 }
 
 // MARK: - DefaultResolutionPopup
