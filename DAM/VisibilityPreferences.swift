@@ -182,18 +182,6 @@ enum VisibilityPreferences {
         else { UserDefaults.standard.removeObject(forKey: key) }
     }
 
-    /// Aspect ratio used to decide whether to show compact "HEIGHTp" labels in the Touch Bar.
-    /// Stored as "W:H", e.g. "16:9". Defaults to 16:9.
-    static var defaultAspectRatio: (w: Int, h: Int) {
-        get {
-            let stored = UserDefaults.standard.string(forKey: "\(AppIdentity.shortID).display.aspectRatio") ?? "16:9"
-            let parts = stored.split(separator: ":").compactMap { Int($0) }
-            guard parts.count == 2, parts[0] > 0, parts[1] > 0 else { return (16, 9) }
-            return (parts[0], parts[1])
-        }
-        set { UserDefaults.standard.set("\(newValue.w):\(newValue.h)", forKey: "\(AppIdentity.shortID).display.aspectRatio") }
-    }
-
     // MARK: - Connected (physical) displays
 
     private static let displayKey = "\(AppIdentity.shortID).hidden.displays"

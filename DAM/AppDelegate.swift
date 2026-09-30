@@ -48,6 +48,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             AudioOutputPicker.shared.advance()
         }
 
+        redirectSwiftUISettingsWindow()
+
         // Once the menu bar item is up, and not while a debug mode drives the app.
         var debugMode = false
         #if DEBUG
@@ -146,6 +148,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let isMirroring = display.isMirroring || videoManager.isBeingMirrored(display)
         videoManager.toggleMirroring(for: display)
         SpeechSynthesizer.shared.announce(isMirroring ? "Extending \(display.name)" : "Mirroring \(display.name)")
+    }
+
+    /// SwiftUI's `Settings` scene owns ⌘, and the app menu's "Settings…" item, and opens
+    /// an empty hosting window for them. When that window comes up, it is closed and the
+    /// settings window shown instead.
+    private func redirectSwiftUISettingsWindow() {
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            guard let self, let window = note.object as? NSWindow,
+                  window !== self.settingsWindow?.window,
+                  let content = window.contentView,
+                  String(describing: type(of: content)).contains("Hosting")
+            else { return }
+            // After SwiftUI has finished showing it, or the close does not stick.
+            DispatchQueue.main.async {
+                window.close()
+                self.openSettings(nil)
+            }
+        }
     }
 
     /// Offers, once, to show Control Center's Screen Mirroring item in the menu bar, which

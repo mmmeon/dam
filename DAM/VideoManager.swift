@@ -54,20 +54,12 @@ struct DisplayMode: Identifiable, Hashable {
     /// "1920 × 1080"-style label for the resolution pickers, noting HiDPI.
     var resolutionLabel: String { "\(width) × \(height)" + (isHiDPI ? "  HiDPI" : "") }
 
-    /// Compact label for Touch Bar.
-    /// Uses "HEIGHTp" when the resolution matches the configured default aspect ratio and
-    /// that representation is shorter; otherwise "WIDTHxHEIGHT". Appends "↑" for HiDPI and
-    /// "✦" for virtual modes.
+    /// Compact "1080p"-style label for the Touch Bar, with "↑" for HiDPI and "✦" for virtual
+    /// modes. The pickers only list sizes in the panel's own aspect ratio, so the height
+    /// identifies a size.
     var shortLabel: String {
         let markers = (isHiDPI ? "↑" : "") + (isVirtual ? "✦" : "")
-        let suffix = markers.isEmpty ? "" : " " + markers
-        let ar = VisibilityPreferences.defaultAspectRatio
-        if width * ar.h == height * ar.w {
-            let pLabel = "\(height)p\(suffix)"
-            let wLabel = "\(width)×\(height)\(suffix)"
-            return pLabel.count <= wLabel.count ? pLabel : wLabel
-        }
-        return "\(width)×\(height)\(suffix)"
+        return "\(height)p" + (markers.isEmpty ? "" : " " + markers)
     }
 }
 
@@ -97,6 +89,13 @@ struct VirtualResolutionSelection {
 final class VideoManager: ObservableObject {
     /// All Bonjour-discovered AirPlay destinations, regardless of visibility preference.
     private(set) var allAirPlayDevices: [DisplayInfo] = []
+    /// The online display IDs at the last merge; nil before the first.
+    private var previousOnlineIDs: Set<CGDirectDisplayID>?
+    /// Displays that came online since the first merge and have not yet been matched to
+    /// an AirPlay device. Bonjour may resolve a display's name only after it is connected,
+    /// so a connect is recognised whenever its ID is first matched, not when the name
+    /// changes state.
+    private var pendingConnectIDs: Set<CGDirectDisplayID> = []
     /// All physically connected non-AirPlay screens, regardless of visibility preference.
     private(set) var allConnectedDisplays: [DisplayInfo] = []
 
@@ -403,6 +402,11 @@ final class VideoManager: ObservableObject {
         //     non-builtin displays with no IODisplayConnect service (vendor "aapl",
         //     product "airp"). Match unresolved Bonjour names to these displays.
         let onlineSet = Set(onlineIDs)
+        if let previous = previousOnlineIDs {
+            pendingConnectIDs.formUnion(onlineSet.subtracting(previous))
+        }
+        pendingConnectIDs.formIntersection(onlineSet)
+        previousOnlineIDs = onlineSet
 
         // Pass 1: resolve via NSScreen or cache.
         var resolvedIDs: [String: CGDirectDisplayID] = [:]
@@ -497,7 +501,13 @@ final class VideoManager: ObservableObject {
             virtualAnchorArrangements.removeValue(forKey: name)
         }
 
+        // AirPlay displays whose display came online after the app started. One already
+        // connected at the first merge is left as it is.
+        let justConnected = newAirPlay.filter { $0.isConnected && pendingConnectIDs.contains($0.cgDisplayID) }
+        pendingConnectIDs.subtract(justConnected.map(\.cgDisplayID))
+
         if allAirPlayDevices    != newAirPlay   { allAirPlayDevices    = newAirPlay   }
+        for display in justConnected { applyDefaultVirtualMode(to: display) }
         if allConnectedDisplays != newPhysical  { allConnectedDisplays = newPhysical  }
         applyVisibility()
     }

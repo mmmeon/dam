@@ -6,11 +6,10 @@ final class VideoManagerFilterTests: XCTestCase {
 
     private let airPlayKey      = "\(AppIdentity.shortID).hidden.airplay"
     private let displayKey      = "\(AppIdentity.shortID).hidden.displays"
-    private let aspectRatioKey  = "\(AppIdentity.shortID).display.aspectRatio"
 
     override func tearDown() {
         super.tearDown()
-        [airPlayKey, displayKey, aspectRatioKey].forEach { UserDefaults.standard.removeObject(forKey: $0) }
+        [airPlayKey, displayKey].forEach { UserDefaults.standard.removeObject(forKey: $0) }
     }
 
     // MARK: - Helpers
@@ -190,6 +189,48 @@ final class VideoManagerFilterTests: XCTestCase {
         XCTAssertFalse(hiDPI.contains { $0.width == 2560 }, "No 5K backing is advertised")
     }
 
+    // MARK: - VideoManager.defaultVirtualMode(for:)
+
+    func testDefaultVirtualMode_noneStored_isNil() {
+        let key = "\(AppIdentity.shortID).virtual.airplay.defaultResolution"
+        let saved = UserDefaults.standard.object(forKey: key)
+        defer { UserDefaults.standard.set(saved, forKey: key) }
+        VisibilityPreferences.setDefaultVirtualResolution(nil, for: .airPlay)
+        XCTAssertNil(VideoManager.defaultVirtualMode(for: .airPlay))
+    }
+
+    func testDefaultVirtualMode_prefers60HzAt1x_elseHighestEnabledRate() {
+        let resKey   = "\(AppIdentity.shortID).virtual.airplay.defaultResolution"
+        let ratesKey = "\(AppIdentity.shortID).virtual.airplay.refreshRates"
+        let savedRes = UserDefaults.standard.object(forKey: resKey)
+        let savedRates = UserDefaults.standard.object(forKey: ratesKey)
+        defer {
+            UserDefaults.standard.set(savedRes, forKey: resKey)
+            UserDefaults.standard.set(savedRates, forKey: ratesKey)
+        }
+        VisibilityPreferences.setDefaultVirtualResolution("1920x1080", for: .airPlay)
+
+        VisibilityPreferences.setVirtualRefreshRates([30, 60, 120], for: .airPlay)
+        let mode = VideoManager.defaultVirtualMode(for: .airPlay)
+        XCTAssertEqual(mode?.width, 1920)
+        XCTAssertEqual(mode?.height, 1080)
+        XCTAssertEqual(mode?.roundedRefreshRate, 60)
+        XCTAssertEqual(mode?.isHiDPI, false)
+        XCTAssertEqual(mode?.isVirtual, true)
+
+        // 60 Hz is always offered, so it stays the choice even when only 120 is checked.
+        VisibilityPreferences.setVirtualRefreshRates([120], for: .airPlay)
+        XCTAssertEqual(VideoManager.defaultVirtualMode(for: .airPlay)?.roundedRefreshRate, 60)
+    }
+
+    func testDefaultVirtualMode_unknownResolution_isNil() {
+        let key = "\(AppIdentity.shortID).virtual.airplay.defaultResolution"
+        let saved = UserDefaults.standard.object(forKey: key)
+        defer { UserDefaults.standard.set(saved, forKey: key) }
+        VisibilityPreferences.setDefaultVirtualResolution("800x600", for: .airPlay)
+        XCTAssertNil(VideoManager.defaultVirtualMode(for: .airPlay))
+    }
+
     // MARK: - VideoManager.pickerResolutions(_:native:current:)
 
     private func hiDPI(_ w: Int, _ h: Int) -> DisplayMode {
@@ -277,22 +318,11 @@ final class VideoManagerFilterTests: XCTestCase {
         XCTAssertEqual(m.shortLabel, "720p ↑✦")
     }
 
-    func testDisplayMode_shortLabel_16x9_usesPFormat() {
-        // 1920×1080 is 16:9, so the compact "1080p" label is used (shorter than "1920×1080").
-        let m = mode(1920, 1080)
-        XCTAssertEqual(m.shortLabel, "1080p")
-    }
-
-    func testDisplayMode_shortLabel_4K_usesPFormat() {
-        // 3840×2160 is 16:9, so "2160p" is shorter than "3840×2160".
-        let m = mode(3840, 2160)
-        XCTAssertEqual(m.shortLabel, "2160p")
-    }
-
-    func testDisplayMode_shortLabel_nonStandardRatio_usesWxH() {
-        // 1600×900 is 16:9, but 800×600 is 4:3 — with default 16:9 ratio that's non-matching.
-        let m = mode(800, 600)
-        XCTAssertEqual(m.shortLabel, "800×600")
+    func testDisplayMode_shortLabel_usesHeight() {
+        XCTAssertEqual(mode(1920, 1080).shortLabel, "1080p")
+        XCTAssertEqual(mode(3840, 2160).shortLabel, "2160p")
+        // Any ratio: the pickers only list sizes in the panel's own ratio.
+        XCTAssertEqual(mode(800, 600).shortLabel, "600p")
     }
 
     // MARK: - DisplayMode.id
