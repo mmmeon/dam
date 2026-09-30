@@ -54,7 +54,7 @@ func buildStatusMenu(audio: AudioManager,
                 let submenu = buildResolutionSubmenu(display: display, video: video)
                 submenu.addItem(.separator())
                 if canMirrorDisplays {
-                    submenu.addItem(mirrorToggleItem(for: display, isMirroring: mirrorActive))
+                    addMirrorItems(to: submenu, for: display, video: video)
                     // When AirPlay is the slave (built-in is master), offer a dedicated
                     // "Optimize for this Display" item that promotes it to master without
                     // exiting mirror mode — decoupled from the mirror on/off toggle.
@@ -113,7 +113,7 @@ func buildStatusMenu(audio: AudioManager,
                 let submenu = buildResolutionSubmenu(display: display, video: video)
                 if canMirrorDisplays {
                     submenu.addItem(.separator())
-                    submenu.addItem(mirrorToggleItem(for: display, isMirroring: mirrorActive))
+                    addMirrorItems(to: submenu, for: display, video: video)
                 }
                 item.submenu = submenu
             } else {
@@ -152,6 +152,9 @@ private func debugMenuItem() -> NSMenuItem {
                     keyEquivalent: "")
     submenu.addItem(withTitle: "Play Audio Output Picker",
                     action: #selector(AppDelegate.debugPlayAudioPicker(_:)),
+                    keyEquivalent: "")
+    submenu.addItem(withTitle: "Play Mirror Picker",
+                    action: #selector(AppDelegate.debugPlayMirrorPicker(_:)),
                     keyEquivalent: "")
     submenu.addItem(withTitle: "Preview Connecting HUD",
                     action: #selector(AppDelegate.debugPreviewConnectingHUD(_:)),
@@ -280,6 +283,42 @@ private func optimizeItem(for display: DisplayInfo) -> NSMenuItem {
     )
     item.representedObject = display
     return item
+}
+
+/// The mirror items of a display's submenu. With one other display, a single toggle. With
+/// several, a display that mirrors another keeps the toggle (it can only be freed), while
+/// any other gets a "Mirror on" submenu listing the displays that can mirror it, the ones
+/// doing so checked, plus "All Displays", and "Use as Separate Display" when it has slaves.
+private func addMirrorItems(to submenu: NSMenu, for display: DisplayInfo, video: VideoManager) {
+    let targets = video.mirrorTargets(for: display)
+    let inSet   = display.isMirroring || video.isBeingMirrored(display)
+    if targets.count < 2 || display.isMirroring {
+        submenu.addItem(mirrorToggleItem(for: display, isMirroring: inSet))
+        return
+    }
+    if inSet { submenu.addItem(mirrorToggleItem(for: display, isMirroring: true)) }
+
+    let slaves   = Set(video.slaveDisplays(of: display).map(\.id))
+    let mirrorOn = NSMenu()
+    for target in targets {
+        let item = NSMenuItem(title: target.name,
+                              action: #selector(AppDelegate.mirrorOnDisplay(_:)),
+                              keyEquivalent: "")
+        item.representedObject = MirrorSelection(display: display, target: target)
+        item.state = slaves.contains(target.id) ? .on : .off
+        mirrorOn.addItem(item)
+    }
+    mirrorOn.addItem(.separator())
+    let all = NSMenuItem(title: "All Displays",
+                         action: #selector(AppDelegate.mirrorOnDisplay(_:)),
+                         keyEquivalent: "")
+    all.representedObject = MirrorSelection(display: display, target: nil)
+    all.state = slaves.count == targets.count ? .on : .off
+    mirrorOn.addItem(all)
+
+    let parent = NSMenuItem(title: "Mirror on", action: nil, keyEquivalent: "")
+    parent.submenu = mirrorOn
+    submenu.addItem(parent)
 }
 
 private func mirrorToggleItem(for display: DisplayInfo, isMirroring: Bool) -> NSMenuItem {

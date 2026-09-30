@@ -91,6 +91,13 @@ struct VirtualResolutionSelection {
     let display: DisplayInfo
 }
 
+/// A "Mirror on" pick for `display`: `target` is the display to bring into or take out of
+/// its mirror set, or nil for every other display.
+struct MirrorSelection {
+    let display: DisplayInfo
+    let target: DisplayInfo?
+}
+
 final class VideoManager: ObservableObject {
     /// All Bonjour-discovered AirPlay destinations, regardless of visibility preference.
     private(set) var allAirPlayDevices: [DisplayInfo] = []
@@ -244,6 +251,27 @@ final class VideoManager: ObservableObject {
         DisplayArrangement.onlineDisplayIDs().filter { CGDisplayMirrorsDisplay($0) == cgID }
     }
 
+    /// The displays that can mirror `display`: every other connected one, built-in first,
+    /// then externals by name, then AirPlay.
+    func mirrorTargets(for display: DisplayInfo) -> [DisplayInfo] {
+        (allConnectedDisplays + allAirPlayDevices).filter {
+            $0.cgDisplayID != 0 && $0.cgDisplayID != display.cgDisplayID
+        }
+    }
+
+    /// The known displays currently mirroring `display`.
+    func slaveDisplays(of display: DisplayInfo) -> [DisplayInfo] {
+        guard display.cgDisplayID != 0 else { return [] }
+        let ids = Set(slaves(of: display.cgDisplayID))
+        return mirrorTargets(for: display).filter { ids.contains($0.cgDisplayID) }
+    }
+
+    /// The user-visible display `display` mirrors, if any.
+    func masterDisplay(of display: DisplayInfo) -> DisplayInfo? {
+        guard display.cgDisplayID != 0, let master = userMirrorMaster(of: display.cgDisplayID) else { return nil }
+        return mirrorTargets(for: display).first { $0.cgDisplayID == master }
+    }
+
     /// What toggling mirroring does for a display, decided from the live mirror state.
     enum MirrorPlan: Equatable {
         /// The display mirrors another user display: extend it.
@@ -321,16 +349,67 @@ final class VideoManager: ObservableObject {
         case .noOtherDisplay:
             finish(.failure(.noOtherDisplay))
         case .mirror(let target):
-            mirrorLog.debug("toggleMirroring: mirroring \(target.cgDisplayID) onto \(id)")
-            releaseVirtualAnchors(for: [display, target]) { [weak self] in
-                guard let self else { return }
-                self.dissolveMirrorSets(of: [id, target.cgDisplayID]) { result in
-                    if case .failure(let error) = result { return finish(.failure(error)) }
-                    self.commitDisplayChange({ CGConfigureDisplayMirrorOfDisplay($0, target.cgDisplayID, id) }) {
-                        finish($0.map { .mirrored(slave: target.name) })
-                    }
-                }
+            mirror(display, on: [target]) { finish($0.map { .mirrored(slave: target.name) }) }
+        }
+    }
+
+    /// Makes exactly `slaves` mirror `display`. A virtual anchor on any of them is released
+    /// first, then every mirror set they are in is dissolved in its own transaction (so
+    /// slaves of `display` left out of `slaves` end up extended), and the set is built in
+    /// one transaction, since adding to an existing set can fail silently.
+    func mirror(_ display: DisplayInfo, on slaves: [DisplayInfo],
+                completion: ((Result<Void, MirrorError>) -> Void)? = nil) {
+        let finish: (Result<Void, MirrorError>) -> Void = { result in
+            if case .failure(let error) = result {
+                mirrorLog.error("mirror '\(display.name)': \(String(describing: error))")
             }
+            completion?(result)
+        }
+        guard display.cgDisplayID != 0 else { return finish(.failure(.notConnected)) }
+        let id = display.cgDisplayID
+        let slaves = slaves.filter { $0.cgDisplayID != 0 && $0.cgDisplayID != id }
+        guard !slaves.isEmpty else { return finish(.failure(.noOtherDisplay)) }
+        let slaveIDs = slaves.map(\.cgDisplayID)
+        mirrorLog.debug("mirror: \(slaveIDs) onto \(id)")
+        releaseVirtualAnchors(for: [display] + slaves) { [weak self] in
+            guard let self else { return }
+            self.dissolveMirrorSets(of: [id] + slaveIDs) { result in
+                if case .failure(let error) = result { return finish(.failure(error)) }
+                self.commitDisplayChange({ cfg in
+                    for slave in slaveIDs { CGConfigureDisplayMirrorOfDisplay(cfg, slave, id) }
+                }, completion: finish)
+            }
+        }
+    }
+
+    /// Gives `display` its own desktop: frees it if it mirrors another display, frees its
+    /// slaves if others mirror it, and does nothing when it is already extended.
+    func extend(_ display: DisplayInfo, completion: ((Result<Void, MirrorError>) -> Void)? = nil) {
+        guard display.cgDisplayID != 0 else { completion?(.failure(.notConnected)); return }
+        let toExtend = Self.displaysToExtend(freeing: [display.cgDisplayID],
+                                             masterOf: { CGDisplayMirrorsDisplay($0) },
+                                             slavesOf: slaves(of:), anchorIDs: Set(virtualAnchorCGIDs.values))
+        guard !toExtend.isEmpty else { completion?(.success(())); return }
+        mirrorLog.debug("extend: freeing \(toExtend)")
+        commitDisplayChange({ cfg in
+            for id in toExtend { CGConfigureDisplayMirrorOfDisplay(cfg, id, CGDirectDisplayID(0)) }
+        }) { completion?($0) }
+    }
+
+    /// Applies a "Mirror on" pick: a target already mirroring the display is taken out of
+    /// the set, another is brought in alongside the current slaves, and no target means
+    /// every other display.
+    func applyMirrorSelection(_ selection: MirrorSelection,
+                              completion: ((Result<Void, MirrorError>) -> Void)? = nil) {
+        let display = selection.display
+        let current = slaveDisplays(of: display)
+        guard let target = selection.target else {
+            return mirror(display, on: mirrorTargets(for: display), completion: completion)
+        }
+        if current.contains(where: { $0.id == target.id }) {
+            extend(target, completion: completion)
+        } else {
+            mirror(display, on: current + [target], completion: completion)
         }
     }
 
