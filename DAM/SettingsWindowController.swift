@@ -196,7 +196,7 @@ final class SettingsWindowController: NSWindowController {
                 checkbox(title: "Spoken",
                          isOn: VisibilityPreferences.speechEnabled,
                          help: "Speaks the target device name when connecting to AirPlay, " +
-                               "picking an audio output, and toggling mirror / extend mode.",
+                               "picking an audio output, and picking where to mirror.",
                          action: { VisibilityPreferences.speechEnabled = $0 }),
             ]),
             ("Audio Devices:", [

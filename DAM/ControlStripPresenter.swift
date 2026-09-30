@@ -111,12 +111,15 @@ final class ControlStripPresenter: NSObject {
     private var resolutionSegMap: [ObjectIdentifier: (display: DisplayInfo, modes: [DisplayMode])] = [:]
     /// Maps each display button → DisplayInfo so the tap action can identify which display was chosen.
     private var displayButtonMap: [ObjectIdentifier: DisplayInfo] = [:]
+    /// Maps each button of the mirror-targets page → the pick it stands for.
+    private var mirrorChoiceMap: [ObjectIdentifier: MirrorSelection] = [:]
 
     /// The display whose resolution bar is currently presented (so the delegate can build its items).
     private var activeResolutionDisplay: DisplayInfo?
     private var activeResolutionPage: DisplayPage = .resolutions
     /// External and built-in displays have two pages: pick a resolution, then its refresh rate.
-    private enum DisplayPage { case resolutions, rates }
+    /// Any display with several others to mirror on has a page to pick them.
+    private enum DisplayPage { case resolutions, rates, mirrorTargets }
     private var resolutionBar: NSTouchBar?
 
     init(audioManager: AudioManager, videoManager: VideoManager) {
@@ -254,6 +257,7 @@ final class ControlStripPresenter: NSObject {
     private func makeModalBar() -> NSTouchBar {
         resolutionSegMap.removeAll()
         displayButtonMap.removeAll()
+        mirrorChoiceMap.removeAll()
         let bar = NSTouchBar()
         bar.delegate = self
         bar.defaultItemIdentifiers = modalItemIdentifiers()
@@ -360,8 +364,13 @@ final class ControlStripPresenter: NSObject {
     /// when the button was made.
     private func tappedDisplay(_ btn: NSButton) -> DisplayInfo? {
         guard let stale = displayButtonMap[ObjectIdentifier(btn)] else { return nil }
+        return latest(stale) ?? stale
+    }
+
+    /// The current entry for `display`, or nil once it has gone.
+    private func latest(_ display: DisplayInfo) -> DisplayInfo? {
         let all = (videoManager?.airPlayDevices ?? []) + (videoManager?.connectedDisplays ?? [])
-        return all.first { $0.id == stale.id } ?? stale
+        return all.first { $0.id == display.id }
     }
 
     private func makeResolutionBar(for display: DisplayInfo, page: DisplayPage) -> NSTouchBar {
@@ -379,17 +388,38 @@ final class ControlStripPresenter: NSObject {
             ]
             return bar
         }
+        if page == .mirrorTargets {
+            mirrorChoiceMap.removeAll()
+            let targets = videoManager?.mirrorTargets(for: display) ?? []
+            var ids: [NSTouchBarItem.Identifier] = [
+                NSTouchBarItem.Identifier(Self.displayResPrefix + display.id + ".back"), .flexibleSpace,
+            ]
+            ids += targets.indices.map {
+                NSTouchBarItem.Identifier(Self.displayResPrefix + display.id + ".target.\($0)")
+            }
+            if targets.count >= 2 {
+                ids.append(NSTouchBarItem.Identifier(Self.displayResPrefix + display.id + ".target.all"))
+            }
+            bar.defaultItemIdentifiers = ids
+            return bar
+        }
 
         let isAirPlay    = videoManager?.allAirPlayDevices.contains(where: { $0.id == display.id }) ?? false
         let mirrorID     = NSTouchBarItem.Identifier(Self.displayResPrefix + display.id + ".mirror")
+        let mirrorOnID   = NSTouchBarItem.Identifier(Self.displayResPrefix + display.id + ".mirroron")
         let optimizeID   = NSTouchBarItem.Identifier(Self.displayResPrefix + display.id + ".optimize")
         let disconnectID = NSTouchBarItem.Identifier(Self.displayResPrefix + display.id + ".disconnect")
         let resID        = NSTouchBarItem.Identifier(Self.displayResPrefix + display.id)
 
         let allActive = ((videoManager?.allAirPlayDevices ?? []) + (videoManager?.allConnectedDisplays ?? []))
             .filter { $0.cgDisplayID != 0 }
+        let targets = videoManager?.mirrorTargets(for: display) ?? []
+        let inSet   = display.isMirroring || (videoManager?.isBeingMirrored(display) ?? false)
         var ids: [NSTouchBarItem.Identifier] = []
-        if allActive.count >= 2 { ids.append(mirrorID) }
+        // Same rule as the menu: one other display gets a toggle; several get a "Mirror…"
+        // page, with "Extend" alongside while this display has slaves.
+        if !targets.isEmpty && (inSet || targets.count == 1) { ids.append(mirrorID) }
+        if targets.count >= 2 && !display.isMirroring { ids.append(mirrorOnID) }
         // Mirrors the menu: when AirPlay is the slave, offer promoting it to master
         // without leaving mirror mode.
         if allActive.count >= 2 && isAirPlay && display.isMirroring { ids.append(optimizeID) }
@@ -413,6 +443,35 @@ final class ControlStripPresenter: NSObject {
         let isMirroring = display.isMirroring || (videoManager?.isBeingMirrored(display) ?? false)
         return displayActionItem(id: id, title: isMirroring ? "Extend" : "Mirror", display: display,
                                  action: #selector(mirrorToggleTapped(_:)))
+    }
+
+    /// A button on the mirror-targets page: one display that can mirror `display`, tinted
+    /// while it does, or "All", tinted while every one does.
+    private func makeMirrorTargetItem(id: NSTouchBarItem.Identifier, display: DisplayInfo,
+                                      key: String) -> NSTouchBarItem? {
+        guard let vm = videoManager else { return nil }
+        let targets = vm.mirrorTargets(for: display)
+        let slaves  = Set(vm.slaveDisplays(of: display).map(\.id))
+        let selection: MirrorSelection
+        let title: String
+        let active: Bool
+        if key == "all" {
+            selection = MirrorSelection(display: display, target: nil)
+            title     = "All"
+            active    = slaves.count == targets.count
+        } else {
+            guard let i = Int(key), targets.indices.contains(i) else { return nil }
+            selection = MirrorSelection(display: display, target: targets[i])
+            title     = truncated(targets[i].name, max: 12)
+            active    = slaves.contains(targets[i].id)
+        }
+        let item = NSCustomTouchBarItem(identifier: id)
+        let btn  = NSButton(title: title, target: self, action: #selector(mirrorTargetTapped(_:)))
+        btn.bezelStyle = .rounded
+        btn.bezelColor = active ? .controlAccentColor : nil
+        mirrorChoiceMap[ObjectIdentifier(btn)] = selection
+        item.view = btn
+        return item
     }
 
     /// A button acting on `display`; the action looks the display up in `displayButtonMap`.
@@ -627,6 +686,23 @@ final class ControlStripPresenter: NSObject {
         }
     }
 
+    @objc private func mirrorOnTapped(_ btn: NSButton) {
+        guard let display = tappedDisplay(btn) else { return }
+        showDisplayPage(display, .mirrorTargets)
+    }
+
+    @objc private func mirrorTargetTapped(_ btn: NSButton) {
+        guard let selection = mirrorChoiceMap[ObjectIdentifier(btn)] else { return }
+        // Re-present the page once the change has settled so the tints refresh.
+        videoManager?.applyMirrorSelection(selection) { [weak self] result in
+            if case .failure(let error) = result {
+                SpeechSynthesizer.shared.announce(error.localizedDescription)
+            }
+            guard let self, let display = self.latest(selection.display) else { return }
+            self.showDisplayPage(display, .mirrorTargets)
+        }
+    }
+
     @objc private func mirrorToggleTapped(_ btn: NSButton) {
         guard let display = tappedDisplay(btn) else { return }
         // Re-present the modal once the display config has settled so the label refreshes.
@@ -743,9 +819,17 @@ extension ControlStripPresenter: NSTouchBarDelegate {
             // Resolution bar items, keyed by suffix after the display's identifier.
             guard let display = activeResolutionDisplay,
                   id.rawValue.hasPrefix(Self.displayResPrefix + display.id) else { return nil }
-            switch String(id.rawValue.dropFirst((Self.displayResPrefix + display.id).count)) {
+            let suffix = String(id.rawValue.dropFirst((Self.displayResPrefix + display.id).count))
+            if suffix.hasPrefix(".target.") {
+                return makeMirrorTargetItem(id: id, display: display,
+                                            key: String(suffix.dropFirst(".target.".count)))
+            }
+            switch suffix {
             case ".mirror":
                 return makeMirrorToggleItem(id: id, display: display)
+            case ".mirroron":
+                return displayActionItem(id: id, title: "Mirror…", display: display,
+                                         action: #selector(mirrorOnTapped(_:)))
             case ".optimize":
                 // "Optimize for this Display" (AirPlay mirror slave only).
                 return displayActionItem(id: id, title: "Optimize", display: display,
