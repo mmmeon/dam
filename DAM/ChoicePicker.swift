@@ -1,11 +1,12 @@
 //
 //  ChoicePicker.swift
 //
-//  The picker behind the hotkey-driven choosers (audio outputs, mirror targets): a numbered
-//  list shown on screen and on the Touch Bar, and spoken, as enabled. The owner opens it on
-//  a choice; each further hotkey press moves on. Pressing a number (or tapping a choice on
-//  the Touch Bar) picks that choice, Return picks the tinted one, and pausing picks it too,
-//  so a single press still moves to the next choice. Esc cancels.
+//  The picker behind the hotkey-driven choosers (audio outputs, mirror targets, the main
+//  display): a numbered list shown on screen and on the Touch Bar, and spoken, as enabled.
+//  The owner opens it on the current choice, or on the next one, as set; each further
+//  hotkey press moves on. Pressing a number (or tapping a choice on the Touch Bar) picks
+//  that choice, Return picks the tinted one, and pausing for the set delay picks it too.
+//  Esc cancels.
 //
 
 import AppKit
@@ -13,8 +14,12 @@ import Carbon.HIToolbox
 
 final class ChoicePicker: NSObject {
 
-    /// How long after the last hotkey press the tinted choice is picked.
-    static let pickDelay: TimeInterval = 2.0
+    /// Where a picker opens for the choice that is current now: on it, or on the one after
+    /// it, as the preference says.
+    static func startCursor(current: Int, count: Int) -> Int {
+        guard count > 0 else { return 0 }
+        return VisibilityPreferences.pickerStartsOnCurrent ? current : (current + 1) % count
+    }
 
     private let idPrefix: String
     private let pickingHint: HUDHint
@@ -104,7 +109,8 @@ final class ChoicePicker: NSObject {
 
     private func restartPickTimer() {
         pickTimer?.invalidate()
-        pickTimer = .scheduledTimer(withTimeInterval: Self.pickDelay, repeats: false) { [weak self] _ in
+        pickTimer = .scheduledTimer(withTimeInterval: VisibilityPreferences.pickDelay,
+                                    repeats: false) { [weak self] _ in
             guard let self else { return }
             self.pick(self.cursor)
         }

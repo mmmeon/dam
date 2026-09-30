@@ -2,8 +2,9 @@
 //  MainDisplayPicker.swift
 //
 //  The main-display hotkey's picker: every display that shows its own desktop, opened on
-//  the current main display; each further press moves on, and the choice picker handles
-//  the rest (numbers, Return, pausing, Esc, the Touch Bar and speech).
+//  the current main display (or the next one, as set); each further press moves on, and
+//  the choice picker handles the rest (numbers, Return, pausing, Esc, the Touch Bar and
+//  speech).
 //
 
 import AppKit
@@ -35,8 +36,9 @@ final class MainDisplayPicker {
         (candidates.map(\.name), candidates.firstIndex(where: \.isMain) ?? 0)
     }
 
-    /// Opens the picker on the current main display, or moves to the next display when
-    /// already open. Picking the current main display again changes nothing.
+    /// Opens the picker on the current main display (or the next one, as set), or moves to
+    /// the next display when already open. Picking the current main display again changes
+    /// nothing.
     func advance() {
         if picker.isCycling {
             picker.advance()
@@ -51,7 +53,8 @@ final class MainDisplayPicker {
             return
         }
         let (names, current) = Self.choices(from: candidates)
-        picker.open(choices: names, cursor: current) { [weak self] i in
+        picker.open(choices: names,
+                    cursor: ChoicePicker.startCursor(current: current, count: names.count)) { [weak self] i in
             guard i != current else { return }
             self?.videoManager?.setMainDisplay(candidates[i]) { result in
                 if case .failure(let error) = result {

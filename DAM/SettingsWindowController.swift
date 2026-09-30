@@ -208,6 +208,15 @@ final class SettingsWindowController: NSWindowController {
                                "picking an audio output, and picking where to mirror.",
                          action: { VisibilityPreferences.speechEnabled = $0 }),
             ]),
+            ("Pickers:", [
+                checkbox(title: "Open on the current choice",
+                         isOn: VisibilityPreferences.pickerStartsOnCurrent,
+                         help: "The audio, mirror and main display pickers open on what is " +
+                               "current. Unchecked, they open on the next choice, so a single " +
+                               "press followed by the pause moves on.",
+                         action: { VisibilityPreferences.pickerStartsOnCurrent = $0 }),
+                pickDelayRow(),
+            ]),
             ("Audio Devices:", [
                 checkbox(title: "Hide virtual devices when first discovered",
                          isOn: VisibilityPreferences.autoHideVirtualAudio,
@@ -470,6 +479,56 @@ final class SettingsWindowController: NSWindowController {
         tf.font      = .systemFont(ofSize: NSFont.systemFontSize)
         tf.textColor = .tertiaryLabelColor
         return tf
+    }
+
+    /// "Pick after [2.0] s": how long a picker waits after the last press before it picks.
+    private func pickDelayRow() -> NSView {
+        let range = VisibilityPreferences.pickDelayRange
+        let field = NSTextField(string: Self.delayText(VisibilityPreferences.pickDelay))
+        field.alignment = .right
+        field.controlSize = .small
+        field.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        field.widthAnchor.constraint(equalToConstant: 44).isActive = true
+        let stepper = NSStepper()
+        stepper.minValue  = range.lowerBound
+        stepper.maxValue  = range.upperBound
+        stepper.increment = 0.5
+        stepper.doubleValue = VisibilityPreferences.pickDelay
+        stepper.controlSize = .small
+        let apply: (Double) -> Void = { value in
+            let clamped = VisibilityPreferences.clampedPickDelay(value)
+            VisibilityPreferences.pickDelay = clamped
+            stepper.doubleValue = clamped
+            field.stringValue = Self.delayText(clamped)
+        }
+        pickDelayFieldHandler   = { apply(Double($0.stringValue.replacingOccurrences(of: ",", with: ".")) ?? VisibilityPreferences.pickDelay) }
+        pickDelayStepperHandler = { apply($0.doubleValue) }
+        field.target   = self
+        field.action   = #selector(pickDelayFieldChanged(_:))
+        stepper.target = self
+        stepper.action = #selector(pickDelayStepperChanged(_:))
+        let row = NSStackView(views: [smallLabel("Pick after"), field, stepper, smallLabel("s")])
+        row.orientation = .horizontal
+        row.spacing = 4
+        row.toolTip = "How long a picker waits after the last hotkey press before it picks " +
+                      "the tinted choice."
+        return row
+    }
+
+    private var pickDelayFieldHandler:   ((NSTextField) -> Void)?
+    private var pickDelayStepperHandler: ((NSStepper) -> Void)?
+
+    @objc private func pickDelayFieldChanged(_ sender: NSTextField)  { pickDelayFieldHandler?(sender) }
+    @objc private func pickDelayStepperChanged(_ sender: NSStepper)  { pickDelayStepperHandler?(sender) }
+
+    private static func delayText(_ value: Double) -> String {
+        value == value.rounded() ? String(Int(value)) : String(format: "%.1f", value)
+    }
+
+    private func smallLabel(_ text: String) -> NSTextField {
+        let label = NSTextField(labelWithString: text)
+        label.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        return label
     }
 
     private func checkbox(title: String,
