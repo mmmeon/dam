@@ -44,9 +44,10 @@ func buildStatusMenu(audio: AudioManager,
             item.representedObject = display
             item.state = display.isConnected ? .on : .off
             let mirrorActive = display.isMirroring || video.isBeingMirrored(display)
-            if mirrorActive {
-                let icon = video.hasVirtualAnchor(for: display.name) ? "sparkles" : "square.on.square"
-                item.image = menuIcon(icon)
+            if video.hasVirtualAnchor(for: display.name) {
+                item.image = menuIcon("sparkles")
+            } else if mirrorActive {
+                item.image = menuIcon("square.on.square")
             }
 
             if display.isConnected && display.cgDisplayID != 0 {
@@ -100,11 +101,12 @@ func buildStatusMenu(audio: AudioManager,
             item.state = display.isConnected ? .on : .off
 
             // Mirror icon whether this display is the slave OR the master in a set.
-            // Use sparkles when a virtual anchor is driving the display (same as AirPlay).
+            // Sparkles when a virtual anchor is driving the display (same as AirPlay).
             let mirrorActive = display.isMirroring || video.isBeingMirrored(display)
-            if mirrorActive {
-                let icon = video.hasVirtualAnchor(for: display.name) ? "sparkles" : "square.on.square"
-                item.image = menuIcon(icon)
+            if video.hasVirtualAnchor(for: display.name) {
+                item.image = menuIcon("sparkles")
+            } else if mirrorActive {
+                item.image = menuIcon("square.on.square")
             }
 
             if display.cgDisplayID != 0 {

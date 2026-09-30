@@ -114,6 +114,7 @@ final class ControlStripPresenter: NSObject {
 
     /// The display whose resolution bar is currently presented (so the delegate can build its items).
     private var activeResolutionDisplay: DisplayInfo?
+    private var activeResolutionPage: DisplayPage = .resolutions
     /// External and built-in displays have two pages: pick a resolution, then its refresh rate.
     private enum DisplayPage { case resolutions, rates }
     private var resolutionBar: NSTouchBar?
@@ -181,6 +182,21 @@ final class ControlStripPresenter: NSObject {
     func rebuild() {
         NSApp.touchBar = makeStripBar()
         if let bar = modalBar { updateModalBar(bar) }
+        refreshResolutionBar()
+    }
+
+    /// Re-presents an open resolution bar for the current state of its display, so its
+    /// mirror / extend button and modes follow a change made elsewhere. Closes it when the
+    /// display has gone away.
+    private func refreshResolutionBar() {
+        guard let bar = resolutionBar, let stale = activeResolutionDisplay else { return }
+        let all = (videoManager?.airPlayDevices ?? []) + (videoManager?.connectedDisplays ?? [])
+        guard let fresh = all.first(where: { $0.id == stale.id && $0.cgDisplayID != 0 }) else {
+            NSTouchBar.dismissSystemModal(bar)
+            resolutionBar = nil
+            return
+        }
+        showDisplayPage(fresh, activeResolutionPage)
     }
 
     // MARK: - Touch Bar construction
@@ -238,29 +254,31 @@ final class ControlStripPresenter: NSObject {
     private func makeModalBar() -> NSTouchBar {
         resolutionSegMap.removeAll()
         displayButtonMap.removeAll()
+        let bar = NSTouchBar()
+        bar.delegate = self
+        bar.defaultItemIdentifiers = modalItemIdentifiers()
+        return bar
+    }
 
+    /// The modal bar's items for the current state: audio and AirPlay pickers on the left,
+    /// then a button per connected AirPlay and physical display that opens its resolutions.
+    private func modalItemIdentifiers() -> [NSTouchBarItem.Identifier] {
         var ids: [NSTouchBarItem.Identifier] = [
             Self.modalAudioID, .fixedSpaceSmall, Self.modalVideoID,
         ]
-
-        // Right side: connected AirPlay displays + physical displays, all as buttons
-        // that navigate to the resolution picker.
         let connectedAirPlay = (videoManager?.airPlayDevices ?? [])
             .filter { $0.isConnected && $0.cgDisplayID != 0 }
         let physical = videoManager?.connectedDisplays ?? []
         let rightDisplays = connectedAirPlay + physical
-
         if !rightDisplays.isEmpty {
             ids.append(.flexibleSpace)
             rightDisplays.forEach { ids.append(displayPopoverID(for: $0)) }
         }
-
-        let bar = NSTouchBar()
-        bar.delegate = self
-        bar.defaultItemIdentifiers = ids
-        return bar
+        return ids
     }
 
+    /// Brings an open modal bar up to date in place: the pickers, which displays are
+    /// listed, and each display button's mirror / anchor icon.
     private func updateModalBar(_ bar: NSTouchBar) {
         if let item = bar.item(forIdentifier: Self.modalAudioID) as? NSCustomTouchBarItem {
             item.view = audioSegmented()
@@ -268,7 +286,14 @@ final class ControlStripPresenter: NSObject {
         if let item = bar.item(forIdentifier: Self.modalVideoID) as? NSCustomTouchBarItem {
             item.view = videoSegmented()
         }
-        // Display popovers rebuild their content lazily on next open — no in-place update needed.
+        let ids = modalItemIdentifiers()
+        if bar.defaultItemIdentifiers != ids { bar.defaultItemIdentifiers = ids }
+        for id in ids {
+            guard let display = display(for: id),
+                  let item = bar.item(forIdentifier: id) as? NSCustomTouchBarItem else { continue }
+            if let old = item.view as? NSButton { displayButtonMap.removeValue(forKey: ObjectIdentifier(old)) }
+            item.view = displayButton(for: display)
+        }
     }
 
     // MARK: - Display identifier helpers
@@ -293,29 +318,31 @@ final class ControlStripPresenter: NSObject {
     private func makeDisplayButtonItem(id: NSTouchBarItem.Identifier,
                                        display: DisplayInfo) -> NSTouchBarItem {
         let item = NSCustomTouchBarItem(identifier: id)
-        let btn  = NSButton(title: truncated(display.name, max: 10),
-                            target: self,
-                            action: #selector(displayButtonTapped(_:)))
+        item.view = displayButton(for: display)
+        return item
+    }
+
+    /// A button for `display` in the modal bar, with its current mirror / anchor icon.
+    private func displayButton(for display: DisplayInfo) -> NSButton {
+        let btn = NSButton(title: truncated(display.name, max: 10),
+                           target: self,
+                           action: #selector(displayButtonTapped(_:)))
         btn.bezelStyle = .rounded
 
-        let isAirPlay = videoManager?.allAirPlayDevices.contains(where: { $0.id == display.id }) ?? false
+        // Same rule as the menu: sparkles while a virtual anchor drives the display, the
+        // mirror symbol while it is in a mirror set as slave or master.
+        let isAirPlay    = videoManager?.allAirPlayDevices.contains(where: { $0.id == display.id }) ?? false
+        let hasAnchor    = videoManager?.hasVirtualAnchor(for: display.name) ?? false
+        let mirrorActive = display.isMirroring || (videoManager?.isBeingMirrored(display) ?? false)
         let symbolName: String?
-        if isAirPlay {
-            let isAirPlayMirroring = display.isMirroring || (videoManager?.isBeingMirrored(display) ?? false)
-            if isAirPlayMirroring {
-                // Virtual anchor active → show sparkles to indicate it's a virtual-display mirror.
-                let hasAnchor = videoManager?.hasVirtualAnchor(for: display.name) ?? false
-                symbolName = hasAnchor ? "sparkles" : "square.on.square"
-            } else {
-                symbolName = "airplayvideo"
-            }
+        if hasAnchor {
+            symbolName = "sparkles"
+        } else if mirrorActive {
+            symbolName = "square.on.square"
+        } else if isAirPlay {
+            symbolName = "airplayvideo"
         } else if display.isBuiltIn {
             symbolName = "laptopcomputer"
-        } else if videoManager?.hasVirtualAnchor(for: display.name) ?? false {
-            // External physical display with a virtual anchor active.
-            symbolName = "sparkles"
-        } else if display.isMirroring {
-            symbolName = "square.on.square"
         } else {
             symbolName = nil
         }
@@ -326,12 +353,20 @@ final class ControlStripPresenter: NSObject {
         }
 
         displayButtonMap[ObjectIdentifier(btn)] = display
-        item.view = btn
-        return item
+        return btn
+    }
+
+    /// The display a tapped button stands for, in its current state rather than as it was
+    /// when the button was made.
+    private func tappedDisplay(_ btn: NSButton) -> DisplayInfo? {
+        guard let stale = displayButtonMap[ObjectIdentifier(btn)] else { return nil }
+        let all = (videoManager?.airPlayDevices ?? []) + (videoManager?.connectedDisplays ?? [])
+        return all.first { $0.id == stale.id } ?? stale
     }
 
     private func makeResolutionBar(for display: DisplayInfo, page: DisplayPage) -> NSTouchBar {
         activeResolutionDisplay = display
+        activeResolutionPage    = page
         let bar = NSTouchBar()
         bar.delegate = self
         resolutionBar = bar
@@ -373,12 +408,9 @@ final class ControlStripPresenter: NSObject {
     /// Builds the mirror/extend toggle button for the resolution bar.
     private func makeMirrorToggleItem(id: NSTouchBarItem.Identifier,
                                       display: DisplayInfo) -> NSTouchBarItem {
-        // For AirPlay displays the relevant state is whether something is mirroring
-        // them (they are the master). For physical displays use their own isMirroring flag.
-        let isAirPlay = videoManager?.allAirPlayDevices.contains(where: { $0.id == display.id }) ?? false
-        let isMirroring = isAirPlay
-            ? (display.isMirroring || (videoManager?.isBeingMirrored(display) ?? false))
-            : display.isMirroring
+        // Same rule as the menu: the display is mirroring whether it is the slave or the
+        // master of a set, and a virtual anchor does not count.
+        let isMirroring = display.isMirroring || (videoManager?.isBeingMirrored(display) ?? false)
         return displayActionItem(id: id, title: isMirroring ? "Extend" : "Mirror", display: display,
                                  action: #selector(mirrorToggleTapped(_:)))
     }
@@ -561,7 +593,7 @@ final class ControlStripPresenter: NSObject {
     }
 
     @objc private func displayButtonTapped(_ btn: NSButton) {
-        guard let display = displayButtonMap[ObjectIdentifier(btn)] else {
+        guard let display = tappedDisplay(btn) else {
             NSLog("\(AppIdentity.name): displayButtonTapped – display not found in map")
             return
         }
@@ -570,13 +602,13 @@ final class ControlStripPresenter: NSObject {
     }
 
     @objc private func backToResolutionsTapped(_ btn: NSButton) {
-        guard let display = displayButtonMap[ObjectIdentifier(btn)] else { return }
+        guard let display = tappedDisplay(btn) else { return }
         showDisplayPage(display, .resolutions)
     }
 
 
     @objc private func disconnectTapped(_ btn: NSButton) {
-        guard let display = displayButtonMap[ObjectIdentifier(btn)] else { return }
+        guard let display = tappedDisplay(btn) else { return }
         videoManager?.disconnectAirPlay(deviceName: display.name,
                                         announcing: "Deselected \(display.name)")
         // Close the modal — the display is going away.
@@ -585,19 +617,23 @@ final class ControlStripPresenter: NSObject {
     }
 
     @objc private func optimizeTapped(_ btn: NSButton) {
-        guard let display = displayButtonMap[ObjectIdentifier(btn)] else { return }
-        videoManager?.setAsOptimizedDisplay(display)
-        // Re-present the modal after the display config settles so the buttons refresh.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
+        guard let display = tappedDisplay(btn) else { return }
+        // Re-present the modal once the display config has settled so the buttons refresh.
+        videoManager?.setAsOptimizedDisplay(display) { [weak self] result in
+            if case .failure(let error) = result {
+                SpeechSynthesizer.shared.announce(error.localizedDescription)
+            }
             self?.openModal()
         }
     }
 
     @objc private func mirrorToggleTapped(_ btn: NSButton) {
-        guard let display = displayButtonMap[ObjectIdentifier(btn)] else { return }
-        videoManager?.toggleMirroring(for: display)
-        // Re-present the modal after the display config settles so the button label refreshes.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
+        guard let display = tappedDisplay(btn) else { return }
+        // Re-present the modal once the display config has settled so the label refreshes.
+        videoManager?.toggleMirroring(for: display) { [weak self] result in
+            if case .failure(let error) = result {
+                SpeechSynthesizer.shared.announce(error.localizedDescription)
+            }
             self?.openModal()
         }
     }

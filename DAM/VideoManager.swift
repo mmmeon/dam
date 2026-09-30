@@ -8,6 +8,9 @@ import Foundation
 import IOKit
 import IOKit.graphics
 import Network
+import os.log
+
+private let mirrorLog = Logger(subsystem: AppIdentity.bundleID, category: "Mirror")
 
 struct DisplayMode: Identifiable, Hashable {
     let id: String              // "WIDTHxHEIGHT@RATE" or "WIDTHxHEIGHT@RATE@2x" for HiDPI
@@ -68,7 +71,9 @@ struct DisplayInfo: Identifiable, Hashable {
     let name: String
     let isConnected: Bool                   // true = currently active (in NSScreen.screens)
     let cgDisplayID: CGDirectDisplayID      // 0 when not connected
-    /// True when this display is the slave in a mirror set (it replicates another display).
+    /// True when this display replicates another user-visible display. A display driven
+    /// through one of DAM's virtual anchors is technically a mirror slave too, but it shows
+    /// its own desktop, so it counts as extended here.
     let isMirroring: Bool
     /// True for the Mac's own built-in panel.
     let isBuiltIn: Bool
@@ -106,6 +111,8 @@ final class VideoManager: ObservableObject {
 
     private var browser: NWBrowser?
     private var discoveredNames: Set<String> = []
+    /// The pending re-read of the display list after a display configuration change.
+    private var reconfigureWork: DispatchWorkItem?
     /// Remembers the CGDirectDisplayID for each AirPlay device name the last time
     /// it appeared in NSScreen.screens (extend mode). Used to keep tracking the
     /// display when it becomes a mirror slave and drops out of NSScreen.
@@ -135,11 +142,39 @@ final class VideoManager: ObservableObject {
         }
         browser.start(queue: .global(qos: .utility))
         self.browser = browser
+        observeDisplayChanges()
     }
 
     /// Re-check which discovered devices are currently connected.
     func refresh() {
         mergeDevices()
+    }
+
+    /// Re-reads the display list whenever the display configuration changes, so a mirror
+    /// or extend made anywhere — System Settings, Control Center, a slow AirPlay
+    /// reconfigure — reaches the menu and Touch Bar without waiting for them to be opened.
+    private func observeDisplayChanges() {
+        let context = Unmanaged.passUnretained(self).toOpaque()
+        CGDisplayRegisterReconfigurationCallback({ _, flags, userInfo in
+            // The callback fires once before a change and once after it; act on the latter.
+            guard let userInfo, !flags.contains(.beginConfigurationFlag) else { return }
+            let manager = Unmanaged<VideoManager>.fromOpaque(userInfo).takeUnretainedValue()
+            DispatchQueue.main.async { manager.scheduleMergeAfterReconfiguration() }
+        }, context)
+    }
+
+    /// Coalesces the burst of callbacks one change produces into a single merge, once the
+    /// configuration has had a moment to settle.
+    private func scheduleMergeAfterReconfiguration() {
+        reconfigureWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.mergeDevices()
+            // A resolution or arrangement change leaves the display list as it was, yet the
+            // menu's and Touch Bar's mode markers need rebuilding; announce a change anyway.
+            self?.objectWillChange.send()
+        }
+        reconfigureWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
     }
 
     /// Re-applies the current visibility preferences without re-querying displays.
@@ -160,50 +195,186 @@ final class VideoManager: ObservableObject {
 
     // MARK: - Mirror / Extend
 
-    /// True if any known connected display is currently mirroring `display`
-    /// (i.e. `display` is the master in a mirror set).
-    func isBeingMirrored(_ display: DisplayInfo) -> Bool {
-        guard display.cgDisplayID != 0 else { return false }
-        return (allConnectedDisplays + allAirPlayDevices).contains {
-            $0.cgDisplayID != 0 &&
-            CGDisplayMirrorsDisplay($0.cgDisplayID) == display.cgDisplayID
+    /// What a mirror toggle did.
+    enum MirrorChange {
+        case extended
+        case mirrored(slave: String)
+    }
+
+    enum MirrorError: LocalizedError {
+        case notConnected
+        case noOtherDisplay
+        case configuration(CGError)
+
+        var errorDescription: String? {
+            switch self {
+            case .notConnected:   return "The display is not connected"
+            case .noOtherDisplay: return "No other display to mirror"
+            case .configuration:  return "The display change failed"
+            }
         }
     }
 
-    /// Toggles the mirror relationship.
+    /// True if any online display is currently mirroring `display`
+    /// (i.e. `display` is the master in a mirror set).
+    func isBeingMirrored(_ display: DisplayInfo) -> Bool {
+        guard display.cgDisplayID != 0 else { return false }
+        return !slaves(of: display.cgDisplayID).isEmpty
+    }
+
+    /// Whether `display` is in a mirror set with another user-visible display right now,
+    /// read live rather than from the snapshot a menu or button was built from.
+    func isInMirrorSet(_ display: DisplayInfo) -> Bool {
+        guard display.cgDisplayID != 0 else { return false }
+        return userMirrorMaster(of: display.cgDisplayID) != nil || isBeingMirrored(display)
+    }
+
+    /// The display `cgID` mirrors, unless it mirrors nothing or one of DAM's virtual anchors.
+    func userMirrorMaster(of cgID: CGDirectDisplayID) -> CGDirectDisplayID? {
+        Self.userMirrorMaster(CGDisplayMirrorsDisplay(cgID), anchorIDs: Set(virtualAnchorCGIDs.values))
+    }
+
+    /// `master` as reported by CoreGraphics, unless it is nothing or one of DAM's anchors.
+    static func userMirrorMaster(_ master: CGDirectDisplayID,
+                                 anchorIDs: Set<CGDirectDisplayID>) -> CGDirectDisplayID? {
+        master != CGDirectDisplayID(0) && !anchorIDs.contains(master) ? master : nil
+    }
+
+    private func slaves(of cgID: CGDirectDisplayID) -> [CGDirectDisplayID] {
+        DisplayArrangement.onlineDisplayIDs().filter { CGDisplayMirrorsDisplay($0) == cgID }
+    }
+
+    /// What toggling mirroring does for a display, decided from the live mirror state.
+    enum MirrorPlan: Equatable {
+        /// The display mirrors another user display: extend it.
+        case extendSelf
+        /// Other displays mirror it: extend them.
+        case extendSlaves([CGDirectDisplayID])
+        /// Nothing user-visible mirrors it: make `target` mirror it.
+        case mirror(target: DisplayInfo)
+        case noOtherDisplay
+    }
+
+    /// Decides the toggle for display `id`, which mirrors `master` (0 for nothing) and is
+    /// mirrored by `slaves`. `anchorIDs` are DAM's virtual anchors, which do not count as
+    /// mirroring. `candidates` are the displays that may be made to mirror it, in order.
+    static func mirrorPlan(for id: CGDirectDisplayID, master: CGDirectDisplayID,
+                           slaves: [CGDirectDisplayID], anchorIDs: Set<CGDirectDisplayID>,
+                           candidates: [DisplayInfo]) -> MirrorPlan {
+        if userMirrorMaster(master, anchorIDs: anchorIDs) != nil { return .extendSelf }
+        if !slaves.isEmpty { return .extendSlaves(slaves) }
+        guard let target = candidates.first(where: { $0.cgDisplayID != 0 && $0.cgDisplayID != id }) else {
+            return .noOtherDisplay
+        }
+        return .mirror(target: target)
+    }
+
+    /// The displays to extend so that none of `ids` is left in a user mirror set: each of
+    /// them that mirrors a user display, and every display mirroring one of them.
+    static func displaysToExtend(freeing ids: [CGDirectDisplayID],
+                                 masterOf: (CGDirectDisplayID) -> CGDirectDisplayID,
+                                 slavesOf: (CGDirectDisplayID) -> [CGDirectDisplayID],
+                                 anchorIDs: Set<CGDirectDisplayID>) -> Set<CGDirectDisplayID> {
+        var toExtend = Set<CGDirectDisplayID>()
+        for id in ids {
+            if userMirrorMaster(masterOf(id), anchorIDs: anchorIDs) != nil { toExtend.insert(id) }
+            toExtend.formUnion(slavesOf(id))
+        }
+        return toExtend
+    }
+
+    /// Toggles the mirror relationship, reading the current state live:
     ///
-    /// - If `display` is the **slave** (isMirroring == true): extends it to its own screen.
-    /// - If `display` is the **master** (something is mirroring it): extends the slave.
-    /// - If no mirroring is active: finds the first other connected display and makes
-    ///   it mirror `display`.
-    func toggleMirroring(for display: DisplayInfo) {
-        guard display.cgDisplayID != 0 else { return }
+    /// - If `display` mirrors another user-visible display: extends it to its own screen.
+    /// - If other displays mirror `display`: extends them.
+    /// - Otherwise: makes the first other connected display mirror `display`. A virtual
+    ///   anchor on either display is released first, and any mirror set the other display
+    ///   is already in is dissolved in its own transaction, since adding to an existing set
+    ///   can fail silently.
+    ///
+    /// `completion` runs on the main queue once the change is committed and the display
+    /// list re-read, or with the reason the change could not be made.
+    func toggleMirroring(for display: DisplayInfo,
+                         completion: ((Result<MirrorChange, MirrorError>) -> Void)? = nil) {
+        let finish: (Result<MirrorChange, MirrorError>) -> Void = { result in
+            if case .failure(let error) = result {
+                mirrorLog.error("toggleMirroring '\(display.name)': \(String(describing: error))")
+            }
+            completion?(result)
+        }
+        guard display.cgDisplayID != 0 else { return finish(.failure(.notConnected)) }
+        let id = display.cgDisplayID
+        let plan = Self.mirrorPlan(for: id, master: CGDisplayMirrorsDisplay(id), slaves: slaves(of: id),
+                                   anchorIDs: Set(virtualAnchorCGIDs.values),
+                                   candidates: allConnectedDisplays + allAirPlayDevices)
+        switch plan {
+        case .extendSelf:
+            mirrorLog.debug("toggleMirroring: extending slave \(id)")
+            commitDisplayChange({ CGConfigureDisplayMirrorOfDisplay($0, id, CGDirectDisplayID(0)) }) {
+                finish($0.map { .extended })
+            }
+        case .extendSlaves(let mirroringThis):
+            mirrorLog.debug("toggleMirroring: extending slaves \(mirroringThis) of \(id)")
+            commitDisplayChange({ cfg in
+                for slave in mirroringThis { CGConfigureDisplayMirrorOfDisplay(cfg, slave, CGDirectDisplayID(0)) }
+            }) { finish($0.map { .extended }) }
+        case .noOtherDisplay:
+            finish(.failure(.noOtherDisplay))
+        case .mirror(let target):
+            mirrorLog.debug("toggleMirroring: mirroring \(target.cgDisplayID) onto \(id)")
+            releaseVirtualAnchors(for: [display, target]) { [weak self] in
+                guard let self else { return }
+                self.dissolveMirrorSets(of: [id, target.cgDisplayID]) { result in
+                    if case .failure(let error) = result { return finish(.failure(error)) }
+                    self.commitDisplayChange({ CGConfigureDisplayMirrorOfDisplay($0, target.cgDisplayID, id) }) {
+                        finish($0.map { .mirrored(slave: target.name) })
+                    }
+                }
+            }
+        }
+    }
+
+    /// Releases the virtual anchor of each display in `displays` that has one, one after
+    /// another, then calls `completion` on the main queue.
+    private func releaseVirtualAnchors(for displays: [DisplayInfo], completion: @escaping () -> Void) {
+        guard let next = displays.first(where: { hasVirtualAnchor(for: $0.name) }) else { return completion() }
+        disableVirtualAnchor(for: next) { [weak self] in
+            guard let self else { return }
+            self.releaseVirtualAnchors(for: displays.filter { $0.id != next.id }, completion: completion)
+        }
+    }
+
+    /// Takes each display in `ids` out of whatever user mirror set it is in, as a slave or
+    /// as a master, in one transaction, then waits for the change to settle. Calls
+    /// `completion` at once when none of them is in a set.
+    private func dissolveMirrorSets(of ids: [CGDirectDisplayID],
+                                    completion: @escaping (Result<Void, MirrorError>) -> Void) {
+        let toExtend = Self.displaysToExtend(freeing: ids, masterOf: { CGDisplayMirrorsDisplay($0) },
+                                             slavesOf: slaves(of:), anchorIDs: Set(virtualAnchorCGIDs.values))
+        guard !toExtend.isEmpty else { return completion(.success(())) }
+        mirrorLog.debug("dissolveMirrorSets: extending \(toExtend) first")
+        commitDisplayChange({ cfg in
+            for id in toExtend { CGConfigureDisplayMirrorOfDisplay(cfg, id, CGDirectDisplayID(0)) }
+        }, settle: 1.0, completion: completion)
+    }
+
+    /// Runs `configure` in one display configuration transaction. The commit can block for
+    /// seconds, so it runs off the main queue; once it is done and `settle` has passed, the
+    /// display list is re-read and `completion` runs on the main queue with the result.
+    private func commitDisplayChange(_ configure: (CGDisplayConfigRef) -> Void,
+                                     settle: TimeInterval = 0.5,
+                                     completion: @escaping (Result<Void, MirrorError>) -> Void) {
         var config: CGDisplayConfigRef?
-        guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else { return }
-
-        let allKnown = allConnectedDisplays + allAirPlayDevices
-        // Find a slave that is currently mirroring this display.
-        let slave = allKnown.first {
-            $0.cgDisplayID != 0 &&
-            CGDisplayMirrorsDisplay($0.cgDisplayID) == display.cgDisplayID
-        }
-
-        if display.isMirroring {
-            // This display is itself a slave — extend it.
-            CGConfigureDisplayMirrorOfDisplay(cfg, display.cgDisplayID, CGDirectDisplayID(0))
-        } else if let slave = slave {
-            // Something is mirroring this display — extend the slave.
-            CGConfigureDisplayMirrorOfDisplay(cfg, slave.cgDisplayID, CGDirectDisplayID(0))
-        } else {
-            // No mirroring active — mirror the first other connected display onto this one.
-            let target = allKnown.first { $0.cgDisplayID != 0 && $0.cgDisplayID != display.cgDisplayID }
-            guard let target = target else { CGCancelDisplayConfiguration(cfg); return }
-            CGConfigureDisplayMirrorOfDisplay(cfg, target.cgDisplayID, display.cgDisplayID)
-        }
-
-        CGCompleteDisplayConfiguration(cfg, .permanently)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            self?.mergeDevices()
+        let begin = CGBeginDisplayConfiguration(&config)
+        guard begin == .success, let cfg = config else { return completion(.failure(.configuration(begin))) }
+        configure(cfg)
+        DispatchQueue.global(qos: .userInitiated).async {
+            let err = CGCompleteDisplayConfiguration(cfg, .permanently)
+            if err != .success { mirrorLog.error("CompleteDisplayConfiguration err=\(err.rawValue)") }
+            DispatchQueue.main.asyncAfter(deadline: .now() + settle) { [weak self] in
+                self?.mergeDevices()
+                completion(err == .success ? .success(()) : .failure(.configuration(err)))
+            }
         }
     }
 
@@ -319,18 +490,18 @@ final class VideoManager: ObservableObject {
     }
 
     /// Promotes `display` from mirror slave to mirror master ("Optimize for this Display").
-    /// No-op if the display is already the master or not in a mirror set at all.
-    func setAsOptimizedDisplay(_ display: DisplayInfo) {
-        guard display.cgDisplayID != 0 else { return }
-        let masterID = CGDisplayMirrorsDisplay(display.cgDisplayID)
-        guard masterID != CGDirectDisplayID(0) else { return }  // already master or not mirroring
-
-        var config: CGDisplayConfigRef?
-        guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else { return }
-        CGConfigureDisplayMirrorOfDisplay(cfg, masterID, display.cgDisplayID)
-        CGCompleteDisplayConfiguration(cfg, .permanently)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            self?.mergeDevices()
+    /// No-op if the display does not mirror another user-visible display.
+    func setAsOptimizedDisplay(_ display: DisplayInfo,
+                               completion: ((Result<Void, MirrorError>) -> Void)? = nil) {
+        guard display.cgDisplayID != 0, let master = userMirrorMaster(of: display.cgDisplayID) else {
+            completion?(.success(()))
+            return
+        }
+        commitDisplayChange({ CGConfigureDisplayMirrorOfDisplay($0, master, display.cgDisplayID) }) {
+            if case .failure(let error) = $0 {
+                mirrorLog.error("setAsOptimizedDisplay '\(display.name)': \(String(describing: error))")
+            }
+            completion?($0)
         }
     }
 
@@ -383,7 +554,12 @@ final class VideoManager: ObservableObject {
         var idToName: [CGDirectDisplayID: String] = idToScreenName
         for cgID in onlineIDs {
             guard idToName[cgID] == nil else { continue }
-            guard CGDisplayIsBuiltin(cgID) == 0 else { continue }   // built-in has no IODisplayConnect
+            guard CGDisplayIsBuiltin(cgID) == 0 else {
+                // The built-in panel has no IODisplayConnect entry. It leaves NSScreen while it
+                // is a mirror slave yet stays online, so it needs a name to stay listed.
+                if CGDisplayMirrorsDisplay(cgID) != 0 { idToName[cgID] = "Built-in Display" }
+                continue
+            }
             if let name = ioKitNameCache[cgID] {
                 idToName[cgID] = name
             } else if let name = displayNameFromIOKit(cgID) {
@@ -442,10 +618,9 @@ final class VideoManager: ObservableObject {
                                    isConnected: false, cgDisplayID: 0,
                                    isMirroring: false, isBuiltIn: false)
             }
-            let isMirroring = CGDisplayMirrorsDisplay(cgID) != CGDirectDisplayID(0)
             return DisplayInfo(id: name, name: name,
                                isConnected: true, cgDisplayID: cgID,
-                               isMirroring: isMirroring, isBuiltIn: false)
+                               isMirroring: userMirrorMaster(of: cgID) != nil, isBuiltIn: false)
         }
 
         // Physical: all online displays not in the Bonjour list.
@@ -460,12 +635,13 @@ final class VideoManager: ObservableObject {
             guard !anchorIDs.contains(cgID)  else { continue }   // hide virtual anchors from display list
             guard let name = idToName[cgID] else { continue }
             let isBuiltIn   = CGDisplayIsBuiltin(cgID) != 0
-            let isMirroring = CGDisplayMirrorsDisplay(cgID) != CGDirectDisplayID(0)
+            // A mirror slave leaves NSScreen but is still showing a desktop.
+            let isConnected = liveIDs.contains(cgID) || CGDisplayMirrorsDisplay(cgID) != CGDirectDisplayID(0)
             physical.append(DisplayInfo(id: isBuiltIn ? "__builtin__" : name,
                                         name: name,
-                                        isConnected: liveIDs.contains(cgID),
+                                        isConnected: isConnected,
                                         cgDisplayID: cgID,
-                                        isMirroring: isMirroring,
+                                        isMirroring: userMirrorMaster(of: cgID) != nil,
                                         isBuiltIn: isBuiltIn))
         }
         // Built-in first, then external sorted by name.
@@ -481,13 +657,8 @@ final class VideoManager: ObservableObject {
         // 1. Poll-in-progress guard: if waitForVirtualDisplay hasn't yet written
         //    virtualAnchorCGIDs[name], the anchor is still being established — skip it.
         //
-        // 2. Mirror-slave guard: a physical display that is the mirror slave of a virtual
-        //    anchor is HIDDEN from NSScreen.screens (macOS omits slaves), so its
-        //    isConnected is false even though the mirror is running correctly.
-        //    AirPlay displays avoid this because their isConnected is based on
-        //    CGGetOnlineDisplayList rather than NSScreen — but physical displays use
-        //    NSScreen. Check whether any online display is actively mirroring the
-        //    anchor before tearing it down.
+        // 2. Mirror-slave guard: whatever the display list says, an anchor that some online
+        //    display is actively mirroring is doing its job and stays.
         let connectedDisplayNames = Set(
             newAirPlay.filter { $0.isConnected }.map { $0.name } +
             newPhysical.filter { $0.isConnected }.map { $0.name }

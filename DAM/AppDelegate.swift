@@ -115,15 +115,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func rebuild() {
-        let menu = buildStatusMenu(
+        let menu = NSMenu()
+        menu.delegate = self
+        fill(menu)
+        statusItem.menu = menu
+        controlStrip.rebuild()
+    }
+
+    /// Replaces `menu`'s items with ones built from the managers' current state.
+    private func fill(_ menu: NSMenu) {
+        let fresh = buildStatusMenu(
             audio: audioManager,
             video: videoManager,
             sidecar: sidecarManager,
             onRefresh: { [weak self] in self?.refreshAll(nil) }
         )
-        menu.delegate = self
-        statusItem.menu = menu
-        controlStrip.rebuild()
+        menu.removeAllItems()
+        for item in fresh.items {
+            fresh.removeItem(item)
+            menu.addItem(item)
+        }
     }
 
     // MARK: - Actions
@@ -144,10 +155,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             SpeechSynthesizer.shared.announce("No AirPlay display connected")
             return
         }
-        // Determine current state so we can announce what we're switching TO.
-        let isMirroring = display.isMirroring || videoManager.isBeingMirrored(display)
-        videoManager.toggleMirroring(for: display)
-        SpeechSynthesizer.shared.announce(isMirroring ? "Extending \(display.name)" : "Mirroring \(display.name)")
+        // Announce the intent at once, from the live state; a failure is announced when known.
+        let willExtend = videoManager.isInMirrorSet(display)
+        SpeechSynthesizer.shared.announce(willExtend ? "Extending \(display.name)" : "Mirroring \(display.name)")
+        videoManager.toggleMirroring(for: display) { result in
+            if case .failure(let error) = result {
+                SpeechSynthesizer.shared.announce(error.localizedDescription)
+            }
+        }
     }
 
     /// SwiftUI's `Settings` scene owns ⌘, and the app menu's "Settings…" item, and opens
@@ -203,11 +218,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 // MARK: - NSMenuDelegate
 
 extension AppDelegate: NSMenuDelegate {
-    func menuWillOpen(_ menu: NSMenu) {
+    /// Fills the menu that is about to open from the current state, in place. Assigning a
+    /// freshly built menu to the status item here would not change the one already opening,
+    /// which is what made the menu run one open behind the display state.
+    func menuNeedsUpdate(_ menu: NSMenu) {
         audioManager.refresh()
         videoManager.refresh()
         sidecarManager.refresh()
-        rebuild()
+        fill(menu)
+        controlStrip.rebuild()
     }
 
     #if DEBUG
@@ -298,7 +317,12 @@ extension AppDelegate: NSMenuDelegate {
 
     @objc func optimizeForDisplay(_ sender: NSMenuItem) {
         guard let display = sender.representedObject as? DisplayInfo else { return }
-        videoManager.setAsOptimizedDisplay(display)
+        videoManager.setAsOptimizedDisplay(display) { [weak self] result in
+            if case .failure(let error) = result {
+                SpeechSynthesizer.shared.announce(error.localizedDescription)
+            }
+            self?.rebuild()
+        }
     }
 
     @objc func selectSidecarDevice(_ sender: NSMenuItem) {
@@ -319,8 +343,10 @@ extension AppDelegate: NSMenuDelegate {
 
     @objc func toggleDisplayMirror(_ sender: NSMenuItem) {
         guard let display = sender.representedObject as? DisplayInfo else { return }
-        videoManager.toggleMirroring(for: display)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+        videoManager.toggleMirroring(for: display) { [weak self] result in
+            if case .failure(let error) = result {
+                SpeechSynthesizer.shared.announce(error.localizedDescription)
+            }
             self?.rebuild()
         }
     }

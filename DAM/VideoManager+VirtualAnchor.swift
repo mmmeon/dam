@@ -387,9 +387,10 @@ extension VideoManager {
     }
 
     /// Tears down the mirror, restores the pre-anchor arrangement, and releases the
-    /// CGVirtualDisplay for `display`.
-    func disableVirtualAnchor(for display: DisplayInfo) {
-        guard hasVirtualAnchor(for: display.name) else { return }
+    /// CGVirtualDisplay for `display`. `completion` runs on the main queue once the display
+    /// list has been re-read afterwards, or at once when there was no anchor.
+    func disableVirtualAnchor(for display: DisplayInfo, completion: (() -> Void)? = nil) {
+        guard hasVirtualAnchor(for: display.name) else { completion?(); return }
         let airPlayCGID = display.cgDisplayID != 0
             ? display.cgDisplayID
             : (cachedAirPlayCGIDs[display.name] ?? 0)
@@ -403,6 +404,7 @@ extension VideoManager {
         guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
                 self?.mergeDevices()
+                completion?()
             }
             return
         }
@@ -417,6 +419,7 @@ extension VideoManager {
                 withExtendedLifetime(vd) {}
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
                     self?.mergeDevices()
+                    completion?()
                 }
             }
         }
