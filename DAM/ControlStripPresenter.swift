@@ -556,7 +556,8 @@ final class ControlStripPresenter: NSObject {
         let displays = connectableAirPlayDevices
         let idx = ctrl.selectedSegment
         guard idx >= 0, idx < displays.count else { return }
-        videoManager?.connectAirPlay(deviceName: displays[idx].name)
+        videoManager?.connectAirPlay(deviceName: displays[idx].name,
+                                     announcing: "Selected \(displays[idx].name)")
     }
 
     @objc private func displayButtonTapped(_ btn: NSButton) {
@@ -576,7 +577,8 @@ final class ControlStripPresenter: NSObject {
 
     @objc private func disconnectTapped(_ btn: NSButton) {
         guard let display = displayButtonMap[ObjectIdentifier(btn)] else { return }
-        videoManager?.disconnectAirPlay(deviceName: display.name)
+        videoManager?.disconnectAirPlay(deviceName: display.name,
+                                        announcing: "Deselected \(display.name)")
         // Close the modal — the display is going away.
         if let bar = modalBar { NSTouchBar.dismissSystemModal(bar) }
         modalBar = nil
