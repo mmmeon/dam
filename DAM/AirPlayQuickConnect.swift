@@ -2,9 +2,11 @@
 //  AirPlayQuickConnect.swift
 //
 //  A hotkey-triggered HUD that lets the user pick an AirPlay display by
-//  pressing its number (keyboard) or tapping a Touch Bar button, then
-//  announces "Connecting to…" via TTS and mirrors after the utterance
-//  finishes. Pressing any key or the Touch Bar Cancel button cancels.
+//  pressing its number (keyboard) or tapping a Touch Bar button. The Screen
+//  Mirroring panel is driven right away, up to the display's row; the row is
+//  pressed once the cancel window after the HUD settles has passed, and
+//  "Connecting to…" is announced once the panel closed again. Pressing any key
+//  or the Touch Bar Cancel button before the press cancels and closes the panel.
 //
 
 import AppKit
@@ -42,8 +44,17 @@ final class AirPlayQuickConnect: NSObject {
 
     static let shared = AirPlayQuickConnect()
 
+    /// How long after the HUD settles on the chosen display a key press still cancels,
+    /// before the display's row is pressed in the Screen Mirroring panel.
+    private static let cancelWindow: TimeInterval = 1.5
+
     private weak var videoManager: VideoManager?
     private var state: QCState = .idle
+
+    // The press waits on both: the cancel window passing and the panel finding the row.
+    /// The panel driver's continuation, once it holds at the display's row.
+    private var pendingPress: ((Bool) -> Void)?
+    private var cancelWindowPassed = false
 
     // HUD
     private var panel: HUDPanel?
@@ -122,15 +133,16 @@ final class AirPlayQuickConnect: NSObject {
     /// connecting state. Without it, the HUD opens on the display and highlights it.
     private func startConfirming(display: DisplayInfo, choice: Int? = nil) {
         state = .confirming(display)
+        pendingPress = nil
+        cancelWindowPassed = false
 
-        // Without speech, connect shortly after the HUD settles unless cancelled first.
-        let speech = VisibilityPreferences.speechEnabled
+        // Press once the cancel window after the HUD settles passes uncancelled.
         let settled = { [weak self] in
-            guard !speech else { return }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.cancelWindow) { [weak self] in
                 guard let self, case .confirming(let d) = self.state, d.name == display.name
                 else { return }
-                self.connect(display: display)
+                self.cancelWindowPassed = true
+                self.pressIfReady()
             }
         }
         if choice == nil {
@@ -148,32 +160,47 @@ final class AirPlayQuickConnect: NSObject {
 
         showConfirmingTouchBar(display: display)
 
+        // The HUD and Touch Bar show "Connecting…"; it is spoken once the display was
+        // actually selected in the Screen Mirroring panel.
         SpeechSynthesizer.shared.stop()
-        if speech {
-            DispatchQueue.main.async {
-                SpeechSynthesizer.shared.onFinish = { [weak self] in
-                    self?.connect(display: display)
-                }
-                // caption: false — the HUD and Touch Bar already show "Connecting…".
-                SpeechSynthesizer.shared.speak("Connecting to \(display.name)", caption: false)
-            }
-        }
+
+        // Meanwhile the panel opens and finds the row, holding there for the press.
+        videoManager?.connectAirPlay(
+            deviceName: display.name,
+            announcing: "Connecting to \(display.name)",
+            gate: { [weak self] proceed in
+                guard let self, case .confirming(let d) = self.state, d.name == display.name
+                else { return proceed(false) }
+                self.pendingPress = proceed
+                self.pressIfReady()
+            },
+            completion: { [weak self] _ in
+                // Ended before the press (a failure, or nothing to press): drop the HUD.
+                guard let self, case .confirming(let d) = self.state, d.name == display.name
+                else { return }
+                self.dismiss()
+            })
     }
 
     // MARK: - Connect / Cancel
 
-    private func connect(display: DisplayInfo) {
+    private func pressIfReady() {
+        guard cancelWindowPassed, let proceed = pendingPress else { return }
+        pendingPress = nil
         dismiss()
-        videoManager?.connectAirPlay(deviceName: display.name)
+        proceed(true)
     }
 
     func cancel() {
         SpeechSynthesizer.shared.stop()
+        let proceed = pendingPress
         dismiss()
+        proceed?(false)
     }
 
     private func dismiss() {
         state = .idle
+        pendingPress = nil
         removeMonitors()
         dismissTouchBar()
         panel?.orderOut(nil)

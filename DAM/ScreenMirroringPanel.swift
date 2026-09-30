@@ -16,6 +16,7 @@ private let smLog = Logger(subsystem: AppIdentity.bundleID, category: "ScreenMir
 
 enum ScreenMirroringPanelError: Error, CustomStringConvertible {
     case busy
+    case cancelled
     case controlCenterNotRunning
     case openerNotFound
     case tileNotFound
@@ -25,6 +26,7 @@ enum ScreenMirroringPanelError: Error, CustomStringConvertible {
     var description: String {
         switch self {
         case .busy:                    return "another Screen Mirroring change is in progress"
+        case .cancelled:               return "cancelled before the device was pressed"
         case .controlCenterNotRunning: return "Control Center is not running"
         case .openerNotFound:          return "no Screen Mirroring or Control Center menu bar item"
         case .tileNotFound:            return "no Screen Mirroring tile in Control Center"
@@ -33,9 +35,10 @@ enum ScreenMirroringPanelError: Error, CustomStringConvertible {
         }
     }
 
-    /// What to say when the toggle fails.
-    var announcement: String {
+    /// What to say when the toggle fails; nothing for a cancel the user asked for.
+    var announcement: String? {
         switch self {
+        case .cancelled:             return nil
         case .deviceNotFound(let n): return "\(n) is not listed in Screen Mirroring"
         default:                     return "Could not open Screen Mirroring"
         }
@@ -45,13 +48,19 @@ enum ScreenMirroringPanelError: Error, CustomStringConvertible {
 final class ScreenMirroringPanel {
 
     typealias Completion = (Result<Void, ScreenMirroringPanelError>) -> Void
+    /// Called on the main thread once the device's row is found, before it is pressed,
+    /// with a continuation: `true` presses it, `false` closes the panel without pressing
+    /// and the toggle ends in `.cancelled`.
+    typealias Gate = (_ proceed: @escaping (Bool) -> Void) -> Void
 
     /// Toggles `deviceName` — connecting it, or disconnecting it when it is connected —
-    /// and calls `completion` on the main thread. One toggle runs at a time.
-    static func toggle(deviceName: String, completion: @escaping Completion) {
+    /// and calls `completion` on the main thread. One toggle runs at a time. With `gate`,
+    /// the panel is opened and the device located right away, but the press waits for
+    /// the gate's answer — so a cancel window can run while the driver gets ready.
+    static func toggle(deviceName: String, gate: Gate? = nil, completion: @escaping Completion) {
         dispatchPrecondition(condition: .onQueue(.main))
         guard current == nil else { return completion(.failure(.busy)) }
-        let panel = ScreenMirroringPanel(deviceName: deviceName, completion: completion)
+        let panel = ScreenMirroringPanel(deviceName: deviceName, gate: gate, completion: completion)
         current = panel
         panel.start()
     }
@@ -97,6 +106,7 @@ final class ScreenMirroringPanel {
     private static var current: ScreenMirroringPanel?
 
     private let deviceName: String
+    private let gate: Gate?
     private let completion: Completion
     private var pid: pid_t = 0
     private var app: AXUIElement!
@@ -105,8 +115,9 @@ final class ScreenMirroringPanel {
     private var viaControlCenter = false
     private var waiter: AXWaiter?
 
-    private init(deviceName: String, completion: @escaping Completion) {
+    private init(deviceName: String, gate: Gate?, completion: @escaping Completion) {
         self.deviceName = deviceName
+        self.gate = gate
         self.completion = completion
     }
 
@@ -189,27 +200,44 @@ final class ScreenMirroringPanel {
                 self.logWindows()
                 return self.finish(.failure(.deviceNotFound(self.deviceName)))
             }
-            if let error = device.press() { return self.finish(.failure(.pressFailed(error))) }
-            smLog.debug("pressed \(device.role ?? "?", privacy: .public) \(device.identifier ?? device.title ?? "?", privacy: .public)")
-            DispatchQueue.main.asyncAfter(deadline: .now() + Self.settle) { self.close(popover) }
+            guard let gate = self.gate else { return self.press(device, in: popover) }
+            smLog.debug("holding at \(device.identifier ?? device.title ?? "?", privacy: .public)")
+            var answered = false
+            gate { [weak self] go in
+                guard let self, !answered else { return }
+                answered = true
+                if go {
+                    self.press(device, in: popover)
+                } else {
+                    smLog.debug("cancelled before the press")
+                    self.close(popover, then: .failure(.cancelled))
+                }
+            }
         }
     }
 
-    /// Presses the opener until the panel is gone. From inside Control Center the first
-    /// press only backs out of the Screen Mirroring view to the main panel; the second
-    /// closes it.
-    private func close(_ popover: AXUIElement, attempt: Int = 1) {
+    private func press(_ device: AXUIElement, in popover: AXUIElement) {
+        if let error = device.press() { return finish(.failure(.pressFailed(error))) }
+        smLog.debug("pressed \(device.role ?? "?", privacy: .public) \(device.identifier ?? device.title ?? "?", privacy: .public)")
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.settle) { self.close(popover) }
+    }
+
+    /// Presses the opener until the panel is gone, then finishes with `result`. From
+    /// inside Control Center the first press only backs out of the Screen Mirroring view
+    /// to the main panel; the second closes it.
+    private func close(_ popover: AXUIElement, attempt: Int = 1,
+                       then result: Result<Void, ScreenMirroringPanelError> = .success(())) {
         let isOpen = { [app] in app!.windows.contains { CFEqual($0, popover) } }
-        guard isOpen() else { return finish(.success(())) }
+        guard isOpen() else { return finish(result) }
         guard attempt <= Self.closeAttempts else {
             smLog.error("the panel stayed open")
-            return finish(.success(()))
+            return finish(result)
         }
         wait(for: [kAXUIElementDestroyedNotification], on: popover, timeout: Self.closeTimeout,
              probe: { !isOpen() }) { [weak self] closed in
             guard let self else { return }
-            if closed { return self.finish(.success(())) }
-            self.close(popover, attempt: attempt + 1)
+            if closed { return self.finish(result) }
+            self.close(popover, attempt: attempt + 1, then: result)
         }
         if let error = opener?.press() { smLog.error("closing the panel failed: \(error.rawValue)") }
     }

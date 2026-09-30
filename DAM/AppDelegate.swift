@@ -221,9 +221,12 @@ extension AppDelegate: NSMenuDelegate {
         audioManager.setDefaultDevice(device)
     }
 
+    /// Toggles the display: a connected one is deselected in the Screen Mirroring panel.
     @objc func selectDisplay(_ sender: NSMenuItem) {
         guard let display = sender.representedObject as? DisplayInfo else { return }
-        videoManager.connectAirPlay(deviceName: display.name)
+        let verb = display.isConnected ? "Deselected" : "Selected"
+        videoManager.connectAirPlay(deviceName: display.name,
+                                    announcing: "\(verb) \(display.name)")
     }
 
     @objc func openSettings(_ sender: Any?) {
@@ -288,7 +291,8 @@ extension AppDelegate: NSMenuDelegate {
 
     @objc func disconnectAirPlayDevice(_ sender: NSMenuItem) {
         guard let display = sender.representedObject as? DisplayInfo else { return }
-        videoManager.disconnectAirPlay(deviceName: display.name)
+        videoManager.disconnectAirPlay(deviceName: display.name,
+                                       announcing: "Deselected \(display.name)")
     }
 
     @objc func toggleDisplayMirror(_ sender: NSMenuItem) {

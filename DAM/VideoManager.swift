@@ -211,25 +211,35 @@ final class VideoManager: ObservableObject {
     // MARK: - AirPlay
 
     /// Clicking a connected device in the Screen Mirroring panel toggles it off.
-    func disconnectAirPlay(deviceName: String) {
-        connectAirPlay(deviceName: deviceName)
+    func disconnectAirPlay(deviceName: String, announcing announcement: String? = nil) {
+        connectAirPlay(deviceName: deviceName, announcing: announcement)
     }
 
     /// Connects (or, for a connected device, disconnects) by driving the Screen Mirroring
     /// panel through the Accessibility API, which needs Accessibility access. A missing
     /// permission, or a panel that could not be driven, is announced rather than failing
-    /// silently.
-    func connectAirPlay(deviceName: String) {
+    /// silently. `announcement` is announced only once the device was pressed in the
+    /// panel and the panel closed again — never for a toggle that failed. `gate` holds
+    /// the press until answered (see `ScreenMirroringPanel.Gate`), and `completion`
+    /// reports whether the device was pressed.
+    func connectAirPlay(deviceName: String, announcing announcement: String? = nil,
+                        gate: ScreenMirroringPanel.Gate? = nil,
+                        completion: ((Bool) -> Void)? = nil) {
         guard Self.hasAccessibilityAccess(prompting: true) else {
             SpeechSynthesizer.shared.announce(
                 "\(AppIdentity.name) needs Accessibility access to connect AirPlay")
+            completion?(false)
             return
         }
-        ScreenMirroringPanel.toggle(deviceName: deviceName) { [weak self] result in
-            if case .failure(let error) = result {
+        ScreenMirroringPanel.toggle(deviceName: deviceName, gate: gate) { [weak self] result in
+            switch result {
+            case .success:
+                if let announcement { SpeechSynthesizer.shared.announce(announcement) }
+            case .failure(let error):
                 NSLog("\(AppIdentity.name): connectAirPlay failed: \(error)")
-                SpeechSynthesizer.shared.announce(error.announcement)
+                if let text = error.announcement { SpeechSynthesizer.shared.announce(text) }
             }
+            if case .success = result { completion?(true) } else { completion?(false) }
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                 self?.mergeDevices()
             }
