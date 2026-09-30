@@ -10,12 +10,47 @@ final class VisibilityPreferencesTests: XCTestCase {
     private let autoConnKey  = "\(AppIdentity.shortID).behaviour.autoConnectSingle"
     private let touchBarKey  = "\(AppIdentity.shortID).behaviour.touchBarFeedback"
     private let screenKey    = "\(AppIdentity.shortID).behaviour.screenFeedback"
+    private let startKey     = "\(AppIdentity.shortID).behaviour.pickerStartsOnCurrent"
+    private let delayKey     = "\(AppIdentity.shortID).behaviour.pickDelay"
 
     override func tearDown() {
         super.tearDown()
-        [audioKey, audioSeenKey, airPlayKey, displayKey, autoConnKey, touchBarKey, screenKey].forEach {
+        [audioKey, audioSeenKey, airPlayKey, displayKey, autoConnKey, touchBarKey, screenKey,
+         startKey, delayKey].forEach {
             UserDefaults.standard.removeObject(forKey: $0)
         }
+    }
+
+    // MARK: - Pickers
+
+    func testPickerStartsOnCurrent_defaultsToTrue() {
+        XCTAssertTrue(VisibilityPreferences.pickerStartsOnCurrent)
+    }
+
+    func testPickerStartsOnCurrent_roundTrip() {
+        VisibilityPreferences.pickerStartsOnCurrent = false
+        XCTAssertFalse(VisibilityPreferences.pickerStartsOnCurrent)
+    }
+
+    func testStartCursor_followsThePreference() {
+        VisibilityPreferences.pickerStartsOnCurrent = true
+        XCTAssertEqual(ChoicePicker.startCursor(current: 1, count: 3), 1)
+        VisibilityPreferences.pickerStartsOnCurrent = false
+        XCTAssertEqual(ChoicePicker.startCursor(current: 2, count: 3), 0)
+    }
+
+    func testPickDelay_defaultsToTwoSeconds() {
+        XCTAssertEqual(VisibilityPreferences.pickDelay, 2)
+    }
+
+    func testPickDelay_roundTripAndClamping() {
+        VisibilityPreferences.pickDelay = 3.5
+        XCTAssertEqual(VisibilityPreferences.pickDelay, 3.5)
+        VisibilityPreferences.pickDelay = 0
+        XCTAssertEqual(VisibilityPreferences.pickDelay, VisibilityPreferences.pickDelayRange.lowerBound)
+        VisibilityPreferences.pickDelay = 99
+        XCTAssertEqual(VisibilityPreferences.pickDelay, VisibilityPreferences.pickDelayRange.upperBound)
+        XCTAssertEqual(VisibilityPreferences.clampedPickDelay(.nan), VisibilityPreferences.defaultPickDelay)
     }
 
     // MARK: - Audio visibility

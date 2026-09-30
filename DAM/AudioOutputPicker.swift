@@ -2,8 +2,8 @@
 //  AudioOutputPicker.swift
 //
 //  A hotkey-triggered picker for the enabled audio outputs. The first press opens it on
-//  the output after the current one; each further press moves on, and the choice picker
-//  handles the rest (numbers, Return, pausing, Esc, the Touch Bar and speech).
+//  the current output (or the next one, as set); each further press moves on, and the
+//  choice picker handles the rest (numbers, Return, pausing, Esc, the Touch Bar and speech).
 //
 
 import AppKit
@@ -30,8 +30,8 @@ final class AudioOutputPicker {
         self.audioManager = audioManager
     }
 
-    /// Opens the picker on the output after the current one, or moves to the next output
-    /// when already open.
+    /// Opens the picker on the current output (or the next one, as set), or moves to the
+    /// next output when already open. Picking the current output again changes nothing.
     func advance() {
         if picker.isCycling {
             picker.advance()
@@ -41,14 +41,15 @@ final class AudioOutputPicker {
         guard let audioManager else { return }
         audioManager.refresh()
         let enabled = audioManager.devices
-        guard let next = AudioManager.device(after: audioManager.defaultDeviceID, in: enabled)
-        else {
+        guard !enabled.isEmpty else {
             SpeechSynthesizer.shared.announce("No audio outputs enabled")
             return
         }
+        let current = enabled.firstIndex { $0.id == audioManager.defaultDeviceID } ?? 0
         picker.open(choices: enabled.map(\.name),
-                    cursor: enabled.firstIndex(of: next) ?? 0) { [weak audioManager] i in
-            audioManager?.setDefaultDevice(enabled[i])
+                    cursor: ChoicePicker.startCursor(current: current, count: enabled.count)) { [weak audioManager] i in
+            guard let audioManager, enabled[i].id != audioManager.defaultDeviceID else { return }
+            audioManager.setDefaultDevice(enabled[i])
         }
     }
 

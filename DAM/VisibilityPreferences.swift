@@ -106,6 +106,37 @@ enum VisibilityPreferences {
         set { UserDefaults.standard.set(newValue, forKey: screenFeedbackKey) }
     }
 
+    private static let pickerStartsOnCurrentKey = "\(AppIdentity.shortID).behaviour.pickerStartsOnCurrent"
+
+    /// When true (default), a hotkey picker opens on the current choice. When false it opens
+    /// on the one after it, so a single press followed by the pause moves on.
+    static var pickerStartsOnCurrent: Bool {
+        get {
+            let val = UserDefaults.standard.object(forKey: pickerStartsOnCurrentKey)
+            return val == nil ? true : UserDefaults.standard.bool(forKey: pickerStartsOnCurrentKey)
+        }
+        set { UserDefaults.standard.set(newValue, forKey: pickerStartsOnCurrentKey) }
+    }
+
+    private static let pickDelayKey = "\(AppIdentity.shortID).behaviour.pickDelay"
+    static let pickDelayRange: ClosedRange<TimeInterval> = 0.5...10
+    static let defaultPickDelay: TimeInterval = 2
+
+    /// How long a hotkey picker waits after the last press before picking the tinted
+    /// choice, in seconds, kept within `pickDelayRange`.
+    static var pickDelay: TimeInterval {
+        get {
+            guard UserDefaults.standard.object(forKey: pickDelayKey) != nil else { return defaultPickDelay }
+            return clampedPickDelay(UserDefaults.standard.double(forKey: pickDelayKey))
+        }
+        set { UserDefaults.standard.set(clampedPickDelay(newValue), forKey: pickDelayKey) }
+    }
+
+    static func clampedPickDelay(_ value: TimeInterval) -> TimeInterval {
+        guard value.isFinite else { return defaultPickDelay }
+        return min(max(value, pickDelayRange.lowerBound), pickDelayRange.upperBound)
+    }
+
     private static let extraOfferDismissedKey = "\(AppIdentity.shortID).behaviour.screenMirroringExtraOfferDismissed"
 
     /// True once the user has declined, for good, the offer to show Control Center's

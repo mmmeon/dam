@@ -3,9 +3,9 @@
 //
 //  The mirror hotkey's picker: for the connected AirPlay display, the choice between its
 //  own desktop, showing it on one of the other displays, or on all of them. The first
-//  press opens it on the choice after the current one, so a single press still toggles
-//  between two displays; each further press moves on, and the choice picker handles the
-//  rest (numbers, Return, pausing, Esc, the Touch Bar and speech).
+//  press opens it on the current state (or the next choice, as set); each further press
+//  moves on, and the choice picker handles the rest (numbers, Return, pausing, Esc, the
+//  Touch Bar and speech).
 //
 
 import AppKit
@@ -70,8 +70,8 @@ final class MirrorPicker {
 
     // MARK: - Hotkey
 
-    /// Opens the picker on the choice after the current one, or moves to the next choice
-    /// when already open.
+    /// Opens the picker on the current state (or the next choice, as set), or moves to the
+    /// next choice when already open. Picking the current state again changes nothing.
     func advance() {
         if picker.isCycling {
             picker.advance()
@@ -93,7 +93,7 @@ final class MirrorPicker {
         let current = Self.currentChoice(in: choices, slaves: vm.slaveDisplays(of: display),
                                          master: vm.masterDisplay(of: display))
         picker.open(choices: choices.map(\.name),
-                    cursor: (current + 1) % choices.count) { [weak self] i in
+                    cursor: ChoicePicker.startCursor(current: current, count: choices.count)) { [weak self] i in
             guard i != current else { return }
             self?.apply(choices[i], to: display)
         }
