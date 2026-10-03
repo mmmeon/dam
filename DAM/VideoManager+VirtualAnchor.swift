@@ -699,6 +699,28 @@ extension VideoManager {
             && !virtualAnchorStore.keys.contains { virtualAnchorCGIDs[$0] == nil }
     }
 
+    /// The vendor and model of the display macOS puts up when nothing is attached: "unkn",
+    /// "virt".
+    static let placeholderVendorNumber: UInt32 = 0x756e6b6e
+    static let placeholderModelNumber:  UInt32 = 0x76697274
+
+    /// Whether any of `displays` is one of the Mac's own: not macOS's placeholder, not an iPad
+    /// over Sidecar, and not one of DAM's virtual displays.
+    static func hasOwnDisplay(_ displays: [(vendor: UInt32, model: UInt32)]) -> Bool {
+        displays.contains { d in
+            !(d.vendor == placeholderVendorNumber && d.model == placeholderModelNumber)
+                && !isSidecarDisplay(vendor: d.vendor, model: d.model)
+                && d.vendor != anchorVendorID
+        }
+    }
+
+    /// Whether the Mac has a display of its own online (see `hasOwnDisplay(_:)`).
+    func hasOwnDisplay() -> Bool {
+        Self.hasOwnDisplay(DisplayArrangement.onlineDisplayIDs().map {
+            (CGDisplayVendorNumber($0), CGDisplayModelNumber($0))
+        })
+    }
+
     /// Whether the Mac has no display to show a desktop on, apart from the given virtual ones.
     static func needsBootstrapDisplay(onlineIDs: [CGDirectDisplayID],
                                       virtualIDs: Set<CGDirectDisplayID>) -> Bool {

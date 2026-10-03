@@ -177,6 +177,89 @@ extension SidecarManager {
     }
 }
 
+// MARK: - Connecting on plug-in
+
+/// Connects an iPad over Sidecar once it is plugged in over USB while the Mac has no display
+/// of its own, when Settings ask for it — also one already plugged in when the app starts, as
+/// it does at login. Checked every few seconds. An iPad is connected once per plug-in, so one
+/// disconnected by hand stays so until plugged in again. Sidecar is often not ready just after
+/// login, so a failed attempt is retried a few times.
+final class SidecarAutoConnector {
+    struct Attempt: Equatable {
+        var count = 0
+        var nextTry = Date.distantPast
+        /// Connected, by this or by hand: nothing more to do until the iPad is unplugged.
+        var done = false
+    }
+
+    static let interval: TimeInterval = 3
+    static let retryDelay: TimeInterval = 10
+    /// How long an attempt may take before another is allowed: a stand-in display and the
+    /// Sidecar connection can each take several seconds.
+    static let attemptTimeout: TimeInterval = 45
+    static let maxAttempts = 6
+
+    private let sidecar: SidecarManager
+    private weak var video: VideoManager?
+    private var timer: Timer?
+    /// The iPads on USB, by identifier.
+    private var attempts: [String: Attempt] = [:]
+
+    init(sidecar: SidecarManager, video: VideoManager) {
+        self.sidecar = sidecar
+        self.video = video
+    }
+
+    func start() {
+        guard sidecar.isSupported, timer == nil else { return }
+        timer = Timer.scheduledTimer(withTimeInterval: Self.interval, repeats: true) { [weak self] _ in
+            self?.tick()
+        }
+        tick()
+    }
+
+    private func tick() {
+        guard VisibilityPreferences.autoConnectsSidecarWithoutDisplay, let video else { return }
+        sidecar.refresh()
+        let now = Date()
+        let plan = Self.plan(devices: sidecar.devices, attempts: attempts,
+                             hasOwnDisplay: video.hasOwnDisplay(), now: now)
+        attempts = plan.attempts
+        guard let device = plan.connect else { return }
+        attempts[device.id]?.count += 1
+        attempts[device.id]?.nextTry = now + Self.attemptTimeout
+        scLog.debug("auto-connecting \(device.name, privacy: .public), attempt \(self.attempts[device.id]?.count ?? 0)")
+        SpeechSynthesizer.shared.announce(ConnectTarget.sidecar(device).connectingAnnouncement)
+        sidecar.connect(device, videoManager: video) { [weak self] error in
+            guard let self, self.attempts[device.id] != nil else { return }
+            if error == nil {
+                self.attempts[device.id]?.done = true
+            } else {
+                self.attempts[device.id]?.nextTry = Date() + Self.retryDelay
+            }
+        }
+    }
+
+    /// Which iPad to connect now, if any, and the updated attempts. iPads that left USB are
+    /// forgotten, new ones start fresh, and a connected one counts as done. Nothing is
+    /// connected while the Mac has a display of its own or an iPad is already connected.
+    static func plan(devices: [SidecarDevice], attempts: [String: Attempt],
+                     hasOwnDisplay: Bool, now: Date) -> (connect: SidecarDevice?, attempts: [String: Attempt]) {
+        let onUSB = devices.filter { $0.link == .usb }
+        var next = attempts.filter { entry in onUSB.contains { $0.id == entry.key } }
+        for device in onUSB {
+            if next[device.id] == nil { next[device.id] = Attempt() }
+            if device.isConnected { next[device.id]?.done = true }
+        }
+        guard !hasOwnDisplay, !devices.contains(where: \.isConnected) else { return (nil, next) }
+        let device = onUSB.first { device in
+            guard let a = next[device.id] else { return false }
+            return !a.done && a.count < maxAttempts && a.nextTry <= now
+        }
+        return (device, next)
+    }
+}
+
 enum SidecarError: LocalizedError {
     case deviceGone(String)
     case unavailable
