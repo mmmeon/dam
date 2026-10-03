@@ -33,7 +33,7 @@ final class MainDisplayPicker {
     /// The picker's entries for `candidates` and the one that is main now (the first when
     /// none is marked).
     static func choices(from candidates: [DisplayInfo]) -> (names: [String], current: Int) {
-        (candidates.map(\.name), candidates.firstIndex(where: \.isMain) ?? 0)
+        (candidates.map(\.label), candidates.firstIndex(where: \.isMain) ?? 0)
     }
 
     /// Opens the picker on the current main display (or the next one, as set), or moves to

@@ -41,6 +41,13 @@ struct DisplayArrangement {
                                   mirrorMasters: mirrorMasters)
     }
 
+    /// The same arrangement with the displays in `new` at those origins, so that restoring
+    /// it keeps an arrangement made meanwhile.
+    func replacingOrigins(_ new: [CGDirectDisplayID: CGPoint]) -> DisplayArrangement {
+        DisplayArrangement(origins: origins.merging(new.filter { origins[$0.key] != nil }) { $1 },
+                           mirrorMasters: mirrorMasters)
+    }
+
     static func onlineDisplayIDs() -> [CGDirectDisplayID] {
         var count: CGDisplayCount = 0
         CGGetOnlineDisplayList(0, nil, &count)
@@ -199,11 +206,13 @@ extension VideoManager {
                            includeLarger1x: Bool = false) -> (modes: [DisplayMode], currentIndex: Int?) {
         let current = currentModes(for: display).anchor ?? currentMode(for: display.cgDisplayID)
         let all = availableModes(for: display.cgDisplayID)
-        // Native size from the one-per-size list: availableModes() de-duplicates by pixel
-        // size, so a 1x mode sharing pixels with a HiDPI one (3840×2160 vs 1920×1080 HiDPI)
-        // is missing there, and the largest remaining 1x mode can be the wrong shape.
-        let perSize = availableModesDeduped(for: display.cgDisplayID)
-        var modes = Self.pickerResolutions(perSize, native: Self.nativeSize(of: perSize), current: current,
+        // Native size from every mode: a one-per-size list that prefers HiDPI loses the 1x
+        // mode at a size that also has a downsampled HiDPI one (a 1080p panel offering
+        // 1920×1080 HiDPI backed by 3840×2160), and the largest remaining 1x mode can be
+        // the wrong shape.
+        let native = Self.nativeSize(of: all)
+        let perSize = Self.onePerSize(all, native: native)
+        var modes = Self.pickerResolutions(perSize, native: native, current: current,
                                            includeLarger1x: includeLarger1x)
         if let rate = current?.roundedRefreshRate {
             modes = modes.map { best in
@@ -225,6 +234,24 @@ extension VideoManager {
         modes.filter { !$0.isHiDPI }
             .max { $0.pixelWidth * $0.pixelHeight < $1.pixelWidth * $1.pixelHeight }
             .map { ($0.pixelWidth, $0.pixelHeight) }
+    }
+
+    /// One mode per logical size, at its highest rate: HiDPI when the panel has the pixels
+    /// for it, else 1x, else a downsampled HiDPI mode. Ordered by pixel count, largest first.
+    static func onePerSize(_ modes: [DisplayMode], native: (width: Int, height: Int)?) -> [DisplayMode] {
+        func rank(_ m: DisplayMode) -> Int {
+            guard m.isHiDPI else { return 1 }
+            guard let native else { return 2 }
+            return m.pixelWidth <= native.width && m.pixelHeight <= native.height ? 2 : 0
+        }
+        var best: [String: DisplayMode] = [:]
+        for mode in modes {
+            let key = "\(mode.width)x\(mode.height)"
+            if let existing = best[key],
+               (rank(existing), existing.refreshRate) >= (rank(mode), mode.refreshRate) { continue }
+            best[key] = mode
+        }
+        return best.values.sorted { ($0.pixelWidth, $0.pixelHeight) > ($1.pixelWidth, $1.pixelHeight) }
     }
 
     /// Trims a one-per-size resolution list for the pickers. Relative to the native panel:
@@ -281,7 +308,8 @@ extension VideoManager {
 
         var nativeByRate: [Int: DisplayMode] = [:]
         for mode in availableModes(for: display.cgDisplayID)
-        where mode.width == current.width && mode.height == current.height {
+        where mode.width == current.width && mode.height == current.height
+            && mode.pixelWidth == current.pixelWidth && mode.pixelHeight == current.pixelHeight {
             if nativeByRate[mode.roundedRefreshRate] == nil { nativeByRate[mode.roundedRefreshRate] = mode }
         }
 
@@ -293,6 +321,81 @@ extension VideoManager {
                                                  pixelWidth: current.pixelWidth, pixelHeight: current.pixelHeight)
         }
         return (current, modes)
+    }
+
+    /// Resolution choices for an AirPlay display, native and virtual kept apart, each
+    /// size listed once at the current refresh rate when it has one there. `current` gives
+    /// the index of the size in effect, in the pool that drives the display.
+    func airPlayResolutionOptions(for display: DisplayInfo)
+        -> (native: [DisplayMode], virtual: [DisplayMode], current: (native: Int?, virtual: Int?)) {
+        let current = currentModes(for: display)
+        return Self.airPlayResolutionOptions(nativePerSize: availableModesDeduped(for: display.cgDisplayID),
+                                             nativeAll: availableModes(for: display.cgDisplayID),
+                                             virtual: Self.virtualModes(for: .airPlay),
+                                             anchorCurrent: current.anchor, nativeCurrent: current.native)
+    }
+
+    /// Pure core of `airPlayResolutionOptions(for:)`. A native size takes the current rate
+    /// when the display offers it at that size, else its highest; a virtual size takes the
+    /// current rate when enabled, else 60 Hz, else its highest.
+    static func airPlayResolutionOptions(nativePerSize: [DisplayMode], nativeAll: [DisplayMode],
+                                         virtual: [DisplayMode],
+                                         anchorCurrent: DisplayMode?, nativeCurrent: DisplayMode?)
+        -> (native: [DisplayMode], virtual: [DisplayMode], current: (native: Int?, virtual: Int?)) {
+        func sameSize(_ a: DisplayMode, _ b: DisplayMode) -> Bool {
+            a.width == b.width && a.height == b.height && a.isHiDPI == b.isHiDPI
+        }
+        let rate = (anchorCurrent ?? nativeCurrent)?.roundedRefreshRate
+
+        let native = nativePerSize.map { best in
+            nativeAll.first { sameSize($0, best) && $0.roundedRefreshRate == rate } ?? best
+        }
+
+        var sizes: [DisplayMode] = []
+        for mode in virtual where !sizes.contains(where: { sameSize($0, mode) }) { sizes.append(mode) }
+        let virtualSizes = sizes.map { size in
+            let atSize = virtual.filter { sameSize($0, size) }
+            return atSize.first { $0.roundedRefreshRate == rate }
+                ?? atSize.first { $0.roundedRefreshRate == 60 }
+                ?? size
+        }
+
+        let nativeIdx = nativeCurrent.flatMap { cur in
+            native.firstIndex { $0.width == cur.width && $0.height == cur.height }
+        }
+        let virtualIdx = anchorCurrent.flatMap { cur in virtualSizes.firstIndex { sameSize($0, cur) } }
+        return (native, virtualSizes, (nativeIdx, virtualIdx))
+    }
+
+    /// Refresh-rate choices for an AirPlay display at its current resolution: the native
+    /// modes at that size and the virtual ones when the anchor offers it. Where both have a
+    /// rate, the pool driving the display wins, so changing rate doesn't switch pools.
+    /// Sorted highest rate first; empty when the current mode can't be read.
+    func airPlayRateOptions(for display: DisplayInfo) -> [DisplayMode] {
+        let current = currentModes(for: display)
+        return Self.airPlayRateOptions(nativeAll: availableModes(for: display.cgDisplayID),
+                                       virtual: Self.virtualModes(for: .airPlay),
+                                       anchorCurrent: current.anchor, nativeCurrent: current.native)
+    }
+
+    static func airPlayRateOptions(nativeAll: [DisplayMode], virtual: [DisplayMode],
+                                   anchorCurrent: DisplayMode?, nativeCurrent: DisplayMode?) -> [DisplayMode] {
+        guard let cur = anchorCurrent ?? nativeCurrent else { return [] }
+        func atCurrentSize(_ m: DisplayMode) -> Bool {
+            m.width == cur.width && m.height == cur.height && m.isHiDPI == cur.isHiDPI
+        }
+        var nativeByRate: [Int: DisplayMode] = [:]
+        // The current native mode first, so a 59.94 Hz mode in use isn't hidden by a 60 Hz one.
+        if let nativeCurrent { nativeByRate[nativeCurrent.roundedRefreshRate] = nativeCurrent }
+        for mode in nativeAll where atCurrentSize(mode) && nativeByRate[mode.roundedRefreshRate] == nil {
+            nativeByRate[mode.roundedRefreshRate] = mode
+        }
+        var virtualByRate: [Int: DisplayMode] = [:]
+        for mode in virtual where atCurrentSize(mode) && virtualByRate[mode.roundedRefreshRate] == nil {
+            virtualByRate[mode.roundedRefreshRate] = mode
+        }
+        let (preferred, other) = anchorCurrent != nil ? (virtualByRate, nativeByRate) : (nativeByRate, virtualByRate)
+        return Set(preferred.keys).union(other.keys).sorted(by: >).compactMap { preferred[$0] ?? other[$0] }
     }
 
     /// The default virtual resolution for `context` as a mode the anchor offers: 1x, at

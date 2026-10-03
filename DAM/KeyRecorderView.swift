@@ -27,13 +27,14 @@ final class KeyRecorderView: NSView {
 
     /// The ⓧ shown at the right edge while recording.
     private var cancelRect: NSRect {
-        let side: CGFloat = 14
+        let side: CGFloat = 9.5
         return NSRect(x: bounds.maxX - side - 5, y: (bounds.height - side) / 2, width: side, height: side)
     }
 
     init(preference: HotkeyPreference) {
         self.preference = preference
         super.init(frame: .zero)
+        focusRingType = .none   // draw() paints its own rounded ring while recording
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -127,8 +128,9 @@ final class KeyRecorderView: NSView {
 
         if isRecording {
             NSColor.keyboardFocusIndicatorColor.withAlphaComponent(0.4).setStroke()
-            let ring = NSBezierPath(roundedRect: rect.insetBy(dx: -1.5, dy: -1.5),
-                                    xRadius: 6, yRadius: 6)
+            // Kept inside bounds: the view clips, and an overhanging ring gets square outer corners.
+            let ring = NSBezierPath(roundedRect: bounds.insetBy(dx: 1.5, dy: 1.5),
+                                    xRadius: 4, yRadius: 4)
             ring.lineWidth = 3
             ring.stroke()
         }
@@ -146,13 +148,17 @@ final class KeyRecorderView: NSView {
         str.draw(at: CGPoint(x: (textWidth - sz.width) / 2,
                              y: (bounds.height - sz.height) / 2))
 
-        if isRecording, let glyph = NSImage(systemSymbolName: "xmark.circle.fill",
-                                            accessibilityDescription: "Cancel") {
-            let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
-                .applying(.init(paletteColors: [.secondaryLabelColor]))
-            glyph.withSymbolConfiguration(config)?
-                .draw(in: cancelRect, from: .zero, operation: .sourceOver, fraction: 1,
-                      respectFlipped: true, hints: nil)
+        if isRecording {
+            // A bare x in the text color.
+            let r = cancelRect
+            let x = NSBezierPath()
+            let d = r.width * 0.3
+            x.move(to: NSPoint(x: r.midX - d, y: r.midY - d)); x.line(to: NSPoint(x: r.midX + d, y: r.midY + d))
+            x.move(to: NSPoint(x: r.midX - d, y: r.midY + d)); x.line(to: NSPoint(x: r.midX + d, y: r.midY - d))
+            x.lineWidth = 1.2
+            x.lineCapStyle = .round
+            NSColor.labelColor.setStroke()
+            x.stroke()
         }
     }
 }

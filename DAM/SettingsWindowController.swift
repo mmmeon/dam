@@ -13,6 +13,7 @@ final class SettingsWindowController: NSWindowController {
     private let recorderMainDisplay: KeyRecorderView
     private let audioManager: AudioManager
     private let videoManager: VideoManager
+    private let sidecarManager: SidecarManager
 
     var onSave: ((HotkeyPreference) -> Void)?
     var onSaveAirPlayConnect: ((HotkeyPreference) -> Void)?
@@ -46,7 +47,8 @@ final class SettingsWindowController: NSWindowController {
          currentAudioCycle: HotkeyPreference,
          currentMainDisplay: HotkeyPreference,
          audioManager: AudioManager,
-         videoManager: VideoManager) {
+         videoManager: VideoManager,
+         sidecarManager: SidecarManager) {
         recorder              = KeyRecorderView(preference: current)
         recorderAirPlay       = KeyRecorderView(preference: currentAirPlayConnect)
         recorderMirrorToggle  = KeyRecorderView(preference: currentMirrorToggle)
@@ -54,6 +56,7 @@ final class SettingsWindowController: NSWindowController {
         recorderMainDisplay   = KeyRecorderView(preference: currentMainDisplay)
         self.audioManager     = audioManager
         self.videoManager     = videoManager
+        self.sidecarManager   = sidecarManager
 
         let win = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 420, height: 280),
@@ -108,10 +111,10 @@ final class SettingsWindowController: NSWindowController {
     }
 
     /// Wide enough for the toolbar's four items.
-    private static let minContentWidth: CGFloat = 420
+    private static let minContentWidth: CGFloat = 340
 
     /// Sizes the window to the tab's content, keeping its top edge in place. The height
-    /// is fixed at that; the width stays adjustable. A tab taller than the screen scrolls.
+    /// is fixed at that; the width starts at what the content needs and stays adjustable. A tab taller than the screen scrolls.
     private func fitWindow(to content: NSView) {
         guard let win = window, let stack = (content as? NSScrollView)?.documentView else { return }
         stack.layoutSubtreeIfNeeded()
@@ -121,7 +124,7 @@ final class SettingsWindowController: NSWindowController {
             height = min(height, screen.visibleFrame.height - chrome - 40)
         }
         let minWidth = max(Self.minContentWidth, stack.fittingSize.width)
-        let width = max(win.contentLayoutRect.width, minWidth)
+        let width = minWidth
         win.contentMinSize = NSSize(width: minWidth, height: height)
         win.contentMaxSize = NSSize(width: .greatestFiniteMagnitude, height: height)
         var frame = win.frameRect(forContentRect: NSRect(x: 0, y: 0, width: width, height: height))
@@ -164,7 +167,7 @@ final class SettingsWindowController: NSWindowController {
             ("Main Display:", [hotkeyRow(
                 recorderMainDisplay, reset: #selector(resetMainDisplayToDefault),
                 help: "Picks the display that has the menu bar.")]),
-        ])
+        ], leftAligned: true)
     }
 
     private func buildGeneralTab() -> NSView {
@@ -251,31 +254,52 @@ final class SettingsWindowController: NSWindowController {
                          self?.onRebuild?()
                      })
         }
+        let sidecar = sidecarManager.devices.map { device in
+            nicknameRow(.sidecar, for: device.name, checkbox: rowLabel(device.name))
+        }
         let airPlay = videoManager.allAirPlayDevices.map { device in
-            checkbox(title: device.name,
+            nicknameRow(.display, for: device.name, checkbox: checkbox(title: device.name,
                      isOn: VisibilityPreferences.isVisible(airPlayDevice: device.name),
                      help: "Unchecked: hidden from the menu bar and Touch Bar",
                      action: { [weak self] visible in
                          VisibilityPreferences.setVisible(visible, airPlayDevice: device.name)
                          self?.videoManager.applyVisibility()
                          self?.onRebuild?()
-                     })
+                     }))
         }
         let displays = videoManager.allConnectedDisplays.map { display in
-            checkbox(title: display.name,
+            nicknameRow(.display, for: display.name, checkbox: checkbox(title: display.name,
                      isOn: VisibilityPreferences.isVisible(display: display.name),
                      help: "Unchecked: hidden from the menu bar and Touch Bar",
                      action: { [weak self] visible in
                          VisibilityPreferences.setVisible(visible, display: display.name)
                          self?.videoManager.applyVisibility()
                          self?.onRebuild?()
-                     })
+                     }))
         }
         return formTab([
             ("Audio Output:",       audio.isEmpty    ? [placeholderLabel("No output devices found")] : audio),
             ("AirPlay Displays:",   airPlay.isEmpty  ? [placeholderLabel("None discovered yet")] : airPlay),
+            ("Sidecar:",            sidecar.isEmpty  ? [placeholderLabel("No Sidecar devices found")] : sidecar),
             ("Connected Displays:", displays.isEmpty ? [placeholderLabel("No external displays")] : displays),
         ])
+    }
+
+    /// A device's visibility checkbox with a field beside it for its nickname, which the
+    /// menu, Touch Bar and spoken pickers show in place of the device's own name.
+    private func nicknameRow(_ kind: VisibilityPreferences.NicknameKind, for name: String,
+                             checkbox: NSView) -> NSView {
+        let field = NicknameField(kind: kind, deviceName: name) { [weak self] in self?.onRebuild?() }
+        field.stringValue = VisibilityPreferences.nickname(kind, for: name) ?? ""
+        field.placeholderString = "Nickname"
+        field.controlSize = .small
+        field.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        field.widthAnchor.constraint(equalToConstant: 130).isActive = true
+        field.toolTip = "A name to show for this device in \(AppIdentity.name). Leave blank to use “\(name)”."
+        let row = NSStackView(views: [checkbox, field])
+        row.orientation = .horizontal
+        row.spacing = 8
+        return row
     }
 
     private func buildVirtualTab() -> NSView {
@@ -287,7 +311,7 @@ final class SettingsWindowController: NSWindowController {
         return formTab([
             ("Refresh Rates:", [rates]),
             ("On AirPlay Connect:", [airPlayDefault]),
-        ])
+        ], leftAligned: true)
     }
 
     // MARK: - Actions
@@ -340,7 +364,7 @@ final class SettingsWindowController: NSWindowController {
 
     /// A scrolling tab holding one form. Each group is a label and the controls listed
     /// under it, one per row; the label sits on the group's first row.
-    private func formTab(_ groups: [(label: String, controls: [NSView])]) -> NSView {
+    private func formTab(_ groups: [(label: String, controls: [NSView])], leftAligned: Bool = false) -> NSView {
         let grid = NSGridView()
         grid.rowSpacing    = 6
         grid.columnSpacing = 8
@@ -349,20 +373,24 @@ final class SettingsWindowController: NSWindowController {
             for (i, control) in group.controls.enumerated() {
                 let label = i == 0 ? formLabel(group.label) : NSGridCell.emptyContentView
                 let row = grid.addRow(with: [label, control])
+                row.cell(at: 1).xPlacement = .leading
                 if i == 0 && g > 0 { row.topPadding = 10 }
             }
         }
         grid.column(at: 0).xPlacement = .trailing
         grid.column(at: 1).xPlacement = .leading
+        // Keep the grid at its natural width; stretched, its trailing-placed label column
+        // would push the whole form to the right.
+        grid.setContentHuggingPriority(.required, for: .horizontal)
 
         let scrollView = makeScrollView()
         let stack = SettingsStack()
         stack.orientation = .vertical
-        stack.alignment   = .centerX
+        stack.alignment   = leftAligned ? .leading : .centerX
         stack.edgeInsets  = Self.formInsets
         stack.translatesAutoresizingMaskIntoConstraints = false
-        stack.addArrangedSubview(grid)
         scrollView.documentView = stack
+        stack.addArrangedSubview(grid)
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor),
             stack.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor),
@@ -405,7 +433,7 @@ final class SettingsWindowController: NSWindowController {
         ]
         let rates = [30, 60, 120, 240]
 
-        var rows: [[NSView]] = [[NSGridCell.emptyContentView] + rates.map { columnHeader("\($0) Hz") }]
+        var rows: [[NSView]] = [[NSGridCell.emptyContentView] + rates.map { rotatedColumnHeader("\($0) Hz") }]
         for entry in contexts {
             var row: [NSView] = [rowLabel(entry.name)]
             let enabled = VisibilityPreferences.virtualRefreshRates(for: entry.context)
@@ -421,12 +449,16 @@ final class SettingsWindowController: NSWindowController {
             rows.append(row)
         }
 
-        let grid = NSGridView(views: rows)
+        let grid = BaselineRowGridView(views: rows)
+        grid.baselineRow   = 1
         grid.rowSpacing    = 2
         grid.columnSpacing = 10
         grid.column(at: 0).xPlacement = .leading
         for c in 1...rates.count { grid.column(at: c).xPlacement = .center }
         for r in 0..<grid.numberOfRows { grid.row(at: r).yPlacement = .center }
+        // The rotated headers start at the bottom, so each one's first letter sits the same
+        // distance above its checkboxes whatever the label's length.
+        grid.row(at: 0).yPlacement = .bottom
         return grid
     }
 
@@ -435,6 +467,14 @@ final class SettingsWindowController: NSWindowController {
         tf.font      = .systemFont(ofSize: NSFont.smallSystemFontSize)
         tf.textColor = .secondaryLabelColor
         return tf
+    }
+
+    /// Column header with its text rotated 90° counter-clockwise (reads bottom to top),
+    /// so each column is only as wide as a checkbox.
+    private func rotatedColumnHeader(_ title: String) -> NSView {
+        RotatedLabelView(text: title,
+                         font: .systemFont(ofSize: NSFont.smallSystemFontSize),
+                         color: .secondaryLabelColor)
     }
 
     private func rowLabel(_ title: String) -> NSView {
@@ -484,7 +524,8 @@ final class SettingsWindowController: NSWindowController {
     /// "Pick after [2.0] s": how long a picker waits after the last press before it picks.
     private func pickDelayRow() -> NSView {
         let range = VisibilityPreferences.pickDelayRange
-        let field = NSTextField(string: Self.delayText(VisibilityPreferences.pickDelay))
+        let field = RoundedTextField(frame: .zero)
+        field.stringValue = Self.delayText(VisibilityPreferences.pickDelay)
         field.alignment = .right
         field.controlSize = .small
         field.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
@@ -659,5 +700,156 @@ private final class ClosureButton: NSButton {
 
     @objc private func fired() {
         handler(state == .on)
+    }
+}
+
+
+/// Saves a device's nickname when editing ends; blank clears it.
+private final class NicknameField: RoundedTextField, NSTextFieldDelegate {
+    private let kind: VisibilityPreferences.NicknameKind
+    private let deviceName: String
+    private let onChange: () -> Void
+
+    init(kind: VisibilityPreferences.NicknameKind, deviceName: String, onChange: @escaping () -> Void) {
+        self.kind = kind
+        self.deviceName = deviceName
+        self.onChange = onChange
+        super.init(frame: .zero)
+        delegate = self
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        VisibilityPreferences.setNickname(stringValue, kind, for: deviceName)
+        onChange()
+    }
+}
+
+
+/// A text field drawn like the hotkey recorder: rounded, 1pt separator border on the control
+/// background, with a soft accent ring while editing. No system focus ring.
+private class RoundedTextField: NSTextField {
+
+    private final class Cell: NSTextFieldCell {
+        private let inset = NSSize(width: 6, height: 2)
+
+        override func drawingRect(forBounds rect: NSRect) -> NSRect {
+            super.drawingRect(forBounds: rect.insetBy(dx: inset.width, dy: inset.height))
+        }
+        override func cellSize(forBounds rect: NSRect) -> NSSize {
+            let s = super.cellSize(forBounds: rect)
+            return NSSize(width: s.width + inset.width * 2, height: s.height + inset.height * 2)
+        }
+        override func select(withFrame rect: NSRect, in view: NSView, editor: NSText,
+                             delegate: Any?, start: Int, length: Int) {
+            super.select(withFrame: drawingRect(forBounds: rect), in: view, editor: editor,
+                         delegate: delegate, start: start, length: length)
+        }
+        override func edit(withFrame rect: NSRect, in view: NSView, editor: NSText,
+                           delegate: Any?, event: NSEvent?) {
+            super.edit(withFrame: drawingRect(forBounds: rect), in: view, editor: editor,
+                       delegate: delegate, event: event)
+        }
+    }
+
+    override class var cellClass: AnyClass? {
+        get { Cell.self }
+        set {}
+    }
+
+    private var isEditingField = false { didSet { applyStyle() } }
+
+    override init(frame: NSRect) { super.init(frame: frame); setUp() }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    private func setUp() {
+        isBordered = false
+        drawsBackground = false
+        focusRingType = .none
+        controlSize = .small
+        font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        wantsLayer = true
+        layer?.cornerRadius = 5
+        applyStyle()
+    }
+
+    private func applyStyle() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+            if isEditingField {
+                layer?.borderWidth = 3
+                layer?.borderColor = NSColor.keyboardFocusIndicatorColor.withAlphaComponent(0.4).cgColor
+            } else {
+                layer?.borderWidth = 1
+                layer?.borderColor = NSColor.separatorColor.cgColor
+            }
+        }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyStyle()
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let ok = super.becomeFirstResponder()
+        if ok { isEditingField = true }
+        return ok
+    }
+
+    override func textDidEndEditing(_ notification: Notification) {
+        super.textDidEndEditing(notification)
+        isEditingField = false
+    }
+}
+
+
+/// A single line of text drawn rotated 90° counter-clockwise. Its intrinsic size is the
+/// text's size with width and height swapped.
+private final class RotatedLabelView: NSView {
+    private let text: NSAttributedString
+    /// Space kept below the text's first letter, between it and whatever sits under the view.
+    private static let bottomGap: CGFloat = 8
+
+    init(text: String, font: NSFont, color: NSColor) {
+        self.text = NSAttributedString(string: text,
+                                       attributes: [.font: font, .foregroundColor: color])
+        super.init(frame: .zero)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    override var intrinsicContentSize: NSSize {
+        let size = text.size()
+        return NSSize(width: ceil(size.height), height: ceil(size.width) + Self.bottomGap)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let size = text.size()
+        NSGraphicsContext.saveGraphicsState()
+        let t = NSAffineTransform()
+        t.translateX(by: (bounds.width + size.height) / 2, yBy: Self.bottomGap)
+        t.rotate(byDegrees: 90)
+        t.concat()
+        text.draw(at: .zero)
+        NSGraphicsContext.restoreGraphicsState()
+    }
+}
+
+
+// MARK: - BaselineRowGridView
+
+/// A grid that reports the first baseline of one of its rows, not of its first row, so a
+/// label beside the grid lines up with that row (here the first row under a header row).
+private final class BaselineRowGridView: NSGridView {
+    var baselineRow = 0
+
+    override var firstBaselineOffsetFromTop: CGFloat {
+        guard baselineRow < numberOfRows else { return super.firstBaselineOffsetFromTop }
+        layoutSubtreeIfNeeded()
+        let view = cell(atColumnIndex: 0, rowIndex: baselineRow).contentView ?? self
+        let top = isFlipped ? view.frame.minY : bounds.height - view.frame.maxY
+        return top + view.firstBaselineOffsetFromTop
     }
 }

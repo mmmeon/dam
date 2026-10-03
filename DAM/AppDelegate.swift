@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var audioCycleHotkey: GlobalHotkey!
     private var mainDisplayHotkey: GlobalHotkey!
     private var settingsWindow: SettingsWindowController?
+    private var arrangeWindow: ArrangeDisplaysWindowController?
     private var cancellables = Set<AnyCancellable>()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -71,8 +72,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // `-DAMDebugHUD YES` on launch shows the quick-connect HUD preview; `connecting`
         // shows the connecting HUD instead, `select` plays the select animation, `audio`
         // plays the audio output picker, `mirror` the mirror picker, `main` the main display
-        // picker, `caption` announces an example message, and
-        // `switcher` and `airplay` act as their hotkeys do; `connect-airplay` connects the
+        // picker, `caption` announces an example message, `arrange` opens the Arrange
+        // Displays window, `settings` opens Settings, and `switcher` and `airplay` act as their hotkeys do; `connect-airplay` connects the
         // first available AirPlay display without the HUD, and `disconnect-airplay`
         // disconnects the connected one.
         if let mode = UserDefaults.standard.string(forKey: "DAMDebugHUD") {
@@ -83,6 +84,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case "mirror":     debugPlayMirrorPicker(nil)
             case "main":       debugPlayMainDisplayPicker(nil)
             case "caption":    debugPreviewCaptionHUD(nil)
+            case "arrange":    DispatchQueue.main.async { self.openArrangeDisplays(nil) }
+            case "settings":   DispatchQueue.main.async { self.openSettings(nil) }
             case "switcher":   DispatchQueue.main.async { self.openSwitcher() }
             case "airplay":    // after discovery has had time to find displays
                 DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
@@ -268,7 +271,7 @@ extension AppDelegate: NSMenuDelegate {
         guard let display = sender.representedObject as? DisplayInfo else { return }
         let verb = display.isConnected ? "Deselected" : "Selected"
         videoManager.connectAirPlay(deviceName: display.name,
-                                    announcing: "\(verb) \(display.name)")
+                                    announcing: "\(verb) \(display.label)")
     }
 
     @objc func openSettings(_ sender: Any?) {
@@ -286,7 +289,8 @@ extension AppDelegate: NSMenuDelegate {
             currentAudioCycle: HotkeyPreference.currentAudioCycle,
             currentMainDisplay: HotkeyPreference.currentMainDisplay,
             audioManager: audioManager,
-            videoManager: videoManager
+            videoManager: videoManager,
+            sidecarManager: sidecarManager
         )
         wc.onSave = { [weak self] pref in
             HotkeyPreference.current = pref
@@ -323,6 +327,24 @@ extension AppDelegate: NSMenuDelegate {
         wc.show()
     }
 
+    /// Opens the Arrange Displays window, one for the app's lifetime.
+    @objc func openArrangeDisplays(_ sender: Any?) {
+        let wc = arrangeWindow ?? ArrangeDisplaysWindowController(videoManager: videoManager)
+        arrangeWindow = wc
+        wc.show()
+    }
+
+    /// A "Position" pick: puts the display on the chosen side of another one.
+    @objc func positionDisplay(_ sender: NSMenuItem) {
+        guard let selection = sender.representedObject as? PositionSelection else { return }
+        videoManager.applyPositionSelection(selection) { [weak self] result in
+            if case .failure(let error) = result {
+                SpeechSynthesizer.shared.announce(error.localizedDescription)
+            }
+            self?.rebuild()
+        }
+    }
+
     @objc func optimizeForDisplay(_ sender: NSMenuItem) {
         guard let display = sender.representedObject as? DisplayInfo else { return }
         videoManager.setAsOptimizedDisplay(display) { [weak self] result in
@@ -336,7 +358,7 @@ extension AppDelegate: NSMenuDelegate {
     @objc func selectSidecarDevice(_ sender: NSMenuItem) {
         guard let device = sender.representedObject as? SidecarDevice else { return }
         SpeechSynthesizer.shared.announce(device.isConnected
-            ? "Disconnecting \(device.name)" : "Connecting to \(device.name)")
+            ? "Disconnecting \(device.label)" : "Connecting to \(device.label)")
         sidecarManager.toggle(device) { [weak self] error in
             if let error { SpeechSynthesizer.shared.announce(error.localizedDescription) }
             self?.rebuild()
@@ -346,7 +368,7 @@ extension AppDelegate: NSMenuDelegate {
     @objc func disconnectAirPlayDevice(_ sender: NSMenuItem) {
         guard let display = sender.representedObject as? DisplayInfo else { return }
         videoManager.disconnectAirPlay(deviceName: display.name,
-                                       announcing: "Deselected \(display.name)")
+                                       announcing: "Deselected \(display.label)")
     }
 
     /// A "Mirror on" pick: a checked display leaves the set, an unchecked one joins it, and

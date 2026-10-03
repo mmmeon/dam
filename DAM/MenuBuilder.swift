@@ -17,7 +17,7 @@ func buildStatusMenu(audio: AudioManager,
     } else {
         for device in audio.devices {
             let item = NSMenuItem(
-                title: device.name,
+                title: device.label,
                 action: #selector(AppDelegate.selectAudioDevice(_:)),
                 keyEquivalent: ""
             )
@@ -37,7 +37,7 @@ func buildStatusMenu(audio: AudioManager,
     } else {
         for display in video.airPlayDevices {
             let item = NSMenuItem(
-                title: display.name,
+                title: display.label,
                 action: #selector(AppDelegate.selectDisplay(_:)),
                 keyEquivalent: ""
             )
@@ -55,14 +55,10 @@ func buildStatusMenu(audio: AudioManager,
                 submenu.addItem(.separator())
                 if canMirrorDisplays {
                     addMirrorItems(to: submenu, for: display, video: video)
-                    // When AirPlay is the slave (built-in is master), offer a dedicated
-                    // "Optimize for this Display" item that promotes it to master without
-                    // exiting mirror mode — decoupled from the mirror on/off toggle.
-                    if display.isMirroring {
-                        submenu.addItem(optimizeItem(for: display))
-                    }
+                    if let item = optimizeItem(for: display, video: video) { submenu.addItem(item) }
                 }
                 if let item = mainDisplayItem(for: display, video: video) { submenu.addItem(item) }
+                if let item = positionItem(for: display, video: video) { submenu.addItem(item) }
                 submenu.addItem(disconnectItem(for: display))
                 item.submenu = submenu
             }
@@ -80,7 +76,7 @@ func buildStatusMenu(audio: AudioManager,
         } else {
             for device in sidecar.devices {
                 let item = NSMenuItem(
-                    title: device.name,
+                    title: device.label,
                     action: #selector(AppDelegate.selectSidecarDevice(_:)),
                     keyEquivalent: ""
                 )
@@ -98,7 +94,7 @@ func buildStatusMenu(audio: AudioManager,
         menu.addItem(disabledItem("None"))
     } else {
         for display in video.connectedDisplays {
-            let item = NSMenuItem(title: display.name, action: nil, keyEquivalent: "")
+            let item = NSMenuItem(title: display.label, action: nil, keyEquivalent: "")
             item.state = display.isConnected ? .on : .off
 
             // Mirror icon whether this display is the slave OR the master in a set.
@@ -115,8 +111,10 @@ func buildStatusMenu(audio: AudioManager,
                 if canMirrorDisplays {
                     submenu.addItem(.separator())
                     addMirrorItems(to: submenu, for: display, video: video)
+                    if let item = optimizeItem(for: display, video: video) { submenu.addItem(item) }
                 }
                 if let item = mainDisplayItem(for: display, video: video) { submenu.addItem(item) }
+                if let item = positionItem(for: display, video: video) { submenu.addItem(item) }
                 item.submenu = submenu
             } else {
                 item.submenu = buildResolutionSubmenu(display: display, video: video)
@@ -126,6 +124,16 @@ func buildStatusMenu(audio: AudioManager,
     }
 
     menu.addItem(.separator())
+    if video.currentLayout().displayCount >= 2 {
+        let arrange = NSMenuItem(title: "Arrange Displays…",
+                                 action: #selector(AppDelegate.openArrangeDisplays(_:)),
+                                 keyEquivalent: "")
+        arrange.toolTip = "Drag displays to arrange them. Hold a display over others, then " +
+                          "release, to mirror it on them. Drag a card off the back of a mirrored stack to " +
+                          "extend that display. Drag the square to a different " +
+                          "display to make it the main display."
+        menu.addItem(arrange)
+    }
     menu.addItem(withTitle: "Settings…",
                  action: #selector(AppDelegate.openSettings(_:)),
                  keyEquivalent: ",")
@@ -167,6 +175,10 @@ private func debugMenuItem() -> NSMenuItem {
     submenu.addItem(withTitle: "Play Caption Example",
                     action: #selector(AppDelegate.debugPreviewCaptionHUD(_:)),
                     keyEquivalent: "")
+    // Unlike the main menu's item, there with a single display too.
+    submenu.addItem(withTitle: "Open Arrange Displays",
+                    action: #selector(AppDelegate.openArrangeDisplays(_:)),
+                    keyEquivalent: "")
     submenu.addItem(withTitle: "Hide HUD Previews",
                     action: #selector(AppDelegate.debugHideHUDPreviews(_:)),
                     keyEquivalent: "")
@@ -194,28 +206,27 @@ private func buildResolutionSubmenu(display: DisplayInfo, video: VideoManager) -
     let current = video.currentModes(for: display)
 
     if video.displayContext(for: display) == .airPlay {
-        // — Native group —
-        submenu.addItem(sectionHeader("Native"))
-        let nativeModes  = video.availableModesDeduped(for: display.cgDisplayID)
-        let virtualModes = VideoManager.virtualModes(for: .airPlay)
-        let currentIdx   = VideoManager.currentModeIndex(
-            in: nativeModes + virtualModes, anchorCurrent: current.anchor, nativeCurrent: current.native)
-
-        if nativeModes.isEmpty {
+        // Resolutions in a native and a virtual group, each picked at the current rate where
+        // it can be; then the rates at the current resolution, split the same way.
+        let resolutions = video.airPlayResolutionOptions(for: display)
+        submenu.addItem(sectionHeader("Resolution"))
+        if resolutions.native.isEmpty {
             submenu.addItem(disabledItem("No modes available"))
         } else {
-            for (i, mode) in nativeModes.enumerated() {
-                submenu.addItem(modeItem(title: mode.label, mode: mode, display: display,
-                                         isCurrent: i == currentIdx))
+            for (i, mode) in resolutions.native.enumerated() {
+                submenu.addItem(modeItem(title: mode.resolutionLabel, mode: mode, display: display,
+                                         isCurrent: i == resolutions.current.native))
             }
         }
 
-        // — Virtual group —
-        submenu.addItem(sectionHeader("Virtual"))
-        for (i, mode) in virtualModes.enumerated() {
-            submenu.addItem(modeItem(title: mode.label, mode: mode, display: display,
-                                     isCurrent: nativeModes.count + i == currentIdx))
+        submenu.addItem(sectionHeader("Virtual Resolution"))
+        for (i, mode) in resolutions.virtual.enumerated() {
+            submenu.addItem(modeItem(title: mode.resolutionLabel, mode: mode, display: display,
+                                     isCurrent: i == resolutions.current.virtual))
         }
+
+        addRateSections(to: submenu, rates: video.airPlayRateOptions(for: display),
+                        display: display, current: current)
     } else {
         // External or built-in — Resolution picker + Refresh Rate picker for the current
         // resolution. Native rates use native mode settings; non-native rates activate the
@@ -231,19 +242,36 @@ private func buildResolutionSubmenu(display: DisplayInfo, video: VideoManager) -
             }
         }
 
-        submenu.addItem(sectionHeader("Refresh Rate"))
-        if let options = video.refreshRateOptions(for: display) {
-            let currentIdx = VideoManager.currentModeIndex(
-                in: options.modes, anchorCurrent: current.anchor, nativeCurrent: current.native)
-            for (i, mode) in options.modes.enumerated() {
-                submenu.addItem(modeItem(title: mode.rateLabel, mode: mode, display: display,
-                                         isCurrent: i == currentIdx))
-            }
-        } else {
-            submenu.addItem(disabledItem("No rates available"))
-        }
+        addRateSections(to: submenu, rates: video.refreshRateOptions(for: display)?.modes ?? [],
+                        display: display, current: current)
     }
     return submenu
+}
+
+/// "Refresh Rate" with the native rates, then "Virtual Refresh Rate" with the virtual ones
+/// when there are any — the same split as the resolutions.
+private func addRateSections(to submenu: NSMenu, rates: [DisplayMode], display: DisplayInfo,
+                             current: (anchor: DisplayMode?, native: DisplayMode?)) {
+    let currentIdx = VideoManager.currentModeIndex(
+        in: rates, anchorCurrent: current.anchor, nativeCurrent: current.native)
+    let indexed = Array(rates.enumerated())
+    let native = indexed.filter { !$0.element.isVirtual }
+    let virtual = indexed.filter { $0.element.isVirtual }
+
+    submenu.addItem(sectionHeader("Refresh Rate"))
+    if rates.isEmpty {
+        submenu.addItem(disabledItem("No rates available"))
+    } else if native.isEmpty {
+        submenu.addItem(disabledItem("None"))
+    }
+    for (i, mode) in native {
+        submenu.addItem(modeItem(title: mode.rateLabel, mode: mode, display: display, isCurrent: i == currentIdx))
+    }
+    guard !virtual.isEmpty else { return }
+    submenu.addItem(sectionHeader("Virtual Refresh Rate"))
+    for (i, mode) in virtual {
+        submenu.addItem(modeItem(title: mode.rateLabel, mode: mode, display: display, isCurrent: i == currentIdx))
+    }
 }
 
 /// A selectable mode row: native modes go through `selectResolution`, virtual modes
@@ -280,14 +308,24 @@ private func disconnectItem(for display: DisplayInfo) -> NSMenuItem {
     return item
 }
 
-private func optimizeItem(for display: DisplayInfo) -> NSMenuItem {
-    let item = NSMenuItem(
-        title: "Optimize for this Display",
-        action: #selector(AppDelegate.optimizeForDisplay(_:)),
-        keyEquivalent: ""
-    )
-    item.representedObject = display
-    return item
+/// "Optimize for", listing the displays in the mirror set `display` belongs to with the
+/// optimized one checked; picking another makes the set run at that display's resolution
+/// without leaving mirror mode. Nil when the display is not in a set.
+private func optimizeItem(for display: DisplayInfo, video: VideoManager) -> NSMenuItem? {
+    let members = video.mirrorSetMembers(of: display)
+    guard members.count >= 2 else { return nil }
+    let submenu = NSMenu()
+    for (i, member) in members.enumerated() {
+        let item = NSMenuItem(title: member.label,
+                              action: #selector(AppDelegate.optimizeForDisplay(_:)),
+                              keyEquivalent: "")
+        item.representedObject = member
+        item.state = i == 0 ? .on : .off
+        submenu.addItem(item)
+    }
+    let parent = NSMenuItem(title: "Optimize for", action: nil, keyEquivalent: "")
+    parent.submenu = submenu
+    return parent
 }
 
 /// The mirror items of a display's submenu. With one other display, a single toggle. With
@@ -306,7 +344,7 @@ private func addMirrorItems(to submenu: NSMenu, for display: DisplayInfo, video:
     let slaves   = Set(video.slaveDisplays(of: display).map(\.id))
     let mirrorOn = NSMenu()
     for target in targets {
-        let item = NSMenuItem(title: target.name,
+        let item = NSMenuItem(title: target.label,
                               action: #selector(AppDelegate.mirrorOnDisplay(_:)),
                               keyEquivalent: "")
         item.representedObject = MirrorSelection(display: display, target: target)
@@ -336,6 +374,32 @@ private func mainDisplayItem(for display: DisplayInfo, video: VideoManager) -> N
     item.representedObject = display
     item.state = display.isMain ? .on : .off
     return item
+}
+
+/// "Position", listing for each other desktop the four sides of it the display can be put
+/// on, with where it sits now checked; nil when there is no other desktop. A display in a
+/// mirror set is positioned with its set.
+private func positionItem(for display: DisplayInfo, video: VideoManager) -> NSMenuItem? {
+    let layout = video.currentLayout()
+    guard let id = video.placementID(for: display) else { return nil }
+    let others = layout.placements.filter { $0.id != id }
+    guard !others.isEmpty else { return nil }
+    let submenu = NSMenu()
+    for (i, other) in others.enumerated() {
+        if i > 0 { submenu.addItem(.separator()) }
+        let current = layout.side(of: id, relativeTo: other.id)
+        for side in PlacementSide.allCases {
+            let item = NSMenuItem(title: "\(side.label) \(other.name)",
+                                  action: #selector(AppDelegate.positionDisplay(_:)),
+                                  keyEquivalent: "")
+            item.representedObject = PositionSelection(id: id, other: other.id, side: side)
+            item.state = current == side ? .on : .off
+            submenu.addItem(item)
+        }
+    }
+    let parent = NSMenuItem(title: "Position", action: nil, keyEquivalent: "")
+    parent.submenu = submenu
+    return parent
 }
 
 private func mirrorToggleItem(for display: DisplayInfo, isMirroring: Bool) -> NSMenuItem {
