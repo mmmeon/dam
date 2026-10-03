@@ -224,6 +224,15 @@ enum VisibilityPreferences {
         set { UserDefaults.standard.set(newValue, forKey: sidecarAloneKey) }
     }
 
+    private static let sidecarAutoConnectKey = "\(AppIdentity.shortID).sidecar.autoConnectWithoutDisplay"
+
+    /// Whether an iPad plugged in over USB is connected over Sidecar when the Mac has no
+    /// display of its own, including at login. Off by default.
+    static var autoConnectsSidecarWithoutDisplay: Bool {
+        get { UserDefaults.standard.bool(forKey: sidecarAutoConnectKey) }
+        set { UserDefaults.standard.set(newValue, forKey: sidecarAutoConnectKey) }
+    }
+
     /// The resolution last picked for an iPad's virtual display, as "WIDTHxHEIGHT" (logical),
     /// applied again when it reconnects. Nil means the iPad's own.
     static func sidecarResolution(for name: String) -> String? {

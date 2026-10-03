@@ -317,10 +317,16 @@ final class SettingsWindowController: NSWindowController {
                                             "other resolutions. " +
                                             "Applies on the next Sidecar connection.",
                                       action: { VisibilityPreferences.backsSidecarWithVirtualDisplay = $0 })
+        let sidecarAutoConnect = checkbox(title: "Connect a plugged-in iPad when there is no other display",
+                                          isOn: VisibilityPreferences.autoConnectsSidecarWithoutDisplay,
+                                          help: "When an iPad is plugged in over USB and the Mac has no " +
+                                                "display of its own, connect it over Sidecar. Also " +
+                                                "applies at login with the iPad already plugged in.",
+                                          action: { VisibilityPreferences.autoConnectsSidecarWithoutDisplay = $0 })
         return formTab([
             ("Refresh Rates:", [rates]),
             ("On AirPlay Connect:", [airPlayDefault]),
-            ("On Sidecar Connect:", [sidecarBacking]),
+            ("On Sidecar Connect:", [sidecarBacking, sidecarAutoConnect]),
         ], leftAligned: true)
     }
 

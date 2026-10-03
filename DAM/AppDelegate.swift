@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let audioManager = AudioManager()
     private let videoManager = VideoManager()
     private let sidecarManager = SidecarManager()
+    private var sidecarAutoConnector: SidecarAutoConnector?
     private var controlStrip: ControlStripPresenter!
     private var hotkey: GlobalHotkey!
     private var airPlayConnectHotkey: GlobalHotkey!
@@ -37,6 +38,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controlStrip.install()
 
         AirPlayQuickConnect.shared.configure(videoManager: videoManager, sidecarManager: sidecarManager)
+        sidecarAutoConnector = SidecarAutoConnector(sidecar: sidecarManager, video: videoManager)
+        sidecarAutoConnector?.start()
         AudioOutputPicker.shared.configure(audioManager: audioManager)
         MirrorPicker.shared.configure(videoManager: videoManager)
         MainDisplayPicker.shared.configure(videoManager: videoManager)

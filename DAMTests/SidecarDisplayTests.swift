@@ -166,6 +166,52 @@ final class SidecarDisplayTests: XCTestCase {
         XCTAssertFalse(ConnectTarget.sidecar(usb).isConnected)
     }
 
+    // MARK: - Connecting on plug-in
+
+    private let usb: UInt64 = 0x1000000
+
+    func testOnlyThePlaceholderIsNoDisplayOfTheMacsOwn() {
+        XCTAssertFalse(VideoManager.hasOwnDisplay([]))
+        XCTAssertFalse(VideoManager.hasOwnDisplay([(0x756e6b6e, 0x76697274)]))                 // placeholder
+        XCTAssertFalse(VideoManager.hasOwnDisplay([(0x6161706c, 0x69506164), (0x3456, 0x1234)])) // iPad + anchor
+        XCTAssertTrue(VideoManager.hasOwnDisplay([(0x30ae, 0x61f7)]))
+    }
+
+    func testPluggedInIPadIsConnectedWithoutADisplay() {
+        let pad = SidecarDevice(id: "p", name: iPadName, isConnected: false, status: usb)
+        let plan = SidecarAutoConnector.plan(devices: [pad], attempts: [:], hasOwnDisplay: false, now: Date())
+        XCTAssertEqual(plan.connect?.id, "p")
+        XCTAssertNil(SidecarAutoConnector.plan(devices: [pad], attempts: [:], hasOwnDisplay: true, now: Date()).connect)
+    }
+
+    func testWirelessIPadIsNotAutoConnected() {
+        let pad = SidecarDevice(id: "p", name: iPadName, isConnected: false, status: 0x4)
+        XCTAssertNil(SidecarAutoConnector.plan(devices: [pad], attempts: [:], hasOwnDisplay: false, now: Date()).connect)
+    }
+
+    func testIPadDisconnectedByHandStaysDisconnectedUntilReplugged() {
+        let connected = SidecarDevice(id: "p", name: iPadName, isConnected: true, status: usb)
+        var plan = SidecarAutoConnector.plan(devices: [connected], attempts: [:], hasOwnDisplay: false, now: Date())
+        let disconnected = SidecarDevice(id: "p", name: iPadName, isConnected: false, status: usb)
+        plan = SidecarAutoConnector.plan(devices: [disconnected], attempts: plan.attempts, hasOwnDisplay: false, now: Date())
+        XCTAssertNil(plan.connect)
+        // Unplugged (gone from USB), then plugged in again.
+        plan = SidecarAutoConnector.plan(devices: [], attempts: plan.attempts, hasOwnDisplay: false, now: Date())
+        plan = SidecarAutoConnector.plan(devices: [disconnected], attempts: plan.attempts, hasOwnDisplay: false, now: Date())
+        XCTAssertEqual(plan.connect?.id, "p")
+    }
+
+    func testFailedAttemptsAreRetriedAfterADelayAndThenGivenUp() {
+        let pad = SidecarDevice(id: "p", name: iPadName, isConnected: false, status: usb)
+        let now = Date()
+        var waiting = SidecarAutoConnector.Attempt(count: 1, nextTry: now + 5)
+        XCTAssertNil(SidecarAutoConnector.plan(devices: [pad], attempts: ["p": waiting], hasOwnDisplay: false, now: now).connect)
+        waiting.nextTry = now - 1
+        XCTAssertNotNil(SidecarAutoConnector.plan(devices: [pad], attempts: ["p": waiting], hasOwnDisplay: false, now: now).connect)
+        waiting.count = SidecarAutoConnector.maxAttempts
+        XCTAssertNil(SidecarAutoConnector.plan(devices: [pad], attempts: ["p": waiting], hasOwnDisplay: false, now: now).connect)
+    }
+
     // MARK: - Nickname
 
     func testSidecarDisplayUsesTheIPadNickname() {
