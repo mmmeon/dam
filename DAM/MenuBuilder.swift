@@ -143,6 +143,9 @@ func buildStatusMenu(audio: AudioManager,
                           "display to make it the main display."
         menu.addItem(arrange)
     }
+    menu.addItem(withTitle: "About \(AppIdentity.name)",
+                 action: #selector(AppDelegate.openAbout(_:)),
+                 keyEquivalent: "")
     menu.addItem(withTitle: "Settings…",
                  action: #selector(AppDelegate.openSettings(_:)),
                  keyEquivalent: ",")
