@@ -32,7 +32,7 @@ final class MirrorPicker {
         var name: String {
             switch self {
             case .separate:       return "Separate Display"
-            case .display(let d): return "Mirror on \(d.name)"
+            case .display(let d): return "Mirror on \(d.label)"
             case .all:            return "Mirror on All Displays"
             }
         }

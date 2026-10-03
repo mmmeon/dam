@@ -189,6 +189,79 @@ final class VideoManagerFilterTests: XCTestCase {
         XCTAssertFalse(hiDPI.contains { $0.width == 2560 }, "No 5K backing is advertised")
     }
 
+    // MARK: - VideoManager.airPlayResolutionOptions / airPlayRateOptions
+
+    private func nativeMode(_ w: Int, _ h: Int, hz: Double, io: Int32) -> DisplayMode {
+        DisplayMode(id: "\(w)x\(h)@\(hz)", ioModeID: io, width: w, height: h,
+                    pixelWidth: w, pixelHeight: h, refreshRate: hz, isHiDPI: false)
+    }
+
+    /// 1080p and 720p at 120 and 60 Hz, plus 720p HiDPI at 60 Hz.
+    private var sampleVirtual: [DisplayMode] {
+        [VideoManager.virtualMode(width: 1920, height: 1080, refreshRate: 120),
+         VideoManager.virtualMode(width: 1920, height: 1080, refreshRate: 60),
+         VideoManager.virtualMode(width: 1280, height: 720, refreshRate: 60,
+                                  pixelWidth: 2560, pixelHeight: 1440),
+         VideoManager.virtualMode(width: 1280, height: 720, refreshRate: 120),
+         VideoManager.virtualMode(width: 1280, height: 720, refreshRate: 60)]
+    }
+
+    func testAirPlayResolutions_listEachSizeOnce_atCurrentRate() {
+        let n1080at60 = nativeMode(1920, 1080, hz: 60, io: 1)
+        let n1080at30 = nativeMode(1920, 1080, hz: 30, io: 2)
+        let n720at60  = nativeMode(1280, 720, hz: 60, io: 3)
+        let anchor = VideoManager.virtualMode(width: 1280, height: 720, refreshRate: 120)
+        let opts = VideoManager.airPlayResolutionOptions(
+            nativePerSize: [n1080at60, n720at60], nativeAll: [n1080at60, n1080at30, n720at60],
+            virtual: sampleVirtual, anchorCurrent: anchor, nativeCurrent: nil)
+
+        XCTAssertEqual(opts.native.map(\.ioModeID), [1, 3], "No native 120 Hz — keeps each size's best")
+        XCTAssertEqual(opts.virtual.map(\.resolutionLabel), ["1920 × 1080 ✦", "1280 × 720  HiDPI ✦", "1280 × 720 ✦"])
+        // 120 Hz where offered; the HiDPI size has only 60 Hz.
+        XCTAssertEqual(opts.virtual.map(\.roundedRefreshRate), [120, 60, 120])
+        XCTAssertNil(opts.current.native)
+        XCTAssertEqual(opts.current.virtual, 2)
+    }
+
+    func testAirPlayResolutions_nativeCurrent_keepsRate_andMarksNativeOnly() {
+        let n1080at60 = nativeMode(1920, 1080, hz: 60, io: 1)
+        let n1080at30 = nativeMode(1920, 1080, hz: 30, io: 2)
+        let n720at30  = nativeMode(1280, 720, hz: 30, io: 3)
+        let opts = VideoManager.airPlayResolutionOptions(
+            nativePerSize: [n1080at60, n720at30], nativeAll: [n1080at60, n1080at30, n720at30],
+            virtual: sampleVirtual, anchorCurrent: nil, nativeCurrent: n720at30)
+
+        XCTAssertEqual(opts.native.map(\.ioModeID), [2, 3])
+        XCTAssertEqual(opts.virtual.map(\.roundedRefreshRate), [60, 60, 60], "30 Hz isn't virtual — falls back to 60")
+        XCTAssertEqual(opts.current.native, 1)
+        XCTAssertNil(opts.current.virtual)
+    }
+
+    func testAirPlayRates_anchorActive_preferVirtualAtCurrentSize() {
+        let anchor = VideoManager.virtualMode(width: 1920, height: 1080, refreshRate: 60)
+        let native = [nativeMode(1920, 1080, hz: 60, io: 1), nativeMode(1920, 1080, hz: 30, io: 2),
+                      nativeMode(1280, 720, hz: 50, io: 3)]
+        let rates = VideoManager.airPlayRateOptions(nativeAll: native, virtual: sampleVirtual,
+                                                    anchorCurrent: anchor, nativeCurrent: nil)
+        XCTAssertEqual(rates.map(\.rateLabel), ["120 Hz ✦", "60 Hz ✦", "30 Hz"])
+        XCTAssertEqual(VideoManager.currentModeIndex(in: rates, anchorCurrent: anchor, nativeCurrent: nil), 1)
+    }
+
+    func testAirPlayRates_nativeCurrent_preferNative_keepCurrentFractionalMode() {
+        let current = nativeMode(1920, 1080, hz: 59.94, io: 2)
+        let native = [nativeMode(1920, 1080, hz: 60, io: 1), current]
+        let rates = VideoManager.airPlayRateOptions(nativeAll: native, virtual: sampleVirtual,
+                                                    anchorCurrent: nil, nativeCurrent: current)
+        XCTAssertEqual(rates.map(\.rateLabel), ["120 Hz ✦", "60 Hz"])
+        XCTAssertEqual(rates.last?.ioModeID, 2)
+        XCTAssertEqual(VideoManager.currentModeIndex(in: rates, anchorCurrent: nil, nativeCurrent: current), 1)
+    }
+
+    func testAirPlayRates_noCurrentMode_isEmpty() {
+        XCTAssertTrue(VideoManager.airPlayRateOptions(nativeAll: [], virtual: sampleVirtual,
+                                                      anchorCurrent: nil, nativeCurrent: nil).isEmpty)
+    }
+
     // MARK: - VideoManager.defaultVirtualMode(for:)
 
     func testDefaultVirtualMode_noneStored_isNil() {
@@ -292,6 +365,29 @@ final class VideoManagerFilterTests: XCTestCase {
         let native = VideoManager.nativeSize(of: modes)
         XCTAssertEqual(native?.width, 3840)
         XCTAssertEqual(native?.height, 2160)
+    }
+
+    func testOnePerSize_1080pPanel_keeps16x9() {
+        // The LEN T24i-20: 1080p, yet macOS offers HiDPI sizes backed by up to 6720×3780.
+        // Preferring HiDPI per size used to drop the 1x 1920×1080, making 16:10 1680×1050
+        // the "native" size and letting 16:10 sizes into the list.
+        let all = [hiDPI(1920, 1080), hiDPI(1680, 945), hiDPI(1280, 720), hiDPI(1024, 576),
+                   hiDPI(960, 600), mode(1920, 1080), mode(1680, 1050), mode(1600, 900),
+                   mode(1440, 900), mode(1344, 756), mode(1280, 1024), mode(1280, 720),
+                   hiDPI(720, 450), mode(1024, 576), mode(1024, 768), mode(800, 600)]
+        let native = VideoManager.nativeSize(of: all)
+        XCTAssertEqual(native?.width, 1920)
+        XCTAssertEqual(native?.height, 1080)
+        let kept = VideoManager.pickerResolutions(VideoManager.onePerSize(all, native: native),
+                                                  native: native, current: mode(1920, 1080),
+                                                  includeLarger1x: true)
+        XCTAssertEqual(names(kept), ["1920x1080", "1600x900", "1344x756", "1280x720", "1024x576"])
+    }
+
+    func testOnePerSize_prefersHiDPIThatFitsPanel() {
+        let kept = VideoManager.onePerSize([mode(1920, 1080), hiDPI(1920, 1080), mode(1280, 720),
+                                            hiDPI(1280, 720)], native: (2560, 1440))
+        XCTAssertEqual(names(kept), ["1280x720H", "1920x1080"])
     }
 
     // MARK: - DisplayMode.shortLabel

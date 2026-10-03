@@ -54,8 +54,10 @@ struct DisplayMode: Identifiable, Hashable {
     /// "60 Hz"-style label for the refresh-rate pickers; virtual rates get a "✦".
     var rateLabel: String { "\(roundedRefreshRate) Hz" + (isVirtual ? " ✦" : "") }
 
-    /// "1920 × 1080"-style label for the resolution pickers, noting HiDPI.
-    var resolutionLabel: String { "\(width) × \(height)" + (isHiDPI ? "  HiDPI" : "") }
+    /// "1920 × 1080"-style label for the resolution pickers, noting HiDPI; virtual sizes get a "✦".
+    var resolutionLabel: String {
+        "\(width) × \(height)" + (isHiDPI ? "  HiDPI" : "") + (isVirtual ? " ✦" : "")
+    }
 
     /// Compact "1080p"-style label for the Touch Bar, with "↑" for HiDPI and "✦" for virtual
     /// modes. The pickers only list sizes in the panel's own aspect ratio, so the height
@@ -79,6 +81,10 @@ struct DisplayInfo: Identifiable, Hashable {
     let isBuiltIn: Bool
     /// True for the main display: the one with the menu bar, at the origin.
     var isMain: Bool = false
+
+    /// What the app shows for this display: its nickname if the user set one, else its name.
+    /// `name` stays the identity used to find the display and key its settings.
+    var label: String { VisibilityPreferences.nickname(.display, for: name) ?? name }
 }
 
 struct ResolutionSelection: Hashable {
@@ -506,7 +512,7 @@ final class VideoManager: ObservableObject {
     /// Runs `configure` in one display configuration transaction. The commit can block for
     /// seconds, so it runs off the main queue; once it is done and `settle` has passed, the
     /// display list is re-read and `completion` runs on the main queue with the result.
-    private func commitDisplayChange(_ configure: (CGDisplayConfigRef) -> Void,
+    func commitDisplayChange(_ configure: (CGDisplayConfigRef) -> Void,
                                      settle: TimeInterval = 0.5,
                                      completion: @escaping (Result<Void, MirrorError>) -> Void) {
         var config: CGDisplayConfigRef?
@@ -583,7 +589,8 @@ final class VideoManager: ObservableObject {
                 let hz = cgMode.refreshRate == 0 ? 60.0 : cgMode.refreshRate
                 let pw = cgMode.pixelWidth, ph = cgMode.pixelHeight
                 let hiDPI = pw > w
-                let dedupeKey = "\(pw)x\(ph)@\(hz)"
+                // Logical size too: a 1x 3840×2160 and a 1920×1080 HiDPI share pixels.
+                let dedupeKey = "\(w)x\(h)@\(pw)x\(ph)@\(hz)"
                 guard seen.insert(dedupeKey).inserted else { return nil }
                 let id = hiDPI ? "\(w)x\(h)@\(hz)@2x" : "\(w)x\(h)@\(hz)"
                 return DisplayMode(id: id, ioModeID: cgMode.ioDisplayModeID,
@@ -642,12 +649,40 @@ final class VideoManager: ObservableObject {
             completion?(.success(()))
             return
         }
-        commitDisplayChange({ CGConfigureDisplayMirrorOfDisplay($0, master, display.cgDisplayID) }) {
+        // The old master and every other member of the set come to mirror the new master.
+        let others = slaves(of: master).filter { $0 != display.cgDisplayID }
+        mirrorLog.debug("setAsOptimizedDisplay: \(display.cgDisplayID) replaces \(master); others \(others)")
+        commitDisplayChange({ cfg in
+            CGConfigureDisplayMirrorOfDisplay(cfg, master, display.cgDisplayID)
+            for other in others { CGConfigureDisplayMirrorOfDisplay(cfg, other, display.cgDisplayID) }
+        }) {
             if case .failure(let error) = $0 {
                 mirrorLog.error("setAsOptimizedDisplay '\(display.name)': \(String(describing: error))")
             }
             completion?($0)
         }
+    }
+
+    /// The displays in the user mirror set `display` belongs to, the optimized (master) one
+    /// first, or none when it is not in one.
+    func mirrorSetMembers(of display: DisplayInfo) -> [DisplayInfo] {
+        guard display.cgDisplayID != 0 else { return [] }
+        let ids = Self.mirrorSetIDs(of: display.cgDisplayID, masterOf: { CGDisplayMirrorsDisplay($0) },
+                                    slavesOf: slaves(of:), anchorIDs: Set(virtualAnchorCGIDs.values))
+        let known = allConnectedDisplays + allAirPlayDevices
+        return ids.compactMap { id in known.first { $0.cgDisplayID == id } }
+    }
+
+    /// The IDs of the user mirror set `id` is in, master first, or none: a set whose master
+    /// is one of DAM's anchors is not a user set.
+    static func mirrorSetIDs(of id: CGDirectDisplayID,
+                             masterOf: (CGDirectDisplayID) -> CGDirectDisplayID,
+                             slavesOf: (CGDirectDisplayID) -> [CGDirectDisplayID],
+                             anchorIDs: Set<CGDirectDisplayID>) -> [CGDirectDisplayID] {
+        let master = userMirrorMaster(masterOf(id), anchorIDs: anchorIDs) ?? id
+        let slaves = slavesOf(master)
+        guard !slaves.isEmpty else { return [] }
+        return [master] + slaves
     }
 
     func setMode(_ mode: DisplayMode, for cgDisplayID: CGDirectDisplayID) {

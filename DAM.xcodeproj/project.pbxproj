@@ -40,6 +40,13 @@
 		CC000C302F8D60780090E796 /* ScreenMirroringPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B302F8D60780090E796 /* ScreenMirroringPanel.swift */; };
 		CC000C312F8D60780090E796 /* SidecarManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B312F8D60780090E796 /* SidecarManager.swift */; };
 		CC000C012F8D60780090E796 /* HUD.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B012F8D60780090E796 /* HUD.swift */; };
+		DD000C012F8D60780090E796 /* DisplayLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD000B012F8D60780090E796 /* DisplayLayout.swift */; };
+		DD000C022F8D60780090E796 /* VideoManager+Arrangement.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD000B022F8D60780090E796 /* VideoManager+Arrangement.swift */; };
+		DD000C032F8D60780090E796 /* ArrangeDisplaysWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD000B032F8D60780090E796 /* ArrangeDisplaysWindowController.swift */; };
+		DD100B002F8D607C0090E796 /* DisplayLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A002F8D607C0090E796 /* DisplayLayoutTests.swift */; };
+		DD000C042F8D60780090E796 /* ArrangeTouchBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD000B042F8D60780090E796 /* ArrangeTouchBar.swift */; };
+		DD100B012F8D607C0090E796 /* ArrangeTouchBarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A012F8D607C0090E796 /* ArrangeTouchBarTests.swift */; };
+		DD100B0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -89,6 +96,13 @@
 		CC000B302F8D60780090E796 /* ScreenMirroringPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenMirroringPanel.swift; sourceTree = "<group>"; };
 		CC000B312F8D60780090E796 /* SidecarManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarManager.swift; sourceTree = "<group>"; };
 		CC000B012F8D60780090E796 /* HUD.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HUD.swift; sourceTree = "<group>"; };
+		DD000B012F8D60780090E796 /* DisplayLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DisplayLayout.swift"; sourceTree = "<group>"; };
+		DD000B022F8D60780090E796 /* VideoManager+Arrangement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "VideoManager+Arrangement.swift"; sourceTree = "<group>"; };
+		DD000B032F8D60780090E796 /* ArrangeDisplaysWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ArrangeDisplaysWindowController.swift"; sourceTree = "<group>"; };
+		DD100A002F8D607C0090E796 /* DisplayLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DisplayLayoutTests.swift"; sourceTree = "<group>"; };
+		DD000B042F8D60780090E796 /* ArrangeTouchBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ArrangeTouchBar.swift"; sourceTree = "<group>"; };
+		DD100A012F8D607C0090E796 /* ArrangeTouchBarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ArrangeTouchBarTests.swift"; sourceTree = "<group>"; };
+		DD100A0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DisplayNicknameTests.swift"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -155,6 +169,10 @@
 				8BFD3BE22F8D607B0090E796 /* Assets.xcassets */,
 				8BFD3BE72F8D607B0090E796 /* DAM.entitlements */,
 				8BFD3BE42F8D607B0090E796 /* Preview Content */,
+				DD000B012F8D60780090E796 /* DisplayLayout.swift */,
+				DD000B022F8D60780090E796 /* VideoManager+Arrangement.swift */,
+				DD000B032F8D60780090E796 /* ArrangeDisplaysWindowController.swift */,
+				DD000B042F8D60780090E796 /* ArrangeTouchBar.swift */,
 			);
 			path = DAM;
 			sourceTree = "<group>";
@@ -179,6 +197,9 @@
 				AA900A002F8D607C0090E796 /* MainDisplayPickerTests.swift */,
 				AA400A002F8D607C0090E796 /* HotkeyPreferenceTests.swift */,
 				AA500A002F8D607C0090E796 /* ControlStripPresenterTests.swift */,
+				DD100A002F8D607C0090E796 /* DisplayLayoutTests.swift */,
+				DD100A012F8D607C0090E796 /* ArrangeTouchBarTests.swift */,
+				DD100A0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift */,
 			);
 			path = DAMTests;
 			sourceTree = "<group>";
@@ -305,6 +326,10 @@
 				CC000C302F8D60780090E796 /* ScreenMirroringPanel.swift in Sources */,
 				CC000C312F8D60780090E796 /* SidecarManager.swift in Sources */,
 				CC000C012F8D60780090E796 /* HUD.swift in Sources */,
+				DD000C012F8D60780090E796 /* DisplayLayout.swift in Sources */,
+				DD000C022F8D60780090E796 /* VideoManager+Arrangement.swift in Sources */,
+				DD000C032F8D60780090E796 /* ArrangeDisplaysWindowController.swift in Sources */,
+				DD000C042F8D60780090E796 /* ArrangeTouchBar.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -321,6 +346,9 @@
 				AA900B002F8D607C0090E796 /* MainDisplayPickerTests.swift in Sources */,
 				AA400B002F8D607C0090E796 /* HotkeyPreferenceTests.swift in Sources */,
 				AA500B002F8D607C0090E796 /* ControlStripPresenterTests.swift in Sources */,
+				DD100B002F8D607C0090E796 /* DisplayLayoutTests.swift in Sources */,
+				DD100B012F8D607C0090E796 /* ArrangeTouchBarTests.swift in Sources */,
+				DD100B0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

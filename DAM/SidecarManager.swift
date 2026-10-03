@@ -17,6 +17,9 @@ struct SidecarDevice: Identifiable, Hashable {
     let id: String
     let name: String
     let isConnected: Bool
+
+    /// What the app shows for this device: its nickname if the user set one, else its name.
+    var label: String { VisibilityPreferences.nickname(.sidecar, for: name) ?? name }
 }
 
 final class SidecarManager: ObservableObject {

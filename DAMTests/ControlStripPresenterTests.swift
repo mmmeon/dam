@@ -38,6 +38,33 @@ final class ControlStripPresenterTests: XCTestCase {
         ]
     }
 
+    // MARK: - ControlStripPresenter.airPlayResolutionChoices
+
+    func testAirPlayChoices_dropOtherAspectNatives_thenAppendVirtual() {
+        let native = [nativeMode(1920, 1080, ioModeID: 1), nativeMode(1024, 768, ioModeID: 2),
+                      nativeMode(1280, 720, ioModeID: 3)]
+        let virtual = [virtualMode(3840, 2160), virtualMode(1920, 1080)]
+        let choices = ControlStripPresenter.airPlayResolutionChoices(
+            native: native, virtual: virtual, current: (native: 2, virtual: nil))
+        XCTAssertEqual(choices.modes.map(\.shortLabel), ["1080p", "720p", "2160p ✦", "1080p ✦"])
+        XCTAssertEqual(choices.currentIndex, 1, "The native index shifts past the dropped 4:3 size")
+    }
+
+    func testAirPlayChoices_virtualCurrent_indexesPastNatives() {
+        let native = [nativeMode(1920, 1080, ioModeID: 1), nativeMode(1024, 768, ioModeID: 2)]
+        let virtual = [virtualMode(3840, 2160), virtualMode(1920, 1080)]
+        let choices = ControlStripPresenter.airPlayResolutionChoices(
+            native: native, virtual: virtual, current: (native: nil, virtual: 1))
+        XCTAssertEqual(choices.currentIndex, 2)
+    }
+
+    func testAirPlayChoices_currentNativeOfOtherAspect_isNotMarked() {
+        let native = [nativeMode(1920, 1080, ioModeID: 1), nativeMode(1024, 768, ioModeID: 2)]
+        let choices = ControlStripPresenter.airPlayResolutionChoices(
+            native: native, virtual: [virtualMode(1920, 1080)], current: (native: 1, virtual: nil))
+        XCTAssertNil(choices.currentIndex)
+    }
+
     // MARK: - Virtual anchor active
 
     func testVirtualAnchor_1440p_highlightsVirtual1440Segment() {

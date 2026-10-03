@@ -164,3 +164,33 @@ final class ArrangementMainTests: XCTestCase {
         XCTAssertEqual(captured.makingMain(9).origins, captured.origins)
     }
 }
+
+/// Which displays make up the mirror set a display is in.
+final class MirrorSetMembersTests: XCTestCase {
+
+    private let a: CGDirectDisplayID = 1, b: CGDirectDisplayID = 2, c: CGDirectDisplayID = 3
+    private let anchor: CGDirectDisplayID = 900
+
+    func testMembers_fromASlave_masterFirstThenEverySlave() {
+        let ids = VideoManager.mirrorSetIDs(of: c, masterOf: { $0 == self.a ? 0 : self.a },
+                                            slavesOf: { $0 == self.a ? [self.b, self.c] : [] }, anchorIDs: [])
+        XCTAssertEqual(ids, [a, b, c])
+    }
+
+    func testMembers_fromTheMaster_sameSet() {
+        let ids = VideoManager.mirrorSetIDs(of: a, masterOf: { $0 == self.a ? 0 : self.a },
+                                            slavesOf: { $0 == self.a ? [self.b] : [] }, anchorIDs: [])
+        XCTAssertEqual(ids, [a, b])
+    }
+
+    func testMembers_extendedDisplay_none() {
+        XCTAssertTrue(VideoManager.mirrorSetIDs(of: a, masterOf: { _ in 0 }, slavesOf: { _ in [] },
+                                                anchorIDs: []).isEmpty)
+    }
+
+    func testMembers_anchorSet_isNotAUserSet() {
+        let ids = VideoManager.mirrorSetIDs(of: a, masterOf: { $0 == self.a ? self.anchor : 0 },
+                                            slavesOf: { $0 == self.anchor ? [self.a] : [] }, anchorIDs: [anchor])
+        XCTAssertTrue(ids.isEmpty)
+    }
+}

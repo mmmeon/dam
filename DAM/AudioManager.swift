@@ -8,6 +8,9 @@ import Foundation
 struct AudioDevice: Identifiable, Hashable {
     let id: AudioDeviceID
     let name: String
+
+    /// What the app shows for this device: its nickname if the user set one, else its name.
+    var label: String { VisibilityPreferences.nickname(.audio, for: name) ?? name }
 }
 
 final class AudioManager: ObservableObject {

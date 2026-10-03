@@ -97,6 +97,9 @@ final class ControlStripPresenter: NSObject {
     private static let modalAudioID  = NSTouchBarItem.Identifier("\(AppIdentity.bundleID).modal.audio")
     private static let modalVideoID  = NSTouchBarItem.Identifier("\(AppIdentity.bundleID).modal.video")
     private static let speechStatusID = NSTouchBarItem.Identifier("\(AppIdentity.bundleID).speechStatus")
+    private static let modalArrangeID = NSTouchBarItem.Identifier("\(AppIdentity.bundleID).modal.arrange")
+    private static let audioBackID    = NSTouchBarItem.Identifier("\(AppIdentity.bundleID).audio.back")
+    private static let audioSegID     = NSTouchBarItem.Identifier("\(AppIdentity.bundleID).audio.outputs")
 
     // Prefixes for per-display dynamic identifiers.
     private static let displayPopoverPrefix = "\(AppIdentity.bundleID).modal.display."
@@ -121,6 +124,8 @@ final class ControlStripPresenter: NSObject {
     /// Any display with several others to mirror on has a page to pick them.
     private enum DisplayPage { case resolutions, rates, mirrorTargets }
     private var resolutionBar: NSTouchBar?
+    /// The audio outputs page, while it is presented.
+    private var audioBar: NSTouchBar?
 
     init(audioManager: AudioManager, videoManager: VideoManager) {
         self.audioManager = audioManager
@@ -185,6 +190,9 @@ final class ControlStripPresenter: NSObject {
     func rebuild() {
         NSApp.touchBar = makeStripBar()
         if let bar = modalBar { updateModalBar(bar) }
+        if let bar = audioBar, let item = bar.item(forIdentifier: Self.audioSegID) as? NSCustomTouchBarItem {
+            item.view = audioSegmented()
+        }
         refreshResolutionBar()
     }
 
@@ -264,12 +272,13 @@ final class ControlStripPresenter: NSObject {
         return bar
     }
 
-    /// The modal bar's items for the current state: audio and AirPlay pickers on the left,
-    /// then a button per connected AirPlay and physical display that opens its resolutions.
+    /// The modal bar's items for the current state: the arrange flow (with two or more
+    /// desktops), the audio outputs page and the AirPlay picker on the left, then a button
+    /// per connected AirPlay and physical display that opens its resolutions.
     private func modalItemIdentifiers() -> [NSTouchBarItem.Identifier] {
-        var ids: [NSTouchBarItem.Identifier] = [
-            Self.modalAudioID, .fixedSpaceSmall, Self.modalVideoID,
-        ]
+        var ids: [NSTouchBarItem.Identifier] = []
+        if (videoManager?.currentLayout().placements.count ?? 0) >= 2 { ids.append(Self.modalArrangeID) }
+        ids += [Self.modalAudioID, .fixedSpaceSmall, Self.modalVideoID]
         let connectedAirPlay = (videoManager?.airPlayDevices ?? [])
             .filter { $0.isConnected && $0.cgDisplayID != 0 }
         let physical = videoManager?.connectedDisplays ?? []
@@ -284,9 +293,6 @@ final class ControlStripPresenter: NSObject {
     /// Brings an open modal bar up to date in place: the pickers, which displays are
     /// listed, and each display button's mirror / anchor icon.
     private func updateModalBar(_ bar: NSTouchBar) {
-        if let item = bar.item(forIdentifier: Self.modalAudioID) as? NSCustomTouchBarItem {
-            item.view = audioSegmented()
-        }
         if let item = bar.item(forIdentifier: Self.modalVideoID) as? NSCustomTouchBarItem {
             item.view = videoSegmented()
         }
@@ -328,7 +334,7 @@ final class ControlStripPresenter: NSObject {
 
     /// A button for `display` in the modal bar, with its current mirror / anchor icon.
     private func displayButton(for display: DisplayInfo) -> NSButton {
-        let btn = NSButton(title: truncated(display.name, max: 10),
+        let btn = NSButton(title: truncated(display.label, max: 10),
                            target: self,
                            action: #selector(displayButtonTapped(_:)))
         btn.bezelStyle = .rounded
@@ -412,8 +418,6 @@ final class ControlStripPresenter: NSObject {
         let disconnectID = NSTouchBarItem.Identifier(Self.displayResPrefix + display.id + ".disconnect")
         let resID        = NSTouchBarItem.Identifier(Self.displayResPrefix + display.id)
 
-        let allActive = ((videoManager?.allAirPlayDevices ?? []) + (videoManager?.allConnectedDisplays ?? []))
-            .filter { $0.cgDisplayID != 0 }
         let targets = videoManager?.mirrorTargets(for: display) ?? []
         let inSet   = display.isMirroring || (videoManager?.isBeingMirrored(display) ?? false)
         var ids: [NSTouchBarItem.Identifier] = []
@@ -422,9 +426,9 @@ final class ControlStripPresenter: NSObject {
         if !targets.isEmpty && (inSet || targets.count == 1) { ids.append(mirrorID) }
         if targets.count >= 2 && !display.isMirroring { ids.append(mirrorOnID) }
         if videoManager?.canBeMain(display) ?? false { ids.append(mainID) }
-        // Mirrors the menu: when AirPlay is the slave, offer promoting it to master
+        // Mirrors the menu's "Optimize for": a slave can be promoted to the set's master
         // without leaving mirror mode.
-        if allActive.count >= 2 && isAirPlay && display.isMirroring { ids.append(optimizeID) }
+        if display.isMirroring { ids.append(optimizeID) }
         if isAirPlay { ids.append(disconnectID) }
         ids += [.flexibleSpace, resID]
         bar.defaultItemIdentifiers = ids
@@ -464,7 +468,7 @@ final class ControlStripPresenter: NSObject {
         } else {
             guard let i = Int(key), targets.indices.contains(i) else { return nil }
             selection = MirrorSelection(display: display, target: targets[i])
-            title     = truncated(targets[i].name, max: 12)
+            title     = truncated(targets[i].label, max: 12)
             active    = slaves.contains(targets[i].id)
         }
         let item = NSCustomTouchBarItem(identifier: id)
@@ -487,53 +491,55 @@ final class ControlStripPresenter: NSObject {
         return item
     }
 
-    /// Builds the resolution segments for a display's first page (called by the delegate).
-    /// AirPlay: native resolutions matching the native aspect ratio, then virtual modes; a tap
-    /// applies the mode. External / built-in: native resolutions; a tap opens the rates page.
+    /// Builds the resolution segments for a display's first page (called by the delegate):
+    /// one segment per size, capped at 5 and keeping the current size visible; a tap opens
+    /// the rates page. AirPlay lists its native sizes, then its virtual ones.
     private func makeResolutionSegItem(id: NSTouchBarItem.Identifier,
                                        display: DisplayInfo) -> NSTouchBarItem {
-        let vm = videoManager
-        guard vm?.displayContext(for: display) == .airPlay else {
-            let options = vm?.resolutionOptions(for: display) ?? (modes: [], currentIndex: nil)
-            let window  = Self.window(options.modes, around: options.currentIndex, limit: 5)
-            let selected = options.currentIndex.map { $0 - window.startIndex }
-            return modeSegmentsItem(id: id, display: display, modes: Array(window),
-                                    labels: window.map { $0.shortLabel }, selected: selected,
-                                    action: #selector(resolutionPickTapped(_:)))
-        }
-
-        let allNative = vm?.availableModesDeduped(for: display.cgDisplayID) ?? []
-        func gcd(_ a: Int, _ b: Int) -> Int { b == 0 ? a : gcd(b, a % b) }
-        let filteredNative: [DisplayMode]
-        if let first = allNative.first {
-            let g = gcd(first.width, first.height)
-            let arW = first.width / g, arH = first.height / g
-            filteredNative = allNative.filter {
-                let g2 = gcd($0.width, $0.height)
-                return $0.width / g2 == arW && $0.height / g2 == arH
-            }
-        } else {
-            filteredNative = []
-        }
-
-        let maxTotal = 5
-        let nativeToUse  = Array(filteredNative.prefix(maxTotal))
-        let virtualToUse = Array(VideoManager.virtualModes(for: .airPlay).prefix(maxTotal - nativeToUse.count))
-        let modes = nativeToUse + virtualToUse
-        let current = vm?.currentModes(for: display)
-        return modeSegmentsItem(id: id, display: display, modes: modes,
-                                labels: modes.map { $0.shortLabel },
-                                selected: VideoManager.currentModeIndex(
-                                    in: modes, anchorCurrent: current?.anchor, nativeCurrent: current?.native),
-                                action: #selector(resolutionSegmentTapped(_:)))
+        let options  = resolutionChoices(for: display)
+        let window   = Self.window(options.modes, around: options.currentIndex, limit: 5)
+        let selected = options.currentIndex.map { $0 - window.startIndex }
+        return modeSegmentsItem(id: id, display: display, modes: Array(window),
+                                labels: window.map { $0.shortLabel }, selected: selected,
+                                action: #selector(resolutionPickTapped(_:)))
     }
 
-    /// Builds the refresh-rate segments for an external or built-in display's second page:
-    /// rates at the current resolution, capped at 5 and keeping the current rate visible.
-    /// Native rate → native mode; non-native rate → virtual anchor.
+    /// The sizes on a display's resolution page and the index of the one in effect.
+    private func resolutionChoices(for display: DisplayInfo) -> (modes: [DisplayMode], currentIndex: Int?) {
+        guard let vm = videoManager else { return ([], nil) }
+        guard vm.displayContext(for: display) == .airPlay else { return vm.resolutionOptions(for: display) }
+        let options = vm.airPlayResolutionOptions(for: display)
+        return Self.airPlayResolutionChoices(native: options.native, virtual: options.virtual,
+                                             current: options.current)
+    }
+
+    /// AirPlay sizes for the Touch Bar: the native ones in the aspect ratio of the largest,
+    /// then the virtual ones; the current index points into the combined list.
+    static func airPlayResolutionChoices(native: [DisplayMode], virtual: [DisplayMode],
+                                         current: (native: Int?, virtual: Int?))
+        -> (modes: [DisplayMode], currentIndex: Int?) {
+        func gcd(_ a: Int, _ b: Int) -> Int { b == 0 ? a : gcd(b, a % b) }
+        func aspect(_ m: DisplayMode) -> (Int, Int) {
+            let g = gcd(m.width, m.height)
+            return (m.width / g, m.height / g)
+        }
+        let largest = native.first.map(aspect)
+        let kept = native.indices.filter { i in largest.map { aspect(native[i]) == $0 } ?? true }
+        let currentIndex = current.native.flatMap { kept.firstIndex(of: $0) }
+            ?? current.virtual.map { kept.count + $0 }
+        return (kept.map { native[$0] } + virtual, currentIndex)
+    }
+
+    /// Builds the refresh-rate segments for a display's second page: rates at the current
+    /// resolution, capped at 5 and keeping the current rate visible.
+    /// Native rate → native mode; virtual rate → virtual anchor.
     private func makeRateSegItem(id: NSTouchBarItem.Identifier,
                                  display: DisplayInfo) -> NSTouchBarItem {
-        let allModes = videoManager?.refreshRateOptions(for: display)?.modes ?? []
+        let allModes = videoManager.map {
+            $0.displayContext(for: display) == .airPlay
+                ? $0.airPlayRateOptions(for: display)
+                : $0.refreshRateOptions(for: display)?.modes ?? []
+        } ?? []
         let current  = videoManager?.currentModes(for: display)
         let currentIdx = VideoManager.currentModeIndex(
             in: allModes, anchorCurrent: current?.anchor, nativeCurrent: current?.native)
@@ -578,7 +584,7 @@ final class ControlStripPresenter: NSObject {
         let devices = audioManager?.devices ?? []
         guard !devices.isEmpty else { return placeholder("No audio devices") }
         let ctrl = NSSegmentedControl(
-            labels: devices.map { truncated($0.name) },
+            labels: devices.map { truncated($0.label) },
             trackingMode: .selectOne,
             target: self,
             action: #selector(audioSegmentTapped(_:))
@@ -604,7 +610,7 @@ final class ControlStripPresenter: NSObject {
             return placeholder(anyConnected ? "AirPlay connected" : "No AirPlay")
         }
         let ctrl = NSSegmentedControl(
-            labels: displays.map { truncated($0.name) },
+            labels: displays.map { truncated($0.label) },
             trackingMode: .selectAny,
             target: self,
             action: #selector(videoSegmentTapped(_:))
@@ -631,6 +637,7 @@ final class ControlStripPresenter: NSObject {
         audioManager?.refresh()
         videoManager?.refresh()
         if let existing = resolutionBar { NSTouchBar.dismissSystemModal(existing); resolutionBar = nil }
+        if let existing = audioBar { NSTouchBar.dismissSystemModal(existing); audioBar = nil }
         if let existing = modalBar { NSTouchBar.dismissSystemModal(existing) }
         let bar = makeModalBar()
         modalBar = bar
@@ -638,11 +645,33 @@ final class ControlStripPresenter: NSObject {
         NSTouchBar.presentSystemModal(bar, for: Self.stripID)
     }
 
+    /// Opens the arrange flow in place of the modal bar; it comes back here when done.
+    @objc private func arrangeTapped() {
+        guard let vm = videoManager else { return }
+        ArrangeTouchBar.shared.start(videoManager: vm) { [weak self] in self?.openModal() }
+    }
+
+    /// Presents the audio outputs page over the modal bar.
+    @objc private func audioPageTapped() {
+        if let existing = audioBar { NSTouchBar.dismissSystemModal(existing) }
+        let bar = NSTouchBar()
+        bar.delegate = self
+        bar.defaultItemIdentifiers = [Self.audioBackID, .flexibleSpace, Self.audioSegID]
+        audioBar = bar
+        NSTouchBar.presentSystemModal(bar, for: Self.stripID)
+    }
+
+    @objc private func audioBackTapped() {
+        openModal()
+    }
+
+    /// Picks the output, then returns to the modal bar.
     @objc private func audioSegmentTapped(_ ctrl: NSSegmentedControl) {
         let devices = audioManager?.devices ?? []
         let idx = ctrl.selectedSegment
         guard idx >= 0, idx < devices.count else { return }
         audioManager?.setDefaultDevice(devices[idx])
+        openModal()
     }
 
     @objc private func videoSegmentTapped(_ ctrl: NSSegmentedControl) {
@@ -650,7 +679,7 @@ final class ControlStripPresenter: NSObject {
         let idx = ctrl.selectedSegment
         guard idx >= 0, idx < displays.count else { return }
         videoManager?.connectAirPlay(deviceName: displays[idx].name,
-                                     announcing: "Selected \(displays[idx].name)")
+                                     announcing: "Selected \(displays[idx].label)")
     }
 
     @objc private func displayButtonTapped(_ btn: NSButton) {
@@ -671,7 +700,7 @@ final class ControlStripPresenter: NSObject {
     @objc private func disconnectTapped(_ btn: NSButton) {
         guard let display = tappedDisplay(btn) else { return }
         videoManager?.disconnectAirPlay(deviceName: display.name,
-                                        announcing: "Deselected \(display.name)")
+                                        announcing: "Deselected \(display.label)")
         // Close the modal — the display is going away.
         if let bar = modalBar { NSTouchBar.dismissSystemModal(bar) }
         modalBar = nil
@@ -740,23 +769,32 @@ final class ControlStripPresenter: NSObject {
         }
     }
 
-    /// External / built-in resolution page: tapping the current resolution opens its rates;
-    /// tapping another switches to it, then opens its rates once the change has settled.
+    /// Resolution page: tapping the current resolution opens its rates; tapping another
+    /// switches to it, then opens its rates once the change has settled.
     @objc private func resolutionPickTapped(_ seg: NSSegmentedControl) {
         guard let ctx = resolutionSegMap[ObjectIdentifier(seg)] else { return }
         let idx = seg.selectedSegment
         guard idx >= 0, idx < ctx.modes.count, let vm = videoManager else { return }
         let mode    = ctx.modes[idx]
         let display = ctx.display
-        let options = vm.resolutionOptions(for: display)
+        let options = resolutionChoices(for: display)
         let isCurrent = options.currentIndex.map {
-            options.modes[$0].width == mode.width && options.modes[$0].height == mode.height
+            let cur = options.modes[$0]
+            return cur.width == mode.width && cur.height == mode.height
+                && cur.isHiDPI == mode.isHiDPI && cur.isVirtual == mode.isVirtual
         } ?? false
         guard !isCurrent else {
             showDisplayPage(display, .rates)
             return
         }
-        let delay = applyNativeMode(mode, for: display)
+        let delay: TimeInterval
+        if mode.isVirtual {
+            // Starting an anchor takes a few seconds (the menu waits 4 s before rebuilding).
+            delay = vm.hasVirtualAnchor(for: display.name) ? 0 : 3.3
+            vm.selectVirtualMode(mode, for: display)
+        } else {
+            delay = applyNativeMode(mode, for: display)
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + delay + 0.7) { [weak self] in
             self?.showDisplayPage(display, .rates)
         }
@@ -814,6 +852,25 @@ extension ControlStripPresenter: NSTouchBarDelegate {
             return nil
 
         case Self.modalAudioID:
+            // "Audio" opens the outputs page.
+            let item = NSCustomTouchBarItem(identifier: id)
+            let btn = NSButton(title: "Audio", target: self, action: #selector(audioPageTapped))
+            btn.bezelStyle = .rounded
+            if let img = NSImage(systemSymbolName: "speaker.wave.2", accessibilityDescription: nil) {
+                btn.image = img
+                btn.imagePosition = .imageLeading
+            }
+            item.view = btn
+            return item
+
+        case Self.audioBackID:
+            let item = NSCustomTouchBarItem(identifier: id)
+            let btn = NSButton(title: "◀", target: self, action: #selector(audioBackTapped))
+            btn.bezelStyle = .rounded
+            item.view = btn
+            return item
+
+        case Self.audioSegID:
             let item = NSCustomTouchBarItem(identifier: id)
             item.view = audioSegmented()
             return item
@@ -821,6 +878,17 @@ extension ControlStripPresenter: NSTouchBarDelegate {
         case Self.modalVideoID:
             let item = NSCustomTouchBarItem(identifier: id)
             item.view = videoSegmented()
+            return item
+
+        case Self.modalArrangeID:
+            let item = NSCustomTouchBarItem(identifier: id)
+            let btn = NSButton(title: "Arrange", target: self, action: #selector(arrangeTapped))
+            btn.bezelStyle = .rounded
+            if let img = NSImage(systemSymbolName: "rectangle.3.group", accessibilityDescription: nil) {
+                btn.image = img
+                btn.imagePosition = .imageLeading
+            }
+            item.view = btn
             return item
 
         default:
@@ -850,7 +918,7 @@ extension ControlStripPresenter: NSTouchBarDelegate {
                 (item.view as? NSButton)?.bezelColor = display.isMain ? .controlAccentColor : nil
                 return item
             case ".optimize":
-                // "Optimize for this Display" (AirPlay mirror slave only).
+                // "Optimize for this Display" (mirror slaves only).
                 return displayActionItem(id: id, title: "Optimize", display: display,
                                          action: #selector(optimizeTapped(_:)))
             case ".disconnect":

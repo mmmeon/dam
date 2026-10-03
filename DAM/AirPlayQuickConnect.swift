@@ -93,7 +93,7 @@ final class AirPlayQuickConnect: NSObject {
         let displays = all.filter { !$0.isConnected }
         guard !displays.isEmpty else {
             SpeechSynthesizer.shared.announce(all.count == 1
-                ? "Already connected to \(all[0].name)"
+                ? "Already connected to \(all[0].label)"
                 : "All displays already connected")
             return
         }
@@ -110,13 +110,13 @@ final class AirPlayQuickConnect: NSObject {
     private func startSelecting(displays: [DisplayInfo]) {
         state = .selecting(displays)
 
-        showHUD(.choices(displays.map(\.name), numbered: true), hint: .selecting)
+        showHUD(.choices(displays.map(\.label), numbered: true), hint: .selecting)
         installMonitor(displays: displays)
         showSelectingTouchBar(displays: displays)
 
         if VisibilityPreferences.speechEnabled {
             let list = displays.enumerated()
-                .map { "\($0.offset + 1). \($0.element.name)" }
+                .map { "\($0.offset + 1). \($0.element.label)" }
                 .joined(separator: ". ")
             let speech = "Select a display. \(list)"
             DispatchQueue.main.async {
@@ -146,7 +146,7 @@ final class AirPlayQuickConnect: NSObject {
             }
         }
         if choice == nil {
-            showHUD(.choices([display.name], numbered: false), hint: .connecting)
+            showHUD(.choices([display.label], numbered: false), hint: .connecting)
         }
         if let content = panel?.contentView as? HUDContentView {
             content.select(choice ?? 0, hint: .connecting, completion: settled)
@@ -167,7 +167,7 @@ final class AirPlayQuickConnect: NSObject {
         // Meanwhile the panel opens and finds the row, holding there for the press.
         videoManager?.connectAirPlay(
             deviceName: display.name,
-            announcing: "Connecting to \(display.name)",
+            announcing: "Connecting to \(display.label)",
             gate: { [weak self] proceed in
                 guard let self, case .confirming(let d) = self.state, d.name == display.name
                 else { return proceed(false) }
@@ -358,7 +358,7 @@ extension AirPlayQuickConnect: NSTouchBarDelegate {
         if identifier == .qcStatus {
             let item = NSCustomTouchBarItem(identifier: identifier)
             let name: String
-            if case .confirming(let display) = state { name = display.name } else { name = "" }
+            if case .confirming(let display) = state { name = display.label } else { name = "" }
             let label = NSTextField(labelWithString: "Connecting to \(name)…")
             label.textColor = .white
             label.font = .systemFont(ofSize: 13)
@@ -373,7 +373,7 @@ extension AirPlayQuickConnect: NSTouchBarDelegate {
            idx < touchBarDisplays.count {
             let item = NSCustomTouchBarItem(identifier: identifier)
             let display = touchBarDisplays[idx]
-            let btn = NSButton(title: "\(idx + 1).  \(truncated(display.name))",
+            let btn = NSButton(title: "\(idx + 1).  \(truncated(display.label))",
                                target: self,
                                action: #selector(touchBarDisplayTapped(_:)))
             btn.tag = idx

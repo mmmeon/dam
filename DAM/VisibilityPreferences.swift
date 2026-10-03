@@ -213,6 +213,36 @@ enum VisibilityPreferences {
         else { UserDefaults.standard.removeObject(forKey: key) }
     }
 
+    // MARK: - Nicknames
+
+    /// The kinds of device a nickname can be given to. Each keeps its own list, so equal
+    /// names of different kinds don't share a nickname.
+    enum NicknameKind: String {
+        case display, audio, sidecar
+
+        fileprivate var key: String {
+            self == .display ? "\(AppIdentity.shortID).nicknames.displays"
+                             : "\(AppIdentity.shortID).nicknames.\(rawValue)"
+        }
+    }
+
+    /// Nicknames the user gave devices of `kind`, keyed by the device's own name.
+    static func nicknames(_ kind: NicknameKind) -> [String: String] {
+        UserDefaults.standard.dictionary(forKey: kind.key) as? [String: String] ?? [:]
+    }
+
+    static func nickname(_ kind: NicknameKind, for name: String) -> String? {
+        nicknames(kind)[name]
+    }
+
+    /// Sets the nickname for `name`; blank text removes it.
+    static func setNickname(_ nickname: String?, _ kind: NicknameKind, for name: String) {
+        var all = nicknames(kind)
+        let trimmed = nickname?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if trimmed.isEmpty { all.removeValue(forKey: name) } else { all[name] = trimmed }
+        UserDefaults.standard.set(all, forKey: kind.key)
+    }
+
     // MARK: - Connected (physical) displays
 
     private static let displayKey = "\(AppIdentity.shortID).hidden.displays"
