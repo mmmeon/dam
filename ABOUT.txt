@@ -1,0 +1,8 @@
+{name}
+Display Audio Manager
+Version {version} ({build})
+
+{copyright}
+
+made by claude
+with guidance from mmmeon

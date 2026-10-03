@@ -286,8 +286,8 @@ extension AppDelegate: NSMenuDelegate {
                                     announcing: "\(verb) \(display.label)")
     }
 
-    /// An About window in two panes: icon, name, version and copyright on the left, the
-    /// bundled README's feature list as plain text on the right.
+    /// An About window in two panes: the icon over the bundled ABOUT.txt on the left, the
+    /// bundled README's feature list on the right, both as plain text.
     @objc func openAbout(_ sender: Any?) {
         NSApp.activate(ignoringOtherApps: true)
         if let existing = aboutWindow {
@@ -299,42 +299,37 @@ extension AppDelegate: NSMenuDelegate {
         icon.widthAnchor.constraint(equalToConstant: 128).isActive = true
         icon.heightAnchor.constraint(equalToConstant: 128).isActive = true
 
-        let name = NSTextField(labelWithString: AppIdentity.name)
-        name.font = .boldSystemFont(ofSize: 14)
+        // ABOUT.txt as written, each line centred under the icon, with {name}, {version},
+        // {build} (the commit it was built from) and {copyright} filled in from the bundle.
         let info = Bundle.main.infoDictionary
-        let version = NSTextField(labelWithString:
-            "Version \(info?["CFBundleShortVersionString"] as? String ?? "?") " +
-            "(\(info?["CFBundleVersion"] as? String ?? "?"))")
-        version.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        version.textColor = .secondaryLabelColor
-        let copyright = NSTextField(wrappingLabelWithString:
-            info?["NSHumanReadableCopyright"] as? String ?? "")
-        copyright.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        copyright.textColor = .secondaryLabelColor
-        copyright.alignment = .center
-        copyright.preferredMaxLayoutWidth = 160
+        var about = bundledText("ABOUT")
+        for (key, value) in [("name", AppIdentity.name),
+                             ("version", info?["CFBundleShortVersionString"] as? String ?? "?"),
+                             ("build", info?["DAMCommit"] as? String ?? info?["CFBundleVersion"] as? String ?? "?"),
+                             ("copyright", info?["NSHumanReadableCopyright"] as? String ?? "")] {
+            about = about.replacingOccurrences(of: "{\(key)}", with: value)
+        }
+        let identityText = NSTextField(labelWithString: about)
+        identityText.font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+        identityText.alignment = .center
+        identityText.setContentCompressionResistancePriority(.required, for: .vertical)
+        identityText.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         // The README as written, in a fixed-width font so its ASCII layout lines up. Its
         // first line, the name, duplicates the one above.
-        var body = ""
-        if let url = Bundle.main.url(forResource: "README", withExtension: "txt"),
-           let text = try? String(contentsOf: url, encoding: .utf8) {
-            body = text.split(separator: "\n", omittingEmptySubsequences: false)
-                .dropFirst().joined(separator: "\n")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-        }
+        let body = bundledText("README").split(separator: "\n", omittingEmptySubsequences: false)
+            .dropFirst().joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         let features = NSTextField(labelWithString: body)
         features.font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
         features.setContentCompressionResistancePriority(.required, for: .vertical)
         features.setContentCompressionResistancePriority(.required, for: .horizontal)
 
-        let identity = NSStackView(views: [icon, name, version, copyright])
+        let identity = NSStackView(views: [icon, identityText])
         identity.orientation = .vertical
         identity.alignment = .centerX
-        identity.spacing = 6
-        identity.setCustomSpacing(12, after: icon)
-        identity.setCustomSpacing(16, after: version)
-        identity.widthAnchor.constraint(equalToConstant: 180).isActive = true
+        identity.spacing = 12
+        identity.widthAnchor.constraint(greaterThanOrEqualToConstant: 180).isActive = true
 
         let divider = NSBox()
         divider.boxType = .separator
@@ -363,6 +358,13 @@ extension AppDelegate: NSMenuDelegate {
         window.center()
         window.makeKeyAndOrderFront(nil)
         aboutWindow = window
+    }
+
+    /// A text file bundled with the app, or "" when it is missing.
+    private func bundledText(_ name: String) -> String {
+        guard let url = Bundle.main.url(forResource: name, withExtension: "txt"),
+              let text = try? String(contentsOf: url, encoding: .utf8) else { return "" }
+        return text
     }
 
     @objc func openSettings(_ sender: Any?) {
