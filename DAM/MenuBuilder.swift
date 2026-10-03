@@ -214,7 +214,15 @@ private func buildResolutionSubmenu(display: DisplayInfo, video: VideoManager) -
     let submenu = NSMenu()
     let current = video.currentModes(for: display)
 
-    if video.displayContext(for: display) == .airPlay {
+    if display.isSidecar, video.hasVirtualAnchor(for: display.name) {
+        // The anchor's sizes, scaled onto the iPad. Sidecar runs at 60 Hz only.
+        let resolutions = video.sidecarResolutionOptions(for: display)
+        submenu.addItem(sectionHeader("Resolution"))
+        for (i, mode) in resolutions.modes.enumerated() {
+            submenu.addItem(modeItem(title: mode.resolutionLabel, mode: mode, display: display,
+                                     isCurrent: i == resolutions.currentIndex))
+        }
+    } else if video.displayContext(for: display) == .airPlay {
         // Resolutions in a native and a virtual group, each picked at the current rate where
         // it can be; then the rates at the current resolution, split the same way.
         let resolutions = video.airPlayResolutionOptions(for: display)

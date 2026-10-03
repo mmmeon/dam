@@ -311,8 +311,9 @@ final class SettingsWindowController: NSWindowController {
                                  "display at this resolution. “Display's own” leaves it as it is."
         let sidecarBacking = checkbox(title: "Back a connected iPad with a virtual display",
                                       isOn: VisibilityPreferences.backsSidecarWithVirtualDisplay,
-                                      help: "The iPad mirrors a virtual display locked to its own " +
-                                            "resolution, so it can be the Mac's only display. " +
+                                      help: "The iPad mirrors a virtual display in its own shape, " +
+                                            "so it can be the Mac's only display and can run at " +
+                                            "other resolutions. " +
                                             "Applies on the next Sidecar connection.",
                                       action: { VisibilityPreferences.backsSidecarWithVirtualDisplay = $0 })
         return formTab([

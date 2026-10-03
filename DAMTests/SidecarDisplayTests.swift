@@ -129,6 +129,33 @@ final class SidecarDisplayTests: XCTestCase {
         XCTAssertFalse(VisibilityPreferences.backsSidecarWithVirtualDisplay)
     }
 
+    // MARK: - Resolutions
+
+    func testSidecarAnchorOffersSizesInTheIPadsShape() {
+        let native = VideoManager.virtualMode(width: 960, height: 704, refreshRate: 60,
+                                              pixelWidth: 1920, pixelHeight: 1408)
+        let modes = VideoManager.sidecarVirtualModes(native: native)
+        XCTAssertEqual(modes.map { "\($0.width)x\($0.height)" },
+                       ["1600x1174", "1440x1056", "1280x938", "1120x822", "960x704", "800x586"])
+        XCTAssertTrue(modes.allSatisfy { $0.isHiDPI && $0.isVirtual && $0.roundedRefreshRate == 60 })
+        XCTAssertTrue(modes.allSatisfy { $0.pixelWidth == $0.width * 2 })
+    }
+
+    func testSidecarSizesStayWithin4KBacking() {
+        let native = VideoManager.virtualMode(width: 1366, height: 1024, refreshRate: 60,
+                                              pixelWidth: 2732, pixelHeight: 2048)
+        let widths = VideoManager.sidecarVirtualModes(native: native).map(\.pixelWidth)
+        XCTAssertTrue(widths.allSatisfy { $0 <= 3840 })
+        XCTAssertTrue(widths.contains(2732))
+    }
+
+    func testSidecarResolutionIsRememberedPerIPad() {
+        defer { VisibilityPreferences.setSidecarResolution(nil, for: iPadName) }
+        VisibilityPreferences.setSidecarResolution("1280x938", for: iPadName)
+        XCTAssertEqual(VisibilityPreferences.sidecarResolution(for: iPadName), "1280x938")
+        XCTAssertNil(VisibilityPreferences.sidecarResolution(for: iPadName + " 2"))
+    }
+
     // MARK: - Nickname
 
     func testSidecarDisplayUsesTheIPadNickname() {
