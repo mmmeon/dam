@@ -156,6 +156,16 @@ final class SidecarDisplayTests: XCTestCase {
         XCTAssertNil(VisibilityPreferences.sidecarResolution(for: iPadName + " 2"))
     }
 
+    // MARK: - Connecting
+
+    func testConnectTargetNamesTheIPadsLink() {
+        let usb = SidecarDevice(id: "x", name: iPadName, isConnected: false, status: 0x1000000)
+        XCTAssertEqual(ConnectTarget.sidecar(usb).connectingAnnouncement, "Connecting to \(iPadName) over USB")
+        let bleOnly = SidecarDevice(id: "x", name: iPadName, isConnected: false, status: 0x2)
+        XCTAssertEqual(ConnectTarget.sidecar(bleOnly).connectingAnnouncement, "Connecting to \(iPadName)")
+        XCTAssertFalse(ConnectTarget.sidecar(usb).isConnected)
+    }
+
     // MARK: - Nickname
 
     func testSidecarDisplayUsesTheIPadNickname() {
