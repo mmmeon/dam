@@ -1,12 +1,13 @@
 //
 //  AirPlayQuickConnect.swift
 //
-//  A hotkey-triggered HUD that lets the user pick an AirPlay display by
-//  pressing its number (keyboard) or tapping a Touch Bar button. The Screen
-//  Mirroring panel is driven right away, up to the display's row; the row is
+//  A hotkey-triggered HUD that lets the user pick an AirPlay display or an iPad by
+//  pressing its number (keyboard) or tapping a Touch Bar button. For AirPlay the
+//  Screen Mirroring panel is driven right away, up to the display's row; the row is
 //  pressed once the cancel window after the HUD settles has passed, and
-//  "Connecting to…" is announced once the panel closed again. Pressing any key
-//  or the Touch Bar Cancel button before the press cancels and closes the panel.
+//  "Connecting to…" is announced once the panel closed again. An iPad is connected
+//  over Sidecar once the cancel window has passed. Pressing any key or the Touch Bar
+//  Cancel button before then cancels (and closes the panel).
 //
 
 import AppKit
@@ -22,12 +23,46 @@ private extension NSTouchBarItem.Identifier {
     }
 }
 
+// MARK: - Targets
+
+/// Something that can be connected without a screen to click on: an AirPlay display or an
+/// iPad over Sidecar. The connect hotkey and the Touch Bar list both.
+enum ConnectTarget: Hashable {
+    case airPlay(DisplayInfo)
+    case sidecar(SidecarDevice)
+
+    var label: String {
+        switch self {
+        case .airPlay(let display): return display.label
+        case .sidecar(let device):  return device.label
+        }
+    }
+
+    var isConnected: Bool {
+        switch self {
+        case .airPlay(let display): return display.isConnected
+        case .sidecar(let device):  return device.isConnected
+        }
+    }
+
+    /// AirPlay displays first, then iPads, connected or not.
+    static func all(video: VideoManager, sidecar: SidecarManager?) -> [ConnectTarget] {
+        video.airPlayDevices.map(ConnectTarget.airPlay) + (sidecar?.devices ?? []).map(ConnectTarget.sidecar)
+    }
+
+    /// "Connecting to pad over USB" for an iPad, naming the link it will use.
+    var connectingAnnouncement: String {
+        guard case .sidecar(let device) = self, let link = device.link else { return "Connecting to \(label)" }
+        return "Connecting to \(label) over \(link.rawValue)"
+    }
+}
+
 // MARK: - State
 
 private enum QCState {
     case idle
-    case selecting([DisplayInfo])
-    case confirming(DisplayInfo)
+    case selecting([ConnectTarget])
+    case confirming(ConnectTarget)
 }
 
 // MARK: - Hints
@@ -49,6 +84,7 @@ final class AirPlayQuickConnect: NSObject {
     private static let cancelWindow: TimeInterval = 1.5
 
     private weak var videoManager: VideoManager?
+    private weak var sidecarManager: SidecarManager?
     private var state: QCState = .idle
 
     // The press waits on both: the cancel window passing and the panel finding the row.
@@ -67,14 +103,15 @@ final class AirPlayQuickConnect: NSObject {
 
     // Touch Bar
     private var touchBar: NSTouchBar?
-    private var touchBarDisplays: [DisplayInfo] = []
+    private var touchBarDisplays: [ConnectTarget] = []
 
     private override init() { super.init() }
 
     // MARK: - Configuration
 
-    func configure(videoManager: VideoManager) {
+    func configure(videoManager: VideoManager, sidecarManager: SidecarManager? = nil) {
         self.videoManager = videoManager
+        self.sidecarManager = sidecarManager
     }
 
     // MARK: - Activation (called by the GlobalHotkey)
@@ -82,9 +119,10 @@ final class AirPlayQuickConnect: NSObject {
     func activate() {
         guard let vm = videoManager else { return }
 
-        let all = vm.airPlayDevices
+        sidecarManager?.refresh()
+        let all = ConnectTarget.all(video: vm, sidecar: sidecarManager)
         guard !all.isEmpty else {
-            SpeechSynthesizer.shared.announce("No AirPlay displays found")
+            SpeechSynthesizer.shared.announce("No AirPlay displays or iPads found")
             return
         }
 
@@ -107,7 +145,7 @@ final class AirPlayQuickConnect: NSObject {
 
     // MARK: - Selecting
 
-    private func startSelecting(displays: [DisplayInfo]) {
+    private func startSelecting(displays: [ConnectTarget]) {
         state = .selecting(displays)
 
         showHUD(.choices(displays.map(\.label), numbered: true), hint: .selecting)
@@ -131,7 +169,7 @@ final class AirPlayQuickConnect: NSObject {
 
     /// `choice` is the row picked in the selection HUD; that HUD then animates into the
     /// connecting state. Without it, the HUD opens on the display and highlights it.
-    private func startConfirming(display: DisplayInfo, choice: Int? = nil) {
+    private func startConfirming(display: ConnectTarget, choice: Int? = nil) {
         state = .confirming(display)
         pendingPress = nil
         cancelWindowPassed = false
@@ -139,7 +177,7 @@ final class AirPlayQuickConnect: NSObject {
         // Press once the cancel window after the HUD settles passes uncancelled.
         let settled = { [weak self] in
             DispatchQueue.main.asyncAfter(deadline: .now() + Self.cancelWindow) { [weak self] in
-                guard let self, case .confirming(let d) = self.state, d.name == display.name
+                guard let self, case .confirming(let d) = self.state, d == display
                 else { return }
                 self.cancelWindowPassed = true
                 self.pressIfReady()
@@ -164,22 +202,33 @@ final class AirPlayQuickConnect: NSObject {
         // actually selected in the Screen Mirroring panel.
         SpeechSynthesizer.shared.stop()
 
-        // Meanwhile the panel opens and finds the row, holding there for the press.
-        videoManager?.connectAirPlay(
-            deviceName: display.name,
-            announcing: "Connecting to \(display.label)",
-            gate: { [weak self] proceed in
-                guard let self, case .confirming(let d) = self.state, d.name == display.name
-                else { return proceed(false) }
-                self.pendingPress = proceed
-                self.pressIfReady()
-            },
-            completion: { [weak self] _ in
-                // Ended before the press (a failure, or nothing to press): drop the HUD.
-                guard let self, case .confirming(let d) = self.state, d.name == display.name
+        switch display {
+        case .airPlay(let airPlay):
+            // Meanwhile the panel opens and finds the row, holding there for the press.
+            videoManager?.connectAirPlay(
+                deviceName: airPlay.name,
+                announcing: display.connectingAnnouncement,
+                gate: { [weak self] proceed in
+                    guard let self, case .confirming(let d) = self.state, d == display
+                    else { return proceed(false) }
+                    self.pendingPress = proceed
+                    self.pressIfReady()
+                },
+                completion: { [weak self] _ in
+                    // Ended before the press (a failure, or nothing to press): drop the HUD.
+                    guard let self, case .confirming(let d) = self.state, d == display
+                    else { return }
+                    self.dismiss()
+                })
+        case .sidecar(let device):
+            // Nothing to prepare: connect once the cancel window passes.
+            pendingPress = { [weak self] proceed in
+                guard proceed, let self, let vm = self.videoManager, let sidecar = self.sidecarManager
                 else { return }
-                self.dismiss()
-            })
+                SpeechSynthesizer.shared.announce(display.connectingAnnouncement)
+                sidecar.connect(device, videoManager: vm)
+            }
+        }
     }
 
     // MARK: - Connect / Cancel
@@ -211,7 +260,7 @@ final class AirPlayQuickConnect: NSObject {
 
     // MARK: - Key Monitors
 
-    private func installMonitor(displays: [DisplayInfo]) {
+    private func installMonitor(displays: [ConnectTarget]) {
         removeMonitors()
 
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
@@ -225,7 +274,7 @@ final class AirPlayQuickConnect: NSObject {
     }
 
     /// Returns `true` if the event was consumed.
-    private func handleKey(_ event: NSEvent, displays: [DisplayInfo]) -> Bool {
+    private func handleKey(_ event: NSEvent, displays: [ConnectTarget]) -> Bool {
         switch state {
         case .selecting(let ds):
             if Int(event.keyCode) == kVK_Escape { cancel(); return true }
@@ -251,7 +300,7 @@ final class AirPlayQuickConnect: NSObject {
 
     // MARK: - Touch Bar
 
-    private func showSelectingTouchBar(displays: [DisplayInfo]) {
+    private func showSelectingTouchBar(displays: [ConnectTarget]) {
         touchBarDisplays = displays
         dismissTouchBar()
         guard Feedback.touchBar else { return }
@@ -265,7 +314,7 @@ final class AirPlayQuickConnect: NSObject {
         NSTouchBar.presentSystemModal(bar)
     }
 
-    private func showConfirmingTouchBar(display: DisplayInfo) {
+    private func showConfirmingTouchBar(display: ConnectTarget) {
         dismissTouchBar()
         guard Feedback.touchBar else { return }
 

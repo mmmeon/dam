@@ -107,6 +107,7 @@ final class ControlStripPresenter: NSObject {
 
     private weak var audioManager: AudioManager?
     private weak var videoManager: VideoManager?
+    private weak var sidecarManager: SidecarManager?
     private var modalBar: NSTouchBar?
 
     /// Maps each resolution segmented control → (display, ordered modes) so the
@@ -127,9 +128,10 @@ final class ControlStripPresenter: NSObject {
     /// The audio outputs page, while it is presented.
     private var audioBar: NSTouchBar?
 
-    init(audioManager: AudioManager, videoManager: VideoManager) {
+    init(audioManager: AudioManager, videoManager: VideoManager, sidecarManager: SidecarManager? = nil) {
         self.audioManager = audioManager
         self.videoManager = videoManager
+        self.sidecarManager = sidecarManager
         super.init()
         SpeechSynthesizer.shared.onSpokenLengthChanged = {
             CaptionHUD.shared.setSpoken(SpeechSynthesizer.shared.spokenLength)
@@ -431,7 +433,7 @@ final class ControlStripPresenter: NSObject {
         // Mirrors the menu's "Optimize for": a slave can be promoted to the set's master
         // without leaving mirror mode.
         if display.isMirroring { ids.append(optimizeID) }
-        if isAirPlay { ids.append(disconnectID) }
+        if isAirPlay || display.isSidecar { ids.append(disconnectID) }
         ids += [.flexibleSpace, resID]
         bar.defaultItemIdentifiers = ids
         return bar
@@ -600,17 +602,19 @@ final class ControlStripPresenter: NSObject {
         return ctrl
     }
 
-    /// AirPlay devices offered for connection — connected ones appear as buttons on the
-    /// right side of the bar instead. Segment indices in `videoSegmented()` index this list.
-    private var connectableAirPlayDevices: [DisplayInfo] {
-        (videoManager?.airPlayDevices ?? []).filter { !$0.isConnected }
+    /// AirPlay displays and iPads offered for connection — connected ones appear as buttons
+    /// on the right side of the bar instead. Segment indices in `videoSegmented()` index this list.
+    private var connectableTargets: [ConnectTarget] {
+        guard let vm = videoManager else { return [] }
+        return ConnectTarget.all(video: vm, sidecar: sidecarManager).filter { !$0.isConnected }
     }
 
     private func videoSegmented() -> NSView {
-        let displays = connectableAirPlayDevices
+        let displays = connectableTargets
         guard !displays.isEmpty else {
-            let anyConnected = videoManager?.airPlayDevices.contains { $0.isConnected } ?? false
-            return placeholder(anyConnected ? "AirPlay connected" : "No AirPlay")
+            let anyConnected = videoManager.map { ConnectTarget.all(video: $0, sidecar: sidecarManager) }?
+                .contains { $0.isConnected } ?? false
+            return placeholder(anyConnected ? "Displays connected" : "No AirPlay or iPads")
         }
         let ctrl = NSSegmentedControl(
             labels: displays.map { truncated($0.label) },
@@ -678,11 +682,16 @@ final class ControlStripPresenter: NSObject {
     }
 
     @objc private func videoSegmentTapped(_ ctrl: NSSegmentedControl) {
-        let displays = connectableAirPlayDevices
+        let displays = connectableTargets
         let idx = ctrl.selectedSegment
-        guard idx >= 0, idx < displays.count else { return }
-        videoManager?.connectAirPlay(deviceName: displays[idx].name,
-                                     announcing: "Selected \(displays[idx].label)")
+        guard idx >= 0, idx < displays.count, let vm = videoManager else { return }
+        switch displays[idx] {
+        case .airPlay(let display):
+            vm.connectAirPlay(deviceName: display.name, announcing: "Selected \(display.label)")
+        case .sidecar(let device):
+            SpeechSynthesizer.shared.announce(displays[idx].connectingAnnouncement)
+            sidecarManager?.connect(device, videoManager: vm)
+        }
     }
 
     @objc private func displayButtonTapped(_ btn: NSButton) {
@@ -702,8 +711,13 @@ final class ControlStripPresenter: NSObject {
 
     @objc private func disconnectTapped(_ btn: NSButton) {
         guard let display = tappedDisplay(btn) else { return }
-        videoManager?.disconnectAirPlay(deviceName: display.name,
-                                        announcing: "Deselected \(display.label)")
+        if display.isSidecar {
+            SpeechSynthesizer.shared.announce("Disconnecting \(display.label)")
+            sidecarManager?.disconnect(display: display)
+        } else {
+            videoManager?.disconnectAirPlay(deviceName: display.name,
+                                            announcing: "Deselected \(display.label)")
+        }
         // Close the modal — the display is going away.
         if let bar = modalBar { NSTouchBar.dismissSystemModal(bar) }
         modalBar = nil

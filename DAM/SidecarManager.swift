@@ -137,6 +137,46 @@ final class SidecarManager: ObservableObject {
     }
 }
 
+// MARK: - Connecting, with or without a display
+
+extension SidecarManager {
+    /// Connects `device`. With no display at all Sidecar has nothing to join, so the Mac gets
+    /// a stand-in display first, dropped again should the iPad fail or never come up.
+    /// Failures are announced; `completion` gets SidecarCore's result on the main queue.
+    func connect(_ device: SidecarDevice, videoManager: VideoManager,
+                 completion: ((Error?) -> Void)? = nil) {
+        videoManager.ensureDisplayForSidecar { [weak self, weak videoManager] in
+            guard let self else { return }
+            self.toggle(device) { error in
+                if let error {
+                    SpeechSynthesizer.shared.announce(error.localizedDescription)
+                    videoManager?.releaseBootstrapDisplay()
+                }
+                completion?(error)
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 90) { [weak videoManager] in
+            guard let videoManager, !videoManager.connectedDisplays.contains(where: \.isSidecar) else { return }
+            videoManager.releaseBootstrapDisplay()
+        }
+    }
+
+    /// Disconnects the iPad behind a Sidecar display, announcing a failure.
+    func disconnect(display: DisplayInfo, completion: ((Error?) -> Void)? = nil) {
+        refresh()
+        guard let device = devices.first(where: { $0.isConnected && $0.name == display.name }) else {
+            let error = SidecarError.deviceGone(display.name)
+            SpeechSynthesizer.shared.announce(error.localizedDescription)
+            completion?(error)
+            return
+        }
+        toggle(device) { error in
+            if let error { SpeechSynthesizer.shared.announce(error.localizedDescription) }
+            completion?(error)
+        }
+    }
+}
+
 enum SidecarError: LocalizedError {
     case deviceGone(String)
     case unavailable

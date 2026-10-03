@@ -156,7 +156,8 @@ final class SettingsWindowController: NSWindowController {
                       "Without a Touch Bar (or with the lid closed) it opens the menu bar menu.")]),
             ("Quick Connect:", [hotkeyRow(
                 recorderAirPlay, reset: #selector(resetAirPlayConnectToDefault),
-                help: "Connects to an AirPlay display from any application.")]),
+                help: "Connects to an AirPlay display or an iPad (Sidecar) from any " +
+                      "application, even with no display attached.")]),
             ("Mirror / Extend:", [hotkeyRow(
                 recorderMirrorToggle, reset: #selector(resetMirrorToggleToDefault),
                 help: "Picks where the connected AirPlay display is mirrored: nowhere, " +
