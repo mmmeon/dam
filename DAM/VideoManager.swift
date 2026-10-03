@@ -155,6 +155,15 @@ final class VideoManager: ObservableObject {
     var virtualAnchorArrangements: [String: DisplayArrangement] = [:]
     /// The display each anchor was made for, keyed like the above.
     var virtualAnchorTargets: [String: CGDirectDisplayID] = [:]
+    /// The size each anchor is meant to run at, keyed like the above.
+    var virtualAnchorModes: [String: DisplayMode] = [:]
+    /// Until when the layout around each newly mirrored anchor is kept, keyed like the above.
+    /// WindowServer can re-lay the displays out some seconds after the mirror is committed.
+    var virtualAnchorSettleDeadlines: [String: Date] = [:]
+    /// Whether sizes were just put back after such a re-layout, so positions follow next.
+    var virtualAnchorPositionsPending = false
+    /// Whether such a put-back is being committed; later changes wait for the one it causes.
+    var virtualAnchorReassertInFlight = false
     /// An iPad's own mode by display, read when its anchor was created. While it mirrors the
     /// anchor the iPad reports the anchor's size instead, so the size choices come from this.
     var sidecarNativeModes: [CGDirectDisplayID: DisplayMode] = [:]
@@ -203,6 +212,7 @@ final class VideoManager: ObservableObject {
     private func scheduleMergeAfterReconfiguration() {
         reconfigureWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
+            self?.reassertAnchorLayout()
             self?.mergeDevices()
             // A resolution or arrangement change leaves the display list as it was, yet the
             // menu's and Touch Bar's mode markers need rebuilding; announce a change anyway.
@@ -745,6 +755,8 @@ final class VideoManager: ObservableObject {
         }
 
         CGConfigureDisplayWithDisplayMode(cfg, cgDisplayID, cgMode, nil)
+        // Keep the choice should an anchor's layout be put back afterwards.
+        for name in virtualAnchorArrangements.keys { virtualAnchorArrangements[name]?.modes[cgDisplayID] = cgMode }
         CGCompleteDisplayConfiguration(cfg, .permanently)
     }
 
@@ -917,6 +929,8 @@ final class VideoManager: ObservableObject {
             virtualAnchorStore.removeValue(forKey: name)
             virtualAnchorCGIDs.removeValue(forKey: name)
             virtualAnchorArrangements.removeValue(forKey: name)
+            virtualAnchorModes.removeValue(forKey: name)
+            virtualAnchorSettleDeadlines.removeValue(forKey: name)
         }
 
         // AirPlay displays whose display came online after the app started. One already
