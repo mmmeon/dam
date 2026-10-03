@@ -47,6 +47,7 @@
 		DD000C042F8D60780090E796 /* ArrangeTouchBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD000B042F8D60780090E796 /* ArrangeTouchBar.swift */; };
 		DD100B012F8D607C0090E796 /* ArrangeTouchBarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A012F8D607C0090E796 /* ArrangeTouchBarTests.swift */; };
 		DD100B0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift */; };
+		DD100B0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -103,6 +104,7 @@
 		DD000B042F8D60780090E796 /* ArrangeTouchBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ArrangeTouchBar.swift"; sourceTree = "<group>"; };
 		DD100A012F8D607C0090E796 /* ArrangeTouchBarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ArrangeTouchBarTests.swift"; sourceTree = "<group>"; };
 		DD100A0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DisplayNicknameTests.swift"; sourceTree = "<group>"; };
+		DD100A0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SidecarDisplayTests.swift"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -200,6 +202,7 @@
 				DD100A002F8D607C0090E796 /* DisplayLayoutTests.swift */,
 				DD100A012F8D607C0090E796 /* ArrangeTouchBarTests.swift */,
 				DD100A0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift */,
+				DD100A0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift */,
 			);
 			path = DAMTests;
 			sourceTree = "<group>";
@@ -349,6 +352,7 @@
 				DD100B002F8D607C0090E796 /* DisplayLayoutTests.swift in Sources */,
 				DD100B012F8D607C0090E796 /* ArrangeTouchBarTests.swift in Sources */,
 				DD100B0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift in Sources */,
+				DD100B0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

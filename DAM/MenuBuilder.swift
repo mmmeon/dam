@@ -43,22 +43,12 @@ func buildStatusMenu(audio: AudioManager,
             )
             item.representedObject = display
             item.state = display.isConnected ? .on : .off
-            let mirrorActive = display.isMirroring || video.isBeingMirrored(display)
-            if video.hasVirtualAnchor(for: display.name) {
-                item.image = menuIcon("sparkles")
-            } else if mirrorActive {
-                item.image = menuIcon("square.on.square")
-            }
+            item.image = displayIcon(for: display, video: video)
 
             if display.isConnected && display.cgDisplayID != 0 {
                 let submenu = buildResolutionSubmenu(display: display, video: video)
                 submenu.addItem(.separator())
-                if canMirrorDisplays {
-                    addMirrorItems(to: submenu, for: display, video: video)
-                    if let item = optimizeItem(for: display, video: video) { submenu.addItem(item) }
-                }
-                if let item = mainDisplayItem(for: display, video: video) { submenu.addItem(item) }
-                if let item = positionItem(for: display, video: video) { submenu.addItem(item) }
+                addDisplayControls(to: submenu, for: display, video: video, canMirror: canMirrorDisplays)
                 submenu.addItem(disconnectItem(for: display))
                 item.submenu = submenu
             }
@@ -82,43 +72,62 @@ func buildStatusMenu(audio: AudioManager,
                 )
                 item.representedObject = device
                 item.state = device.isConnected ? .on : .off
+                // The link the iPad is reachable over: a cable or Wi‑Fi.
+                let linkIcon = device.link.flatMap { menuIcon($0.symbolName) }
+                item.image = linkIcon
+                item.toolTip = device.link.map { "Reachable over \($0.rawValue)" }
+                    ?? "Seen over Bluetooth only"
+
+                // A connected iPad's display controls live here, as an AirPlay display's do.
+                // An item with a submenu cannot be clicked, so the submenu ends in Disconnect.
+                if device.isConnected,
+                   let display = video.connectedDisplays.first(where: { $0.isSidecar && $0.name == device.name }) {
+                    item.image = displayIcon(for: display, video: video) ?? linkIcon ?? menuIcon("ipad")
+                    let submenu = NSMenu()
+                    if let link = device.link {
+                        let over = disabledItem("Connected over \(link.rawValue)")
+                        over.image = menuIcon(link.symbolName)
+                        submenu.addItem(over)
+                        submenu.addItem(.separator())
+                    }
+                    for control in buildResolutionSubmenu(display: display, video: video).items {
+                        control.menu?.removeItem(control)
+                        submenu.addItem(control)
+                    }
+                    submenu.addItem(.separator())
+                    addDisplayControls(to: submenu, for: display, video: video, canMirror: canMirrorDisplays)
+                    let disconnect = NSMenuItem(
+                        title: "Disconnect",
+                        action: #selector(AppDelegate.selectSidecarDevice(_:)),
+                        keyEquivalent: ""
+                    )
+                    disconnect.representedObject = device
+                    submenu.addItem(disconnect)
+                    item.submenu = submenu
+                }
                 menu.addItem(item)
             }
         }
     }
 
-    // — Connected Displays section —
+    // — Connected Displays section — physical displays; a Sidecar iPad is listed above
     menu.addItem(.separator())
     menu.addItem(sectionHeader("Connected Displays"))
-    if video.connectedDisplays.isEmpty {
+    let physicalDisplays = video.connectedDisplays.filter { !$0.isSidecar }
+    if physicalDisplays.isEmpty {
         menu.addItem(disabledItem("None"))
     } else {
-        for display in video.connectedDisplays {
+        for display in physicalDisplays {
             let item = NSMenuItem(title: display.label, action: nil, keyEquivalent: "")
             item.state = display.isConnected ? .on : .off
+            item.image = displayIcon(for: display, video: video)
 
-            // Mirror icon whether this display is the slave OR the master in a set.
-            // Sparkles when a virtual anchor is driving the display (same as AirPlay).
-            let mirrorActive = display.isMirroring || video.isBeingMirrored(display)
-            if video.hasVirtualAnchor(for: display.name) {
-                item.image = menuIcon("sparkles")
-            } else if mirrorActive {
-                item.image = menuIcon("square.on.square")
-            }
-
+            let submenu = buildResolutionSubmenu(display: display, video: video)
             if display.cgDisplayID != 0 {
-                let submenu = buildResolutionSubmenu(display: display, video: video)
-                if canMirrorDisplays {
-                    submenu.addItem(.separator())
-                    addMirrorItems(to: submenu, for: display, video: video)
-                    if let item = optimizeItem(for: display, video: video) { submenu.addItem(item) }
-                }
-                if let item = mainDisplayItem(for: display, video: video) { submenu.addItem(item) }
-                if let item = positionItem(for: display, video: video) { submenu.addItem(item) }
-                item.submenu = submenu
-            } else {
-                item.submenu = buildResolutionSubmenu(display: display, video: video)
+                if canMirrorDisplays { submenu.addItem(.separator()) }
+                addDisplayControls(to: submenu, for: display, video: video, canMirror: canMirrorDisplays)
             }
+            item.submenu = submenu
             menu.addItem(item)
         }
     }
@@ -292,6 +301,25 @@ private func modeItem(title: String, mode: DisplayMode, display: DisplayInfo, is
 }
 
 /// True when at least two displays are online — required for mirror/extend to make sense.
+/// Sparkles when a virtual anchor is driving the display; a mirror icon whether the display
+/// is the slave or the master in a set; nil otherwise.
+private func displayIcon(for display: DisplayInfo, video: VideoManager) -> NSImage? {
+    if video.hasVirtualAnchor(for: display.name) { return menuIcon("sparkles") }
+    if display.isMirroring || video.isBeingMirrored(display) { return menuIcon("square.on.square") }
+    return nil
+}
+
+/// The mirror, optimize, main-display and position items for a connected display.
+private func addDisplayControls(to submenu: NSMenu, for display: DisplayInfo,
+                                video: VideoManager, canMirror: Bool) {
+    if canMirror {
+        addMirrorItems(to: submenu, for: display, video: video)
+        if let item = optimizeItem(for: display, video: video) { submenu.addItem(item) }
+    }
+    if let item = mainDisplayItem(for: display, video: video) { submenu.addItem(item) }
+    if let item = positionItem(for: display, video: video) { submenu.addItem(item) }
+}
+
 private func canMirror(video: VideoManager) -> Bool {
     let active = (video.allAirPlayDevices + video.allConnectedDisplays)
         .filter { $0.cgDisplayID != 0 }

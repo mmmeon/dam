@@ -353,6 +353,8 @@ final class ControlStripPresenter: NSObject {
             symbolName = "airplayvideo"
         } else if display.isBuiltIn {
             symbolName = "laptopcomputer"
+        } else if display.isSidecar {
+            symbolName = "ipad"
         } else {
             symbolName = nil
         }

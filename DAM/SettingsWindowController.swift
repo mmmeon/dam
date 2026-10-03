@@ -267,7 +267,8 @@ final class SettingsWindowController: NSWindowController {
                          self?.onRebuild?()
                      }))
         }
-        let displays = videoManager.allConnectedDisplays.map { display in
+        // A Sidecar iPad has its row under "Sidecar:" above.
+        let displays = videoManager.allConnectedDisplays.filter { !$0.isSidecar }.map { display in
             nicknameRow(.display, for: display.name, checkbox: checkbox(title: display.name,
                      isOn: VisibilityPreferences.isVisible(display: display.name),
                      help: "Unchecked: hidden from the menu bar and Touch Bar",
@@ -308,9 +309,16 @@ final class SettingsWindowController: NSWindowController {
         let airPlayDefault = buildDefaultResolutionPopup(for: .airPlay)
         airPlayDefault.toolTip = "When an AirPlay display connects, drive it through the virtual " +
                                  "display at this resolution. “Display's own” leaves it as it is."
+        let sidecarBacking = checkbox(title: "Back a connected iPad with a virtual display",
+                                      isOn: VisibilityPreferences.backsSidecarWithVirtualDisplay,
+                                      help: "The iPad mirrors a virtual display locked to its own " +
+                                            "resolution, so it can be the Mac's only display. " +
+                                            "Applies on the next Sidecar connection.",
+                                      action: { VisibilityPreferences.backsSidecarWithVirtualDisplay = $0 })
         return formTab([
             ("Refresh Rates:", [rates]),
             ("On AirPlay Connect:", [airPlayDefault]),
+            ("On Sidecar Connect:", [sidecarBacking]),
         ], leftAligned: true)
     }
 

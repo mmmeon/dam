@@ -468,8 +468,8 @@ extension VideoManager {
         descriptor.sizeInMillimeters = CGSize(width: 600, height: 340)
         descriptor.maxPixelsWide = UInt32(max(3840, locked?.pixelWidth ?? 0))
         descriptor.maxPixelsHigh = UInt32(max(2160, locked?.pixelHeight ?? 0))
-        descriptor.vendorID  = 0x3456
-        descriptor.productID = 0x1234
+        descriptor.vendorID  = Self.anchorVendorID
+        descriptor.productID = Self.anchorProductID
         descriptor.serialNum = 0x0002
         vdLog.debug("enableVirtualAnchor: descriptor configured — vendor=0x3456 product=0x1234 serial=0x0002 queue=main")
 
@@ -572,6 +572,125 @@ extension VideoManager {
         }
     }
 
+    // MARK: - Sidecar
+
+    /// Vendor and product the anchors and the stand-in display carry. The stand-in has its
+    /// own product so the anchor search never mistakes it for a new anchor.
+    static let anchorVendorID:      UInt32 = 0x3456
+    static let anchorProductID:     UInt32 = 0x1234
+    static let bootstrapProductID:  UInt32 = 0x1235
+
+    /// Gives an iPad that has just connected over Sidecar a virtual anchor locked to its own
+    /// mode and mirrored onto it. Nothing changes on the iPad, but the Mac then always has a
+    /// display besides it, so the iPad can be the only one: Sidecar does not come up, or stay
+    /// up, as the sole display. Off through Settings.
+    func backSidecarDisplay(_ display: DisplayInfo) {
+        guard VisibilityPreferences.backsSidecarWithVirtualDisplay, display.isSidecar,
+              !hasVirtualAnchor(for: display.name) else { return }
+        vdLog.debug("backSidecarDisplay: '\(display.name)' connected — anchoring in 2 s")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            guard let self,
+                  let current = self.allConnectedDisplays.first(where: { $0.isSidecar && $0.name == display.name }),
+                  current.cgDisplayID != 0, !self.hasVirtualAnchor(for: current.name)
+            else { return }
+            self.enableVirtualAnchor(for: current)
+        }
+    }
+
+    /// Whether the Mac has no display to show a desktop on, apart from the given virtual ones.
+    static func needsBootstrapDisplay(onlineIDs: [CGDirectDisplayID],
+                                      virtualIDs: Set<CGDirectDisplayID>) -> Bool {
+        !onlineIDs.contains { !virtualIDs.contains($0) }
+    }
+
+    /// Makes sure a display exists before Sidecar connects, creating a stand-in virtual one
+    /// when the Mac has none. `completion` runs on the main queue once a display is online,
+    /// or straight away when one already is; also when the stand-in could not be made, so a
+    /// connection is still attempted.
+    func ensureDisplayForSidecar(completion: @escaping () -> Void) {
+        var virtualIDs = Set(virtualAnchorCGIDs.values)
+        if bootstrapDisplayID != 0 { virtualIDs.insert(bootstrapDisplayID) }
+        let needed = Self.needsBootstrapDisplay(onlineIDs: DisplayArrangement.onlineDisplayIDs(),
+                                                virtualIDs: virtualIDs)
+        guard needed, bootstrapDisplay == nil else { return completion() }
+        vdLog.debug("ensureDisplayForSidecar: no display online — creating a stand-in")
+
+        let descriptor = CGVirtualDisplayDescriptor()
+        descriptor.setDispatchQueue(.main)
+        descriptor.name = "\(AppIdentity.name) Stand-in"
+        descriptor.sizeInMillimeters = CGSize(width: 600, height: 340)
+        descriptor.maxPixelsWide = 1920
+        descriptor.maxPixelsHigh = 1080
+        descriptor.vendorID  = Self.anchorVendorID
+        descriptor.productID = Self.bootstrapProductID
+        descriptor.serialNum = 0x0003
+        descriptor.terminationHandler = { [weak self] _, _ in
+            DispatchQueue.main.async {
+                self?.bootstrapDisplay = nil
+                self?.bootstrapDisplayID = 0
+                self?.mergeDevices()
+            }
+        }
+        let vd = CGVirtualDisplay(descriptor: descriptor)
+        let settings = CGVirtualDisplaySettings()
+        settings.hiDPI = 0
+        settings.modes = [CGVirtualDisplayMode(width: 1920, height: 1080, refreshRate: 60)]
+        guard vd.apply(settings) else {
+            vdLog.error("ensureDisplayForSidecar: applySettings failed — connecting without a stand-in")
+            return completion()
+        }
+        bootstrapDisplay = vd
+        waitForBootstrapDisplay(vd, attempt: 0, completion: completion)
+    }
+
+    private func waitForBootstrapDisplay(_ vd: CGVirtualDisplay, attempt: Int,
+                                         completion: @escaping () -> Void) {
+        let online = DisplayArrangement.onlineDisplayIDs()
+        let id = vd.displayID != 0 && online.contains(vd.displayID)
+            ? vd.displayID
+            : online.first {
+                CGDisplayVendorNumber($0) == Self.anchorVendorID
+                    && CGDisplayModelNumber($0) == Self.bootstrapProductID
+            } ?? 0
+        if id != 0 {
+            vdLog.debug("ensureDisplayForSidecar: stand-in online as \(id)")
+            bootstrapDisplayID = id
+            mergeDevices()
+            // Let WindowServer settle on the new display before Sidecar adds another.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: completion)
+            return
+        }
+        guard attempt < 10 else {
+            vdLog.error("ensureDisplayForSidecar: stand-in never came online — dropping it")
+            bootstrapDisplay = nil
+            return completion()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            self?.waitForBootstrapDisplay(vd, attempt: attempt + 1, completion: completion)
+        }
+    }
+
+    /// Drops the stand-in once the iPad is up and, when it is to be backed, has its anchor;
+    /// or when the iPad will not be backed at all.
+    func releaseBootstrapDisplayIfDone(displays: [DisplayInfo]) {
+        guard bootstrapDisplay != nil else { return }
+        let backing = VisibilityPreferences.backsSidecarWithVirtualDisplay
+        let settled = displays.contains { display in
+            display.isSidecar && display.isConnected
+                && (!backing || virtualAnchorCGIDs[display.name] != nil)
+        }
+        if settled { releaseBootstrapDisplay() }
+    }
+
+    /// Drops the stand-in display. The display list is re-read once it has gone.
+    func releaseBootstrapDisplay() {
+        guard bootstrapDisplay != nil else { return }
+        vdLog.debug("releaseBootstrapDisplay: dropping stand-in \(self.bootstrapDisplayID)")
+        bootstrapDisplay = nil
+        bootstrapDisplayID = 0
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.mergeDevices() }
+    }
+
     // MARK: - Private
 
     /// Polls until the virtual display appears in the system display list, then
@@ -609,9 +728,9 @@ extension VideoManager {
                 return directID
             }
             if let heuristic = allIDs.first(where: {
-                CGDisplayVendorNumber($0) == 0x3456 &&
-                CGDisplayModelNumber($0) == 0x1234 &&
-                !claimedAnchorIDs.contains($0)
+                CGDisplayVendorNumber($0) == Self.anchorVendorID &&
+                CGDisplayModelNumber($0) == Self.anchorProductID &&
+                !claimedAnchorIDs.contains($0) && $0 != bootstrapDisplayID
             }) {
                 vdLog.debug("waitForVirtualDisplay: found via vendor/product heuristic id=\(heuristic)")
                 return heuristic

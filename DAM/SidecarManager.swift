@@ -13,13 +13,40 @@ import os
 
 private let scLog = Logger(subsystem: AppIdentity.bundleID, category: "Sidecar")
 
+/// How the Mac can reach an iPad for Sidecar.
+enum SidecarLink: String {
+    case usb = "USB"
+    case wifi = "Wi‑Fi"
+
+    /// The SF Symbol for the link.
+    var symbolName: String { self == .usb ? "cable.connector" : "wifi" }
+}
+
 struct SidecarDevice: Identifiable, Hashable {
     let id: String
     let name: String
     let isConnected: Bool
+    /// SidecarCore's status word for the device: Rapport's endpoint status flags, which say
+    /// which links reach the iPad.
+    var status: UInt64 = 0
 
     /// What the app shows for this device: its nickname if the user set one, else its name.
     var label: String { VisibilityPreferences.nickname(.sidecar, for: name) ?? name }
+
+    /// The link Sidecar would use: USB when the cable is attached, else Wi‑Fi when the iPad is
+    /// reachable over it. Nil when only Bluetooth sees the iPad.
+    var link: SidecarLink? { Self.link(fromStatus: status) }
+
+    // Rapport endpoint status flags, as its description names them.
+    static let usbFlag:               UInt64 = 1 << 24    // "USB"
+    static let infrastructureWiFiFlag: UInt64 = 1 << 2    // "iWiFi": same Wi‑Fi network
+    static let peerToPeerWiFiFlag:    UInt64 = 1 << 9     // "WiFiP2P": AWDL
+
+    static func link(fromStatus status: UInt64) -> SidecarLink? {
+        if status & usbFlag != 0 { return .usb }
+        if status & (infrastructureWiFiFlag | peerToPeerWiFiFlag) != 0 { return .wifi }
+        return nil
+    }
 }
 
 final class SidecarManager: ObservableObject {
@@ -58,18 +85,29 @@ final class SidecarManager: ObservableObject {
         return fn(cls, sel)
     }
 
+    /// A device's identifier as a string. SidecarCore hands it over as an NSUUID.
+    static func identifier(of object: NSObject) -> String? {
+        switch object.value(forKey: "identifier") {
+        case let uuid as UUID:     return uuid.uuidString
+        case let string as String: return string
+        case let other?:           return "\(other)"
+        case nil:                  return nil
+        }
+    }
+
     /// Re-reads the nearby and connected devices.
     func refresh() {
         guard let manager else { return }
         let connected = Set((manager.value(forKey: "connectedDevices") as? [NSObject] ?? [])
-            .compactMap { $0.value(forKey: "identifier") as? String })
+            .compactMap(Self.identifier(of:)))
         var objects: [String: NSObject] = [:]
         var found: [SidecarDevice] = []
         for object in manager.value(forKey: "devices") as? [NSObject] ?? [] {
-            guard let id = object.value(forKey: "identifier") as? String,
+            guard let id = Self.identifier(of: object),
                   let name = object.value(forKey: "name") as? String else { continue }
             objects[id] = object
-            found.append(SidecarDevice(id: id, name: name, isConnected: connected.contains(id)))
+            found.append(SidecarDevice(id: id, name: name, isConnected: connected.contains(id),
+                                       status: object.value(forKey: "status") as? UInt64 ?? 0))
         }
         self.objects = objects
         found.sort { $0.name < $1.name }

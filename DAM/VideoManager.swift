@@ -81,10 +81,13 @@ struct DisplayInfo: Identifiable, Hashable {
     let isBuiltIn: Bool
     /// True for the main display: the one with the menu bar, at the origin.
     var isMain: Bool = false
+    /// True for an iPad connected over Sidecar. Its `name` is the iPad's name, so the entry
+    /// matches the device in the Sidecar section and shares its nickname.
+    var isSidecar: Bool = false
 
     /// What the app shows for this display: its nickname if the user set one, else its name.
     /// `name` stays the identity used to find the display and key its settings.
-    var label: String { VisibilityPreferences.nickname(.display, for: name) ?? name }
+    var label: String { VisibilityPreferences.nickname(isSidecar ? .sidecar : .display, for: name) ?? name }
 }
 
 struct ResolutionSelection: Hashable {
@@ -124,6 +127,10 @@ final class VideoManager: ObservableObject {
     /// Physical displays filtered by VisibilityPreferences — used by the menu and Touch Bar.
     @Published private(set) var connectedDisplays: [DisplayInfo] = []
 
+    /// Returns the names of the iPads currently connected over Sidecar. Asked on every merge,
+    /// so a Sidecar display is named after its iPad however the connection was made.
+    var connectedSidecarNames: () -> [String] = { [] }
+
     private var browser: NWBrowser?
     private var discoveredNames: Set<String> = []
     /// The pending re-read of the display list after a display configuration change.
@@ -142,6 +149,10 @@ final class VideoManager: ObservableObject {
     var virtualAnchorCGIDs: [String: CGDirectDisplayID] = [:]
     /// Display layout captured just before each anchor was created, keyed like the above.
     var virtualAnchorArrangements: [String: DisplayArrangement] = [:]
+    /// A stand-in virtual display, created when Sidecar is asked to connect while the Mac has
+    /// no display at all, and dropped once the iPad has a display of its own to sit with.
+    var bootstrapDisplay: AnyObject?
+    var bootstrapDisplayID: CGDirectDisplayID = 0
 
     /// Start continuous Bonjour discovery. Call once on launch; runs until the app quits.
     func startDiscovery() {
@@ -206,6 +217,29 @@ final class VideoManager: ObservableObject {
 
     static func filter(connectedDisplays: [DisplayInfo], hidden: Set<String>) -> [DisplayInfo] {
         connectedDisplays.filter { !hidden.contains($0.name) }
+    }
+
+    // MARK: - Sidecar displays
+
+    /// The vendor and model CoreGraphics reports for an iPad over Sidecar: "aapl" and "iPad".
+    /// (AirPlay virtual displays are "aapl" / "airp".) Neither has an IODisplayConnect entry.
+    static let sidecarVendorNumber: UInt32 = 0x6161706c
+    static let sidecarModelNumber:  UInt32 = 0x69506164
+
+    static func isSidecarDisplay(vendor: UInt32, model: UInt32) -> Bool {
+        vendor == sidecarVendorNumber && model == sidecarModelNumber
+    }
+
+    static func isSidecarDisplay(_ cgID: CGDirectDisplayID) -> Bool {
+        isSidecarDisplay(vendor: CGDisplayVendorNumber(cgID), model: CGDisplayModelNumber(cgID))
+    }
+
+    /// Pairs each Sidecar display with a connected iPad's name. NSScreen calls every one
+    /// "Sidecar Display", so the pairing is by order: display IDs ascending, names sorted.
+    /// Exact with one iPad, the usual case. Displays beyond the names are left out.
+    static func sidecarNames(displayIDs: [CGDirectDisplayID],
+                             deviceNames: [String]) -> [CGDirectDisplayID: String] {
+        Dictionary(uniqueKeysWithValues: zip(displayIDs.sorted(), deviceNames.sorted()))
     }
 
     // MARK: - Mirror / Extend
@@ -748,6 +782,15 @@ final class VideoManager: ObservableObject {
             }
         }
 
+        // Sidecar: NSScreen names an iPad "Sidecar Display", and a mirror slave leaves
+        // NSScreen altogether. Name each after its iPad so the entry matches the Sidecar
+        // section, falling back to the generic name when SidecarCore lists no iPad for it.
+        let sidecarIDs = onlineIDs.filter { Self.isSidecarDisplay($0) }
+        if !sidecarIDs.isEmpty {
+            let names = Self.sidecarNames(displayIDs: sidecarIDs, deviceNames: connectedSidecarNames())
+            for cgID in sidecarIDs { idToName[cgID] = names[cgID] ?? idToName[cgID] ?? "Sidecar Display" }
+        }
+
         // AirPlay: resolve each Bonjour-discovered name to a CGDirectDisplayID.
         //
         // Strategy (in priority order):
@@ -782,8 +825,10 @@ final class VideoManager: ObservableObject {
         // These are virtual (AirPlay) displays that slipped past NSScreen and the cache.
         if !unresolvedNames.isEmpty {
             let resolvedSet = Set(resolvedIDs.values)
+            // Sidecar displays have no IOKit entry either, but are named above.
             let virtualIDs = onlineIDs.filter {
                 CGDisplayIsBuiltin($0) == 0 && idToName[$0] == nil && !resolvedSet.contains($0)
+                    && !Self.isSidecarDisplay($0)
             }
             // Pair by sorted order — deterministic when counts match.
             for (name, cgID) in zip(unresolvedNames, virtualIDs) {
@@ -808,7 +853,8 @@ final class VideoManager: ObservableObject {
         // Includes the built-in panel when the lid is open (it appears in NSScreen
         // and therefore idToName). Absent in clamshell mode, which is correct.
         let airPlayIDs = Set(newAirPlay.map(\.cgDisplayID))
-        let anchorIDs  = Set(virtualAnchorCGIDs.values)
+        var anchorIDs  = Set(virtualAnchorCGIDs.values)
+        if bootstrapDisplayID != 0 { anchorIDs.insert(bootstrapDisplayID) }
 
         var physical: [DisplayInfo] = []
         for cgID in onlineIDs {
@@ -824,7 +870,8 @@ final class VideoManager: ObservableObject {
                                         cgDisplayID: cgID,
                                         isMirroring: userMirrorMaster(of: cgID) != nil,
                                         isBuiltIn: isBuiltIn,
-                                        isMain: CGDisplayIsMain(cgID) != 0))
+                                        isMain: CGDisplayIsMain(cgID) != 0,
+                                        isSidecar: sidecarIDs.contains(cgID)))
         }
         // Built-in first, then external sorted by name.
         let newPhysical = physical.sorted { l, r in
@@ -858,10 +905,15 @@ final class VideoManager: ObservableObject {
         // connected at the first merge is left as it is.
         let justConnected = newAirPlay.filter { $0.isConnected && pendingConnectIDs.contains($0.cgDisplayID) }
         pendingConnectIDs.subtract(justConnected.map(\.cgDisplayID))
+        // Likewise an iPad that has just come up over Sidecar.
+        let sidecarJustConnected = newPhysical.filter { $0.isSidecar && pendingConnectIDs.contains($0.cgDisplayID) }
+        pendingConnectIDs.subtract(sidecarJustConnected.map(\.cgDisplayID))
 
         if allAirPlayDevices    != newAirPlay   { allAirPlayDevices    = newAirPlay   }
         for display in justConnected { applyDefaultVirtualMode(to: display) }
         if allConnectedDisplays != newPhysical  { allConnectedDisplays = newPhysical  }
+        for display in sidecarJustConnected { backSidecarDisplay(display) }
+        releaseBootstrapDisplayIfDone(displays: newPhysical)
         applyVisibility()
     }
 
