@@ -630,14 +630,8 @@ extension VideoManager {
                   current.cgDisplayID != 0, !self.hasVirtualAnchor(for: current.name),
                   self.canBack(current.cgDisplayID)
             else { return }
-            // The anchor would start at a size of its own choosing: give it the one last
-            // picked for this iPad, else the iPad's own.
-            let native = self.currentMode(for: current.cgDisplayID)
-            let modes = native.map(Self.sidecarVirtualModes(native:)) ?? []
-            let stored = VisibilityPreferences.sidecarResolution(for: current.name)
-            let initial = modes.first { "\($0.width)x\($0.height)" == stored }
-                ?? modes.first { $0.width == native?.width && $0.height == native?.height }
-            self.enableVirtualAnchor(for: current, initialMode: initial)
+            // Its size is chosen once the mirror is wired (see sidecarStartMode(for:)).
+            self.enableVirtualAnchor(for: current)
         }
     }
 
@@ -656,6 +650,18 @@ extension VideoManager {
             guard w * scale <= max(3840, native.pixelWidth) else { return nil }
             return virtualMode(width: w, height: h, refreshRate: 60, pixelWidth: w * scale, pixelHeight: h * scale)
         }
+    }
+
+    /// The size an iPad's new anchor starts at: the one last picked for the iPad, else its own.
+    /// Looked up by the name the anchor has by then, as the iPad may only have been named
+    /// "Sidecar Display" when it was anchored.
+    func sidecarStartMode(for cgID: CGDirectDisplayID) -> DisplayMode? {
+        guard let native = sidecarNativeModes[cgID] else { return nil }
+        let modes = Self.sidecarVirtualModes(native: native)
+        let name = virtualAnchorTargets.first { $0.value == cgID }?.key
+        let stored = name.flatMap(VisibilityPreferences.sidecarResolution(for:))
+        return modes.first { "\($0.width)x\($0.height)" == stored }
+            ?? modes.first { $0.width == native.width && $0.height == native.height }
     }
 
     /// Resolution choices for an iPad driven by its anchor, and the index of the one in effect.
@@ -921,6 +927,9 @@ extension VideoManager {
             // Step 3: let the system settle, then refresh the UI on the main queue.
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                 self?.restoreArrangementAfterMirror(name: name, excluding: [airPlayID, virtualID])
+                // The anchor would otherwise run at a size of its own choosing.
+                let initialMode = initialMode
+                    ?? (Self.isSidecarDisplay(airPlayID) ? self?.sidecarStartMode(for: airPlayID) : nil)
                 if let initialMode {
                     vdLog.debug("step3: applying initial mode \(initialMode.width)×\(initialMode.height) @\(initialMode.refreshRate)Hz")
                     self?.setModeOnVirtualAnchor(initialMode, anchorID: virtualID, name: name, slaveID: airPlayID)
