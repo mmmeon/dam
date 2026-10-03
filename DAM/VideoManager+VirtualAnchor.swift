@@ -533,6 +533,13 @@ extension VideoManager {
 
         virtualAnchorArrangements[deviceName] = DisplayArrangement.current()
         virtualAnchorTargets[deviceName] = airPlayCGID
+        // The size the anchor will run at, listed first so it comes up at it (or at its backing
+        // size, for a HiDPI one) rather than at a size it is switched away from once mirrored.
+        let startMode = initialMode ?? (display.isSidecar ? sidecarStartMode(for: airPlayCGID) : nil)
+        let isStart = { (r: (width: Int, height: Int)) in
+            r.width == startMode?.pixelWidth && r.height == startMode?.pixelHeight
+        }
+        let orderedResolutions = resolutions.filter(isStart) + resolutions.filter { !isStart($0) }
         let vd = CGVirtualDisplay(descriptor: descriptor)
         vdLog.debug("enableVirtualAnchor: CGVirtualDisplay created — immediate displayID=\(vd.displayID)")
 
@@ -542,8 +549,10 @@ extension VideoManager {
         settings.hiDPI = (sidecarModes != nil || (locked?.isHiDPI ?? true)) ? 1 : 0
         // Sidecar runs at 60 Hz whatever the anchor offers.
         let allRates = sidecarModes != nil ? [60] : VisibilityPreferences.effectiveVirtualRefreshRates(for: context)
-        settings.modes = resolutions.flatMap { res in
-            allRates.map { rate in
+        let startRate = startMode?.roundedRefreshRate
+        let orderedRates = allRates.filter { $0 == startRate } + allRates.filter { $0 != startRate }
+        settings.modes = orderedResolutions.flatMap { res in
+            orderedRates.map { rate in
                 CGVirtualDisplayMode(width: UInt(res.width), height: UInt(res.height), refreshRate: Double(rate))
             }
         }
@@ -915,8 +924,18 @@ extension VideoManager {
         }
     }
 
+    /// The size an anchor is to run at: the one asked for, else for an iPad the one it
+    /// starts at. Nil leaves the anchor at its own choice.
+    private func anchorStartMode(_ initialMode: DisplayMode?, slaveID: CGDirectDisplayID) -> DisplayMode? {
+        initialMode ?? (Self.isSidecarDisplay(slaveID) ? sidecarStartMode(for: slaveID) : nil)
+    }
+
     /// Applies the mirror relationship (airPlay → virtual) and chains step 3.
     /// Called from both the no-prior-mirror path and the post-teardown background path.
+    ///
+    /// The anchor is set to its starting size in the same transaction, before the target
+    /// display follows it, so the target is reconfigured once rather than mirrored at one
+    /// size and then switched to another.
     private func applyMirror(name: String, airPlayID: CGDirectDisplayID, virtualID: CGDirectDisplayID,
                              initialMode: DisplayMode?) {
         vdLog.debug("step2: configuring mirror airPlayID=\(airPlayID) → virtualID=\(virtualID)")
@@ -939,6 +958,12 @@ extension VideoManager {
         if CGDisplayMirrorsDisplay(virtualID) != 0 {
             CGConfigureDisplayMirrorOfDisplay(cfg, virtualID, CGDirectDisplayID(0))
         }
+        if let startMode = anchorStartMode(initialMode, slaveID: airPlayID),
+           !anchorRuns(startMode, anchorID: virtualID),
+           let cgMode = anchorDisplayMode(startMode, anchorID: virtualID) {
+            vdLog.debug("step2: anchor starts at \(cgMode.width)×\(cgMode.height) (pixels \(cgMode.pixelWidth)×\(cgMode.pixelHeight)) @\(cgMode.refreshRate)Hz")
+            CGConfigureDisplayWithDisplayMode(cfg, virtualID, cgMode, nil)
+        }
         CGConfigureDisplayMirrorOfDisplay(cfg, airPlayID, virtualID)
         // CGCompleteDisplayConfiguration can block for ~10 s on some systems while the
         // display config settles — run on a background queue to keep the UI responsive.
@@ -949,12 +974,12 @@ extension VideoManager {
             // Step 3: let the system settle, then refresh the UI on the main queue.
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                 self?.restoreArrangementAfterMirror(name: name, excluding: [airPlayID, virtualID])
-                // The anchor would otherwise run at a size of its own choosing.
-                let initialMode = initialMode
-                    ?? (Self.isSidecarDisplay(airPlayID) ? self?.sidecarStartMode(for: airPlayID) : nil)
-                if let initialMode {
-                    vdLog.debug("step3: applying initial mode \(initialMode.width)×\(initialMode.height) @\(initialMode.refreshRate)Hz")
-                    self?.setModeOnVirtualAnchor(initialMode, anchorID: virtualID, name: name, slaveID: airPlayID)
+                // Normally set with the mirror already; this catches an iPad renamed meanwhile
+                // (its remembered size is filed under the new name) or a mode the commit lost.
+                if let self, let mode = self.anchorStartMode(initialMode, slaveID: airPlayID),
+                   !self.anchorRuns(mode, anchorID: virtualID) {
+                    vdLog.debug("step3: anchor not at \(mode.width)×\(mode.height) @\(mode.refreshRate)Hz — applying it")
+                    self.setModeOnVirtualAnchor(mode, anchorID: virtualID, name: name, slaveID: airPlayID)
                 }
                 vdLog.debug("step3: mergeDevices")
                 self?.mergeDevices()
@@ -994,37 +1019,7 @@ extension VideoManager {
     /// arrangement (or extended, if there's none) in the same transaction.
     private func setModeOnVirtualAnchor(_ mode: DisplayMode, anchorID: CGDirectDisplayID,
                                         name: String, slaveID: CGDirectDisplayID) {
-        guard anchorID != 0 else { return }
-
-        let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
-        guard let modeList = CGDisplayCopyAllDisplayModes(anchorID, options) as? [CGDisplayMode] else {
-            vdLog.error("setModeOnVirtualAnchor: CGDisplayCopyAllDisplayModes returned nil for \(anchorID)")
-            return
-        }
-        vdLog.debug("setModeOnVirtualAnchor: \(modeList.count) modes on master \(anchorID), seeking \(mode.width)×\(mode.height) (pixels \(mode.pixelWidth)×\(mode.pixelHeight)) @\(mode.refreshRate)Hz")
-        for m in modeList { vdLog.debug("  candidate: \(m.width)×\(m.height) (pixels \(m.pixelWidth)×\(m.pixelHeight)) @\(m.refreshRate)Hz") }
-
-        let sameSize: (CGDisplayMode) -> Bool = {
-            $0.width == mode.width && $0.height == mode.height
-                && $0.pixelWidth == mode.pixelWidth && $0.pixelHeight == mode.pixelHeight
-        }
-        // Prefer exact size + rate; fall back to size only (the virtual display may report a
-        // slightly different rate); last resort for a HiDPI mode the anchor didn't derive is
-        // the logical size at 1x.
-        let cgMode = modeList.first { sameSize($0) && abs($0.refreshRate - mode.refreshRate) < 1.0 }
-            ?? modeList.first(where: sameSize)
-            ?? modeList.first {
-                $0.pixelWidth == mode.width && $0.pixelHeight == mode.height
-                    && abs($0.refreshRate - mode.refreshRate) < 1.0
-            }
-        if let cgMode, mode.isHiDPI, cgMode.pixelWidth == cgMode.width {
-            vdLog.error("setModeOnVirtualAnchor: anchor offers no HiDPI \(mode.width)×\(mode.height) — falling back to 1x")
-        }
-
-        guard let cgMode else {
-            vdLog.error("setModeOnVirtualAnchor: no mode matching \(mode.width)×\(mode.height) on master \(anchorID)")
-            return
-        }
+        guard anchorID != 0, let cgMode = anchorDisplayMode(mode, anchorID: anchorID) else { return }
         vdLog.debug("setModeOnVirtualAnchor: applying \(cgMode.pixelWidth)×\(cgMode.pixelHeight) @\(cgMode.refreshRate)Hz on master \(anchorID)")
 
         var config: CGDisplayConfigRef?
@@ -1046,5 +1041,43 @@ extension VideoManager {
             let completeErr = CGCompleteDisplayConfiguration(cfg, .forAppOnly)
             vdLog.debug("setModeOnVirtualAnchor: CompleteDisplayConfiguration err=\(completeErr.rawValue)")
         }
+    }
+
+    /// The anchor's own mode for `mode`: exact size and rate, else size only (the virtual
+    /// display may report a slightly different rate), else — for a HiDPI mode the anchor
+    /// didn't derive — the logical size at 1x.
+    private func anchorDisplayMode(_ mode: DisplayMode, anchorID: CGDirectDisplayID) -> CGDisplayMode? {
+        let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
+        guard let modeList = CGDisplayCopyAllDisplayModes(anchorID, options) as? [CGDisplayMode] else {
+            vdLog.error("anchorDisplayMode: CGDisplayCopyAllDisplayModes returned nil for \(anchorID)")
+            return nil
+        }
+        vdLog.debug("anchorDisplayMode: \(modeList.count) modes on master \(anchorID), seeking \(mode.width)×\(mode.height) (pixels \(mode.pixelWidth)×\(mode.pixelHeight)) @\(mode.refreshRate)Hz")
+        for m in modeList { vdLog.debug("  candidate: \(m.width)×\(m.height) (pixels \(m.pixelWidth)×\(m.pixelHeight)) @\(m.refreshRate)Hz") }
+
+        let cgMode = modeList.first { Self.matches($0, mode) && abs($0.refreshRate - mode.refreshRate) < 1.0 }
+            ?? modeList.first { Self.matches($0, mode) }
+            ?? modeList.first {
+                $0.pixelWidth == mode.width && $0.pixelHeight == mode.height
+                    && abs($0.refreshRate - mode.refreshRate) < 1.0
+            }
+        if let cgMode, mode.isHiDPI, cgMode.pixelWidth == cgMode.width {
+            vdLog.error("anchorDisplayMode: anchor offers no HiDPI \(mode.width)×\(mode.height) — falling back to 1x")
+        }
+        if cgMode == nil {
+            vdLog.error("anchorDisplayMode: no mode matching \(mode.width)×\(mode.height) on master \(anchorID)")
+        }
+        return cgMode
+    }
+
+    /// Whether the anchor already runs at `mode`'s size and (to within 1 Hz) rate.
+    private func anchorRuns(_ mode: DisplayMode, anchorID: CGDirectDisplayID) -> Bool {
+        guard let current = CGDisplayCopyDisplayMode(anchorID) else { return false }
+        return Self.matches(current, mode) && abs(current.refreshRate - mode.refreshRate) < 1.0
+    }
+
+    private static func matches(_ cgMode: CGDisplayMode, _ mode: DisplayMode) -> Bool {
+        cgMode.width == mode.width && cgMode.height == mode.height
+            && cgMode.pixelWidth == mode.pixelWidth && cgMode.pixelHeight == mode.pixelHeight
     }
 }
