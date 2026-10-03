@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		A0A1D0000000000000000F02 /* README.txt in Resources */ = {isa = PBXBuildFile; fileRef = A0A1D0000000000000000F01 /* README.txt */; };
+		A0A1D0000000000000000F04 /* ABOUT.txt in Resources */ = {isa = PBXBuildFile; fileRef = A0A1D0000000000000000F03 /* ABOUT.txt */; };
 		A0A1D0000000000000000002 /* AppIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0A1D0000000000000000001 /* AppIdentity.swift */; };
 		8BFD3BDF2F8D60780090E796 /* MainApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BFD3BDE2F8D60780090E796 /* MainApp.swift */; };
 		8BFD3BE32F8D607B0090E796 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 8BFD3BE22F8D607B0090E796 /* Assets.xcassets */; };
@@ -63,6 +64,7 @@
 
 /* Begin PBXFileReference section */
 		A0A1D0000000000000000F01 /* README.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = README.txt; sourceTree = SOURCE_ROOT; };
+		A0A1D0000000000000000F03 /* ABOUT.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = ABOUT.txt; sourceTree = SOURCE_ROOT; };
 		8BFD3BDB2F8D60780090E796 /* DAM.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DAM.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A0A1D0000000000000000001 /* AppIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIdentity.swift; sourceTree = "<group>"; };
 		8BFD3BDE2F8D60780090E796 /* MainApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainApp.swift; sourceTree = "<group>"; };
@@ -150,6 +152,7 @@
 			children = (
 				8BFD3BDE2F8D60780090E796 /* MainApp.swift */,
 				A0A1D0000000000000000F01 /* README.txt */,
+				A0A1D0000000000000000F03 /* ABOUT.txt */,
 				A0A1D0000000000000000001 /* AppIdentity.swift */,
 				8BFD3C0A2F8D60780090E796 /* AppDelegate.swift */,
 				8BFD3C0C2F8D60780090E796 /* AudioManager.swift */,
@@ -220,6 +223,7 @@
 				8BFD3BD72F8D60780090E796 /* Sources */,
 				8BFD3BD82F8D60780090E796 /* Frameworks */,
 				8BFD3BD92F8D60780090E796 /* Resources */,
+				A0A1D0000000000000000F05 /* Stamp Commit */,
 			);
 			buildRules = (
 			);
@@ -294,6 +298,7 @@
 				8BFD3BE62F8D607B0090E796 /* Preview Assets.xcassets in Resources */,
 				8BFD3BE32F8D607B0090E796 /* Assets.xcassets in Resources */,
 				A0A1D0000000000000000F02 /* README.txt in Resources */,
+				A0A1D0000000000000000F04 /* ABOUT.txt in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -305,6 +310,24 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		A0A1D0000000000000000F05 /* Stamp Commit */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Stamp Commit";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# The build is the commit it was made from: CFBundleVersion counts the commits (it must\n# be numeric), DAMCommit holds the short hash, marked \"+\" when the tree has changes.\nplist=\"$TARGET_BUILD_DIR/$INFOPLIST_PATH\"\ncd \"$SRCROOT\" || exit 0\ncount=$(git rev-list --count HEAD 2>/dev/null) || exit 0\nhash=$(git rev-parse --short HEAD)\ngit diff --quiet HEAD -- . ':!*.xcuserstate' ':!*xcuserdata*' 2>/dev/null || hash=\"$hash+\"\n/usr/libexec/PlistBuddy -c \"Set :CFBundleVersion $count\" \"$plist\"\n/usr/libexec/PlistBuddy -c \"Delete :DAMCommit\" \"$plist\" 2>/dev/null\n/usr/libexec/PlistBuddy -c \"Add :DAMCommit string $hash\" \"$plist\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		8BFD3BD72F8D60780090E796 /* Sources */ = {
