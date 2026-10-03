@@ -224,6 +224,20 @@ enum VisibilityPreferences {
         set { UserDefaults.standard.set(newValue, forKey: sidecarAloneKey) }
     }
 
+    /// The resolution last picked for an iPad's virtual display, as "WIDTHxHEIGHT" (logical),
+    /// applied again when it reconnects. Nil means the iPad's own.
+    static func sidecarResolution(for name: String) -> String? {
+        (UserDefaults.standard.dictionary(forKey: sidecarResolutionsKey) as? [String: String])?[name]
+    }
+
+    static func setSidecarResolution(_ res: String?, for name: String) {
+        var all = (UserDefaults.standard.dictionary(forKey: sidecarResolutionsKey) as? [String: String]) ?? [:]
+        all[name] = res
+        UserDefaults.standard.set(all, forKey: sidecarResolutionsKey)
+    }
+
+    private static let sidecarResolutionsKey = "\(AppIdentity.shortID).sidecar.resolutions"
+
     // MARK: - Nicknames
 
     /// The kinds of device a nickname can be given to. Each keeps its own list, so equal

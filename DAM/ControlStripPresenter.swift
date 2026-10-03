@@ -509,6 +509,7 @@ final class ControlStripPresenter: NSObject {
     /// The sizes on a display's resolution page and the index of the one in effect.
     private func resolutionChoices(for display: DisplayInfo) -> (modes: [DisplayMode], currentIndex: Int?) {
         guard let vm = videoManager else { return ([], nil) }
+        if display.isSidecar, vm.hasVirtualAnchor(for: display.name) { return vm.sidecarResolutionOptions(for: display) }
         guard vm.displayContext(for: display) == .airPlay else { return vm.resolutionOptions(for: display) }
         let options = vm.airPlayResolutionOptions(for: display)
         return Self.airPlayResolutionChoices(native: options.native, virtual: options.virtual,

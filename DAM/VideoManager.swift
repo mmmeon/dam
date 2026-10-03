@@ -142,6 +142,10 @@ final class VideoManager: ObservableObject {
     /// Caches IOKit-derived display names by cgID. Valid for the lifetime of a
     /// cgID — IDs are reassigned on disconnect, so stale entries are never accessed.
     private var ioKitNameCache: [CGDirectDisplayID: String] = [:]
+    /// The iPad name last paired with each Sidecar display. SidecarCore can list no connected
+    /// iPad for a moment while displays reconfigure; renaming the display then would orphan
+    /// its anchor, which is keyed by name.
+    private var sidecarNameCache: [CGDirectDisplayID: String] = [:]
     /// Retained CGVirtualDisplay objects keyed by AirPlay device name.
     /// Stored as AnyObject to avoid @available on the stored property.
     var virtualAnchorStore: [String: AnyObject] = [:]
@@ -149,6 +153,11 @@ final class VideoManager: ObservableObject {
     var virtualAnchorCGIDs: [String: CGDirectDisplayID] = [:]
     /// Display layout captured just before each anchor was created, keyed like the above.
     var virtualAnchorArrangements: [String: DisplayArrangement] = [:]
+    /// The display each anchor was made for, keyed like the above.
+    var virtualAnchorTargets: [String: CGDirectDisplayID] = [:]
+    /// An iPad's own mode by display, read when its anchor was created. While it mirrors the
+    /// anchor the iPad reports the anchor's size instead, so the size choices come from this.
+    var sidecarNativeModes: [CGDirectDisplayID: DisplayMode] = [:]
     /// A stand-in virtual display, created when Sidecar is asked to connect while the Mac has
     /// no display at all, and dropped once the iPad has a display of its own to sit with.
     var bootstrapDisplay: AnyObject?
@@ -788,7 +797,10 @@ final class VideoManager: ObservableObject {
         let sidecarIDs = onlineIDs.filter { Self.isSidecarDisplay($0) }
         if !sidecarIDs.isEmpty {
             let names = Self.sidecarNames(displayIDs: sidecarIDs, deviceNames: connectedSidecarNames())
-            for cgID in sidecarIDs { idToName[cgID] = names[cgID] ?? idToName[cgID] ?? "Sidecar Display" }
+            for cgID in sidecarIDs {
+                if let name = names[cgID] { sidecarNameCache[cgID] = name }
+                idToName[cgID] = sidecarNameCache[cgID] ?? idToName[cgID] ?? "Sidecar Display"
+            }
         }
 
         // AirPlay: resolve each Bonjour-discovered name to a CGDirectDisplayID.
@@ -881,13 +893,15 @@ final class VideoManager: ObservableObject {
 
         // Release virtual anchors whose display is no longer connected.
         //
-        // Two guards protect live anchors from being prematurely torn down:
+        // Three guards protect live anchors from being prematurely torn down (the third is
+        // below):
         //
         // 1. Poll-in-progress guard: if waitForVirtualDisplay hasn't yet written
         //    virtualAnchorCGIDs[name], the anchor is still being established — skip it.
         //
         // 2. Mirror-slave guard: whatever the display list says, an anchor that some online
         //    display is actively mirroring is doing its job and stays.
+        renameSidecarAnchors(for: newPhysical)
         let connectedDisplayNames = Set(
             newAirPlay.filter { $0.isConnected }.map { $0.name } +
             newPhysical.filter { $0.isConnected }.map { $0.name }
@@ -896,6 +910,10 @@ final class VideoManager: ObservableObject {
             guard let anchorID = virtualAnchorCGIDs[name] else { continue }   // guard 1: still polling
             // Guard 2: keep the anchor alive while a physical slave is mirroring it.
             if onlineIDs.contains(where: { CGDisplayMirrorsDisplay($0) == anchorID }) { continue }
+            // Guard 3: or while the display it was made for is online. While the mirror is
+            // being wired that display can drop out of NSScreen before it shows as a slave.
+            if let target = virtualAnchorTargets[name], onlineIDs.contains(target) { continue }
+            virtualAnchorTargets.removeValue(forKey: name)
             virtualAnchorStore.removeValue(forKey: name)
             virtualAnchorCGIDs.removeValue(forKey: name)
             virtualAnchorArrangements.removeValue(forKey: name)
@@ -905,14 +923,15 @@ final class VideoManager: ObservableObject {
         // connected at the first merge is left as it is.
         let justConnected = newAirPlay.filter { $0.isConnected && pendingConnectIDs.contains($0.cgDisplayID) }
         pendingConnectIDs.subtract(justConnected.map(\.cgDisplayID))
-        // Likewise an iPad that has just come up over Sidecar.
-        let sidecarJustConnected = newPhysical.filter { $0.isSidecar && pendingConnectIDs.contains($0.cgDisplayID) }
-        pendingConnectIDs.subtract(sidecarJustConnected.map(\.cgDisplayID))
+        pendingConnectIDs.subtract(newPhysical.filter(\.isSidecar).map(\.cgDisplayID))
 
         if allAirPlayDevices    != newAirPlay   { allAirPlayDevices    = newAirPlay   }
         for display in justConnected { applyDefaultVirtualMode(to: display) }
         if allConnectedDisplays != newPhysical  { allConnectedDisplays = newPhysical  }
-        for display in sidecarJustConnected { backSidecarDisplay(display) }
+        // Every iPad on Sidecar without an anchor, not only one that has just come up: one
+        // already connected when the app started, or whose anchor a mirror change released,
+        // would otherwise shut off once the other displays go.
+        for display in newPhysical where display.isSidecar && display.isConnected { backSidecarDisplay(display) }
         releaseBootstrapDisplayIfDone(displays: newPhysical)
         applyVisibility()
     }
