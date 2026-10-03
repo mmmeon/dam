@@ -213,6 +213,17 @@ enum VisibilityPreferences {
         else { UserDefaults.standard.removeObject(forKey: key) }
     }
 
+    // MARK: - Sidecar
+
+    private static let sidecarAloneKey = "\(AppIdentity.shortID).sidecar.virtualDisplayBacking"
+
+    /// Whether a connected iPad gets a virtual display behind it, mirrored, so that it can be
+    /// the Mac's only display. On by default.
+    static var backsSidecarWithVirtualDisplay: Bool {
+        get { UserDefaults.standard.object(forKey: sidecarAloneKey) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: sidecarAloneKey) }
+    }
+
     // MARK: - Nicknames
 
     /// The kinds of device a nickname can be given to. Each keeps its own list, so equal

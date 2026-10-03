@@ -108,6 +108,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         #endif
 
+        // Name Sidecar displays after their iPad, re-reading SidecarCore on each display merge
+        // so a connection made from Control Center is recognised too.
+        videoManager.connectedSidecarNames = { [sidecarManager] in
+            sidecarManager.refresh()
+            return sidecarManager.devices.filter(\.isConnected).map(\.name)
+        }
+
         // Rebuild menu and Control Strip whenever a manager publishes a change
         audioManager.objectWillChange
             .merge(with: videoManager.objectWillChange, sidecarManager.objectWillChange)
@@ -357,11 +364,25 @@ extension AppDelegate: NSMenuDelegate {
 
     @objc func selectSidecarDevice(_ sender: NSMenuItem) {
         guard let device = sender.representedObject as? SidecarDevice else { return }
+        let over = device.link.map { " over \($0.rawValue)" } ?? ""
         SpeechSynthesizer.shared.announce(device.isConnected
-            ? "Disconnecting \(device.label)" : "Connecting to \(device.label)")
-        sidecarManager.toggle(device) { [weak self] error in
-            if let error { SpeechSynthesizer.shared.announce(error.localizedDescription) }
-            self?.rebuild()
+            ? "Disconnecting \(device.label)" : "Connecting to \(device.label)\(over)")
+        let toggle: () -> Void = { [weak self] in
+            self?.sidecarManager.toggle(device) { [weak self] error in
+                if let error {
+                    SpeechSynthesizer.shared.announce(error.localizedDescription)
+                    self?.videoManager.releaseBootstrapDisplay()
+                }
+                self?.rebuild()
+            }
+        }
+        if device.isConnected { toggle(); return }
+        // With no display at all, Sidecar has nothing to join: give it a stand-in first.
+        videoManager.ensureDisplayForSidecar(completion: toggle)
+        // Should the iPad never come up, don't leave the stand-in behind.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 90) { [weak self] in
+            guard let self, !self.videoManager.connectedDisplays.contains(where: \.isSidecar) else { return }
+            self.videoManager.releaseBootstrapDisplay()
         }
     }
 
