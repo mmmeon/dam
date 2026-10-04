@@ -11,6 +11,7 @@ import Network
 import os.log
 
 private let mirrorLog = Logger(subsystem: AppIdentity.bundleID, category: "Mirror")
+private let displayLog = Logger(subsystem: AppIdentity.bundleID, category: "Display")
 
 struct DisplayMode: Identifiable, Hashable {
     let id: String              // "WIDTHxHEIGHT@RATE" or "WIDTHxHEIGHT@RATE@2x" for HiDPI
@@ -135,6 +136,8 @@ final class VideoManager: ObservableObject {
     private var discoveredNames: Set<String> = []
     /// The pending re-read of the display list after a display configuration change.
     private var reconfigureWork: DispatchWorkItem?
+    /// Each display's mode when the screens went to sleep, put back after they wake.
+    private var modesBeforeSleep: [CGDirectDisplayID: Int32] = [:]
     /// Remembers the CGDirectDisplayID for each AirPlay device name the last time
     /// it appeared in NSScreen.screens (extend mode). Used to keep tracking the
     /// display when it becomes a mirror slave and drops out of NSScreen.
@@ -187,6 +190,7 @@ final class VideoManager: ObservableObject {
         browser.start(queue: .global(qos: .utility))
         self.browser = browser
         observeDisplayChanges()
+        observeSleepAndWake()
     }
 
     /// Re-check which discovered devices are currently connected.
@@ -205,6 +209,63 @@ final class VideoManager: ObservableObject {
             let manager = Unmanaged<VideoManager>.fromOpaque(userInfo).takeUnretainedValue()
             DispatchQueue.main.async { manager.scheduleMergeAfterReconfiguration() }
         }, context)
+    }
+
+    /// A display can come back from sleep at another resolution (its EDID re-read, or
+    /// WindowServer re-laying the displays out). Each display's mode is noted as the screens
+    /// sleep and put back after they wake: once soon, and once after a later re-layout.
+    private func observeSleepAndWake() {
+        let center = NSWorkspace.shared.notificationCenter
+        center.addObserver(forName: NSWorkspace.screensDidSleepNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.modesBeforeSleep = Dictionary(uniqueKeysWithValues: DisplayArrangement.onlineDisplayIDs().compactMap { id in
+                CGDisplayCopyDisplayMode(id).map { (id, $0.ioDisplayModeID) }
+            })
+        }
+        center.addObserver(forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            for delay in [3.0, 12.0] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { self?.restoreModesAfterWake() }
+            }
+        }
+    }
+
+    private func restoreModesAfterWake() {
+        guard !modesBeforeSleep.isEmpty, !virtualAnchorReassertInFlight else { return }
+        var current: [CGDirectDisplayID: Int32] = [:]
+        var available: [CGDirectDisplayID: [Int32: CGDisplayMode]] = [:]
+        var skip = Set(virtualAnchorCGIDs.values)
+        let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
+        for id in DisplayArrangement.onlineDisplayIDs() {
+            current[id] = CGDisplayCopyDisplayMode(id)?.ioDisplayModeID
+            let modes = CGDisplayCopyAllDisplayModes(id, options) as? [CGDisplayMode] ?? []
+            available[id] = Dictionary(modes.map { ($0.ioDisplayModeID, $0) }) { first, _ in first }
+            if CGDisplayMirrorsDisplay(id) != 0 { skip.insert(id) }
+        }
+        let restore = Self.modesToRestore(saved: modesBeforeSleep, current: current,
+                                          available: available.mapValues { Set($0.keys) }, skip: skip)
+        guard !restore.isEmpty else { return }
+        displayLog.debug("restoreModesAfterWake: \(restore)")
+        commitDisplayChange({ cfg in
+            for (id, modeID) in restore {
+                if let mode = available[id]?[modeID] { CGConfigureDisplayWithDisplayMode(cfg, id, mode, nil) }
+            }
+        }) { result in
+            if case .failure(let error) = result {
+                displayLog.error("restoreModesAfterWake: \(String(describing: error))")
+            }
+        }
+    }
+
+    /// The displays whose mode differs from the one `saved` for them, with the mode to put
+    /// back: only displays still online that still offer it, and none in `skip` (anchors,
+    /// whose sizes are kept elsewhere, and mirror slaves, which follow their master).
+    static func modesToRestore(saved: [CGDirectDisplayID: Int32],
+                               current: [CGDirectDisplayID: Int32],
+                               available: [CGDirectDisplayID: Set<Int32>],
+                               skip: Set<CGDirectDisplayID>) -> [CGDirectDisplayID: Int32] {
+        saved.filter { id, modeID in
+            guard !skip.contains(id), let now = current[id], now != modeID else { return false }
+            return available[id]?.contains(modeID) ?? false
+        }
     }
 
     /// Coalesces the burst of callbacks one change produces into a single merge, once the
@@ -273,12 +334,14 @@ final class VideoManager: ObservableObject {
         case notConnected
         case noOtherDisplay
         case configuration(CGError)
+        case timedOut
 
         var errorDescription: String? {
             switch self {
             case .notConnected:   return "The display is not connected"
             case .noOtherDisplay: return "No other display to mirror"
             case .configuration:  return "The display change failed"
+            case .timedOut:       return "The display change did not finish"
             }
         }
     }
@@ -565,18 +628,32 @@ final class VideoManager: ObservableObject {
     /// Runs `configure` in one display configuration transaction. The commit can block for
     /// seconds, so it runs off the main queue; once it is done and `settle` has passed, the
     /// display list is re-read and `completion` runs on the main queue with the result.
+    /// A commit WindowServer has not finished after `timeout` is reported as `.timedOut`
+    /// so callers waiting on it carry on; should it finish later, the list is re-read then.
     func commitDisplayChange(_ configure: (CGDisplayConfigRef) -> Void,
                                      settle: TimeInterval = 0.5,
+                                     timeout: TimeInterval = 10,
                                      completion: @escaping (Result<Void, MirrorError>) -> Void) {
         var config: CGDisplayConfigRef?
         let begin = CGBeginDisplayConfiguration(&config)
         guard begin == .success, let cfg = config else { return completion(.failure(.configuration(begin))) }
         configure(cfg)
+        // Touched on the main queue only: whichever of the commit and the timeout comes first
+        // reports, and the other one does not.
+        var reported = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + timeout) {
+            guard !reported else { return }
+            reported = true
+            mirrorLog.error("CompleteDisplayConfiguration still running after \(timeout) s")
+            completion(.failure(.timedOut))
+        }
         DispatchQueue.global(qos: .userInitiated).async {
             let err = CGCompleteDisplayConfiguration(cfg, .permanently)
             if err != .success { mirrorLog.error("CompleteDisplayConfiguration err=\(err.rawValue)") }
             DispatchQueue.main.asyncAfter(deadline: .now() + settle) { [weak self] in
                 self?.mergeDevices()
+                guard !reported else { return }
+                reported = true
                 completion(err == .success ? .success(()) : .failure(.configuration(err)))
             }
         }
@@ -738,26 +815,34 @@ final class VideoManager: ObservableObject {
         return [master] + slaves
     }
 
-    func setMode(_ mode: DisplayMode, for cgDisplayID: CGDirectDisplayID) {
-        guard cgDisplayID != 0 else { return }
+    /// Sets `mode` on the display. The commit runs off the main queue; `completion` runs on
+    /// the main queue once the change has settled.
+    func setMode(_ mode: DisplayMode, for cgDisplayID: CGDirectDisplayID,
+                 completion: ((Result<Void, MirrorError>) -> Void)? = nil) {
+        guard cgDisplayID != 0 else { completion?(.failure(.notConnected)); return }
         let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
         guard let modeList = CGDisplayCopyAllDisplayModes(cgDisplayID, options) as? [CGDisplayMode],
-              let cgMode = modeList.first(where: { $0.ioDisplayModeID == mode.ioModeID }) else { return }
-
-        var config: CGDisplayConfigRef?
-        guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else { return }
-
-        // If this display is currently a mirror slave, promote it to master first
-        // ("Optimize for this display") so the resolution change applies to it.
-        let masterID = CGDisplayMirrorsDisplay(cgDisplayID)
-        if masterID != CGDirectDisplayID(0) {
-            CGConfigureDisplayMirrorOfDisplay(cfg, masterID, cgDisplayID)
+              let cgMode = modeList.first(where: { $0.ioDisplayModeID == mode.ioModeID }) else {
+            completion?(.failure(.configuration(.illegalArgument)))
+            return
         }
 
-        CGConfigureDisplayWithDisplayMode(cfg, cgDisplayID, cgMode, nil)
         // Keep the choice should an anchor's layout be put back afterwards.
         for name in virtualAnchorArrangements.keys { virtualAnchorArrangements[name]?.modes[cgDisplayID] = cgMode }
-        CGCompleteDisplayConfiguration(cfg, .permanently)
+        commitDisplayChange({ cfg in
+            // If this display is currently a mirror slave, promote it to master first
+            // ("Optimize for this display") so the resolution change applies to it.
+            let masterID = CGDisplayMirrorsDisplay(cgDisplayID)
+            if masterID != CGDirectDisplayID(0) {
+                CGConfigureDisplayMirrorOfDisplay(cfg, masterID, cgDisplayID)
+            }
+            CGConfigureDisplayWithDisplayMode(cfg, cgDisplayID, cgMode, nil)
+        }, settle: 0.3) { result in
+            if case .failure(let error) = result {
+                mirrorLog.error("setMode \(cgDisplayID): \(String(describing: error))")
+            }
+            completion?(result)
+        }
     }
 
     // MARK: - Private
