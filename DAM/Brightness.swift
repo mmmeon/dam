@@ -80,57 +80,34 @@ private final class AVServiceTransport: DDCTransport {
 
     private let service: CFTypeRef
 
-    /// The transport for the external display with `cgID`, matched by the vendor, product
-    /// and serial number its framebuffer reports.
+    /// The transport for the external display with `cgID`: the AV service of the one
+    /// framebuffer that describes it best.
     init?(display cgID: CGDirectDisplayID) {
         guard let create = Self.create else { return nil }
-        let vendor = CGDisplayVendorNumber(cgID), product = CGDisplayModelNumber(cgID)
-        let serial = CGDisplaySerialNumber(cgID)
-
-        var iterator: io_iterator_t = 0
-        guard IORegistryEntryCreateIterator(IORegistryGetRootEntry(kIOMainPortDefault), kIOServicePlane,
-                                            IOOptionBits(kIORegistryIterateRecursively), &iterator) == KERN_SUCCESS
+        let framebuffers = DisplayRegistry.framebuffersWithAVServices().filter { $0.avService != 0 }
+        guard let index = DisplayRegistry.uniqueMatch(vendor: CGDisplayVendorNumber(cgID),
+                                                      product: CGDisplayModelNumber(cgID),
+                                                      serial: CGDisplaySerialNumber(cgID),
+                                                      in: framebuffers.map(\.attributes)),
+              let service = create(kCFAllocatorDefault, framebuffers[index].avService)?.takeRetainedValue()
         else { return nil }
-        defer { IOObjectRelease(iterator) }
-
-        // Each framebuffer comes before its AV service in the registry, so the service
-        // belongs to the framebuffer seen last.
-        var framebufferMatches = false
-        var found: CFTypeRef?
-        while found == nil {
-            let entry = IOIteratorNext(iterator)
-            guard entry != 0 else { break }
-            defer { IOObjectRelease(entry) }
-            var nameBuffer = [CChar](repeating: 0, count: 128)
-            IORegistryEntryGetName(entry, &nameBuffer)
-            let name = String(cString: nameBuffer)
-            if name == "AppleCLCD2" || name == "IOMobileFramebufferShim" {
-                let attributes = IORegistryEntryCreateCFProperty(entry, "DisplayAttributes" as CFString,
-                                                                 kCFAllocatorDefault, 0)?.takeRetainedValue()
-                let productAttributes = (attributes as? [String: Any])?["ProductAttributes"] as? [String: Any]
-                func u32(_ key: String) -> UInt32? { (productAttributes?[key] as? NSNumber)?.uint32Value }
-                framebufferMatches = u32("LegacyManufacturerID") == vendor && u32("ProductID") == product
-                    && (serial == 0 || u32("SerialNumber").map { $0 == 0 || $0 == serial } ?? true)
-            } else if name == "DCPAVServiceProxy", framebufferMatches {
-                let location = IORegistryEntryCreateCFProperty(entry, "Location" as CFString,
-                                                               kCFAllocatorDefault, 0)?.takeRetainedValue() as? String
-                if location == "External" { found = create(kCFAllocatorDefault, entry)?.takeRetainedValue() }
-            }
-        }
-        guard let found else { return nil }
-        service = found
+        self.service = service
     }
 
     func transact(_ packet: [UInt8], replyLength: Int) -> [UInt8]? {
         guard let read = Self.read, let write = Self.write else { return nil }
         // The service takes the host sub-address as an argument, not as part of the packet.
+        // Some displays miss a packet sent once, so it goes twice, as MonitorControl does.
         var body = Array(packet.dropFirst())
-        let sent = body.withUnsafeMutableBytes {
-            write(service, UInt32(DDC.displayAddress >> 1), UInt32(DDC.hostAddress), $0.baseAddress!, UInt32($0.count))
+        for attempt in 0..<2 {
+            if attempt > 0 { usleep(10_000) }
+            let sent = body.withUnsafeMutableBytes {
+                write(service, UInt32(DDC.displayAddress >> 1), UInt32(DDC.hostAddress), $0.baseAddress!, UInt32($0.count))
+            }
+            guard sent == kIOReturnSuccess else { return nil }
         }
-        guard sent == kIOReturnSuccess else { return nil }
         guard replyLength > 0 else { return [] }
-        usleep(40_000)  // the display needs time to prepare its reply
+        usleep(50_000)  // the display needs time to prepare its reply
         var reply = [UInt8](repeating: 0, count: replyLength)
         let received = reply.withUnsafeMutableBytes {
             read(service, UInt32(DDC.displayAddress >> 1), UInt32(DDC.hostAddress), $0.baseAddress!, UInt32($0.count))
@@ -236,7 +213,7 @@ private final class DDCBrightness: BrightnessControl {
 
     func read() -> Double? {
         // Displays drop the odd request, so a failed read is tried again before giving up.
-        for attempt in 0..<3 {
+        for attempt in 0..<4 {
             if attempt > 0 { usleep(50_000) }
             if let reply = transport.transact(DDC.getVCP(DDC.brightness), replyLength: 11),
                let value = DDC.parseVCPReply(reply, code: DDC.brightness) {

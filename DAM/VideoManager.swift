@@ -868,7 +868,8 @@ final class VideoManager: ObservableObject {
         var onlineIDs = [CGDirectDisplayID](repeating: 0, count: Int(onlineCount))
         CGGetOnlineDisplayList(onlineCount, &onlineIDs, &onlineCount)
 
-        // Build a full id → name map, falling back to IOKit for external displays not in NSScreen.
+        // Build a full id → name map, falling back to IOKit for external displays not in NSScreen:
+        // their IODisplayConnect service on Intel, their framebuffer on Apple silicon.
         // Built-in panels and AirPlay virtual displays have no IODisplayConnect entry — they
         // are already resolved via NSScreen (built-in) or left absent (AirPlay virtual).
         var idToName: [CGDirectDisplayID: String] = idToScreenName
@@ -882,7 +883,7 @@ final class VideoManager: ObservableObject {
             }
             if let name = ioKitNameCache[cgID] {
                 idToName[cgID] = name
-            } else if let name = displayNameFromIOKit(cgID) {
+            } else if let name = displayNameFromIOKit(cgID) ?? DisplayRegistry.productName(for: cgID) {
                 ioKitNameCache[cgID] = name
                 idToName[cgID] = name
             }
