@@ -2,7 +2,8 @@ import XCTest
 import CoreGraphics
 @testable import DAM
 
-/// DDC/CI packets for display brightness, and which modes are put back after a wake.
+/// DDC/CI packets for display brightness, matching displays to their Apple silicon
+/// framebuffers, and which modes are put back after a wake.
 final class BrightnessTests: XCTestCase {
 
     // MARK: - DDC packets
@@ -78,5 +79,49 @@ final class BrightnessTests: XCTestCase {
         let restore = VideoManager.modesToRestore(saved: [1: 10, 2: 20], current: [1: 11, 2: 21],
                                                   available: [1: [10, 11], 2: [20, 21]], skip: [1])
         XCTAssertEqual(restore, [2: 20])
+    }
+
+    // MARK: - DisplayRegistry matching
+
+    private func attributes(_ vendor: UInt32, _ product: UInt32, serial: UInt32? = nil,
+                            name: String? = nil) -> DisplayRegistry.Attributes {
+        DisplayRegistry.Attributes(vendor: vendor, product: product, serial: serial, name: name)
+    }
+
+    func testMatches_vendorAndProductMustAgree() {
+        let candidates = [attributes(0x30AE, 1), attributes(0x10AC, 2), attributes(0x30AE, 2)]
+        XCTAssertEqual(DisplayRegistry.matches(vendor: 0x30AE, product: 2, serial: 0, in: candidates), [2])
+    }
+
+    func testMatches_agreeingSerialRanksFirst() {
+        let candidates = [attributes(1, 2, serial: 7), attributes(1, 2), attributes(1, 2, serial: 9)]
+        XCTAssertEqual(DisplayRegistry.matches(vendor: 1, product: 2, serial: 9, in: candidates), [2, 1, 0])
+    }
+
+    func testUniqueMatch_differentlyEncodedSerial_stillFits() {
+        XCTAssertEqual(DisplayRegistry.uniqueMatch(vendor: 1, product: 2, serial: 1234,
+                                                   in: [attributes(1, 2, serial: 0x31323334)]), 0)
+    }
+
+    func testUniqueMatch_identicalMonitorsWithoutSerials_isNil() {
+        XCTAssertNil(DisplayRegistry.uniqueMatch(vendor: 1, product: 2, serial: 0,
+                                                 in: [attributes(1, 2), attributes(1, 2)]))
+    }
+
+    func testUniqueMatch_identicalMonitorsToldApartBySerial() {
+        let candidates = [attributes(1, 2, serial: 5), attributes(1, 2, serial: 6)]
+        XCTAssertEqual(DisplayRegistry.uniqueMatch(vendor: 1, product: 2, serial: 6, in: candidates), 1)
+    }
+
+    func testUniqueMatch_none_isNil() {
+        XCTAssertNil(DisplayRegistry.uniqueMatch(vendor: 1, product: 2, serial: 0, in: [attributes(3, 4)]))
+    }
+
+    func testProductName_onIntel_isNil() throws {
+        #if arch(arm64)
+        throw XCTSkip("Apple silicon has display framebuffers to read")
+        #else
+        XCTAssertNil(DisplayRegistry.productName(for: CGMainDisplayID()))
+        #endif
     }
 }
