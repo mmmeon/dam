@@ -211,6 +211,7 @@ final class SettingsWindowController: NSWindowController {
                          help: "Speaks the target device name when connecting to AirPlay, " +
                                "picking an audio output, and picking where to mirror.",
                          action: { VisibilityPreferences.speechEnabled = $0 }),
+                speechOutputRow(),
             ]),
             ("Pickers:", [
                 checkbox(title: "Open on the current choice",
@@ -307,7 +308,7 @@ final class SettingsWindowController: NSWindowController {
     private func buildVirtualTab() -> NSView {
         let rates = buildRefreshRateGrid()
         rates.toolTip = "Rates the virtual display offers for each kind of display."
-        let airPlayDefault = buildDefaultResolutionPopup(for: .airPlay)
+        let airPlayDefault = buildClosurePopup(for: .airPlay)
         airPlayDefault.toolTip = "When an AirPlay display connects, drive it through the virtual " +
                                  "display at this resolution. “Display's own” leaves it as it is."
         let sidecarBacking = checkbox(title: "Back a connected iPad with a virtual display",
@@ -500,8 +501,8 @@ final class SettingsWindowController: NSWindowController {
     }
 
     /// Popup for choosing the default virtual resolution for a given context.
-    private func buildDefaultResolutionPopup(for context: VisibilityPreferences.DisplayContext) -> NSView {
-        let popup = DefaultResolutionPopup(onSelect: { [weak self] key in
+    private func buildClosurePopup(for context: VisibilityPreferences.DisplayContext) -> NSView {
+        let popup = ClosurePopup(onSelect: { [weak self] key in
             VisibilityPreferences.setDefaultVirtualResolution(key, for: context)
             self?.onRebuild?()
         })
@@ -569,6 +570,44 @@ final class SettingsWindowController: NSWindowController {
         row.spacing = 4
         row.toolTip = "How long a picker waits after the last hotkey press before it picks " +
                       "the tinted choice."
+        return row
+    }
+
+    /// "Speak through [Sound Output]": the audio device spoken feedback plays on.
+    private func speechOutputRow() -> NSView {
+        let devices = audioManager.allOutputDevices.compactMap { device in
+            AudioManager.uid(of: device.id).map { (uid: $0, device: device) }
+        }
+        let popup = ClosurePopup(onSelect: { uid in
+            VisibilityPreferences.speechOutputUID  = uid
+            VisibilityPreferences.speechOutputName = devices.first { $0.uid == uid }?.device.name
+        })
+        popup.controlSize = .small
+        popup.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        popup.menu?.addItem(NSMenuItem(title: "Sound Output", action: nil, keyEquivalent: ""))
+        popup.menu?.addItem(.separator())
+        for entry in devices {
+            let item = NSMenuItem(title: entry.device.label, action: nil, keyEquivalent: "")
+            item.representedObject = entry.uid
+            popup.menu?.addItem(item)
+        }
+        if let stored = VisibilityPreferences.speechOutputUID {
+            if let index = devices.firstIndex(where: { $0.uid == stored }) {
+                popup.selectItem(at: index + 2)
+            } else {
+                // Keep a disconnected choice selectable rather than silently dropping it.
+                let name = VisibilityPreferences.speechOutputName ?? "Unknown device"
+                let item = NSMenuItem(title: "\(name) (not connected)", action: nil, keyEquivalent: "")
+                item.representedObject = stored
+                popup.menu?.addItem(item)
+                popup.select(item)
+            }
+        }
+        let row = NSStackView(views: [smallLabel("Speak through"), popup])
+        row.orientation = .horizontal
+        row.spacing = 4
+        row.toolTip = "The audio device spoken feedback plays on. Sound Output follows the " +
+                      "current output; a chosen device that isn't connected falls back to it."
         return row
     }
 
@@ -676,11 +715,11 @@ private final class FlippedClipView: NSClipView {
     override var isFlipped: Bool { true }
 }
 
-// MARK: - DefaultResolutionPopup
+// MARK: - ClosurePopup
 
 /// NSPopUpButton subclass that fires a closure when the selection changes, carrying
-/// the `representedObject` of the chosen item (a `String?` resolution key or nil).
-private final class DefaultResolutionPopup: NSPopUpButton {
+/// the `representedObject` of the chosen item as a `String?` (e.g. a resolution key or device UID).
+private final class ClosurePopup: NSPopUpButton {
     private let handler: (String?) -> Void
 
     init(onSelect: @escaping (String?) -> Void) {
