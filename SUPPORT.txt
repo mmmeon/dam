@@ -6,14 +6,15 @@ Devices on which each feature has been confirmed to work.
 
 MACS
 
-Model            macOS         Audio  AirPlay  Sidecar  Resolution  Mirror  Arrange  Hotkeys  Touch Bar  Announce
----------------  ------------  -----  -------  -------  ----------  ------  -------  -------  ---------  --------
-MacBookPro14,2   13 Ventura      x       x        x         x         x        x        x         x          x
+Model            macOS         Audio  AirPlay  Sidecar  Resolution  Brightness  Mirror  Arrange  Hotkeys  Touch Bar  Announce
+---------------  ------------  -----  -------  -------  ----------  ----------  ------  -------  -------  ---------  --------
+MacBookPro14,2   13 Ventura      x       x        x         x                     x        x        x         x          x
 
   Audio       Switch audio output
   AirPlay     Connect AirPlay displays
   Sidecar     Connect Sidecar iPads
   Resolution  Resolution and refresh rate, including virtual ones
+  Brightness  Brightness: DDC, the built-in panel, or dimming
   Mirror      Mirror, extend, optimize a mirror set, main display, position
   Arrange     Arrange displays by drag and drop
   Hotkeys     Global hotkeys
