@@ -13,8 +13,19 @@ final class VisibilityPreferencesTests: XCTestCase {
     private let startKey     = "\(AppIdentity.shortID).behaviour.pickerStartsOnCurrent"
     private let delayKey     = "\(AppIdentity.shortID).behaviour.pickDelay"
 
+    // The host app also writes preferences (seen audio devices, for one), so start each
+    // test from a clean slate as well as cleaning up after it.
+    override func setUp() {
+        super.setUp()
+        clearPreferences()
+    }
+
     override func tearDown() {
         super.tearDown()
+        clearPreferences()
+    }
+
+    private func clearPreferences() {
         [audioKey, audioSeenKey, airPlayKey, displayKey, autoConnKey, touchBarKey, screenKey,
          startKey, delayKey].forEach {
             UserDefaults.dam.removeObject(forKey: $0)

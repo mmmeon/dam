@@ -7,8 +7,19 @@ final class VideoManagerFilterTests: XCTestCase {
     private let airPlayKey      = "\(AppIdentity.shortID).hidden.airplay"
     private let displayKey      = "\(AppIdentity.shortID).hidden.displays"
 
+    // The host app also writes preferences (seen audio devices, for one), so start each
+    // test from a clean slate as well as cleaning up after it.
+    override func setUp() {
+        super.setUp()
+        clearPreferences()
+    }
+
     override func tearDown() {
         super.tearDown()
+        clearPreferences()
+    }
+
+    private func clearPreferences() {
         [airPlayKey, displayKey].forEach { UserDefaults.dam.removeObject(forKey: $0) }
     }
 
