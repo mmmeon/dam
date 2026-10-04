@@ -124,4 +124,24 @@ final class BrightnessTests: XCTestCase {
         XCTAssertNil(DisplayRegistry.productName(for: CGMainDisplayID()))
         #endif
     }
+
+    // MARK: - GammaTables
+
+    private let tables = GammaTables(red: [0, 0.5, 1], green: [0, 0.4, 0.9], blue: [0.1, 0.5, 1])
+
+    func testGammaTables_scaled() {
+        let half = tables.scaled(by: 0.5)
+        XCTAssertEqual(half.red, [0, 0.25, 0.5])
+        XCTAssertEqual(half.green, [0, 0.2, 0.45])
+        XCTAssertEqual(half.blue, [0.05, 0.25, 0.5])
+    }
+
+    func testGammaTables_readBackRounding_isClose() {
+        let readBack = GammaTables(red: [0, 0.502, 0.998], green: [0, 0.4, 0.9], blue: [0.1, 0.5, 1])
+        XCTAssertTrue(readBack.isClose(to: tables))
+    }
+
+    func testGammaTables_reset_isNotClose() {
+        XCTAssertFalse(tables.isClose(to: tables.scaled(by: 0.9)))
+    }
 }
