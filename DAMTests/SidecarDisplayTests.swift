@@ -130,9 +130,9 @@ final class SidecarDisplayTests: XCTestCase {
 
     func testSidecarBackingIsOnByDefault() {
         let key = "\(AppIdentity.shortID).sidecar.virtualDisplayBacking"
-        let saved = UserDefaults.standard.object(forKey: key)
-        defer { UserDefaults.standard.set(saved, forKey: key) }
-        UserDefaults.standard.removeObject(forKey: key)
+        let saved = UserDefaults.dam.object(forKey: key)
+        defer { UserDefaults.dam.set(saved, forKey: key) }
+        UserDefaults.dam.removeObject(forKey: key)
         XCTAssertTrue(VisibilityPreferences.backsSidecarWithVirtualDisplay)
         VisibilityPreferences.backsSidecarWithVirtualDisplay = false
         XCTAssertFalse(VisibilityPreferences.backsSidecarWithVirtualDisplay)

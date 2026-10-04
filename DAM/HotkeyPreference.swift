@@ -76,14 +76,14 @@ struct HotkeyPreference: Codable, Equatable {
     }
 
     private static func load(_ key: String, fallback: HotkeyPreference) -> HotkeyPreference {
-        guard let data = UserDefaults.standard.data(forKey: key),
+        guard let data = UserDefaults.dam.data(forKey: key),
               let pref = try? JSONDecoder().decode(HotkeyPreference.self, from: data)
         else { return fallback }
         return pref
     }
 
     private static func store(_ pref: HotkeyPreference, _ key: String) {
-        UserDefaults.standard.set(try? JSONEncoder().encode(pref), forKey: key)
+        UserDefaults.dam.set(try? JSONEncoder().encode(pref), forKey: key)
     }
 
     // MARK: - Display

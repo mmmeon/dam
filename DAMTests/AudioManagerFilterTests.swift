@@ -11,7 +11,7 @@ final class AudioManagerFilterTests: XCTestCase {
 
     override func tearDown() {
         super.tearDown()
-        [audioKey, audioSeenKey, speechUIDKey, speechNameKey].forEach { UserDefaults.standard.removeObject(forKey: $0) }
+        [audioKey, audioSeenKey, speechUIDKey, speechNameKey].forEach { UserDefaults.dam.removeObject(forKey: $0) }
     }
 
     // Convenience factory — AudioDeviceID is UInt32; use arbitrary values for tests.
