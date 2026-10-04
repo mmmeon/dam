@@ -1,0 +1,66 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Stamp Commit sets CFBundleVersion from the commit count
+
+      - name: Test
+        run: |
+          xcodebuild -project DAM.xcodeproj -scheme DAM \
+            -destination 'platform=macOS' \
+            -derivedDataPath build/dd \
+            CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=YES CODE_SIGNING_ALLOWED=YES \
+            DEVELOPMENT_TEAM= \
+            test
+
+      - name: Build (Release, ad-hoc signed, arm64 + x86_64)
+        run: |
+          xcodebuild -project DAM.xcodeproj -scheme DAM \
+            -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -derivedDataPath build/dd \
+            ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=YES CODE_SIGNING_ALLOWED=YES \
+            DEVELOPMENT_TEAM= \
+            MARKETING_VERSION="${GITHUB_REF_NAME#v}" \
+            build
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          ditto -c -k --keepParent build/dd/Build/Products/Release/DAM.app \
+            "dist/DAM-${GITHUB_REF_NAME}.zip"
+
+      - name: Sign with SSH key
+        env:
+          SSH_SIGNING_KEY: ${{ secrets.SSH_SIGNING_KEY }}
+        run: |
+          key="$RUNNER_TEMP/signing_key"
+          printf '%s\n' "$SSH_SIGNING_KEY" > "$key"
+          chmod 600 "$key"
+          zip="dist/DAM-${GITHUB_REF_NAME}.zip"
+          ssh-keygen -Y sign -f "$key" -n file "$zip"
+          rm -f "$key"
+          # Fail if the secret doesn't match the public key in the repo.
+          ssh-keygen -Y verify -f allowed_signers -I dam-release -n file \
+            -s "$zip.sig" < "$zip"
+          (cd dist && shasum -a 256 *.zip > SHA256SUMS)
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* allowed_signers \
+            --title "DAM ${GITHUB_REF_NAME}" \
+            --generate-notes

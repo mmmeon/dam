@@ -23,3 +23,8 @@ CONTROL
 
 SETTINGS
   * Display nicknames, hidden devices, launch at login
+
+VERIFYING A RELEASE
+  Releases are signed with the SSH key in allowed_signers:
+    ssh-keygen -Y verify -f allowed_signers -I dam-release -n file \
+      -s DAM-vX.Y.zip.sig < DAM-vX.Y.zip
