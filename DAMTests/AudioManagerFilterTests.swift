@@ -6,10 +6,12 @@ final class AudioManagerFilterTests: XCTestCase {
 
     private let audioKey     = "\(AppIdentity.shortID).hidden.audio"
     private let audioSeenKey = "\(AppIdentity.shortID).seen.audio"
+    private let speechUIDKey  = "\(AppIdentity.shortID).behaviour.speechOutputUID"
+    private let speechNameKey = "\(AppIdentity.shortID).behaviour.speechOutputName"
 
     override func tearDown() {
         super.tearDown()
-        [audioKey, audioSeenKey].forEach { UserDefaults.standard.removeObject(forKey: $0) }
+        [audioKey, audioSeenKey, speechUIDKey, speechNameKey].forEach { UserDefaults.standard.removeObject(forKey: $0) }
     }
 
     // Convenience factory — AudioDeviceID is UInt32; use arbitrary values for tests.
@@ -160,5 +162,53 @@ final class AudioManagerFilterTests: XCTestCase {
 
     func testDeviceAfter_noDevices_returnsNil() {
         XCTAssertNil(AudioManager.device(after: 1, in: []))
+    }
+
+    // MARK: - AudioManager.uid(of:) / deviceID(forUID:)
+    // These read live CoreAudio state (tests run inside the app process).
+
+    func testUID_roundTripsForEveryOutputDevice() throws {
+        let manager = AudioManager()
+        manager.refresh()
+        try XCTSkipIf(manager.allOutputDevices.isEmpty, "no audio output devices")
+        for device in manager.allOutputDevices {
+            let uid = try XCTUnwrap(AudioManager.uid(of: device.id), "\(device.name) has no UID")
+            XCTAssertEqual(AudioManager.deviceID(forUID: uid), device.id, device.name)
+        }
+    }
+
+    func testUID_unknownDevice_isNil() {
+        XCTAssertNil(AudioManager.uid(of: kAudioObjectUnknown))
+    }
+
+    func testDeviceIDForUID_unknownUID_isNil() {
+        XCTAssertNil(AudioManager.deviceID(forUID: "no-such-device-uid"))
+    }
+
+    func testDeviceIDForUID_emptyUID_isNil() {
+        XCTAssertNil(AudioManager.deviceID(forUID: ""))
+    }
+
+    // MARK: - VisibilityPreferences.speechOutputUID / speechOutputName
+
+    func testSpeechOutput_defaultsToSoundOutput() {
+        XCTAssertNil(VisibilityPreferences.speechOutputUID)
+        XCTAssertNil(VisibilityPreferences.speechOutputName)
+    }
+
+    func testSpeechOutput_roundTrip() {
+        VisibilityPreferences.speechOutputUID  = "BuiltInSpeakerDevice"
+        VisibilityPreferences.speechOutputName = "MacBook Pro Speakers"
+        XCTAssertEqual(VisibilityPreferences.speechOutputUID, "BuiltInSpeakerDevice")
+        XCTAssertEqual(VisibilityPreferences.speechOutputName, "MacBook Pro Speakers")
+    }
+
+    func testSpeechOutput_settingNil_returnsToSoundOutput() {
+        VisibilityPreferences.speechOutputUID  = "BuiltInSpeakerDevice"
+        VisibilityPreferences.speechOutputName = "MacBook Pro Speakers"
+        VisibilityPreferences.speechOutputUID  = nil
+        VisibilityPreferences.speechOutputName = nil
+        XCTAssertNil(VisibilityPreferences.speechOutputUID)
+        XCTAssertNil(VisibilityPreferences.speechOutputName)
     }
 }
