@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let audioManager = AudioManager()
     private let videoManager = VideoManager()
     private let sidecarManager = SidecarManager()
+    private let brightnessManager = BrightnessManager()
     private var sidecarAutoConnector: SidecarAutoConnector?
     private var controlStrip: ControlStripPresenter!
     private var hotkey: GlobalHotkey!
@@ -122,7 +123,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Rebuild menu and Control Strip whenever a manager publishes a change
         audioManager.objectWillChange
-            .merge(with: videoManager.objectWillChange, sidecarManager.objectWillChange)
+            .merge(with: videoManager.objectWillChange, sidecarManager.objectWillChange,
+                   brightnessManager.objectWillChange)
             .debounce(for: .milliseconds(200), scheduler: RunLoop.main)
             .sink { [weak self] in self?.rebuild() }
             .store(in: &cancellables)
@@ -148,10 +150,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Replaces `menu`'s items with ones built from the managers' current state.
     private func fill(_ menu: NSMenu) {
+        // Brightness is read in the background; a display found adjustable rebuilds the menu.
+        brightnessManager.refresh(videoManager.allConnectedDisplays)
         let fresh = buildStatusMenu(
             audio: audioManager,
             video: videoManager,
             sidecar: sidecarManager,
+            brightness: brightnessManager,
             onRefresh: { [weak self] in self?.refreshAll(nil) }
         )
         menu.removeAllItems()
@@ -512,18 +517,10 @@ extension AppDelegate: NSMenuDelegate {
         if let ap = matchingDisplay, videoManager.hasVirtualAnchor(for: ap.name) {
             videoManager.disableVirtualAnchor(for: ap)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
-                self?.videoManager.setMode(sel.mode, for: sel.cgDisplayID)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    self?.rebuild()
-                }
+                self?.videoManager.setMode(sel.mode, for: sel.cgDisplayID) { _ in self?.rebuild() }
             }
         } else {
-            videoManager.setMode(sel.mode, for: sel.cgDisplayID)
-            // Allow the display reconfiguration to settle before querying the new
-            // current mode — CGDisplayCopyDisplayMode can lag the config commit.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                self?.rebuild()
-            }
+            videoManager.setMode(sel.mode, for: sel.cgDisplayID) { [weak self] _ in self?.rebuild() }
         }
     }
 

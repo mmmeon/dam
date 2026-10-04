@@ -25,6 +25,7 @@
 		AA300B002F8D607C0090E796 /* VideoManagerFilterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA300A002F8D607C0090E796 /* VideoManagerFilterTests.swift */; };
 		AA600B002F8D607C0090E796 /* ScreenMirroringPanelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA600A002F8D607C0090E796 /* ScreenMirroringPanelTests.swift */; };
 		AA700B002F8D607C0090E796 /* MirrorPlanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA700A002F8D607C0090E796 /* MirrorPlanTests.swift */; };
+		DD700B002F8D607C0090E796 /* BrightnessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD700A002F8D607C0090E796 /* BrightnessTests.swift */; };
 		AA800B002F8D607C0090E796 /* MirrorPickerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA800A002F8D607C0090E796 /* MirrorPickerTests.swift */; };
 		AA900B002F8D607C0090E796 /* MainDisplayPickerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA900A002F8D607C0090E796 /* MainDisplayPickerTests.swift */; };
 		AA400B002F8D607C0090E796 /* HotkeyPreferenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA400A002F8D607C0090E796 /* HotkeyPreferenceTests.swift */; };
@@ -42,6 +43,7 @@
 		CC000C302F8D60780090E796 /* ScreenMirroringPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B302F8D60780090E796 /* ScreenMirroringPanel.swift */; };
 		CC000C312F8D60780090E796 /* SidecarManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B312F8D60780090E796 /* SidecarManager.swift */; };
 		CC000C012F8D60780090E796 /* HUD.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B012F8D60780090E796 /* HUD.swift */; };
+		BB510C012F8D60780090E796 /* Brightness.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB510B012F8D60780090E796 /* Brightness.swift */; };
 		DD000C012F8D60780090E796 /* DisplayLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD000B012F8D60780090E796 /* DisplayLayout.swift */; };
 		DD000C022F8D60780090E796 /* VideoManager+Arrangement.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD000B022F8D60780090E796 /* VideoManager+Arrangement.swift */; };
 		DD000C032F8D60780090E796 /* ArrangeDisplaysWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD000B032F8D60780090E796 /* ArrangeDisplaysWindowController.swift */; };
@@ -84,6 +86,7 @@
 		AA300A002F8D607C0090E796 /* VideoManagerFilterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoManagerFilterTests.swift; sourceTree = "<group>"; };
 		AA600A002F8D607C0090E796 /* ScreenMirroringPanelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenMirroringPanelTests.swift; sourceTree = "<group>"; };
 		AA700A002F8D607C0090E796 /* MirrorPlanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirrorPlanTests.swift; sourceTree = "<group>"; };
+		DD700A002F8D607C0090E796 /* BrightnessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrightnessTests.swift; sourceTree = "<group>"; };
 		AA800A002F8D607C0090E796 /* MirrorPickerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirrorPickerTests.swift; sourceTree = "<group>"; };
 		AA900A002F8D607C0090E796 /* MainDisplayPickerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainDisplayPickerTests.swift; sourceTree = "<group>"; };
 		AA400A002F8D607C0090E796 /* HotkeyPreferenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyPreferenceTests.swift; sourceTree = "<group>"; };
@@ -101,6 +104,7 @@
 		CC000B302F8D60780090E796 /* ScreenMirroringPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenMirroringPanel.swift; sourceTree = "<group>"; };
 		CC000B312F8D60780090E796 /* SidecarManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarManager.swift; sourceTree = "<group>"; };
 		CC000B012F8D60780090E796 /* HUD.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HUD.swift; sourceTree = "<group>"; };
+		BB510B012F8D60780090E796 /* Brightness.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Brightness.swift; sourceTree = "<group>"; };
 		DD000B012F8D60780090E796 /* DisplayLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DisplayLayout.swift"; sourceTree = "<group>"; };
 		DD000B022F8D60780090E796 /* VideoManager+Arrangement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "VideoManager+Arrangement.swift"; sourceTree = "<group>"; };
 		DD000B032F8D60780090E796 /* ArrangeDisplaysWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ArrangeDisplaysWindowController.swift"; sourceTree = "<group>"; };
@@ -174,6 +178,7 @@
 				CC000B302F8D60780090E796 /* ScreenMirroringPanel.swift */,
 				CC000B312F8D60780090E796 /* SidecarManager.swift */,
 				CC000B012F8D60780090E796 /* HUD.swift */,
+				BB510B012F8D60780090E796 /* Brightness.swift */,
 				8BFD3BE22F8D607B0090E796 /* Assets.xcassets */,
 				8BFD3BE72F8D607B0090E796 /* DAM.entitlements */,
 				8BFD3BE42F8D607B0090E796 /* Preview Content */,
@@ -201,6 +206,7 @@
 				AA300A002F8D607C0090E796 /* VideoManagerFilterTests.swift */,
 				AA600A002F8D607C0090E796 /* ScreenMirroringPanelTests.swift */,
 				AA700A002F8D607C0090E796 /* MirrorPlanTests.swift */,
+				DD700A002F8D607C0090E796 /* BrightnessTests.swift */,
 				AA800A002F8D607C0090E796 /* MirrorPickerTests.swift */,
 				AA900A002F8D607C0090E796 /* MainDisplayPickerTests.swift */,
 				AA400A002F8D607C0090E796 /* HotkeyPreferenceTests.swift */,
@@ -356,6 +362,7 @@
 				CC000C302F8D60780090E796 /* ScreenMirroringPanel.swift in Sources */,
 				CC000C312F8D60780090E796 /* SidecarManager.swift in Sources */,
 				CC000C012F8D60780090E796 /* HUD.swift in Sources */,
+				BB510C012F8D60780090E796 /* Brightness.swift in Sources */,
 				DD000C012F8D60780090E796 /* DisplayLayout.swift in Sources */,
 				DD000C022F8D60780090E796 /* VideoManager+Arrangement.swift in Sources */,
 				DD000C032F8D60780090E796 /* ArrangeDisplaysWindowController.swift in Sources */,
@@ -372,6 +379,7 @@
 				AA300B002F8D607C0090E796 /* VideoManagerFilterTests.swift in Sources */,
 				AA600B002F8D607C0090E796 /* ScreenMirroringPanelTests.swift in Sources */,
 				AA700B002F8D607C0090E796 /* MirrorPlanTests.swift in Sources */,
+				DD700B002F8D607C0090E796 /* BrightnessTests.swift in Sources */,
 				AA800B002F8D607C0090E796 /* MirrorPickerTests.swift in Sources */,
 				AA900B002F8D607C0090E796 /* MainDisplayPickerTests.swift in Sources */,
 				AA400B002F8D607C0090E796 /* HotkeyPreferenceTests.swift in Sources */,

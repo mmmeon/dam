@@ -10,6 +10,7 @@ CONNECT
 
 DISPLAYS
   * Resolution and refresh rate, including virtual ones
+  * Brightness (DDC on external displays)
   * Mirror, extend, optimize a mirror set
   * Main display and position
   * Arrange by drag and drop
