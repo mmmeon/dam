@@ -1,8 +1,9 @@
 //
 //  Brightness.swift
 //
-//  Display brightness: DDC/CI over the display's I2C bus for external displays, and the
-//  private DisplayServices framework for the Mac's own panel.
+//  Display brightness: DDC/CI over the display's I2C bus for external displays, the
+//  private DisplayServices framework for the Mac's own panel, and gamma dimming for
+//  displays that take neither.
 //
 
 import AppKit
@@ -262,6 +263,91 @@ private final class BuiltInBrightness: BrightnessControl {
     }
 }
 
+/// A display's gamma tables, one value from 0 to 1 per step of each channel.
+struct GammaTables: Equatable {
+    var red: [CGGammaValue], green: [CGGammaValue], blue: [CGGammaValue]
+
+    /// The tables display `cgID` uses now.
+    static func current(of cgID: CGDirectDisplayID) -> GammaTables? {
+        let capacity = CGDisplayGammaTableCapacity(cgID)
+        guard capacity > 0 else { return nil }
+        var red = [CGGammaValue](repeating: 0, count: Int(capacity))
+        var green = red, blue = red
+        var count: UInt32 = 0
+        guard CGGetDisplayTransferByTable(cgID, capacity, &red, &green, &blue, &count) == .success,
+              count > 0 else { return nil }
+        let n = Int(count)
+        return GammaTables(red: Array(red.prefix(n)), green: Array(green.prefix(n)), blue: Array(blue.prefix(n)))
+    }
+
+    func apply(to cgID: CGDirectDisplayID) -> Bool {
+        CGSetDisplayTransferByTable(cgID, UInt32(red.count), red, green, blue) == .success
+    }
+
+    func scaled(by factor: Double) -> GammaTables {
+        let f = CGGammaValue(factor)
+        return GammaTables(red: red.map { $0 * f }, green: green.map { $0 * f }, blue: blue.map { $0 * f })
+    }
+
+    /// Whether `other` is these tables, give or take the rounding the hardware does when
+    /// they are read back.
+    func isClose(to other: GammaTables) -> Bool {
+        guard red.count == other.red.count else { return false }
+        let pairs = zip(red + green + blue, other.red + other.green + other.blue)
+        return pairs.allSatisfy { abs($0 - $1) < 0.01 }
+    }
+}
+
+/// A display that takes no brightness commands (no DDC through its port, dock or adapter),
+/// dimmed in software by scaling its gamma tables: the backlight stays as it is and the
+/// picture gets darker. macOS puts the tables back when DAM quits; ColorSync can reset
+/// them on a display change, so `reassert` applies the dimming again.
+private final class GammaBrightness: BrightnessControl {
+    /// The darkest the picture gets, so the slider's end never leaves a black screen.
+    static let floor = 0.15
+
+    private let cgID: CGDirectDisplayID
+    /// The display's own tables, before any dimming.
+    private var original: GammaTables
+    private var applied: GammaTables?
+    private var level = 1.0
+
+    init?(display cgID: CGDirectDisplayID) {
+        guard let tables = GammaTables.current(of: cgID) else { return nil }
+        self.cgID = cgID
+        original = tables
+    }
+
+    deinit {
+        if level < 1 { _ = original.apply(to: cgID) }
+    }
+
+    func read() -> Double? { level }
+
+    var isDimmed: Bool { level < 1 }
+
+    func write(_ level: Double) -> Bool {
+        self.level = level
+        return apply()
+    }
+
+    /// Applies the dimming again if something reset the tables, taking the tables found as
+    /// the display's own.
+    func reassert() {
+        guard level < 1, let applied, let current = GammaTables.current(of: cgID),
+              !current.isClose(to: applied) else { return }
+        brightnessLog.debug("display \(self.cgID)'s gamma was reset; dimming it again")
+        original = current
+        _ = apply()
+    }
+
+    private func apply() -> Bool {
+        let tables = level < 1 ? original.scaled(by: Self.floor + (1 - Self.floor) * level) : original
+        applied = tables
+        return tables.apply(to: cgID)
+    }
+}
+
 // MARK: - Manager
 
 /// Reads and sets display brightness. A DDC request can take a tenth of a second, so the
@@ -269,12 +355,20 @@ private final class BuiltInBrightness: BrightnessControl {
 final class BrightnessManager: ObservableObject {
     /// The displays whose brightness can be set, as found when each was last read.
     @Published private(set) var adjustable: Set<CGDirectDisplayID> = []
+    /// The adjustable displays that take no brightness commands and are dimmed in software.
+    private(set) var dimmedInSoftware: Set<CGDirectDisplayID> = []
     /// The last brightness read or set for each display, from 0 to 1.
     let levels = CurrentValueSubject<[CGDirectDisplayID: Double], Never>([:])
 
     private let queue = DispatchQueue(label: "\(AppIdentity.bundleID).brightness", qos: .userInitiated)
     /// Each display's control, made when it is first needed. Touched on `queue` only.
     private var controls: [CGDirectDisplayID: BrightnessControl] = [:]
+    /// The displays that have answered a brightness command. One that never has is dimmed
+    /// in software instead; one that has keeps being asked. Touched on `queue` only.
+    private var answered: Set<CGDirectDisplayID> = []
+    /// When each display dimmed in software was last asked for its brightness again, in
+    /// case it was only asleep the first time. Touched on `queue` only.
+    private var lastAsked: [CGDirectDisplayID: Date] = [:]
 
     private var lastRead: [CGDirectDisplayID: Date] = [:]
     private var reading: Set<CGDirectDisplayID> = []
@@ -294,8 +388,16 @@ final class BrightnessManager: ObservableObject {
     func refresh(_ displays: [DisplayInfo]) {
         let ids = Set(displays.filter { !$0.isSidecar && $0.cgDisplayID != 0 }.map(\.cgDisplayID))
         if !adjustable.isSubset(of: ids) { adjustable.formIntersection(ids) }
+        dimmedInSoftware.formIntersection(ids)
         lastRead = lastRead.filter { ids.contains($0.key) }
-        queue.async { [weak self] in self?.controls = self?.controls.filter { ids.contains($0.key) } ?? [:] }
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.controls = self.controls.filter { ids.contains($0.key) }
+            self.answered.formIntersection(ids)
+            self.lastAsked = self.lastAsked.filter { ids.contains($0.key) }
+            // The display configuration may have changed since; ColorSync resets gamma then.
+            for control in self.controls.values { (control as? GammaBrightness)?.reassert() }
+        }
 
         let now = Date()
         for id in ids where !reading.contains(id) && !writing.contains(id) {
@@ -305,11 +407,26 @@ final class BrightnessManager: ObservableObject {
             lastRead[id] = now
             queue.async { [weak self] in
                 guard let self else { return }
-                let level = self.control(for: id)?.read()
+                var control = self.control(for: id)
+                if let gamma = control as? GammaBrightness, !gamma.isDimmed,
+                   Date().timeIntervalSince(self.lastAsked[id] ?? .distantPast) > 60 {
+                    self.lastAsked[id] = Date()
+                    self.controls[id] = nil
+                    control = self.control(for: id)
+                }
+                var level = control?.read()
+                if level != nil, !(control is GammaBrightness) { self.answered.insert(id) }
+                if level == nil, !self.answered.contains(id), let gamma = GammaBrightness(display: id) {
+                    brightnessLog.debug("display \(id) takes no brightness commands; dimming it in software")
+                    self.controls[id] = gamma
+                    control = gamma
+                    level = gamma.read()
+                }
                 // A display that stopped answering may have been replaced by another with
                 // its ID; look it up afresh next time.
                 if level == nil { self.controls[id] = nil }
-                DispatchQueue.main.async { self.finishReading(id, level: level) }
+                let software = control is GammaBrightness
+                DispatchQueue.main.async { self.finishReading(id, level: level, software: software) }
             }
         }
     }
@@ -338,8 +455,9 @@ final class BrightnessManager: ObservableObject {
         }
     }
 
-    private func finishReading(_ cgID: CGDirectDisplayID, level: Double?) {
+    private func finishReading(_ cgID: CGDirectDisplayID, level: Double?, software: Bool) {
         reading.remove(cgID)
+        if software { dimmedInSoftware.insert(cgID) } else { dimmedInSoftware.remove(cgID) }
         guard let level else {
             if adjustable.contains(cgID) { adjustable.remove(cgID) }
             return
@@ -381,6 +499,9 @@ final class BrightnessSliderView: NSView {
         slider.target = self
         slider.action = #selector(sliderMoved(_:))
         slider.setAccessibilityLabel("Brightness")
+        if manager.dimmedInSoftware.contains(cgID) {
+            toolTip = "This display takes no brightness commands, so \(AppIdentity.name) darkens its picture instead."
+        }
 
         let stack = NSStackView(views: [sunImage("sun.min"), slider, sunImage("sun.max")])
         stack.spacing = 6

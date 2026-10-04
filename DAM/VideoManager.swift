@@ -137,7 +137,7 @@ final class VideoManager: ObservableObject {
     /// The pending re-read of the display list after a display configuration change.
     private var reconfigureWork: DispatchWorkItem?
     /// Each display's mode when the screens went to sleep, put back after they wake.
-    private var modesBeforeSleep: [CGDirectDisplayID: Int32] = [:]
+    private var modesBeforeSleep: [CGDirectDisplayID: ModeShape] = [:]
     /// Remembers the CGDirectDisplayID for each AirPlay device name the last time
     /// it appeared in NSScreen.screens (extend mode). Used to keep tracking the
     /// display when it becomes a mirror slave and drops out of NSScreen.
@@ -218,7 +218,7 @@ final class VideoManager: ObservableObject {
         let center = NSWorkspace.shared.notificationCenter
         center.addObserver(forName: NSWorkspace.screensDidSleepNotification, object: nil, queue: .main) { [weak self] _ in
             self?.modesBeforeSleep = Dictionary(uniqueKeysWithValues: DisplayArrangement.onlineDisplayIDs().compactMap { id in
-                CGDisplayCopyDisplayMode(id).map { (id, $0.ioDisplayModeID) }
+                CGDisplayCopyDisplayMode(id).map { (id, ModeShape($0)) }
             })
         }
         center.addObserver(forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main) { [weak self] _ in
@@ -230,14 +230,14 @@ final class VideoManager: ObservableObject {
 
     private func restoreModesAfterWake() {
         guard !modesBeforeSleep.isEmpty, !virtualAnchorReassertInFlight else { return }
-        var current: [CGDirectDisplayID: Int32] = [:]
-        var available: [CGDirectDisplayID: [Int32: CGDisplayMode]] = [:]
+        var current: [CGDirectDisplayID: ModeShape] = [:]
+        var available: [CGDirectDisplayID: [ModeShape: CGDisplayMode]] = [:]
         var skip = Set(virtualAnchorCGIDs.values)
         let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
         for id in DisplayArrangement.onlineDisplayIDs() {
-            current[id] = CGDisplayCopyDisplayMode(id)?.ioDisplayModeID
+            current[id] = CGDisplayCopyDisplayMode(id).map(ModeShape.init)
             let modes = CGDisplayCopyAllDisplayModes(id, options) as? [CGDisplayMode] ?? []
-            available[id] = Dictionary(modes.map { ($0.ioDisplayModeID, $0) }) { first, _ in first }
+            available[id] = Dictionary(modes.map { (ModeShape($0), $0) }) { first, _ in first }
             if CGDisplayMirrorsDisplay(id) != 0 { skip.insert(id) }
         }
         let restore = Self.modesToRestore(saved: modesBeforeSleep, current: current,
@@ -245,8 +245,8 @@ final class VideoManager: ObservableObject {
         guard !restore.isEmpty else { return }
         displayLog.debug("restoreModesAfterWake: \(restore)")
         commitDisplayChange({ cfg in
-            for (id, modeID) in restore {
-                if let mode = available[id]?[modeID] { CGConfigureDisplayWithDisplayMode(cfg, id, mode, nil) }
+            for (id, shape) in restore {
+                if let mode = available[id]?[shape] { CGConfigureDisplayWithDisplayMode(cfg, id, mode, nil) }
             }
         }) { result in
             if case .failure(let error) = result {
@@ -258,13 +258,28 @@ final class VideoManager: ObservableObject {
     /// The displays whose mode differs from the one `saved` for them, with the mode to put
     /// back: only displays still online that still offer it, and none in `skip` (anchors,
     /// whose sizes are kept elsewhere, and mirror slaves, which follow their master).
-    static func modesToRestore(saved: [CGDirectDisplayID: Int32],
-                               current: [CGDirectDisplayID: Int32],
-                               available: [CGDirectDisplayID: Set<Int32>],
-                               skip: Set<CGDirectDisplayID>) -> [CGDirectDisplayID: Int32] {
-        saved.filter { id, modeID in
-            guard !skip.contains(id), let now = current[id], now != modeID else { return false }
-            return available[id]?.contains(modeID) ?? false
+    static func modesToRestore<Mode: Hashable>(saved: [CGDirectDisplayID: Mode],
+                                               current: [CGDirectDisplayID: Mode],
+                                               available: [CGDirectDisplayID: Set<Mode>],
+                                               skip: Set<CGDirectDisplayID>) -> [CGDirectDisplayID: Mode] {
+        saved.filter { id, mode in
+            guard !skip.contains(id), let now = current[id], now != mode else { return false }
+            return available[id]?.contains(mode) ?? false
+        }
+    }
+
+    /// What a mode is, as opposed to its ID, which a display can renumber when it comes back.
+    struct ModeShape: Hashable {
+        let width: Int, height: Int, pixelWidth: Int, pixelHeight: Int
+        /// In hundredths of a hertz, so 59.94 and 60 stay apart but rounding noise does not.
+        let refreshRate: Int
+
+        init(_ mode: CGDisplayMode) {
+            width = mode.width
+            height = mode.height
+            pixelWidth = mode.pixelWidth
+            pixelHeight = mode.pixelHeight
+            refreshRate = Int((mode.refreshRate * 100).rounded())
         }
     }
 
@@ -712,11 +727,12 @@ final class VideoManager: ObservableObject {
         guard let modeList = CGDisplayCopyAllDisplayModes(cgDisplayID, options) as? [CGDisplayMode] else { return [] }
 
         var seen = Set<String>()
+        let panelRate = Self.panelRefreshRate(of: cgDisplayID)
         return modeList
             .compactMap { cgMode -> DisplayMode? in
                 let w = cgMode.width, h = cgMode.height
                 guard w > 1, h > 1 else { return nil }
-                let hz = cgMode.refreshRate == 0 ? 60.0 : cgMode.refreshRate
+                let hz = cgMode.refreshRate == 0 ? panelRate : cgMode.refreshRate
                 let pw = cgMode.pixelWidth, ph = cgMode.pixelHeight
                 let hiDPI = pw > w
                 // Logical size too: a 1x 3840×2160 and a 1920×1080 HiDPI share pixels.
@@ -737,10 +753,11 @@ final class VideoManager: ObservableObject {
         let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
         guard let modeList = CGDisplayCopyAllDisplayModes(cgDisplayID, options) as? [CGDisplayMode] else { return [] }
         var best: [String: DisplayMode] = [:]
+        let panelRate = Self.panelRefreshRate(of: cgDisplayID)
         for cgMode in modeList {
             let w = cgMode.width, h = cgMode.height
             guard w > 1, h > 1 else { continue }
-            let hz = cgMode.refreshRate == 0 ? 60.0 : cgMode.refreshRate
+            let hz = cgMode.refreshRate == 0 ? panelRate : cgMode.refreshRate
             let pw = cgMode.pixelWidth, ph = cgMode.pixelHeight
             let hiDPI = pw > w
             let key = "\(w)x\(h)"
@@ -758,11 +775,25 @@ final class VideoManager: ObservableObject {
         return best.values.sorted { ($0.pixelWidth, $0.pixelHeight) > ($1.pixelWidth, $1.pixelHeight) }
     }
 
+    /// Each panel's refresh rate, as last seen while it was on screen.
+    private static var panelRefreshRates: [CGDirectDisplayID: Double] = [:]
+
+    /// The refresh rate of a display whose modes report none, as built-in panels' do: the
+    /// most frames its screen shows a second (120 on a ProMotion panel). A mirror slave
+    /// leaves NSScreen, so the rate seen last is kept; 60 when it was never seen.
+    static func panelRefreshRate(of cgDisplayID: CGDirectDisplayID) -> Double {
+        let screen = NSScreen.screens.first {
+            ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == cgDisplayID
+        }
+        if let rate = screen?.maximumFramesPerSecond, rate > 0 { panelRefreshRates[cgDisplayID] = Double(rate) }
+        return panelRefreshRates[cgDisplayID] ?? 60
+    }
+
     func currentMode(for cgDisplayID: CGDirectDisplayID) -> DisplayMode? {
         guard cgDisplayID != 0,
               let cgMode = CGDisplayCopyDisplayMode(cgDisplayID) else { return nil }
         let w = cgMode.width, h = cgMode.height
-        let hz = cgMode.refreshRate == 0 ? 60.0 : cgMode.refreshRate
+        let hz = cgMode.refreshRate == 0 ? Self.panelRefreshRate(of: cgDisplayID) : cgMode.refreshRate
         let pw = cgMode.pixelWidth, ph = cgMode.pixelHeight
         let hiDPI = pw > w
         let id = hiDPI ? "\(w)x\(h)@\(hz)@2x" : "\(w)x\(h)@\(hz)"
