@@ -11,8 +11,19 @@ final class HotkeyPreferenceTests: XCTestCase {
     private let key4 = "\(AppIdentity.bundleID).hotkeyAudioCycle"
     private let key5 = "\(AppIdentity.bundleID).hotkeyMainDisplay"
 
+    // The host app also writes preferences (seen audio devices, for one), so start each
+    // test from a clean slate as well as cleaning up after it.
+    override func setUp() {
+        super.setUp()
+        clearPreferences()
+    }
+
     override func tearDown() {
         super.tearDown()
+        clearPreferences()
+    }
+
+    private func clearPreferences() {
         [key1, key2, key3, key4, key5].forEach { UserDefaults.dam.removeObject(forKey: $0) }
     }
 

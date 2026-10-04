@@ -9,8 +9,19 @@ final class AudioManagerFilterTests: XCTestCase {
     private let speechUIDKey  = "\(AppIdentity.shortID).behaviour.speechOutputUID"
     private let speechNameKey = "\(AppIdentity.shortID).behaviour.speechOutputName"
 
+    // The host app also writes preferences (seen audio devices, for one), so start each
+    // test from a clean slate as well as cleaning up after it.
+    override func setUp() {
+        super.setUp()
+        clearPreferences()
+    }
+
     override func tearDown() {
         super.tearDown()
+        clearPreferences()
+    }
+
+    private func clearPreferences() {
         [audioKey, audioSeenKey, speechUIDKey, speechNameKey].forEach { UserDefaults.dam.removeObject(forKey: $0) }
     }
 
