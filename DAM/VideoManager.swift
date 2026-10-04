@@ -317,12 +317,22 @@ final class VideoManager: ObservableObject {
     // MARK: - Sidecar displays
 
     /// The vendor and model CoreGraphics reports for an iPad over Sidecar: "aapl" and "iPad".
-    /// (AirPlay virtual displays are "aapl" / "airp".) Neither has an IODisplayConnect entry.
+    /// AirPlay displays are "aapl" / "airp" (seen 2026-10-04 on an AirPlay TV). Neither has
+    /// an IODisplayConnect entry.
     static let sidecarVendorNumber: UInt32 = 0x6161706c
     static let sidecarModelNumber:  UInt32 = 0x69506164
+    static let airPlayModelNumber:  UInt32 = 0x61697270
 
     static func isSidecarDisplay(vendor: UInt32, model: UInt32) -> Bool {
         vendor == sidecarVendorNumber && model == sidecarModelNumber
+    }
+
+    static func isAirPlayDisplay(vendor: UInt32, model: UInt32) -> Bool {
+        vendor == sidecarVendorNumber && model == airPlayModelNumber
+    }
+
+    static func isAirPlayDisplay(_ cgID: CGDirectDisplayID) -> Bool {
+        isAirPlayDisplay(vendor: CGDisplayVendorNumber(cgID), model: CGDisplayModelNumber(cgID))
     }
 
     static func isSidecarDisplay(_ cgID: CGDirectDisplayID) -> Bool {
@@ -938,9 +948,8 @@ final class VideoManager: ObservableObject {
         //  1. NSScreen name match — reliable in extend mode and software-mirror mode.
         //  2. Cached ID from a prior extend-mode observation, still online — handles the
         //     hardware-mirror-slave case where NSScreen drops the display.
-        //  3. "No IOKit entry" heuristic — AirPlay virtual displays are the only online
-        //     non-builtin displays with no IODisplayConnect service (vendor "aapl",
-        //     product "airp"). Match unresolved Bonjour names to these displays.
+        //  3. Unnamed AirPlay displays — online displays with no name, reporting vendor
+        //     "aapl" and product "airp". Match unresolved Bonjour names to these displays.
         let onlineSet = Set(onlineIDs)
         if let previous = previousOnlineIDs {
             pendingConnectIDs.formUnion(onlineSet.subtracting(previous))
@@ -962,14 +971,13 @@ final class VideoManager: ObservableObject {
             }
         }
 
-        // Pass 2: match unresolved names to online displays with no IOKit entry.
-        // These are virtual (AirPlay) displays that slipped past NSScreen and the cache.
+        // Pass 2: match unresolved names to unnamed AirPlay displays, which slipped past
+        // NSScreen and the cache. Only displays reporting AirPlay's vendor and model count,
+        // so a monitor left without a name is never taken for one.
         if !unresolvedNames.isEmpty {
             let resolvedSet = Set(resolvedIDs.values)
-            // Sidecar displays have no IOKit entry either, but are named above.
             let virtualIDs = onlineIDs.filter {
-                CGDisplayIsBuiltin($0) == 0 && idToName[$0] == nil && !resolvedSet.contains($0)
-                    && !Self.isSidecarDisplay($0)
+                Self.isAirPlayDisplay($0) && idToName[$0] == nil && !resolvedSet.contains($0)
             }
             // Pair by sorted order — deterministic when counts match.
             for (name, cgID) in zip(unresolvedNames, virtualIDs) {
