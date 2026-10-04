@@ -12,6 +12,9 @@
 //  immediately on stop(), after a short linger on natural finish. While captioned text
 //  is spoken, spokenLength / onSpokenLengthChanged track progress word by word.
 //
+//  Speech plays through the device chosen in Settings (VisibilityPreferences.speechOutputUID),
+//  falling back to the system sound output when none is chosen or it isn't connected.
+//
 
 import AppKit
 
@@ -66,6 +69,7 @@ final class SpeechSynthesizer {
     func speak(_ text: String, caption: Bool = true) {
         clearTimer?.invalidate()
         if synth.isSpeaking { synth.stopSpeaking() }
+        routeOutput()
         synth.startSpeaking(text)
         spokenLength = caption ? 0 : nil
         setDisplayText(caption ? text : nil)
@@ -91,6 +95,16 @@ final class SpeechSynthesizer {
     }
 
     // MARK: - Internal
+
+    private static let outputDeviceProperty =
+        NSSpeechSynthesizer.SpeechPropertyKey(rawValue: kSpeechOutputToAudioDeviceProperty as String)
+
+    /// Points the synthesizer at the chosen speech device, resolved from its UID on every
+    /// utterance since device IDs change across reconnects. 0 means the system sound output.
+    private func routeOutput() {
+        let deviceID = VisibilityPreferences.speechOutputUID.flatMap(AudioManager.deviceID(forUID:)) ?? 0
+        try? synth.setObject(NSNumber(value: deviceID), forProperty: Self.outputDeviceProperty)
+    }
 
     /// Sets the caption. Clearing it also clears spokenLength.
     private func setDisplayText(_ text: String?) {

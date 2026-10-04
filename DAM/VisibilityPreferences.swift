@@ -84,6 +84,22 @@ enum VisibilityPreferences {
         set { UserDefaults.standard.set(newValue, forKey: speechEnabledKey) }
     }
 
+    private static let speechOutputUIDKey  = "\(AppIdentity.shortID).behaviour.speechOutputUID"
+    private static let speechOutputNameKey = "\(AppIdentity.shortID).behaviour.speechOutputName"
+
+    /// UID of the audio device speech plays through. Nil (default) follows the
+    /// system sound output; so does a chosen device that isn't connected.
+    static var speechOutputUID: String? {
+        get { UserDefaults.standard.string(forKey: speechOutputUIDKey) }
+        set { UserDefaults.standard.set(newValue, forKey: speechOutputUIDKey) }
+    }
+
+    /// Name of the speech output device, so Settings can show it while it's disconnected.
+    static var speechOutputName: String? {
+        get { UserDefaults.standard.string(forKey: speechOutputNameKey) }
+        set { UserDefaults.standard.set(newValue, forKey: speechOutputNameKey) }
+    }
+
     private static let touchBarFeedbackKey = "\(AppIdentity.shortID).behaviour.touchBarFeedback"
 
     /// When true (default), hotkeys show their feedback on the Touch Bar when one is available.

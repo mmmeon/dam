@@ -76,6 +76,30 @@ final class AudioManager: ObservableObject {
         defaultDeviceID = device.id
     }
 
+    /// The device's persistent UID. Unlike its AudioDeviceID, it survives reconnects and reboots.
+    static func uid(of id: AudioDeviceID) -> String? {
+        stringProperty(kAudioDevicePropertyDeviceUID, of: id)
+    }
+
+    /// The current AudioDeviceID of the device with `uid`, or nil when it isn't connected.
+    static func deviceID(forUID uid: String) -> AudioDeviceID? {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyTranslateUIDToDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var cfUID = uid as CFString
+        var deviceID: AudioDeviceID = kAudioObjectUnknown
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let status = withUnsafePointer(to: &cfUID) { qualifier in
+            AudioObjectGetPropertyData(
+                AudioObjectID(kAudioObjectSystemObject),
+                &addr, UInt32(MemoryLayout<CFString>.size), qualifier, &size, &deviceID
+            )
+        }
+        return status == noErr && deviceID != kAudioObjectUnknown ? deviceID : nil
+    }
+
     // MARK: - Private
 
     private func fetchOutputDevices() -> [AudioDevice] {
@@ -107,7 +131,7 @@ final class AudioManager: ObservableObject {
             var streamSize: UInt32 = 0
             AudioObjectGetPropertyDataSize(id, &outAddr, 0, nil, &streamSize)
             guard streamSize > 0 else { return nil }
-            guard let name = objectName(for: id) else { return nil }
+            guard let name = Self.stringProperty(kAudioObjectPropertyName, of: id) else { return nil }
             return AudioDevice(id: id, name: name)
         }
     }
@@ -157,10 +181,10 @@ final class AudioManager: ObservableObject {
         }
     }
 
-    /// Reads kAudioObjectPropertyName, taking ownership of the retained CFString.
-    private func objectName(for id: AudioDeviceID) -> String? {
+    /// Reads a CFString property such as kAudioObjectPropertyName, taking ownership of the retained CFString.
+    private static func stringProperty(_ selector: AudioObjectPropertySelector, of id: AudioObjectID) -> String? {
         var addr = AudioObjectPropertyAddress(
-            mSelector: kAudioObjectPropertyName,
+            mSelector: selector,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
