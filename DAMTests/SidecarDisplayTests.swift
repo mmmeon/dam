@@ -26,6 +26,15 @@ final class SidecarDisplayTests: XCTestCase {
         XCTAssertFalse(VideoManager.isSidecarDisplay(vendor: 0x30ae, model: 0x61f7))
     }
 
+    func testAirPlayVendorAndModelAreRecognised() {
+        XCTAssertTrue(VideoManager.isAirPlayDisplay(vendor: 0x6161706c, model: 0x61697270))
+    }
+
+    func testSidecarAndOrdinaryDisplaysAreNotAirPlay() {
+        XCTAssertFalse(VideoManager.isAirPlayDisplay(vendor: 0x6161706c, model: 0x69506164))
+        XCTAssertFalse(VideoManager.isAirPlayDisplay(vendor: 0x30ae, model: 0x61f7))
+    }
+
     // MARK: - Naming after the iPad
 
     func testOneDisplayTakesTheOneName() {
