@@ -1,0 +1,40 @@
+CONFIRMED DEVICES
+
+Devices on which each feature has been confirmed to work.
+  x  confirmed     -  not available on this device     (blank)  not yet tested
+
+
+MACS
+
+Model            macOS         Audio  AirPlay  Sidecar  Resolution  Mirror  Arrange  Hotkeys  Touch Bar  Announce
+---------------  ------------  -----  -------  -------  ----------  ------  -------  -------  ---------  --------
+MacBookPro14,2   13 Ventura      x       x        x         x         x        x        x         x          x
+
+  Audio       Switch audio output
+  AirPlay     Connect AirPlay displays
+  Sidecar     Connect Sidecar iPads
+  Resolution  Resolution and refresh rate, including virtual ones
+  Mirror      Mirror, extend, optimize a mirror set, main display, position
+  Arrange     Arrange displays by drag and drop
+  Hotkeys     Global hotkeys
+  Touch Bar   Touch Bar controls
+  Announce    On-screen and spoken announcements
+
+
+IPADS (SIDECAR)
+
+Model            iPadOS        Cable  Wi-Fi  Auto-connect  Resolution  Mirror  Arrange
+---------------  ------------  -----  -----  ------------  ----------  ------  -------
+iPad6,3          16              x      x         x            x         x        x
+
+  Cable         Connect over USB
+  Wi-Fi         Connect wirelessly
+  Auto-connect  Connect when plugged in and there is no other display
+  Resolution    Resolution, scaled from a virtual display
+  Mirror        Mirror, extend, main display, position
+  Arrange       Arrange displays by drag and drop
+
+
+Model is the device's identifier:
+  Mac   `sysctl -n hw.model`, or System Information > Hardware > Model Identifier
+  iPad  `defaults read com.apple.iPod Devices` on a Mac it has synced with ("Product Type")
