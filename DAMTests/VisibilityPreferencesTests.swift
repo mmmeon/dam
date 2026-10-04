@@ -17,7 +17,7 @@ final class VisibilityPreferencesTests: XCTestCase {
         super.tearDown()
         [audioKey, audioSeenKey, airPlayKey, displayKey, autoConnKey, touchBarKey, screenKey,
          startKey, delayKey].forEach {
-            UserDefaults.standard.removeObject(forKey: $0)
+            UserDefaults.dam.removeObject(forKey: $0)
         }
     }
 

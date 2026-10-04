@@ -9,7 +9,7 @@ final class VideoManagerFilterTests: XCTestCase {
 
     override func tearDown() {
         super.tearDown()
-        [airPlayKey, displayKey].forEach { UserDefaults.standard.removeObject(forKey: $0) }
+        [airPlayKey, displayKey].forEach { UserDefaults.dam.removeObject(forKey: $0) }
     }
 
     // MARK: - Helpers
@@ -171,8 +171,8 @@ final class VideoManagerFilterTests: XCTestCase {
 
     func testVirtualModes_alwaysInclude60Hz_sortedByResolutionThenRate() {
         let key = "\(AppIdentity.shortID).virtual.airplay.refreshRates"
-        let saved = UserDefaults.standard.object(forKey: key)
-        defer { UserDefaults.standard.set(saved, forKey: key) }
+        let saved = UserDefaults.dam.object(forKey: key)
+        defer { UserDefaults.dam.set(saved, forKey: key) }
         VisibilityPreferences.setVirtualRefreshRates([120], for: .airPlay)
 
         let modes = VideoManager.virtualModes(for: .airPlay)
@@ -266,8 +266,8 @@ final class VideoManagerFilterTests: XCTestCase {
 
     func testDefaultVirtualMode_noneStored_isNil() {
         let key = "\(AppIdentity.shortID).virtual.airplay.defaultResolution"
-        let saved = UserDefaults.standard.object(forKey: key)
-        defer { UserDefaults.standard.set(saved, forKey: key) }
+        let saved = UserDefaults.dam.object(forKey: key)
+        defer { UserDefaults.dam.set(saved, forKey: key) }
         VisibilityPreferences.setDefaultVirtualResolution(nil, for: .airPlay)
         XCTAssertNil(VideoManager.defaultVirtualMode(for: .airPlay))
     }
@@ -275,11 +275,11 @@ final class VideoManagerFilterTests: XCTestCase {
     func testDefaultVirtualMode_prefers60HzAt1x_elseHighestEnabledRate() {
         let resKey   = "\(AppIdentity.shortID).virtual.airplay.defaultResolution"
         let ratesKey = "\(AppIdentity.shortID).virtual.airplay.refreshRates"
-        let savedRes = UserDefaults.standard.object(forKey: resKey)
-        let savedRates = UserDefaults.standard.object(forKey: ratesKey)
+        let savedRes = UserDefaults.dam.object(forKey: resKey)
+        let savedRates = UserDefaults.dam.object(forKey: ratesKey)
         defer {
-            UserDefaults.standard.set(savedRes, forKey: resKey)
-            UserDefaults.standard.set(savedRates, forKey: ratesKey)
+            UserDefaults.dam.set(savedRes, forKey: resKey)
+            UserDefaults.dam.set(savedRates, forKey: ratesKey)
         }
         VisibilityPreferences.setDefaultVirtualResolution("1920x1080", for: .airPlay)
 
@@ -298,8 +298,8 @@ final class VideoManagerFilterTests: XCTestCase {
 
     func testDefaultVirtualMode_unknownResolution_isNil() {
         let key = "\(AppIdentity.shortID).virtual.airplay.defaultResolution"
-        let saved = UserDefaults.standard.object(forKey: key)
-        defer { UserDefaults.standard.set(saved, forKey: key) }
+        let saved = UserDefaults.dam.object(forKey: key)
+        defer { UserDefaults.dam.set(saved, forKey: key) }
         VisibilityPreferences.setDefaultVirtualResolution("800x600", for: .airPlay)
         XCTAssertNil(VideoManager.defaultVirtualMode(for: .airPlay))
     }

@@ -8,6 +8,17 @@
 import Foundation
 import ServiceManagement
 
+extension UserDefaults {
+    /// Where DAM keeps its preferences. Under tests it's a store of their own, emptied at
+    /// launch, so tests neither see nor change the user's settings.
+    static let dam: UserDefaults = {
+        guard NSClassFromString("XCTestCase") != nil else { return .standard }
+        let suite = "\(AppIdentity.shortID).tests"
+        UserDefaults.standard.removePersistentDomain(forName: suite)
+        return UserDefaults(suiteName: suite)!
+    }()
+}
+
 enum VisibilityPreferences {
 
     // MARK: - Audio
@@ -16,16 +27,16 @@ enum VisibilityPreferences {
     private static let audioSeenKey = "\(AppIdentity.shortID).seen.audio"
 
     static var hiddenAudioDevices: Set<String> {
-        get { Set(UserDefaults.standard.stringArray(forKey: audioKey) ?? []) }
-        set { UserDefaults.standard.set(Array(newValue), forKey: audioKey) }
+        get { Set(UserDefaults.dam.stringArray(forKey: audioKey) ?? []) }
+        set { UserDefaults.dam.set(Array(newValue), forKey: audioKey) }
     }
 
     /// Every audio device name ever observed. Used to auto-hide virtual devices
     /// only on their first discovery, without re-hiding them if the user later
     /// enables them manually.
     static var seenAudioDevices: Set<String> {
-        get { Set(UserDefaults.standard.stringArray(forKey: audioSeenKey) ?? []) }
-        set { UserDefaults.standard.set(Array(newValue), forKey: audioSeenKey) }
+        get { Set(UserDefaults.dam.stringArray(forKey: audioSeenKey) ?? []) }
+        set { UserDefaults.dam.set(Array(newValue), forKey: audioSeenKey) }
     }
 
     static func isVisible(audioDevice name: String) -> Bool {
@@ -43,8 +54,8 @@ enum VisibilityPreferences {
     private static let airPlayKey = "\(AppIdentity.shortID).hidden.airplay"
 
     static var hiddenAirPlayDevices: Set<String> {
-        get { Set(UserDefaults.standard.stringArray(forKey: airPlayKey) ?? []) }
-        set { UserDefaults.standard.set(Array(newValue), forKey: airPlayKey) }
+        get { Set(UserDefaults.dam.stringArray(forKey: airPlayKey) ?? []) }
+        set { UserDefaults.dam.set(Array(newValue), forKey: airPlayKey) }
     }
 
     static func isVisible(airPlayDevice name: String) -> Bool {
@@ -66,10 +77,10 @@ enum VisibilityPreferences {
     /// confirmation / TTS step. When false the selection list is always shown.
     static var autoConnectSingleDisplay: Bool {
         get {
-            let val = UserDefaults.standard.object(forKey: autoConnectKey)
-            return val == nil ? true : UserDefaults.standard.bool(forKey: autoConnectKey)
+            let val = UserDefaults.dam.object(forKey: autoConnectKey)
+            return val == nil ? true : UserDefaults.dam.bool(forKey: autoConnectKey)
         }
-        set { UserDefaults.standard.set(newValue, forKey: autoConnectKey) }
+        set { UserDefaults.dam.set(newValue, forKey: autoConnectKey) }
     }
 
     private static let speechEnabledKey = "\(AppIdentity.shortID).behaviour.speechEnabled"
@@ -78,10 +89,10 @@ enum VisibilityPreferences {
     /// mirror/extend are announced via TTS. Set to false to silence all speech.
     static var speechEnabled: Bool {
         get {
-            let val = UserDefaults.standard.object(forKey: speechEnabledKey)
-            return val == nil ? true : UserDefaults.standard.bool(forKey: speechEnabledKey)
+            let val = UserDefaults.dam.object(forKey: speechEnabledKey)
+            return val == nil ? true : UserDefaults.dam.bool(forKey: speechEnabledKey)
         }
-        set { UserDefaults.standard.set(newValue, forKey: speechEnabledKey) }
+        set { UserDefaults.dam.set(newValue, forKey: speechEnabledKey) }
     }
 
     private static let speechOutputUIDKey  = "\(AppIdentity.shortID).behaviour.speechOutputUID"
@@ -90,14 +101,14 @@ enum VisibilityPreferences {
     /// UID of the audio device speech plays through. Nil (default) follows the
     /// system sound output; so does a chosen device that isn't connected.
     static var speechOutputUID: String? {
-        get { UserDefaults.standard.string(forKey: speechOutputUIDKey) }
-        set { UserDefaults.standard.set(newValue, forKey: speechOutputUIDKey) }
+        get { UserDefaults.dam.string(forKey: speechOutputUIDKey) }
+        set { UserDefaults.dam.set(newValue, forKey: speechOutputUIDKey) }
     }
 
     /// Name of the speech output device, so Settings can show it while it's disconnected.
     static var speechOutputName: String? {
-        get { UserDefaults.standard.string(forKey: speechOutputNameKey) }
-        set { UserDefaults.standard.set(newValue, forKey: speechOutputNameKey) }
+        get { UserDefaults.dam.string(forKey: speechOutputNameKey) }
+        set { UserDefaults.dam.set(newValue, forKey: speechOutputNameKey) }
     }
 
     private static let touchBarFeedbackKey = "\(AppIdentity.shortID).behaviour.touchBarFeedback"
@@ -105,10 +116,10 @@ enum VisibilityPreferences {
     /// When true (default), hotkeys show their feedback on the Touch Bar when one is available.
     static var touchBarFeedback: Bool {
         get {
-            let val = UserDefaults.standard.object(forKey: touchBarFeedbackKey)
-            return val == nil ? true : UserDefaults.standard.bool(forKey: touchBarFeedbackKey)
+            let val = UserDefaults.dam.object(forKey: touchBarFeedbackKey)
+            return val == nil ? true : UserDefaults.dam.bool(forKey: touchBarFeedbackKey)
         }
-        set { UserDefaults.standard.set(newValue, forKey: touchBarFeedbackKey) }
+        set { UserDefaults.dam.set(newValue, forKey: touchBarFeedbackKey) }
     }
 
     private static let screenFeedbackKey = "\(AppIdentity.shortID).behaviour.screenFeedback"
@@ -116,10 +127,10 @@ enum VisibilityPreferences {
     /// When true (default), hotkeys show their feedback on screen.
     static var screenFeedback: Bool {
         get {
-            let val = UserDefaults.standard.object(forKey: screenFeedbackKey)
-            return val == nil ? true : UserDefaults.standard.bool(forKey: screenFeedbackKey)
+            let val = UserDefaults.dam.object(forKey: screenFeedbackKey)
+            return val == nil ? true : UserDefaults.dam.bool(forKey: screenFeedbackKey)
         }
-        set { UserDefaults.standard.set(newValue, forKey: screenFeedbackKey) }
+        set { UserDefaults.dam.set(newValue, forKey: screenFeedbackKey) }
     }
 
     private static let pickerStartsOnCurrentKey = "\(AppIdentity.shortID).behaviour.pickerStartsOnCurrent"
@@ -128,10 +139,10 @@ enum VisibilityPreferences {
     /// on the one after it, so a single press followed by the pause moves on.
     static var pickerStartsOnCurrent: Bool {
         get {
-            let val = UserDefaults.standard.object(forKey: pickerStartsOnCurrentKey)
-            return val == nil ? true : UserDefaults.standard.bool(forKey: pickerStartsOnCurrentKey)
+            let val = UserDefaults.dam.object(forKey: pickerStartsOnCurrentKey)
+            return val == nil ? true : UserDefaults.dam.bool(forKey: pickerStartsOnCurrentKey)
         }
-        set { UserDefaults.standard.set(newValue, forKey: pickerStartsOnCurrentKey) }
+        set { UserDefaults.dam.set(newValue, forKey: pickerStartsOnCurrentKey) }
     }
 
     private static let pickDelayKey = "\(AppIdentity.shortID).behaviour.pickDelay"
@@ -142,10 +153,10 @@ enum VisibilityPreferences {
     /// choice, in seconds, kept within `pickDelayRange`.
     static var pickDelay: TimeInterval {
         get {
-            guard UserDefaults.standard.object(forKey: pickDelayKey) != nil else { return defaultPickDelay }
-            return clampedPickDelay(UserDefaults.standard.double(forKey: pickDelayKey))
+            guard UserDefaults.dam.object(forKey: pickDelayKey) != nil else { return defaultPickDelay }
+            return clampedPickDelay(UserDefaults.dam.double(forKey: pickDelayKey))
         }
-        set { UserDefaults.standard.set(clampedPickDelay(newValue), forKey: pickDelayKey) }
+        set { UserDefaults.dam.set(clampedPickDelay(newValue), forKey: pickDelayKey) }
     }
 
     static func clampedPickDelay(_ value: TimeInterval) -> TimeInterval {
@@ -158,8 +169,8 @@ enum VisibilityPreferences {
     /// True once the user has declined, for good, the offer to show Control Center's
     /// Screen Mirroring item in the menu bar.
     static var screenMirroringExtraOfferDismissed: Bool {
-        get { UserDefaults.standard.bool(forKey: extraOfferDismissedKey) }
-        set { UserDefaults.standard.set(newValue, forKey: extraOfferDismissedKey) }
+        get { UserDefaults.dam.bool(forKey: extraOfferDismissedKey) }
+        set { UserDefaults.dam.set(newValue, forKey: extraOfferDismissedKey) }
     }
 
     private static let autoHideVirtualAudioKey = "\(AppIdentity.shortID).behaviour.autoHideVirtualAudio"
@@ -169,10 +180,10 @@ enum VisibilityPreferences {
     /// in Settings at any time.
     static var autoHideVirtualAudio: Bool {
         get {
-            let val = UserDefaults.standard.object(forKey: autoHideVirtualAudioKey)
-            return val == nil ? true : UserDefaults.standard.bool(forKey: autoHideVirtualAudioKey)
+            let val = UserDefaults.dam.object(forKey: autoHideVirtualAudioKey)
+            return val == nil ? true : UserDefaults.dam.bool(forKey: autoHideVirtualAudioKey)
         }
-        set { UserDefaults.standard.set(newValue, forKey: autoHideVirtualAudioKey) }
+        set { UserDefaults.dam.set(newValue, forKey: autoHideVirtualAudioKey) }
     }
 
     // MARK: - System
@@ -203,12 +214,12 @@ enum VisibilityPreferences {
     /// Refresh rates (Hz) to expose on the virtual anchor display. Defaults to [60].
     static func virtualRefreshRates(for context: DisplayContext) -> Set<Int> {
         let key = "\(AppIdentity.shortID).virtual.\(context.rawValue).refreshRates"
-        return Set((UserDefaults.standard.array(forKey: key) as? [Int]) ?? [60])
+        return Set((UserDefaults.dam.array(forKey: key) as? [Int]) ?? [60])
     }
 
     static func setVirtualRefreshRates(_ rates: Set<Int>, for context: DisplayContext) {
         let key = "\(AppIdentity.shortID).virtual.\(context.rawValue).refreshRates"
-        UserDefaults.standard.set(Array(rates), forKey: key)
+        UserDefaults.dam.set(Array(rates), forKey: key)
     }
 
     /// Every rate the virtual anchor advertises for `context`, highest first: the configured
@@ -220,13 +231,13 @@ enum VisibilityPreferences {
 
     /// Default virtual resolution stored as "WIDTHxHEIGHT", e.g. "3840x2160". Nil means no default.
     static func defaultVirtualResolution(for context: DisplayContext) -> String? {
-        UserDefaults.standard.string(forKey: "\(AppIdentity.shortID).virtual.\(context.rawValue).defaultResolution")
+        UserDefaults.dam.string(forKey: "\(AppIdentity.shortID).virtual.\(context.rawValue).defaultResolution")
     }
 
     static func setDefaultVirtualResolution(_ res: String?, for context: DisplayContext) {
         let key = "\(AppIdentity.shortID).virtual.\(context.rawValue).defaultResolution"
-        if let v = res { UserDefaults.standard.set(v, forKey: key) }
-        else { UserDefaults.standard.removeObject(forKey: key) }
+        if let v = res { UserDefaults.dam.set(v, forKey: key) }
+        else { UserDefaults.dam.removeObject(forKey: key) }
     }
 
     // MARK: - Sidecar
@@ -236,8 +247,8 @@ enum VisibilityPreferences {
     /// Whether a connected iPad gets a virtual display behind it, mirrored, so that it can be
     /// the Mac's only display. On by default.
     static var backsSidecarWithVirtualDisplay: Bool {
-        get { UserDefaults.standard.object(forKey: sidecarAloneKey) as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: sidecarAloneKey) }
+        get { UserDefaults.dam.object(forKey: sidecarAloneKey) as? Bool ?? true }
+        set { UserDefaults.dam.set(newValue, forKey: sidecarAloneKey) }
     }
 
     private static let sidecarAutoConnectKey = "\(AppIdentity.shortID).sidecar.autoConnectWithoutDisplay"
@@ -245,20 +256,20 @@ enum VisibilityPreferences {
     /// Whether an iPad plugged in over USB is connected over Sidecar when the Mac has no
     /// display of its own, including at login. Off by default.
     static var autoConnectsSidecarWithoutDisplay: Bool {
-        get { UserDefaults.standard.bool(forKey: sidecarAutoConnectKey) }
-        set { UserDefaults.standard.set(newValue, forKey: sidecarAutoConnectKey) }
+        get { UserDefaults.dam.bool(forKey: sidecarAutoConnectKey) }
+        set { UserDefaults.dam.set(newValue, forKey: sidecarAutoConnectKey) }
     }
 
     /// The resolution last picked for an iPad's virtual display, as "WIDTHxHEIGHT" (logical),
     /// applied again when it reconnects. Nil means the iPad's own.
     static func sidecarResolution(for name: String) -> String? {
-        (UserDefaults.standard.dictionary(forKey: sidecarResolutionsKey) as? [String: String])?[name]
+        (UserDefaults.dam.dictionary(forKey: sidecarResolutionsKey) as? [String: String])?[name]
     }
 
     static func setSidecarResolution(_ res: String?, for name: String) {
-        var all = (UserDefaults.standard.dictionary(forKey: sidecarResolutionsKey) as? [String: String]) ?? [:]
+        var all = (UserDefaults.dam.dictionary(forKey: sidecarResolutionsKey) as? [String: String]) ?? [:]
         all[name] = res
-        UserDefaults.standard.set(all, forKey: sidecarResolutionsKey)
+        UserDefaults.dam.set(all, forKey: sidecarResolutionsKey)
     }
 
     private static let sidecarResolutionsKey = "\(AppIdentity.shortID).sidecar.resolutions"
@@ -278,7 +289,7 @@ enum VisibilityPreferences {
 
     /// Nicknames the user gave devices of `kind`, keyed by the device's own name.
     static func nicknames(_ kind: NicknameKind) -> [String: String] {
-        UserDefaults.standard.dictionary(forKey: kind.key) as? [String: String] ?? [:]
+        UserDefaults.dam.dictionary(forKey: kind.key) as? [String: String] ?? [:]
     }
 
     static func nickname(_ kind: NicknameKind, for name: String) -> String? {
@@ -290,7 +301,7 @@ enum VisibilityPreferences {
         var all = nicknames(kind)
         let trimmed = nickname?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if trimmed.isEmpty { all.removeValue(forKey: name) } else { all[name] = trimmed }
-        UserDefaults.standard.set(all, forKey: kind.key)
+        UserDefaults.dam.set(all, forKey: kind.key)
     }
 
     // MARK: - Connected (physical) displays
@@ -298,8 +309,8 @@ enum VisibilityPreferences {
     private static let displayKey = "\(AppIdentity.shortID).hidden.displays"
 
     static var hiddenDisplays: Set<String> {
-        get { Set(UserDefaults.standard.stringArray(forKey: displayKey) ?? []) }
-        set { UserDefaults.standard.set(Array(newValue), forKey: displayKey) }
+        get { Set(UserDefaults.dam.stringArray(forKey: displayKey) ?? []) }
+        set { UserDefaults.dam.set(Array(newValue), forKey: displayKey) }
     }
 
     static func isVisible(display name: String) -> Bool {
