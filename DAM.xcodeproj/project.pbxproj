@@ -7,9 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		A0A1D0000000000000000F02 /* README.txt in Resources */ = {isa = PBXBuildFile; fileRef = A0A1D0000000000000000F01 /* README.txt */; };
-		A0A1D0000000000000000F04 /* ABOUT.txt in Resources */ = {isa = PBXBuildFile; fileRef = A0A1D0000000000000000F03 /* ABOUT.txt */; };
-		A0A1D0000000000000000002 /* AppIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0A1D0000000000000000001 /* AppIdentity.swift */; };
 		8BFD3BDF2F8D60780090E796 /* MainApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BFD3BDE2F8D60780090E796 /* MainApp.swift */; };
 		8BFD3BE32F8D607B0090E796 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 8BFD3BE22F8D607B0090E796 /* Assets.xcassets */; };
 		8BFD3BE62F8D607B0090E796 /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 8BFD3BE52F8D607B0090E796 /* Preview Assets.xcassets */; };
@@ -17,39 +14,40 @@
 		8BFD3C0D2F8D60780090E796 /* AudioManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BFD3C0C2F8D60780090E796 /* AudioManager.swift */; };
 		8BFD3C0F2F8D60780090E796 /* VideoManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BFD3C0E2F8D60780090E796 /* VideoManager.swift */; };
 		8BFD3C112F8D60780090E796 /* MenuBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BFD3C102F8D60780090E796 /* MenuBuilder.swift */; };
+		A0A1D0000000000000000002 /* AppIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0A1D0000000000000000001 /* AppIdentity.swift */; };
+		A0A1D0000000000000000F02 /* README.txt in Resources */ = {isa = PBXBuildFile; fileRef = A0A1D0000000000000000F01 /* README.txt */; };
+		A0A1D0000000000000000F04 /* ABOUT.txt in Resources */ = {isa = PBXBuildFile; fileRef = A0A1D0000000000000000F03 /* ABOUT.txt */; };
 		AA0001002F8D60780090E796 /* ControlStripPresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000FF2F8D60780090E796 /* ControlStripPresenter.swift */; };
 		AA0003002F8D60780090E796 /* GlobalHotkey.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0002FF2F8D60780090E796 /* GlobalHotkey.swift */; };
 		AA1001002F9D00000090E796 /* VideoManager+VirtualAnchor.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1000FF2F9D00000090E796 /* VideoManager+VirtualAnchor.swift */; };
 		AA100B002F8D607C0090E796 /* VisibilityPreferencesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA100A002F8D607C0090E796 /* VisibilityPreferencesTests.swift */; };
 		AA200B002F8D607C0090E796 /* AudioManagerFilterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA200A002F8D607C0090E796 /* AudioManagerFilterTests.swift */; };
 		AA300B002F8D607C0090E796 /* VideoManagerFilterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA300A002F8D607C0090E796 /* VideoManagerFilterTests.swift */; };
-		AA600B002F8D607C0090E796 /* ScreenMirroringPanelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA600A002F8D607C0090E796 /* ScreenMirroringPanelTests.swift */; };
-		AA700B002F8D607C0090E796 /* MirrorPlanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA700A002F8D607C0090E796 /* MirrorPlanTests.swift */; };
-		DD700B002F8D607C0090E796 /* BrightnessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD700A002F8D607C0090E796 /* BrightnessTests.swift */; };
-		AA800B002F8D607C0090E796 /* MirrorPickerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA800A002F8D607C0090E796 /* MirrorPickerTests.swift */; };
-		AA900B002F8D607C0090E796 /* MainDisplayPickerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA900A002F8D607C0090E796 /* MainDisplayPickerTests.swift */; };
 		AA400B002F8D607C0090E796 /* HotkeyPreferenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA400A002F8D607C0090E796 /* HotkeyPreferenceTests.swift */; };
 		AA500B002F8D607C0090E796 /* ControlStripPresenterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA500A002F8D607C0090E796 /* ControlStripPresenterTests.swift */; };
+		AA600B002F8D607C0090E796 /* ScreenMirroringPanelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA600A002F8D607C0090E796 /* ScreenMirroringPanelTests.swift */; };
+		AA700B002F8D607C0090E796 /* MirrorPlanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA700A002F8D607C0090E796 /* MirrorPlanTests.swift */; };
+		AA800B002F8D607C0090E796 /* MirrorPickerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA800A002F8D607C0090E796 /* MirrorPickerTests.swift */; };
+		AA900B002F8D607C0090E796 /* MainDisplayPickerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA900A002F8D607C0090E796 /* MainDisplayPickerTests.swift */; };
 		BB0002002F8D60780090E796 /* HotkeyPreference.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0001002F8D60780090E796 /* HotkeyPreference.swift */; };
 		BB0004002F8D60780090E796 /* KeyRecorderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0003002F8D60780090E796 /* KeyRecorderView.swift */; };
 		BB0006002F8D60780090E796 /* SettingsWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0005002F8D60780090E796 /* SettingsWindowController.swift */; };
 		BB0008002F8D60780090E796 /* VisibilityPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0007002F8D60780090E796 /* VisibilityPreferences.swift */; };
 		BB000A002F8D60780090E796 /* SpeechSynthesizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0009002F8D60780090E796 /* SpeechSynthesizer.swift */; };
+		BB520C012F8D60780090E796 /* DisplayRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB520B012F8D60780090E796 /* DisplayRegistry.swift */; };
 		CC000C002F8D60780090E796 /* AirPlayQuickConnect.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B002F8D60780090E796 /* AirPlayQuickConnect.swift */; };
+		CC000C012F8D60780090E796 /* HUD.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B012F8D60780090E796 /* HUD.swift */; };
 		CC000C022F8D60780090E796 /* AudioOutputPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B022F8D60780090E796 /* AudioOutputPicker.swift */; };
+		CC000C302F8D60780090E796 /* ScreenMirroringPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B302F8D60780090E796 /* ScreenMirroringPanel.swift */; };
+		CC000C312F8D60780090E796 /* SidecarManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B312F8D60780090E796 /* SidecarManager.swift */; };
 		CC100C012F8D60780090E796 /* ChoicePicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC100B012F8D60780090E796 /* ChoicePicker.swift */; };
 		CC100C022F8D60780090E796 /* MirrorPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC100B022F8D60780090E796 /* MirrorPicker.swift */; };
 		CC100C032F8D60780090E796 /* MainDisplayPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC100B032F8D60780090E796 /* MainDisplayPicker.swift */; };
-		CC000C302F8D60780090E796 /* ScreenMirroringPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B302F8D60780090E796 /* ScreenMirroringPanel.swift */; };
-		CC000C312F8D60780090E796 /* SidecarManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B312F8D60780090E796 /* SidecarManager.swift */; };
-		CC000C012F8D60780090E796 /* HUD.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B012F8D60780090E796 /* HUD.swift */; };
-		BB510C012F8D60780090E796 /* Brightness.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB510B012F8D60780090E796 /* Brightness.swift */; };
-		BB520C012F8D60780090E796 /* DisplayRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB520B012F8D60780090E796 /* DisplayRegistry.swift */; };
 		DD000C012F8D60780090E796 /* DisplayLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD000B012F8D60780090E796 /* DisplayLayout.swift */; };
 		DD000C022F8D60780090E796 /* VideoManager+Arrangement.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD000B022F8D60780090E796 /* VideoManager+Arrangement.swift */; };
 		DD000C032F8D60780090E796 /* ArrangeDisplaysWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD000B032F8D60780090E796 /* ArrangeDisplaysWindowController.swift */; };
-		DD100B002F8D607C0090E796 /* DisplayLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A002F8D607C0090E796 /* DisplayLayoutTests.swift */; };
 		DD000C042F8D60780090E796 /* ArrangeTouchBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD000B042F8D60780090E796 /* ArrangeTouchBar.swift */; };
+		DD100B002F8D607C0090E796 /* DisplayLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A002F8D607C0090E796 /* DisplayLayoutTests.swift */; };
 		DD100B012F8D607C0090E796 /* ArrangeTouchBarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A012F8D607C0090E796 /* ArrangeTouchBarTests.swift */; };
 		DD100B0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift */; };
 		DD100B0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift */; };
@@ -66,10 +64,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		A0A1D0000000000000000F01 /* README.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = README.txt; sourceTree = SOURCE_ROOT; };
-		A0A1D0000000000000000F03 /* ABOUT.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = ABOUT.txt; sourceTree = SOURCE_ROOT; };
 		8BFD3BDB2F8D60780090E796 /* DAM.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DAM.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		A0A1D0000000000000000001 /* AppIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIdentity.swift; sourceTree = "<group>"; };
 		8BFD3BDE2F8D60780090E796 /* MainApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainApp.swift; sourceTree = "<group>"; };
 		8BFD3BE22F8D607B0090E796 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		8BFD3BE52F8D607B0090E796 /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
@@ -79,42 +74,43 @@
 		8BFD3C0C2F8D60780090E796 /* AudioManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioManager.swift; sourceTree = "<group>"; };
 		8BFD3C0E2F8D60780090E796 /* VideoManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoManager.swift; sourceTree = "<group>"; };
 		8BFD3C102F8D60780090E796 /* MenuBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBuilder.swift; sourceTree = "<group>"; };
+		A0A1D0000000000000000001 /* AppIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIdentity.swift; sourceTree = "<group>"; };
+		A0A1D0000000000000000F01 /* README.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = README.txt; sourceTree = SOURCE_ROOT; };
+		A0A1D0000000000000000F03 /* ABOUT.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = ABOUT.txt; sourceTree = SOURCE_ROOT; };
 		AA0000FF2F8D60780090E796 /* ControlStripPresenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlStripPresenter.swift; sourceTree = "<group>"; };
 		AA0002FF2F8D60780090E796 /* GlobalHotkey.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlobalHotkey.swift; sourceTree = "<group>"; };
 		AA1000FF2F9D00000090E796 /* VideoManager+VirtualAnchor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "VideoManager+VirtualAnchor.swift"; sourceTree = "<group>"; };
 		AA100A002F8D607C0090E796 /* VisibilityPreferencesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisibilityPreferencesTests.swift; sourceTree = "<group>"; };
 		AA200A002F8D607C0090E796 /* AudioManagerFilterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioManagerFilterTests.swift; sourceTree = "<group>"; };
 		AA300A002F8D607C0090E796 /* VideoManagerFilterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoManagerFilterTests.swift; sourceTree = "<group>"; };
-		AA600A002F8D607C0090E796 /* ScreenMirroringPanelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenMirroringPanelTests.swift; sourceTree = "<group>"; };
-		AA700A002F8D607C0090E796 /* MirrorPlanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirrorPlanTests.swift; sourceTree = "<group>"; };
-		DD700A002F8D607C0090E796 /* BrightnessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrightnessTests.swift; sourceTree = "<group>"; };
-		AA800A002F8D607C0090E796 /* MirrorPickerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirrorPickerTests.swift; sourceTree = "<group>"; };
-		AA900A002F8D607C0090E796 /* MainDisplayPickerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainDisplayPickerTests.swift; sourceTree = "<group>"; };
 		AA400A002F8D607C0090E796 /* HotkeyPreferenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyPreferenceTests.swift; sourceTree = "<group>"; };
 		AA500A002F8D607C0090E796 /* ControlStripPresenterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlStripPresenterTests.swift; sourceTree = "<group>"; };
+		AA600A002F8D607C0090E796 /* ScreenMirroringPanelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenMirroringPanelTests.swift; sourceTree = "<group>"; };
+		AA700A002F8D607C0090E796 /* MirrorPlanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirrorPlanTests.swift; sourceTree = "<group>"; };
+		AA800A002F8D607C0090E796 /* MirrorPickerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirrorPickerTests.swift; sourceTree = "<group>"; };
+		AA900A002F8D607C0090E796 /* MainDisplayPickerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainDisplayPickerTests.swift; sourceTree = "<group>"; };
 		BB0001002F8D60780090E796 /* HotkeyPreference.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyPreference.swift; sourceTree = "<group>"; };
 		BB0003002F8D60780090E796 /* KeyRecorderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyRecorderView.swift; sourceTree = "<group>"; };
 		BB0005002F8D60780090E796 /* SettingsWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsWindowController.swift; sourceTree = "<group>"; };
 		BB0007002F8D60780090E796 /* VisibilityPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisibilityPreferences.swift; sourceTree = "<group>"; };
 		BB0009002F8D60780090E796 /* SpeechSynthesizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechSynthesizer.swift; sourceTree = "<group>"; };
+		BB520B012F8D60780090E796 /* DisplayRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayRegistry.swift; sourceTree = "<group>"; };
 		CC000B002F8D60780090E796 /* AirPlayQuickConnect.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AirPlayQuickConnect.swift; sourceTree = "<group>"; };
+		CC000B012F8D60780090E796 /* HUD.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HUD.swift; sourceTree = "<group>"; };
 		CC000B022F8D60780090E796 /* AudioOutputPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioOutputPicker.swift; sourceTree = "<group>"; };
+		CC000B302F8D60780090E796 /* ScreenMirroringPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenMirroringPanel.swift; sourceTree = "<group>"; };
+		CC000B312F8D60780090E796 /* SidecarManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarManager.swift; sourceTree = "<group>"; };
 		CC100B012F8D60780090E796 /* ChoicePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChoicePicker.swift; sourceTree = "<group>"; };
 		CC100B022F8D60780090E796 /* MirrorPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirrorPicker.swift; sourceTree = "<group>"; };
 		CC100B032F8D60780090E796 /* MainDisplayPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainDisplayPicker.swift; sourceTree = "<group>"; };
-		CC000B302F8D60780090E796 /* ScreenMirroringPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenMirroringPanel.swift; sourceTree = "<group>"; };
-		CC000B312F8D60780090E796 /* SidecarManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarManager.swift; sourceTree = "<group>"; };
-		CC000B012F8D60780090E796 /* HUD.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HUD.swift; sourceTree = "<group>"; };
-		BB510B012F8D60780090E796 /* Brightness.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Brightness.swift; sourceTree = "<group>"; };
-		BB520B012F8D60780090E796 /* DisplayRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayRegistry.swift; sourceTree = "<group>"; };
-		DD000B012F8D60780090E796 /* DisplayLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DisplayLayout.swift"; sourceTree = "<group>"; };
+		DD000B012F8D60780090E796 /* DisplayLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayLayout.swift; sourceTree = "<group>"; };
 		DD000B022F8D60780090E796 /* VideoManager+Arrangement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "VideoManager+Arrangement.swift"; sourceTree = "<group>"; };
-		DD000B032F8D60780090E796 /* ArrangeDisplaysWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ArrangeDisplaysWindowController.swift"; sourceTree = "<group>"; };
-		DD100A002F8D607C0090E796 /* DisplayLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DisplayLayoutTests.swift"; sourceTree = "<group>"; };
-		DD000B042F8D60780090E796 /* ArrangeTouchBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ArrangeTouchBar.swift"; sourceTree = "<group>"; };
-		DD100A012F8D607C0090E796 /* ArrangeTouchBarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ArrangeTouchBarTests.swift"; sourceTree = "<group>"; };
-		DD100A0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DisplayNicknameTests.swift"; sourceTree = "<group>"; };
-		DD100A0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SidecarDisplayTests.swift"; sourceTree = "<group>"; };
+		DD000B032F8D60780090E796 /* ArrangeDisplaysWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArrangeDisplaysWindowController.swift; sourceTree = "<group>"; };
+		DD000B042F8D60780090E796 /* ArrangeTouchBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArrangeTouchBar.swift; sourceTree = "<group>"; };
+		DD100A002F8D607C0090E796 /* DisplayLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayLayoutTests.swift; sourceTree = "<group>"; };
+		DD100A012F8D607C0090E796 /* ArrangeTouchBarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArrangeTouchBarTests.swift; sourceTree = "<group>"; };
+		DD100A0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayNicknameTests.swift; sourceTree = "<group>"; };
+		DD100A0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarDisplayTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -180,7 +176,6 @@
 				CC000B302F8D60780090E796 /* ScreenMirroringPanel.swift */,
 				CC000B312F8D60780090E796 /* SidecarManager.swift */,
 				CC000B012F8D60780090E796 /* HUD.swift */,
-				BB510B012F8D60780090E796 /* Brightness.swift */,
 				BB520B012F8D60780090E796 /* DisplayRegistry.swift */,
 				8BFD3BE22F8D607B0090E796 /* Assets.xcassets */,
 				8BFD3BE72F8D607B0090E796 /* DAM.entitlements */,
@@ -209,7 +204,6 @@
 				AA300A002F8D607C0090E796 /* VideoManagerFilterTests.swift */,
 				AA600A002F8D607C0090E796 /* ScreenMirroringPanelTests.swift */,
 				AA700A002F8D607C0090E796 /* MirrorPlanTests.swift */,
-				DD700A002F8D607C0090E796 /* BrightnessTests.swift */,
 				AA800A002F8D607C0090E796 /* MirrorPickerTests.swift */,
 				AA900A002F8D607C0090E796 /* MainDisplayPickerTests.swift */,
 				AA400A002F8D607C0090E796 /* HotkeyPreferenceTests.swift */,
@@ -365,7 +359,6 @@
 				CC000C302F8D60780090E796 /* ScreenMirroringPanel.swift in Sources */,
 				CC000C312F8D60780090E796 /* SidecarManager.swift in Sources */,
 				CC000C012F8D60780090E796 /* HUD.swift in Sources */,
-				BB510C012F8D60780090E796 /* Brightness.swift in Sources */,
 				BB520C012F8D60780090E796 /* DisplayRegistry.swift in Sources */,
 				DD000C012F8D60780090E796 /* DisplayLayout.swift in Sources */,
 				DD000C022F8D60780090E796 /* VideoManager+Arrangement.swift in Sources */,
@@ -383,7 +376,6 @@
 				AA300B002F8D607C0090E796 /* VideoManagerFilterTests.swift in Sources */,
 				AA600B002F8D607C0090E796 /* ScreenMirroringPanelTests.swift in Sources */,
 				AA700B002F8D607C0090E796 /* MirrorPlanTests.swift in Sources */,
-				DD700B002F8D607C0090E796 /* BrightnessTests.swift in Sources */,
 				AA800B002F8D607C0090E796 /* MirrorPickerTests.swift in Sources */,
 				AA900B002F8D607C0090E796 /* MainDisplayPickerTests.swift in Sources */,
 				AA400B002F8D607C0090E796 /* HotkeyPreferenceTests.swift in Sources */,
@@ -532,6 +524,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = DAM/DAM.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -569,6 +562,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = DAM/DAM.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;

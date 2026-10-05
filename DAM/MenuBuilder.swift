@@ -7,7 +7,6 @@ import AppKit
 func buildStatusMenu(audio: AudioManager,
                      video: VideoManager,
                      sidecar: SidecarManager,
-                     brightness: BrightnessManager? = nil,
                      onRefresh: @escaping () -> Void) -> NSMenu {
     let menu = NSMenu()
 
@@ -124,13 +123,6 @@ func buildStatusMenu(audio: AudioManager,
             item.image = displayIcon(for: display, video: video)
 
             let submenu = buildResolutionSubmenu(display: display, video: video)
-            if let brightness, brightness.level(for: display.cgDisplayID) != nil {
-                let slider = NSMenuItem()
-                slider.view = BrightnessSliderView(display: display.cgDisplayID, manager: brightness)
-                submenu.insertItem(sectionHeader("Brightness"), at: 0)
-                submenu.insertItem(slider, at: 1)
-                submenu.insertItem(.separator(), at: 2)
-            }
             if display.cgDisplayID != 0 {
                 if canMirrorDisplays { submenu.addItem(.separator()) }
                 addDisplayControls(to: submenu, for: display, video: video, canMirror: canMirrorDisplays)
