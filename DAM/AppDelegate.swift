@@ -10,7 +10,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let audioManager = AudioManager()
     private let videoManager = VideoManager()
     private let sidecarManager = SidecarManager()
-    private let brightnessManager = BrightnessManager()
     private var sidecarAutoConnector: SidecarAutoConnector?
     private var controlStrip: ControlStripPresenter!
     private var hotkey: GlobalHotkey!
@@ -123,8 +122,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Rebuild menu and Control Strip whenever a manager publishes a change
         audioManager.objectWillChange
-            .merge(with: videoManager.objectWillChange, sidecarManager.objectWillChange,
-                   brightnessManager.objectWillChange)
+            .merge(with: videoManager.objectWillChange, sidecarManager.objectWillChange)
             .debounce(for: .milliseconds(200), scheduler: RunLoop.main)
             .sink { [weak self] in self?.rebuild() }
             .store(in: &cancellables)
@@ -150,13 +148,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Replaces `menu`'s items with ones built from the managers' current state.
     private func fill(_ menu: NSMenu) {
-        // Brightness is read in the background; a display found adjustable rebuilds the menu.
-        brightnessManager.refresh(videoManager.allConnectedDisplays)
         let fresh = buildStatusMenu(
             audio: audioManager,
             video: videoManager,
             sidecar: sidecarManager,
-            brightness: brightnessManager,
             onRefresh: { [weak self] in self?.refreshAll(nil) }
         )
         menu.removeAllItems()
