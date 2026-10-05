@@ -165,9 +165,17 @@ private final class FramebufferTransport: DDCTransport {
         request.sendAddress = UInt32(DDC.displayAddress)
         request.sendTransactionType = IOOptionBits(kIOI2CSimpleTransactionType)
         if replyLength > 0 {
+            // A bus that does not list DDC/CI replies among its transaction types can hang in
+            // the kernel when asked for one, locking up WindowServer, so it is read the simple
+            // way instead, as MonitorControl does.
+            let types = IORegistryEntryCreateCFProperty(interface, kIOI2CTransactionTypesKey as CFString,
+                                                        kCFAllocatorDefault, 0)?
+                .takeRetainedValue() as? NSNumber
+            let ddcReply = (types?.uint32Value ?? 0) & (1 << kIOI2CDDCciReplyTransactionType) != 0
             request.replyAddress = UInt32(DDC.displayAddress + 1)
             request.replySubAddress = DDC.hostAddress
-            request.replyTransactionType = IOOptionBits(kIOI2CDDCciReplyTransactionType)
+            request.replyTransactionType = IOOptionBits(ddcReply ? kIOI2CDDCciReplyTransactionType
+                                                                 : kIOI2CSimpleTransactionType)
             request.minReplyDelay = 50_000_000  // ns: the display needs time to prepare its reply
         } else {
             request.replyTransactionType = IOOptionBits(kIOI2CNoTransactionType)
