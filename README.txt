@@ -1,29 +1,22 @@
-DAM
-Menu bar control for displays and audio.
+controller for displays and audio that supports:
 
-AUDIO
-  * Switch audio output
+     * touch bar, menu, and keybinds cann control the same features.
 
-CONNECT
-  * AirPlay displays and Sidecar iPads
-  * Auto-connect a plugged-in iPad when it's the only display
+              * spoken prompts and announcement
+         * switch audio output
 
-DISPLAYS
-  * Resolution and refresh rate, including virtual ones
-  * Mirror, extend, optimize a mirror set
-  * Main display and position
-  * Arrange by drag and drop
+  * airplay receivers 
+  * sidecar ipad as primary display
+    * auto-connect to ipad when only display available
+  * resolution overrides using virtual displays
 
-CONTROL
-  * Global hotkeys: switcher, AirPlay quick-connect,
-    mirror, audio, main display
-  * Touch Bar
-  * On-screen and spoken announcements
+  * arrange * extend * mirror * optimize display
+            * position with popup
+	* relative positioning with via menus
 
-SETTINGS
-  * Display nicknames, hidden devices, launch at login
 
-VERIFYING A RELEASE
-  Releases are signed with the SSH key in allowed_signers:
-    ssh-keygen -Y verify -f allowed_signers -I dam-release -n file \
-      -s DAM-vX.Y.zip.sig < DAM-vX.Y.zip
+      * nickname devices (in the app)
+    * hide devices (from the app)
+
+tested on:
+
