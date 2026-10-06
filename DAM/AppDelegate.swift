@@ -7,6 +7,7 @@ import Combine
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
+    private var iconAnimator: MenuBarIconAnimator!
     private let audioManager = AudioManager()
     private let videoManager = VideoManager()
     private let sidecarManager = SidecarManager()
@@ -80,7 +81,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // picker, `caption` announces an example message, `arrange` opens the Arrange
         // Displays window, `settings` opens Settings, and `switcher` and `airplay` act as their hotkeys do; `connect-airplay` connects the
         // first available AirPlay display without the HUD, and `disconnect-airplay`
-        // disconnects the connected one.
+        // disconnects the connected one. `icon` steps the menu bar icon through
+        // connection counts to show its animation.
         if let mode = UserDefaults.standard.string(forKey: "DAMDebugHUD") {
             switch mode {
             case "connecting": debugPreviewConnectingHUD(nil)
@@ -89,6 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case "mirror":     debugPlayMirrorPicker(nil)
             case "main":       debugPlayMainDisplayPicker(nil)
             case "caption":    debugPreviewCaptionHUD(nil)
+            case "icon":       debugPlayMenuBarIcon(nil)
             case "arrange":    DispatchQueue.main.async { self.openArrangeDisplays(nil) }
             case "settings":   DispatchQueue.main.async { self.openSettings(nil) }
             case "switcher":   DispatchQueue.main.async { self.openSwitcher() }
@@ -132,9 +135,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        let icon = NSImage(named: "MenuBarIcon")
-        icon?.isTemplate = true
-        statusItem.button?.image = icon
+        iconAnimator = MenuBarIconAnimator(button: statusItem.button)
         rebuild()
     }
 
@@ -144,6 +145,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         fill(menu)
         statusItem.menu = menu
         controlStrip.rebuild()
+        iconAnimator.show(count: connectionCount)
+    }
+
+    /// Connections running through the app, shown by the menu bar icon's outflow: AirPlay
+    /// displays and Sidecar iPads in use.
+    private var connectionCount: Int {
+        videoManager.allAirPlayDevices.filter(\.isConnected).count
+            + sidecarManager.devices.filter(\.isConnected).count
     }
 
     /// Replaces `menu`'s items with ones built from the managers' current state.
@@ -235,6 +244,7 @@ extension AppDelegate: NSMenuDelegate {
         sidecarManager.refresh()
         fill(menu)
         controlStrip.rebuild()
+        iconAnimator.show(count: connectionCount)
     }
 
     #if DEBUG
@@ -265,6 +275,19 @@ extension AppDelegate: NSMenuDelegate {
     /// Announces an example status message through the normal speech and caption path.
     @objc func debugPreviewCaptionHUD(_ sender: Any?) {
         SpeechSynthesizer.shared.announce("Mirroring Living Room TV")
+    }
+
+    /// Steps the menu bar icon through connection counts, one change every 2.5 seconds, then
+    /// back to the real count, animating even with Reduce Motion on. A real connection
+    /// change in the meantime shows the real count early.
+    @objc func debugPlayMenuBarIcon(_ sender: Any?) {
+        let counts: [Int?] = [3, 8, 1, 0, 2, nil]
+        for (step, count) in counts.enumerated() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5 + 2.5 * Double(step)) { [weak self] in
+                guard let self else { return }
+                self.iconAnimator.show(count: count ?? self.connectionCount, ignoringReduceMotion: true)
+            }
+        }
     }
 
     @objc func debugHideHUDPreviews(_ sender: Any?) {

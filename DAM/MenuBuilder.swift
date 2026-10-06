@@ -187,6 +187,9 @@ private func debugMenuItem() -> NSMenuItem {
     submenu.addItem(withTitle: "Play Caption Example",
                     action: #selector(AppDelegate.debugPreviewCaptionHUD(_:)),
                     keyEquivalent: "")
+    submenu.addItem(withTitle: "Play Menu Bar Icon Animation",
+                    action: #selector(AppDelegate.debugPlayMenuBarIcon(_:)),
+                    keyEquivalent: "")
     // Unlike the main menu's item, there with a single display too.
     submenu.addItem(withTitle: "Open Arrange Displays",
                     action: #selector(AppDelegate.openArrangeDisplays(_:)),

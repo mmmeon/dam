@@ -1,0 +1,276 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   width="300mm"
+   height="300mm"
+   viewBox="0 0 300 300"
+   version="1.1"
+   id="svg1"
+   inkscape:version="1.4.4 (dcaf3e7d9e, 2026-05-05)"
+   sodipodi:docname="icon.svg"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns:xlink="http://www.w3.org/1999/xlink"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview1"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:document-units="mm"
+     inkscape:zoom="0.65544933"
+     inkscape:cx="559.1584"
+     inkscape:cy="564.49825"
+     inkscape:window-width="1418"
+     inkscape:window-height="1003"
+     inkscape:window-x="180"
+     inkscape:window-y="12"
+     inkscape:window-maximized="0"
+     inkscape:current-layer="icon"
+     showgrid="false">
+    <inkscape:page
+       x="0"
+       y="0"
+       width="300"
+       height="300"
+       id="page-full"
+       inkscape:label="Full"
+       margin="0"
+       bleed="0" />
+    <inkscape:page
+       x="320"
+       y="0"
+       width="300"
+       height="300"
+       id="page-outline"
+       inkscape:label="Outline" />
+    <inkscape:page
+       x="0"
+       y="320"
+       width="1580"
+       height="330"
+       id="page-variants"
+       inkscape:label="Variants" />
+  </sodipodi:namedview>
+  <defs
+     id="defs1">
+    <clipPath
+       id="squircle-clip">
+      <use
+         xlink:href="#squircle" />
+    </clipPath>
+  </defs>
+  <!-- macOS icon grid: 824/1024 body with continuous (squircle) corners.
+       Full icon only; the menu bar variant has no frame. -->
+  <g
+     inkscape:label="Frame"
+     inkscape:groupmode="layer"
+     id="frame"
+     style="fill:none;stroke:#000000;stroke-width:6">
+    <path
+       d="M 112.3285,29.2969 L 187.6715,29.2969 C 211.5801,29.2969 223.5344,29.2969 234.3147,32.8544 C 250.4527,38.4796 261.5204,49.5473 267.1456,65.6853 C 270.7031,76.4656 270.7031,88.4199 270.7031,112.3285 L 270.7031,187.6715 C 270.7031,211.5801 270.7031,223.5344 267.1456,234.3147 C 261.5204,250.4527 250.4527,261.5204 234.3147,267.1456 C 223.5344,270.7031 211.5801,270.7031 187.6715,270.7031 L 112.3285,270.7031 C 88.4199,270.7031 76.4656,270.7031 65.6853,267.1456 C 49.5473,261.5204 38.4796,250.4527 32.8544,234.3147 C 29.2969,223.5344 29.2969,211.5801 29.2969,187.6715 L 29.2969,112.3285 C 29.2969,88.4199 29.2969,76.4656 32.8544,65.6853 C 38.4796,49.5473 49.5473,38.4796 65.6853,32.8544 C 76.4656,29.2969 88.4199,29.2969 112.3285,29.2969 Z"
+       id="squircle"
+       inkscape:label="squircle" />
+  </g>
+  <!-- Fill lives on the layer, not on the shapes, so the outline clone can
+       override it. Don't set fill/stroke on the shapes inside #icon.
+       The knurl lines sit outside #icon because each version has its own:
+       fine lines on the full icon, fewer heavy ones for the menu bar. They
+       carry #icon's transform, so they won't follow if the bar moves. -->
+  <g
+     inkscape:label="Full"
+     inkscape:groupmode="layer"
+     id="full"
+     style="fill:#000000">
+    <!-- Clipped to the squircle; the inner group scales x1.486 so the bar spans
+         the squircle less a 24 unit margin each side, centred across. Vertically
+         the top piece overlaps the frame's border by 2 and the bottom
+         piece runs out of the frame. The menu bar clone isn't affected by this. -->
+    <g
+       id="full-clip"
+       clip-path="url(#squircle-clip)"
+       inkscape:label="clip">
+    <g
+       id="full-scale"
+       transform="matrix(1.486168,0,0,1.486168,-72.925197,-70.532645)"
+       inkscape:label="scale">
+    <g
+       id="icon"
+       transform="translate(2.149,7.2829)">
+      <path
+         d="M 40.427635,60.562414 H 255.274404 C 250.723264,85.31684 249.578164,117.19659 212.836964,133.02493 H 82.865074 C 46.123876,117.19659 44.978779,85.31684 40.427635,60.562414 Z"
+         id="path1"
+         inkscape:label="top"
+         />
+      <path
+         d="M 83.148116,165.02493 C 104.141859,176.82658 118.823984,200.038544 122.784254,246.131294 H 172.917784 C 176.878054,200.038544 191.560179,176.82658 212.553922,165.02493 Z"
+         id="path2"
+         inkscape:label="bottom"
+         inkscape:transform-center-x="1.7512371"
+         inkscape:transform-center-y="-16.284994" />
+      <rect
+         id="rect1"
+         width="129.97189"
+         height="32"
+         x="82.865074"
+         y="133.02493"
+         inkscape:label="center"
+         />
+    </g>
+    <!-- Spaced as evenly turned ridges on a cylinder seen side-on:
+         x = centre + half-width * sin(-63..63 step 9 deg). -->
+    <path
+       d="M 89.9481,133.0249 V 165.0249 M 95.2763,133.0249 V 165.0249 M 101.8990,133.0249 V 165.0249 M 109.6532,133.0249 V 165.0249 M 118.3480,133.0249 V 165.0249 M 127.7693,133.0249 V 165.0249 M 137.6850,133.0249 V 165.0249 M 147.8510,133.0249 V 165.0249 M 158.0171,133.0249 V 165.0249 M 167.9328,133.0249 V 165.0249 M 177.3540,133.0249 V 165.0249 M 186.0488,133.0249 V 165.0249 M 193.8030,133.0249 V 165.0249 M 200.4258,133.0249 V 165.0249 M 205.7539,133.0249 V 165.0249"
+       id="knurl"
+       transform="translate(2.149,7.2829)"
+       inkscape:label="knurl"
+       style="fill:none;stroke:#ffffff;stroke-width:2" />
+    </g>
+    </g>
+  </g>
+  <g
+     inkscape:label="Outline"
+     inkscape:groupmode="layer"
+     id="outline">
+    <!-- Menu bar symbol, drawn on its own (not a clone of the full icon).
+         Generated: bar 200 x 63.3, reservoir 270 wide and 60 tall,
+         outflow cut 50 below the bar (of 100); open top and bottom,
+         centred on the page. The outflow shown is n = 2. -->
+    <g
+       id="menubar"
+       transform="translate(320,0)"
+       style="fill:none;stroke:#000000;stroke-width:14;stroke-linejoin:round;stroke-linecap:round"
+       inkscape:label="menu bar">
+      <path
+         d="M 15,63.35 C 18.752,83.846 19.697,110.246 50,123.35 M 285,63.35 C 281.248,83.846 280.303,110.246 250,123.35"
+         id="top-menubar"
+         inkscape:label="top" />
+      <rect
+         x="50"
+         y="123.35"
+         width="200"
+         height="63.3"
+         id="bar-menubar"
+         inkscape:label="center" />
+      <path
+         d="M 50,186.65 C 70.091,196.096 86.259,211.476 96.727,236.65 M 250,186.65 C 229.909,196.096 213.741,211.476 203.273,236.65"
+         id="bottom-menubar"
+         inkscape:label="bottom" />
+      <path
+         d="M 73.396,123.35 V 186.65 M 107.738,123.35 V 186.65 M 150,123.35 V 186.65 M 192.262,123.35 V 186.65 M 226.604,123.35 V 186.65"
+         id="knurl-menubar"
+         inkscape:label="knurl" />
+    </g>
+  </g>
+  <!-- Menu bar variants for connection count n, generated: the outflow's
+       uncut lower edge is the bar width x (F + (1 - F) * n / (n + 4)),
+       F = 0.1236, n capped at 8; labels give the width at the cut. Top, bar and ridges are clones of the menu bar page,
+       so edits to those show here; the outflows are regenerated, so edits to
+       #bottom-menubar don't reach them. -->
+  <g
+     inkscape:label="Variants"
+     inkscape:groupmode="layer"
+     id="variants">
+    <g
+       id="variant-0"
+       transform="translate(0,320)"
+       style="fill:none;stroke:#000000;stroke-width:14;stroke-linejoin:round;stroke-linecap:round"
+       inkscape:label="n = 0">
+      <use
+         xlink:href="#top-menubar" />
+      <use
+         xlink:href="#bar-menubar" />
+      <path
+         d="M 50,186.65 C 80.136,196.096 104.388,211.476 120.091,236.65 M 250,186.65 C 219.864,196.096 195.612,211.476 179.909,236.65"
+         inkscape:label="bottom (n = 0)" />
+      <use
+         xlink:href="#knurl-menubar" />
+    </g>
+    <text
+       x="150.0"
+       y="636"
+       style="font-family:sans-serif;font-size:12px;text-anchor:middle;fill:#808080">n = 0 · width 59.8</text>
+    <g
+       id="variant-1"
+       transform="translate(320,320)"
+       style="fill:none;stroke:#000000;stroke-width:14;stroke-linejoin:round;stroke-linecap:round"
+       inkscape:label="n = 1">
+      <use
+         xlink:href="#top-menubar" />
+      <use
+         xlink:href="#bar-menubar" />
+      <path
+         d="M 50,186.65 C 74.109,196.096 93.511,211.476 106.073,236.65 M 250,186.65 C 225.891,196.096 206.489,211.476 193.927,236.65"
+         inkscape:label="bottom (n = 1)" />
+      <use
+         xlink:href="#knurl-menubar" />
+    </g>
+    <text
+       x="470.0"
+       y="636"
+       style="font-family:sans-serif;font-size:12px;text-anchor:middle;fill:#808080">n = 1 · width 87.9</text>
+    <g
+       id="variant-2"
+       transform="translate(640,320)"
+       style="fill:none;stroke:#000000;stroke-width:14;stroke-linejoin:round;stroke-linecap:round"
+       inkscape:label="n = 2">
+      <use
+         xlink:href="#top-menubar" />
+      <use
+         xlink:href="#bar-menubar" />
+      <path
+         d="M 50,186.65 C 70.091,196.096 86.259,211.476 96.727,236.65 M 250,186.65 C 229.909,196.096 213.741,211.476 203.273,236.65"
+         inkscape:label="bottom (n = 2)" />
+      <use
+         xlink:href="#knurl-menubar" />
+    </g>
+    <text
+       x="790.0"
+       y="636"
+       style="font-family:sans-serif;font-size:12px;text-anchor:middle;fill:#808080">n = 2 · width 106.5</text>
+    <g
+       id="variant-4"
+       transform="translate(960,320)"
+       style="fill:none;stroke:#000000;stroke-width:14;stroke-linejoin:round;stroke-linecap:round"
+       inkscape:label="n = 4">
+      <use
+         xlink:href="#top-menubar" />
+      <use
+         xlink:href="#bar-menubar" />
+      <path
+         d="M 50,186.65 C 65.068,196.096 77.194,211.476 85.045,236.65 M 250,186.65 C 234.932,196.096 222.806,211.476 214.955,236.65"
+         inkscape:label="bottom (n = 4)" />
+      <use
+         xlink:href="#knurl-menubar" />
+    </g>
+    <text
+       x="1110.0"
+       y="636"
+       style="font-family:sans-serif;font-size:12px;text-anchor:middle;fill:#808080">n = 4 · width 129.9</text>
+    <g
+       id="variant-8"
+       transform="translate(1280,320)"
+       style="fill:none;stroke:#000000;stroke-width:14;stroke-linejoin:round;stroke-linecap:round"
+       inkscape:label="n = 8">
+      <use
+         xlink:href="#top-menubar" />
+      <use
+         xlink:href="#bar-menubar" />
+      <path
+         d="M 50,186.65 C 60.045,196.096 68.129,211.476 73.364,236.65 M 250,186.65 C 239.955,196.096 231.871,211.476 226.636,236.65"
+         inkscape:label="bottom (n = 8)" />
+      <use
+         xlink:href="#knurl-menubar" />
+    </g>
+    <text
+       x="1430.0"
+       y="636"
+       style="font-family:sans-serif;font-size:12px;text-anchor:middle;fill:#808080">n = 8 · width 153.3</text>
+  </g>
+</svg>
