@@ -24,7 +24,6 @@
 		AA200B002F8D607C0090E796 /* AudioManagerFilterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA200A002F8D607C0090E796 /* AudioManagerFilterTests.swift */; };
 		AA300B002F8D607C0090E796 /* VideoManagerFilterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA300A002F8D607C0090E796 /* VideoManagerFilterTests.swift */; };
 		AA400B002F8D607C0090E796 /* HotkeyPreferenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA400A002F8D607C0090E796 /* HotkeyPreferenceTests.swift */; };
-		EE200B022F8D607C0090E796 /* MenuBarIconTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE200A022F8D607C0090E796 /* MenuBarIconTests.swift */; };
 		AA500B002F8D607C0090E796 /* ControlStripPresenterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA500A002F8D607C0090E796 /* ControlStripPresenterTests.swift */; };
 		AA600B002F8D607C0090E796 /* ScreenMirroringPanelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA600A002F8D607C0090E796 /* ScreenMirroringPanelTests.swift */; };
 		AA700B002F8D607C0090E796 /* MirrorPlanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA700A002F8D607C0090E796 /* MirrorPlanTests.swift */; };
@@ -38,7 +37,6 @@
 		BB520C012F8D60780090E796 /* DisplayRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB520B012F8D60780090E796 /* DisplayRegistry.swift */; };
 		CC000C002F8D60780090E796 /* AirPlayQuickConnect.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B002F8D60780090E796 /* AirPlayQuickConnect.swift */; };
 		CC000C012F8D60780090E796 /* HUD.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B012F8D60780090E796 /* HUD.swift */; };
-		EE200B012F8D60780090E796 /* MenuBarIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE200A012F8D60780090E796 /* MenuBarIcon.swift */; };
 		CC000C022F8D60780090E796 /* AudioOutputPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B022F8D60780090E796 /* AudioOutputPicker.swift */; };
 		CC000C302F8D60780090E796 /* ScreenMirroringPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B302F8D60780090E796 /* ScreenMirroringPanel.swift */; };
 		CC000C312F8D60780090E796 /* SidecarManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B312F8D60780090E796 /* SidecarManager.swift */; };
@@ -53,6 +51,8 @@
 		DD100B012F8D607C0090E796 /* ArrangeTouchBarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A012F8D607C0090E796 /* ArrangeTouchBarTests.swift */; };
 		DD100B0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift */; };
 		DD100B0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift */; };
+		EE200B012F8D60780090E796 /* MenuBarIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE200A012F8D60780090E796 /* MenuBarIcon.swift */; };
+		EE200B022F8D607C0090E796 /* MenuBarIconTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE200A022F8D607C0090E796 /* MenuBarIconTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -86,7 +86,6 @@
 		AA200A002F8D607C0090E796 /* AudioManagerFilterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioManagerFilterTests.swift; sourceTree = "<group>"; };
 		AA300A002F8D607C0090E796 /* VideoManagerFilterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoManagerFilterTests.swift; sourceTree = "<group>"; };
 		AA400A002F8D607C0090E796 /* HotkeyPreferenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyPreferenceTests.swift; sourceTree = "<group>"; };
-		EE200A022F8D607C0090E796 /* MenuBarIconTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarIconTests.swift; sourceTree = "<group>"; };
 		AA500A002F8D607C0090E796 /* ControlStripPresenterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlStripPresenterTests.swift; sourceTree = "<group>"; };
 		AA600A002F8D607C0090E796 /* ScreenMirroringPanelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenMirroringPanelTests.swift; sourceTree = "<group>"; };
 		AA700A002F8D607C0090E796 /* MirrorPlanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirrorPlanTests.swift; sourceTree = "<group>"; };
@@ -100,7 +99,6 @@
 		BB520B012F8D60780090E796 /* DisplayRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayRegistry.swift; sourceTree = "<group>"; };
 		CC000B002F8D60780090E796 /* AirPlayQuickConnect.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AirPlayQuickConnect.swift; sourceTree = "<group>"; };
 		CC000B012F8D60780090E796 /* HUD.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HUD.swift; sourceTree = "<group>"; };
-		EE200A012F8D60780090E796 /* MenuBarIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarIcon.swift; sourceTree = "<group>"; };
 		CC000B022F8D60780090E796 /* AudioOutputPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioOutputPicker.swift; sourceTree = "<group>"; };
 		CC000B302F8D60780090E796 /* ScreenMirroringPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenMirroringPanel.swift; sourceTree = "<group>"; };
 		CC000B312F8D60780090E796 /* SidecarManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarManager.swift; sourceTree = "<group>"; };
@@ -115,6 +113,8 @@
 		DD100A012F8D607C0090E796 /* ArrangeTouchBarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArrangeTouchBarTests.swift; sourceTree = "<group>"; };
 		DD100A0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayNicknameTests.swift; sourceTree = "<group>"; };
 		DD100A0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarDisplayTests.swift; sourceTree = "<group>"; };
+		EE200A012F8D60780090E796 /* MenuBarIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarIcon.swift; sourceTree = "<group>"; };
+		EE200A022F8D607C0090E796 /* MenuBarIconTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarIconTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -547,7 +547,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "$(APP_NAME)";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_LSUIElement = YES;
-				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 mmmeon";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "twentytwentysix+";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -585,7 +585,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "$(APP_NAME)";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_LSUIElement = YES;
-				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 mmmeon";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "twentytwentysix+";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
