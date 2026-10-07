@@ -6,7 +6,7 @@ import AppKit
 
 /// The menu bar symbol: a reservoir over a knurled dam over an outflow whose width shows how
 /// many connections run through the app. Drawn from the same numbers as the Outline page of
-/// icon.svg, in units of that 300 x 300 page, scaled to the status item.
+/// icons/icon.svg, in units of that 300 x 300 page, scaled to the status item.
 enum MenuBarIcon {
     /// Wider than tall, like the symbol; still inside the status item's square length.
     static let size = NSSize(width: 20, height: 18)
