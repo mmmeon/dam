@@ -1,11 +1,13 @@
 name: Release
 
-# v* tags publish a versioned release. Pushes to main replace the rolling
+# v* tags publish a versioned release. Once a day, main replaces the rolling
 # "nightly" pre-release, which never becomes the repo's latest release.
 on:
   push:
     tags: ['v*']
-    branches: [main]
+  schedule:
+    - cron: '0 6 * * *'  # skipped when main hasn't changed since the last nightly
+  workflow_dispatch:  # build a nightly from main now, even if unchanged
 
 permissions:
   contents: write
@@ -21,7 +23,25 @@ env:
   NAME: ${{ github.ref_type == 'tag' && github.ref_name || 'nightly' }}
 
 jobs:
+  changed:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          built=$(gh api "repos/$GITHUB_REPOSITORY/commits/nightly" -q .sha 2>/dev/null) || built=
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] || [ "$built" != "$GITHUB_SHA" ]; then
+            echo build=true >> "$GITHUB_OUTPUT"
+          fi
+
   release:
+    needs: changed
+    # changed is skipped for tags, so don't let that skip this job.
+    if: ${{ !cancelled() && !failure() && (github.ref_type == 'tag' || needs.changed.outputs.build == 'true') }}
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v7

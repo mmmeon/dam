@@ -1,7 +1,8 @@
 name: Build
 
-# Pushes to main are built and tested by release.yml.
 on:
+  push:
+    branches: [main]
   pull_request:
 
 jobs:
