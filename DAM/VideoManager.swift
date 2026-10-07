@@ -298,6 +298,11 @@ final class VideoManager: ObservableObject {
         let work = DispatchWorkItem { [weak self] in
             self?.reassertAnchorLayout()
             self?.mergeDevices()
+            // WindowServer places a display that arrives beside a virtual anchor on top of
+            // it (an AirPlay TV joining an anchored iPad); move it off.
+            if let self, !self.virtualAnchorCGIDs.isEmpty, !self.virtualAnchorReassertInFlight {
+                self.separateOverlappingDisplays()
+            }
             // A resolution or arrangement change leaves the display list as it was, yet the
             // menu's and Touch Bar's mode markers need rebuilding; announce a change anyway.
             self?.objectWillChange.send()
