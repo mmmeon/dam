@@ -1,7 +1,7 @@
 {name}
 Display Audio Manager
 
-made for broken macbooks 
+made for broken macbooks
 but works for others
 
 v{version} ({build})
