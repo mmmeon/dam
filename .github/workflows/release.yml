@@ -1,8 +1,11 @@
 name: Release
 
+# v* tags publish a versioned release. Pushes to main replace the rolling
+# "nightly" pre-release, which never becomes the repo's latest release.
 on:
   push:
     tags: ['v*']
+    branches: [main]
 
 permissions:
   contents: write
@@ -10,11 +13,18 @@ permissions:
   attestations: write
   artifact-metadata: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type == 'branch' }}
+
+env:
+  NAME: ${{ github.ref_type == 'tag' && github.ref_name || 'nightly' }}
+
 jobs:
   release:
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0  # Stamp Commit sets CFBundleVersion from the commit count
 
@@ -29,6 +39,11 @@ jobs:
 
       - name: Build (Release, ad-hoc signed, arm64 + x86_64)
         run: |
+          # Nightlies keep the project's MARKETING_VERSION.
+          version=()
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            version=(MARKETING_VERSION="${GITHUB_REF_NAME#v}")
+          fi
           xcodebuild -project DAM.xcodeproj -scheme DAM \
             -configuration Release \
             -destination 'generic/platform=macOS' \
@@ -36,7 +51,7 @@ jobs:
             ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO \
             CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=YES CODE_SIGNING_ALLOWED=YES \
             DEVELOPMENT_TEAM= \
-            MARKETING_VERSION="${GITHUB_REF_NAME#v}" \
+            "${version[@]}" \
             build
 
       - name: Package
@@ -45,7 +60,7 @@ jobs:
           ditto build/dd/Build/Products/Release/DAM.app stage/DAM.app
           ln -s /Applications stage/Applications
           hdiutil create -volname DAM -srcfolder stage -format UDZO -ov \
-            "dist/DAM-${GITHUB_REF_NAME}.dmg"
+            "dist/DAM-${NAME}.dmg"
           (cd dist && shasum -a 256 *.dmg > SHA256SUMS)
 
       - name: Attest build provenance
@@ -54,9 +69,22 @@ jobs:
           subject-path: dist/DAM-*.dmg
 
       - name: Publish GitHub release
+        if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/* \
-            --title "DAM ${GITHUB_REF_NAME}" \
+          gh release create "$NAME" dist/* \
+            --title "DAM ${NAME}" \
             --generate-notes
+
+      - name: Publish nightly pre-release
+        if: github.ref_type == 'branch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete nightly --cleanup-tag --yes || true
+          gh release create nightly dist/* \
+            --target "$GITHUB_SHA" \
+            --prerelease --latest=false \
+            --title "DAM nightly" \
+            --notes "Built from ${GITHUB_SHA::7}. Not a versioned release."
