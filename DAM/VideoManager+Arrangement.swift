@@ -50,6 +50,23 @@ extension VideoManager {
         })
     }
 
+    /// Moves apart displays that overlap, as after an anchor grows into its neighbour: each
+    /// placement that overlaps an earlier one snaps to the nearest free edge of the others.
+    func separateOverlappingDisplays() {
+        var layout = currentLayout()
+        var changed = false
+        for i in layout.placements.indices {
+            let others = layout.placements.indices.filter { $0 != i }.map { layout.placements[$0].frame }
+            guard layout.placements[..<i].contains(where: {
+                DisplayLayout.overlaps($0.frame, layout.placements[i].frame)
+            }), let free = DisplayLayout.snap(layout.placements[i].frame, to: others) else { continue }
+            arrangeLog.debug("separate: \(layout.placements[i].id) overlaps; moving to \(Int(free.minX)),\(Int(free.minY))")
+            layout.placements[i].frame = free
+            changed = true
+        }
+        if changed { arrange(layout) }
+    }
+
     /// Applies `layout`: every placement gets its origin, shifted so that `main` (or the
     /// current main display) is at the origin, in one transaction. Mirror slaves follow
     /// their master. The arrangement each virtual anchor will restore on release is updated
