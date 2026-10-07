@@ -6,6 +6,9 @@ on:
 
 permissions:
   contents: write
+  id-token: write  # Sigstore signing certificate for the attestation
+  attestations: write
+  artifact-metadata: write
 
 jobs:
   release:
@@ -38,29 +41,22 @@ jobs:
 
       - name: Package
         run: |
-          mkdir -p dist
-          ditto -c -k --keepParent build/dd/Build/Products/Release/DAM.app \
-            "dist/DAM-${GITHUB_REF_NAME}.zip"
+          mkdir -p dist stage
+          ditto build/dd/Build/Products/Release/DAM.app stage/DAM.app
+          ln -s /Applications stage/Applications
+          hdiutil create -volname DAM -srcfolder stage -format UDZO -ov \
+            "dist/DAM-${GITHUB_REF_NAME}.dmg"
+          (cd dist && shasum -a 256 *.dmg > SHA256SUMS)
 
-      - name: Sign with SSH key
-        env:
-          SSH_SIGNING_KEY: ${{ secrets.SSH_SIGNING_KEY }}
-        run: |
-          key="$RUNNER_TEMP/signing_key"
-          printf '%s\n' "$SSH_SIGNING_KEY" > "$key"
-          chmod 600 "$key"
-          zip="dist/DAM-${GITHUB_REF_NAME}.zip"
-          ssh-keygen -Y sign -f "$key" -n file "$zip"
-          rm -f "$key"
-          # Fail if the secret doesn't match the public key in the repo.
-          ssh-keygen -Y verify -f allowed_signers -I dam-release -n file \
-            -s "$zip.sig" < "$zip"
-          (cd dist && shasum -a 256 *.zip > SHA256SUMS)
+      - name: Attest build provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/DAM-*.dmg
 
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/* allowed_signers \
+          gh release create "$GITHUB_REF_NAME" dist/* \
             --title "DAM ${GITHUB_REF_NAME}" \
             --generate-notes
