@@ -87,4 +87,4 @@ jobs:
             --target "$GITHUB_SHA" \
             --prerelease --latest=false \
             --title "DAM nightly" \
-            --notes "Built from ${GITHUB_SHA::7}. Not a versioned release."
+            --notes "built from ${GITHUB_SHA::7}."
