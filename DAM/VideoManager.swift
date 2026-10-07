@@ -170,6 +170,14 @@ final class VideoManager: ObservableObject {
     /// An iPad's own mode by display, read when its anchor was created. While it mirrors the
     /// anchor the iPad reports the anchor's size instead, so the size choices come from this.
     var sidecarNativeModes: [CGDirectDisplayID: DisplayMode] = [:]
+    /// Mirror changes in flight. While any is, iPads are not given anchors: one releases an
+    /// iPad's anchor before its commit lands, and re-anchoring in between breaks the new set.
+    var sidecarBackingHolds = 0
+    /// Displays the user set to mirror an iPad, which DAM wires to the iPad's anchor. Kept
+    /// when the anchor is resized, unlike other displays WindowServer adds to its set.
+    var anchorSetSlaves: Set<CGDirectDisplayID> = []
+    /// Displays to mirror onto an iPad's anchor once it is up, by the iPad's name.
+    var anchorPendingSlaves: [String: [CGDirectDisplayID]] = [:]
     /// A stand-in virtual display, created when Sidecar is asked to connect while the Mac has
     /// no display at all, and dropped once the iPad has a display of its own to sit with.
     var bootstrapDisplay: AnyObject?
@@ -387,7 +395,37 @@ final class VideoManager: ObservableObject {
 
     /// The display `cgID` mirrors, unless it mirrors nothing or one of DAM's virtual anchors.
     func userMirrorMaster(of cgID: CGDirectDisplayID) -> CGDirectDisplayID? {
-        Self.userMirrorMaster(CGDisplayMirrorsDisplay(cgID), anchorIDs: Set(virtualAnchorCGIDs.values))
+        Self.userMirrorMaster(mirrorMaster(of: cgID), anchorIDs: Set(virtualAnchorCGIDs.values))
+    }
+
+    /// The display `cgID` mirrors as CoreGraphics reports it, except that a display mirroring
+    /// another display's anchor (the TV in a set with an anchored iPad) mirrors that display.
+    func mirrorMaster(of cgID: CGDirectDisplayID) -> CGDirectDisplayID {
+        let master = CGDisplayMirrorsDisplay(cgID)
+        guard let target = anchorTarget(of: master), target != cgID else { return master }
+        return target
+    }
+
+    /// The anchored iPad `display` mirrors through the iPad's anchor, if it does.
+    func anchoredMaster(of display: DisplayInfo) -> DisplayInfo? {
+        guard display.cgDisplayID != 0,
+              let target = anchorTarget(of: CGDisplayMirrorsDisplay(display.cgDisplayID)),
+              target != display.cgDisplayID else { return nil }
+        return (allConnectedDisplays + allAirPlayDevices).first { $0.cgDisplayID == target }
+    }
+
+    /// The display the anchor `anchorID` drives, if it is one of DAM's anchors.
+    func anchorTarget(of anchorID: CGDirectDisplayID) -> CGDirectDisplayID? {
+        guard anchorID != 0, let name = virtualAnchorCGIDs.first(where: { $0.value == anchorID })?.key
+        else { return nil }
+        return virtualAnchorTargets[name]
+    }
+
+    /// The anchor driving `cgID`, if it has one.
+    func anchorID(driving cgID: CGDirectDisplayID) -> CGDirectDisplayID? {
+        guard cgID != 0, let name = virtualAnchorTargets.first(where: { $0.value == cgID })?.key
+        else { return nil }
+        return virtualAnchorCGIDs[name]
     }
 
     /// `master` as reported by CoreGraphics, unless it is nothing or one of DAM's anchors.
@@ -396,8 +434,13 @@ final class VideoManager: ObservableObject {
         master != CGDirectDisplayID(0) && !anchorIDs.contains(master) ? master : nil
     }
 
+    /// The displays mirroring `cgID`, counting those that mirror its anchor.
     private func slaves(of cgID: CGDirectDisplayID) -> [CGDirectDisplayID] {
-        DisplayArrangement.onlineDisplayIDs().filter { CGDisplayMirrorsDisplay($0) == cgID }
+        let anchor = anchorID(driving: cgID)
+        return DisplayArrangement.onlineDisplayIDs().filter {
+            $0 != cgID && (CGDisplayMirrorsDisplay($0) == cgID
+                || (anchor != nil && CGDisplayMirrorsDisplay($0) == anchor))
+        }
     }
 
     /// The displays that can mirror `display`: every other connected one, built-in first,
@@ -481,7 +524,7 @@ final class VideoManager: ObservableObject {
         }
         guard display.cgDisplayID != 0 else { return finish(.failure(.notConnected)) }
         let id = display.cgDisplayID
-        let plan = Self.mirrorPlan(for: id, master: CGDisplayMirrorsDisplay(id), slaves: slaves(of: id),
+        let plan = Self.mirrorPlan(for: id, master: mirrorMaster(of: id), slaves: slaves(of: id),
                                    anchorIDs: Set(virtualAnchorCGIDs.values),
                                    candidates: allConnectedDisplays + allAirPlayDevices)
         switch plan {
@@ -508,10 +551,13 @@ final class VideoManager: ObservableObject {
     /// one transaction, since adding to an existing set can fail silently.
     func mirror(_ display: DisplayInfo, on slaves: [DisplayInfo],
                 completion: ((Result<Void, MirrorError>) -> Void)? = nil) {
-        let finish: (Result<Void, MirrorError>) -> Void = { result in
+        sidecarBackingHolds += 1
+        let finish: (Result<Void, MirrorError>) -> Void = { [weak self] result in
             if case .failure(let error) = result {
                 mirrorLog.error("mirror '\(display.name)': \(String(describing: error))")
             }
+            // WindowServer reports the new set a moment after the commit.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { self?.sidecarBackingHolds -= 1 }
             completion?(result)
         }
         guard display.cgDisplayID != 0 else { return finish(.failure(.notConnected)) }
@@ -519,13 +565,19 @@ final class VideoManager: ObservableObject {
         let slaves = slaves.filter { $0.cgDisplayID != 0 && $0.cgDisplayID != id }
         guard !slaves.isEmpty else { return finish(.failure(.noOtherDisplay)) }
         let slaveIDs = slaves.map(\.cgDisplayID)
-        mirrorLog.debug("mirror: \(slaveIDs) onto \(id)")
-        releaseVirtualAnchors(for: [display] + slaves) { [weak self] in
+        // An anchored iPad keeps its anchor, which the others mirror too: releasing it
+        // would cost the iPad its sizes, and Sidecar does not hold up without one.
+        let keptAnchor = display.isSidecar ? anchorID(driving: id) : nil
+        mirrorLog.debug("mirror: \(slaveIDs) onto \(id)\(keptAnchor.map { " via its anchor \($0)" } ?? "")")
+        releaseVirtualAnchors(for: (keptAnchor == nil ? [display] : []) + slaves) { [weak self] in
             guard let self else { return }
             self.dissolveMirrorSets(of: [id] + slaveIDs) { result in
                 if case .failure(let error) = result { return finish(.failure(error)) }
+                let masterID = keptAnchor ?? id
+                self.anchorSetSlaves.subtract([id] + slaveIDs)
+                if keptAnchor != nil { self.anchorSetSlaves.formUnion(slaveIDs) }
                 self.commitDisplayChange({ cfg in
-                    for slave in slaveIDs { CGConfigureDisplayMirrorOfDisplay(cfg, slave, id) }
+                    for slave in slaveIDs { CGConfigureDisplayMirrorOfDisplay(cfg, slave, masterID) }
                 }, completion: finish)
             }
         }
@@ -536,10 +588,11 @@ final class VideoManager: ObservableObject {
     func extend(_ display: DisplayInfo, completion: ((Result<Void, MirrorError>) -> Void)? = nil) {
         guard display.cgDisplayID != 0 else { completion?(.failure(.notConnected)); return }
         let toExtend = Self.displaysToExtend(freeing: [display.cgDisplayID],
-                                             masterOf: { CGDisplayMirrorsDisplay($0) },
+                                             masterOf: { self.mirrorMaster(of: $0) },
                                              slavesOf: slaves(of:), anchorIDs: Set(virtualAnchorCGIDs.values))
         guard !toExtend.isEmpty else { completion?(.success(())); return }
         mirrorLog.debug("extend: freeing \(toExtend)")
+        anchorSetSlaves.subtract(toExtend)
         commitDisplayChange({ cfg in
             for id in toExtend { CGConfigureDisplayMirrorOfDisplay(cfg, id, CGDirectDisplayID(0)) }
         }) { completion?($0) }
@@ -641,7 +694,7 @@ final class VideoManager: ObservableObject {
     /// `completion` at once when none of them is in a set.
     private func dissolveMirrorSets(of ids: [CGDirectDisplayID],
                                     completion: @escaping (Result<Void, MirrorError>) -> Void) {
-        let toExtend = Self.displaysToExtend(freeing: ids, masterOf: { CGDisplayMirrorsDisplay($0) },
+        let toExtend = Self.displaysToExtend(freeing: ids, masterOf: { self.mirrorMaster(of: $0) },
                                              slavesOf: slaves(of:), anchorIDs: Set(virtualAnchorCGIDs.values))
         guard !toExtend.isEmpty else { return completion(.success(())) }
         mirrorLog.debug("dissolveMirrorSets: extending \(toExtend) first")
@@ -820,6 +873,27 @@ final class VideoManager: ObservableObject {
             completion?(.success(()))
             return
         }
+        // An iPad without an anchor gets one first, and the set mirrors that, so the iPad
+        // keeps its sizes (see anchorPendingSlaves).
+        if display.isSidecar, VisibilityPreferences.backsSidecarWithVirtualDisplay,
+           !hasVirtualAnchor(for: display.name) {
+            let members = [master] + slaves(of: master).filter { $0 != display.cgDisplayID }
+            mirrorLog.debug("setAsOptimizedDisplay: anchoring \(display.cgDisplayID) for \(members)")
+            // The set is reshaped onto the anchor in the anchor's own mirror transaction,
+            // without taking it apart first, so the screens change as few times as possible.
+            anchorPendingSlaves[display.name] = members
+            enableVirtualAnchor(for: display)
+            completion?(.success(()))
+            return
+        }
+        // An anchored iPad's set is wired through its anchor; mirror() takes that apart.
+        if anchorID(driving: master) != nil {
+            let members = ([master] + slaves(of: master)).filter { $0 != display.cgDisplayID }
+            mirrorLog.debug("setAsOptimizedDisplay: \(display.cgDisplayID) replaces anchored \(master)")
+            return mirror(display, on: (allConnectedDisplays + allAirPlayDevices).filter {
+                members.contains($0.cgDisplayID)
+            }, completion: completion)
+        }
         // The old master and every other member of the set come to mirror the new master.
         let others = slaves(of: master).filter { $0 != display.cgDisplayID }
         mirrorLog.debug("setAsOptimizedDisplay: \(display.cgDisplayID) replaces \(master); others \(others)")
@@ -838,7 +912,7 @@ final class VideoManager: ObservableObject {
     /// first, or none when it is not in one.
     func mirrorSetMembers(of display: DisplayInfo) -> [DisplayInfo] {
         guard display.cgDisplayID != 0 else { return [] }
-        let ids = Self.mirrorSetIDs(of: display.cgDisplayID, masterOf: { CGDisplayMirrorsDisplay($0) },
+        let ids = Self.mirrorSetIDs(of: display.cgDisplayID, masterOf: { self.mirrorMaster(of: $0) },
                                     slavesOf: slaves(of:), anchorIDs: Set(virtualAnchorCGIDs.values))
         let known = allConnectedDisplays + allAirPlayDevices
         return ids.compactMap { id in known.first { $0.cgDisplayID == id } }

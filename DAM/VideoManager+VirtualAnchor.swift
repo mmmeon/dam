@@ -235,7 +235,11 @@ extension VideoManager {
         // mode at a size that also has a downsampled HiDPI one (a 1080p panel offering
         // 1920×1080 HiDPI backed by 3840×2160), and the largest remaining 1x mode can be
         // the wrong shape.
-        let native = Self.nativeSize(of: all)
+        // An iPad in a mirror set also lists the set's size as a 1x mode, which can be larger
+        // than the iPad and the wrong shape; its own mode gives the native size instead.
+        let native = display.isSidecar
+            ? sidecarNativeMode(for: display.cgDisplayID).map { ($0.pixelWidth, $0.pixelHeight) }
+            : Self.nativeSize(of: all)
         let perSize = Self.onePerSize(all, native: native)
         var modes = Self.pickerResolutions(perSize, native: native, current: current,
                                            includeLarger1x: includeLarger1x)
@@ -489,8 +493,13 @@ extension VideoManager {
         // resolution (including HiDPI backing) so only refresh rate changes are exposed.
         let locked: DisplayMode? = context == .airPlay ? nil : currentMode(for: display.cgDisplayID)
         // An iPad's anchor instead offers a range of sizes in the iPad's shape, scaled onto it.
-        if display.isSidecar, let locked { sidecarNativeModes[display.cgDisplayID] = locked }
-        let sidecarModes = display.isSidecar ? locked.map(Self.sidecarVirtualModes(native:)) : nil
+        // An iPad in a mirror set runs at the set's size, not its own; its own mode then
+        // comes from its mode list (see sidecarNativeMode(for:)).
+        if display.isSidecar, CGDisplayMirrorsDisplay(display.cgDisplayID) == 0, let locked {
+            sidecarNativeModes[display.cgDisplayID] = locked
+        }
+        let sidecarModes = display.isSidecar
+            ? sidecarNativeMode(for: display.cgDisplayID).map(Self.sidecarVirtualModes(native:)) : nil
         let resolutions: [(width: Int, height: Int)]
         if let sidecarModes {
             var sizes: [(width: Int, height: Int)] = []
@@ -678,7 +687,7 @@ extension VideoManager {
     /// Looked up by the name the anchor has by then, as the iPad may only have been named
     /// "Sidecar Display" when it was anchored.
     func sidecarStartMode(for cgID: CGDirectDisplayID) -> DisplayMode? {
-        guard let native = sidecarNativeModes[cgID] else { return nil }
+        guard let native = sidecarNativeMode(for: cgID) else { return nil }
         let modes = Self.sidecarVirtualModes(native: native)
         let name = virtualAnchorTargets.first { $0.value == cgID }?.key
         let stored = name.flatMap(VisibilityPreferences.sidecarResolution(for:))
@@ -686,9 +695,20 @@ extension VideoManager {
             ?? modes.first { $0.width == native.width && $0.height == native.height }
     }
 
+    /// An iPad's own mode: the one recorded when DAM anchored it, else the iPad's largest
+    /// HiDPI mode as CoreGraphics lists it (an iPad anchored before DAM ran, or whose
+    /// display ID changed, has none recorded). Recorded once found.
+    func sidecarNativeMode(for cgID: CGDirectDisplayID) -> DisplayMode? {
+        if let known = sidecarNativeModes[cgID] { return known }
+        let modes = availableModes(for: cgID)
+        guard let native = modes.first(where: \.isHiDPI) ?? modes.first else { return nil }
+        sidecarNativeModes[cgID] = native
+        return native
+    }
+
     /// Resolution choices for an iPad driven by its anchor, and the index of the one in effect.
     func sidecarResolutionOptions(for display: DisplayInfo) -> (modes: [DisplayMode], currentIndex: Int?) {
-        let modes = sidecarNativeModes[display.cgDisplayID].map(Self.sidecarVirtualModes(native:)) ?? []
+        let modes = sidecarNativeMode(for: display.cgDisplayID).map(Self.sidecarVirtualModes(native:)) ?? []
         let current = currentModes(for: display).anchor
         let index = current.flatMap { cur in modes.firstIndex { $0.width == cur.width && $0.height == cur.height } }
         return (modes, index)
@@ -714,11 +734,12 @@ extension VideoManager {
         }
     }
 
-    /// Whether an iPad can be given an anchor now: it is in no mirror set (one the user made,
+    /// Whether an iPad can be given an anchor now: no mirror change is in flight, it is in no mirror set (one the user made,
     /// or an anchor's own — it already has one, whatever it is called), and no anchor is still
     /// being set up, since that one may be for this iPad. A later merge tries again.
     private func canBack(_ cgID: CGDirectDisplayID) -> Bool {
-        CGDisplayMirrorsDisplay(cgID) == 0
+        sidecarBackingHolds == 0
+            && CGDisplayMirrorsDisplay(cgID) == 0
             && !DisplayArrangement.onlineDisplayIDs().contains { CGDisplayMirrorsDisplay($0) == cgID }
             && !virtualAnchorStore.keys.contains { virtualAnchorCGIDs[$0] == nil }
     }
@@ -914,7 +935,9 @@ extension VideoManager {
         // background queue so the Touch Bar and UI stay responsive.
         let existingMirror = CGDisplayMirrorsDisplay(airPlayID)
         vdLog.debug("step1: airPlayID=\(airPlayID) existingMirrorMaster=\(existingMirror)")
-        let hadExistingMirror = existingMirror != CGDirectDisplayID(0)
+        // Not when other displays wait to join: step 2 reshapes the whole set onto the
+        // anchor in one transaction (see anchorPendingSlaves).
+        let hadExistingMirror = existingMirror != CGDirectDisplayID(0) && anchorPendingSlaves[name] == nil
         if hadExistingMirror {
             var teardown: CGDisplayConfigRef?
             let tearErr = CGBeginDisplayConfiguration(&teardown)
@@ -961,10 +984,16 @@ extension VideoManager {
             vdLog.error("step2: BeginDisplayConfiguration failed — aborting")
             return
         }
+        // Displays waiting to join the iPad's set mirror the anchor in this same transaction,
+        // so the screens are reconfigured once, and are left out of the layout put back.
+        let online = Set(DisplayArrangement.onlineDisplayIDs())
+        let joining = (anchorPendingSlaves.removeValue(forKey: name) ?? []).filter(online.contains)
+        anchorSetSlaves.formUnion(joining)
+        let excluded = Set([airPlayID, virtualID] + joining)
         // Undo the default layout WindowServer applied when the virtual display appeared,
         // and put the new mirror set where the target display used to be.
         let arrangement = virtualAnchorArrangements[name]
-        arrangement?.restore(in: cfg, excluding: [airPlayID, virtualID])
+        arrangement?.restore(in: cfg, excluding: excluded)
         if let origin = arrangement?.origins[airPlayID] {
             CGConfigureDisplayOrigin(cfg, virtualID, Int32(origin.x), Int32(origin.y))
         }
@@ -983,6 +1012,8 @@ extension VideoManager {
             CGConfigureDisplayWithDisplayMode(cfg, virtualID, cgMode, nil)
         }
         CGConfigureDisplayMirrorOfDisplay(cfg, airPlayID, virtualID)
+        if !joining.isEmpty { vdLog.debug("step2: \(joining) join the set on the anchor") }
+        for id in joining { CGConfigureDisplayMirrorOfDisplay(cfg, id, virtualID) }
         // CGCompleteDisplayConfiguration can block for ~10 s on some systems while the
         // display config settles — run on a background queue to keep the UI responsive.
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -994,7 +1025,7 @@ extension VideoManager {
             }
             // Step 3: let the system settle, then refresh the UI on the main queue.
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-                self?.restoreArrangementAfterMirror(name: name, excluding: [airPlayID, virtualID])
+                self?.restoreArrangementAfterMirror(name: name, excluding: excluded)
                 // Normally set with the mirror already; this catches an iPad renamed meanwhile
                 // (its remembered size is filed under the new name) or a mode the commit lost.
                 if let self, let mode = self.anchorStartMode(initialMode, slaveID: airPlayID),
@@ -1051,7 +1082,7 @@ extension VideoManager {
             return
         }
         let strays = DisplayArrangement.onlineDisplayIDs().filter {
-            $0 != slaveID && CGDisplayMirrorsDisplay($0) == anchorID
+            $0 != slaveID && CGDisplayMirrorsDisplay($0) == anchorID && !anchorSetSlaves.contains($0)
         }
         for id in strays {
             vdLog.debug("setModeOnVirtualAnchor: releasing display \(id) from the anchor's mirror set")
@@ -1059,9 +1090,11 @@ extension VideoManager {
         }
         virtualAnchorArrangements[name]?.restore(in: cfg, excluding: [anchorID, slaveID])
         CGConfigureDisplayWithDisplayMode(cfg, anchorID, cgMode, nil)
-        DispatchQueue.global(qos: .userInitiated).async {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let completeErr = CGCompleteDisplayConfiguration(cfg, .forAppOnly)
             vdLog.debug("setModeOnVirtualAnchor: CompleteDisplayConfiguration err=\(completeErr.rawValue)")
+            // A larger anchor can come to overlap a display WindowServer did not move.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self?.separateOverlappingDisplays() }
         }
     }
 
@@ -1125,15 +1158,17 @@ extension VideoManager {
             return
         }
         let arrangements = virtualAnchorSettleDeadlines.keys.compactMap { virtualAnchorArrangements[$0] }
-        let excluded = Set(virtualAnchorCGIDs.values).union(virtualAnchorTargets.values)
+        let excluded = Set(virtualAnchorCGIDs.values).union(virtualAnchorTargets.values).union(anchorSetSlaves)
         let online = Set(DisplayArrangement.onlineDisplayIDs())
 
         var config: CGDisplayConfigRef?
         guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else { return }
         var changed = false
         for (name, anchorID) in virtualAnchorCGIDs where online.contains(anchorID) {
+            // Not a display others now mirror: the user made it the master of a set.
             if let target = virtualAnchorTargets[name], online.contains(target),
-               CGDisplayMirrorsDisplay(target) != anchorID {
+               CGDisplayMirrorsDisplay(target) != anchorID,
+               !online.contains(where: { CGDisplayMirrorsDisplay($0) == target }) {
                 vdLog.debug("reassert: display \(target) back onto its anchor \(anchorID)")
                 CGConfigureDisplayMirrorOfDisplay(cfg, target, anchorID)
                 changed = true

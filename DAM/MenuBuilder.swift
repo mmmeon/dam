@@ -220,6 +220,15 @@ private func buildResolutionSubmenu(display: DisplayInfo, video: VideoManager) -
     let submenu = NSMenu()
     let current = video.currentModes(for: display)
 
+    // A display mirroring an iPad through the iPad's anchor runs at whatever the anchor
+    // does; what it reports itself is a scaled mode WindowServer made up.
+    if let master = video.anchoredMaster(of: display) {
+        submenu.addItem(sectionHeader("Resolution"))
+        let size = video.currentModes(for: master).anchor.map { " · \($0.resolutionLabel)" } ?? ""
+        submenu.addItem(disabledItem("Follows \(master.label)\(size)"))
+        return submenu
+    }
+
     if display.isSidecar, video.hasVirtualAnchor(for: display.name) {
         // The anchor's sizes, scaled onto the iPad. Sidecar runs at 60 Hz only.
         let resolutions = video.sidecarResolutionOptions(for: display)
@@ -350,24 +359,19 @@ private func disconnectItem(for display: DisplayInfo) -> NSMenuItem {
     return item
 }
 
-/// "Optimize for", listing the displays in the mirror set `display` belongs to with the
-/// optimized one checked; picking another makes the set run at that display's resolution
-/// without leaving mirror mode. Nil when the display is not in a set.
+/// "Optimize for This Display", checked when `display` is the optimized (master) one of its
+/// mirror set; picking it makes the set run at this display's resolution without leaving
+/// mirror mode. Nil when the display is not in a set.
 private func optimizeItem(for display: DisplayInfo, video: VideoManager) -> NSMenuItem? {
     let members = video.mirrorSetMembers(of: display)
     guard members.count >= 2 else { return nil }
-    let submenu = NSMenu()
-    for (i, member) in members.enumerated() {
-        let item = NSMenuItem(title: member.label,
-                              action: #selector(AppDelegate.optimizeForDisplay(_:)),
-                              keyEquivalent: "")
-        item.representedObject = member
-        item.state = i == 0 ? .on : .off
-        submenu.addItem(item)
-    }
-    let parent = NSMenuItem(title: "Optimize for", action: nil, keyEquivalent: "")
-    parent.submenu = submenu
-    return parent
+    let isOptimized = members.first?.cgDisplayID == display.cgDisplayID
+    let item = NSMenuItem(title: "Optimize for This Display",
+                          action: isOptimized ? nil : #selector(AppDelegate.optimizeForDisplay(_:)),
+                          keyEquivalent: "")
+    item.representedObject = display
+    item.state = isOptimized ? .on : .off
+    return item
 }
 
 /// The mirror items of a display's submenu. With one other display, a single toggle. With
