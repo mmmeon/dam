@@ -83,6 +83,24 @@ jobs:
             "dist/DAM-${NAME}.dmg"
           (cd dist && shasum -a 256 *.dmg > SHA256SUMS)
 
+      - name: Build and package Debug (nightly only)
+        if: github.ref_type == 'branch'
+        run: |
+          xcodebuild -project DAM.xcodeproj -scheme DAM \
+            -configuration Debug \
+            -destination 'generic/platform=macOS' \
+            -derivedDataPath build/dd-debug \
+            ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=YES CODE_SIGNING_ALLOWED=YES \
+            DEVELOPMENT_TEAM= \
+            build
+          mkdir -p stage-debug
+          ditto build/dd-debug/Build/Products/Debug/DAM.app stage-debug/DAM.app
+          ln -s /Applications stage-debug/Applications
+          hdiutil create -volname DAM -srcfolder stage-debug -format UDZO -ov \
+            "dist/DAM-${NAME}-debug.dmg"
+          (cd dist && shasum -a 256 *.dmg > SHA256SUMS)
+
       - name: Attest build provenance
         uses: actions/attest@v4
         with:
