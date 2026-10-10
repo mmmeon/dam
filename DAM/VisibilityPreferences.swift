@@ -206,6 +206,19 @@ enum VisibilityPreferences {
 
     // MARK: - System
 
+    private static let followNewDisplayAudioKey = "\(AppIdentity.shortID).behaviour.followNewDisplayAudio"
+
+    /// When true (default), macOS's switch of the sound output to a newly connected
+    /// display (HDMI / DisplayPort) is left alone. When false, the app switches the
+    /// output back to the device that was playing before.
+    static var followNewDisplayAudio: Bool {
+        get {
+            let val = UserDefaults.dam.object(forKey: followNewDisplayAudioKey)
+            return val == nil ? true : UserDefaults.dam.bool(forKey: followNewDisplayAudioKey)
+        }
+        set { UserDefaults.dam.set(newValue, forKey: followNewDisplayAudioKey) }
+    }
+
     /// Launch the app at login. Backed by SMAppService; UserDefaults is not used.
     static var launchAtLogin: Bool {
         get { SMAppService.mainApp.status == .enabled }

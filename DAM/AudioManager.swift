@@ -20,6 +20,51 @@ final class AudioManager: ObservableObject {
     @Published private(set) var devices: [AudioDevice] = []
     @Published private(set) var defaultDeviceID: AudioDeviceID = kAudioObjectUnknown
 
+    private var knownDeviceIDs: Set<AudioDeviceID> = []
+    private var lastDefaultID: AudioDeviceID = kAudioObjectUnknown
+    /// Devices that appeared recently, with when they appeared. macOS may switch the
+    /// default output to one shortly after it shows up.
+    private var recentlyAdded: [AudioDeviceID: Date] = [:]
+
+    init() {
+        knownDeviceIDs = Set(fetchOutputDevices().map(\.id))
+        lastDefaultID = fetchDefaultOutputDeviceID()
+        let system = AudioObjectID(kAudioObjectSystemObject)
+        for selector in [kAudioHardwarePropertyDevices, kAudioHardwarePropertyDefaultOutputDevice] {
+            var addr = AudioObjectPropertyAddress(
+                mSelector: selector,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            AudioObjectAddPropertyListenerBlock(system, &addr, DispatchQueue.main) { [weak self] _, _ in
+                self?.hardwareChanged()
+            }
+        }
+    }
+
+    /// Tracks newly added devices and, when the user has turned off following a new
+    /// display's audio, undoes macOS's switch to it.
+    private func hardwareChanged() {
+        let now = Date()
+        let ids = Set(fetchOutputDevices().map(\.id))
+        for id in ids.subtracting(knownDeviceIDs) { recentlyAdded[id] = now }
+        knownDeviceIDs = ids
+        recentlyAdded = recentlyAdded.filter { now.timeIntervalSince($0.value) < 5 }
+
+        let current = fetchDefaultOutputDeviceID()
+        if current != lastDefaultID,
+           !VisibilityPreferences.followNewDisplayAudio,
+           recentlyAdded[current] != nil,
+           isDisplayDevice(current),
+           ids.contains(lastDefaultID) {
+            recentlyAdded[current] = nil
+            setDefaultDeviceID(lastDefaultID)
+        } else {
+            lastDefaultID = current
+        }
+        refresh()
+    }
+
     func refresh() {
         let fetched = fetchOutputDevices()
         autoHideNewVirtualDevices(in: fetched)
@@ -62,18 +107,23 @@ final class AudioManager: ObservableObject {
     }
 
     func setDefaultDevice(_ device: AudioDevice) {
+        setDefaultDeviceID(device.id)
+    }
+
+    private func setDefaultDeviceID(_ id: AudioDeviceID) {
         var propAddr = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDefaultOutputDevice,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
-        var deviceID = device.id
+        var deviceID = id
         AudioObjectSetPropertyData(
             AudioObjectID(kAudioObjectSystemObject),
             &propAddr, 0, nil,
             UInt32(MemoryLayout<AudioDeviceID>.size), &deviceID
         )
-        defaultDeviceID = device.id
+        defaultDeviceID = id
+        lastDefaultID = id
     }
 
     /// The device's persistent UID. Unlike its AudioDeviceID, it survives reconnects and reboots.
@@ -149,6 +199,24 @@ final class AudioManager: ObservableObject {
             &propAddr, 0, nil, &size, &deviceID
         )
         return deviceID
+    }
+
+    private func transportType(_ id: AudioDeviceID) -> UInt32? {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyTransportType,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var transport: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &transport) == noErr else { return nil }
+        return transport
+    }
+
+    /// True for a display's audio: HDMI or DisplayPort transport.
+    private func isDisplayDevice(_ id: AudioDeviceID) -> Bool {
+        let t = transportType(id)
+        return t == kAudioDeviceTransportTypeHDMI || t == kAudioDeviceTransportTypeDisplayPort
     }
 
     /// Returns true when the device uses a physical or AirPlay transport type.
