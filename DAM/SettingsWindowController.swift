@@ -229,6 +229,11 @@ final class SettingsWindowController: NSWindowController {
                                "and Loopback when they are first detected. They can be " +
                                "re-enabled in the Devices tab.",
                          action: { VisibilityPreferences.autoHideVirtualAudio = $0 }),
+                checkbox(title: "Switch to a display's audio when it is connected",
+                         isOn: VisibilityPreferences.followNewDisplayAudio,
+                         help: "macOS switches the sound output to a newly connected HDMI or " +
+                               "DisplayPort display. Unchecked, the previous output is restored.",
+                         action: { VisibilityPreferences.followNewDisplayAudio = $0 }),
             ]),
             ("Startup:", [
                 checkbox(title: "Launch at login",
