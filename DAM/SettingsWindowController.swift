@@ -87,6 +87,7 @@ final class SettingsWindowController: NSWindowController {
         win.toolbarStyle = .preference   // centres items, Xcode-style
 
         selectTab(TabID.general)
+        fitWindow()
     }
 
     // MARK: - Tab switching
@@ -107,29 +108,32 @@ final class SettingsWindowController: NSWindowController {
         window?.contentView                     = content
         window?.toolbar?.selectedItemIdentifier = id
         window?.title                           = title
-        fitWindow(to: content)
     }
 
     /// Wide enough for the toolbar's four items.
     private static let minContentWidth: CGFloat = 340
 
-    /// Sizes the window to the tab's content, keeping its top edge in place. The height
-    /// is fixed at that; the width starts at what the content needs and stays adjustable. A tab taller than the screen scrolls.
-    private func fitWindow(to content: NSView) {
-        guard let win = window, let stack = (content as? NSScrollView)?.documentView else { return }
-        stack.layoutSubtreeIfNeeded()
-        var height = stack.fittingSize.height
+    /// The least height the window can be made, below which a tab scrolls.
+    private static let minContentHeight: CGFloat = 200
+
+    /// Sizes the window once to fit the largest tab, so switching tabs leaves it as it is:
+    /// a smaller tab leaves space below, and a tab taller than the screen scrolls. The
+    /// window stays resizable down to what the widest tab needs.
+    private func fitWindow() {
+        guard let win = window else { return }
+        let stacks = [generalContent, hotkeyContent, devicesContent, virtualContent]
+            .compactMap { ($0 as? NSScrollView)?.documentView }
+        stacks.forEach { $0.layoutSubtreeIfNeeded() }
+        var height = stacks.map(\.fittingSize.height).max() ?? 0
         if let screen = win.screen ?? NSScreen.main {
             let chrome = win.frame.height - win.contentLayoutRect.height
             height = min(height, screen.visibleFrame.height - chrome - 40)
         }
-        let minWidth = max(Self.minContentWidth, stack.fittingSize.width)
-        let width = minWidth
-        win.contentMinSize = NSSize(width: minWidth, height: height)
-        win.contentMaxSize = NSSize(width: .greatestFiniteMagnitude, height: height)
+        let width = max(Self.minContentWidth, stacks.map(\.fittingSize.width).max() ?? 0)
+        win.contentMinSize = NSSize(width: width, height: min(height, Self.minContentHeight))
         var frame = win.frameRect(forContentRect: NSRect(x: 0, y: 0, width: width, height: height))
         frame.origin = NSPoint(x: win.frame.minX, y: win.frame.maxY - frame.height)
-        win.setFrame(frame, display: true, animate: win.isVisible)
+        win.setFrame(frame, display: true)
     }
 
     @objc private func toolbarItemTapped(_ item: NSToolbarItem) {
