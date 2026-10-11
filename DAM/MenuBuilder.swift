@@ -204,16 +204,15 @@ private func debugMenuItem() -> NSMenuItem {
 }
 #endif
 
-/// Turns the streaming display, sized for an iPad, on or off.
+/// Turns the streaming display on or off.
 private func streamingDisplayItem(video: VideoManager) -> NSMenuItem {
-    let preset = StreamingDisplayPreset.iPadPro9_7
     let item = NSMenuItem(title: "Streaming Display",
                           action: #selector(AppDelegate.toggleStreamingDisplay(_:)),
                           keyEquivalent: "")
     item.state = video.hasStreamingDisplay ? .on : .off
     item.image = menuIcon("rectangle.on.rectangle")
-    item.toolTip = "A virtual \(preset.width) × \(preset.height) HiDPI display for \(preset.name), " +
-                   "for a streaming app such as RustDesk or Sunshine to show."
+    item.toolTip = "A virtual display for a streaming or remote-desktop app to show. " +
+                   "Set its resolution and refresh rate under Connected Displays."
     return item
 }
 
