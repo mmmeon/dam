@@ -544,10 +544,12 @@
 					/System/Library/PrivateFrameworks,
 				);
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = DAM/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "$(APP_NAME)";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "twentytwentysix+";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "$(APP_NAME) looks for AirPlay displays on your network so you can connect to them.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -582,10 +584,12 @@
 					/System/Library/PrivateFrameworks,
 				);
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = DAM/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "$(APP_NAME)";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "twentytwentysix+";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "$(APP_NAME) looks for AirPlay displays on your network so you can connect to them.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
