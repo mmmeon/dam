@@ -11,6 +11,7 @@ final class SettingsWindowController: NSWindowController {
     private let recorderMirrorToggle: KeyRecorderView
     private let recorderAudioCycle: KeyRecorderView
     private let recorderMainDisplay: KeyRecorderView
+    private let recorderResolution: KeyRecorderView
     private let audioManager: AudioManager
     private let videoManager: VideoManager
     private let sidecarManager: SidecarManager
@@ -20,6 +21,7 @@ final class SettingsWindowController: NSWindowController {
     var onSaveMirrorToggle: ((HotkeyPreference) -> Void)?
     var onSaveAudioCycle: ((HotkeyPreference) -> Void)?
     var onSaveMainDisplay: ((HotkeyPreference) -> Void)?
+    var onSaveResolution: ((HotkeyPreference) -> Void)?
     /// Called whenever a visibility checkbox is toggled so the menu/Touch Bar rebuild.
     var onRebuild: (() -> Void)?
 
@@ -46,6 +48,7 @@ final class SettingsWindowController: NSWindowController {
          currentMirrorToggle: HotkeyPreference,
          currentAudioCycle: HotkeyPreference,
          currentMainDisplay: HotkeyPreference,
+         currentResolution: HotkeyPreference,
          audioManager: AudioManager,
          videoManager: VideoManager,
          sidecarManager: SidecarManager) {
@@ -54,6 +57,7 @@ final class SettingsWindowController: NSWindowController {
         recorderMirrorToggle  = KeyRecorderView(preference: currentMirrorToggle)
         recorderAudioCycle    = KeyRecorderView(preference: currentAudioCycle)
         recorderMainDisplay   = KeyRecorderView(preference: currentMainDisplay)
+        recorderResolution    = KeyRecorderView(preference: currentResolution)
         self.audioManager     = audioManager
         self.videoManager     = videoManager
         self.sidecarManager   = sidecarManager
@@ -148,6 +152,7 @@ final class SettingsWindowController: NSWindowController {
         recorderMirrorToggle.onChanged = { [weak self] pref in self?.onSaveMirrorToggle?(pref) }
         recorderAudioCycle.onChanged   = { [weak self] pref in self?.onSaveAudioCycle?(pref) }
         recorderMainDisplay.onChanged  = { [weak self] pref in self?.onSaveMainDisplay?(pref) }
+        recorderResolution.onChanged   = { [weak self] pref in self?.onSaveResolution?(pref) }
 
         return formTab([
             ("Switcher:", [hotkeyRow(
@@ -168,6 +173,9 @@ final class SettingsWindowController: NSWindowController {
             ("Main Display:", [hotkeyRow(
                 recorderMainDisplay, reset: #selector(resetMainDisplayToDefault),
                 help: "Picks the display that has the menu bar.")]),
+            ("Resolution:", [hotkeyRow(
+                recorderResolution, reset: #selector(resetResolutionToDefault),
+                help: "Picks a resolution for the display under the pointer.")]),
         ], leftAligned: true)
     }
 
@@ -366,6 +374,12 @@ final class SettingsWindowController: NSWindowController {
         let pref = HotkeyPreference.defaultMainDisplay
         recorderMainDisplay.preference = pref
         onSaveMainDisplay?(pref)
+    }
+
+    @objc private func resetResolutionToDefault() {
+        let pref = HotkeyPreference.defaultResolution
+        recorderResolution.preference = pref
+        onSaveResolution?(pref)
     }
 
     // MARK: - Layout helpers

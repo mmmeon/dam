@@ -10,6 +10,7 @@ final class HotkeyPreferenceTests: XCTestCase {
     private let key3 = "\(AppIdentity.bundleID).hotkeyMirrorToggle"
     private let key4 = "\(AppIdentity.bundleID).hotkeyAudioCycle"
     private let key5 = "\(AppIdentity.bundleID).hotkeyMainDisplay"
+    private let key6 = "\(AppIdentity.bundleID).hotkeyResolution"
 
     // The host app also writes preferences (seen audio devices, for one), so start each
     // test from a clean slate as well as cleaning up after it.
@@ -24,7 +25,7 @@ final class HotkeyPreferenceTests: XCTestCase {
     }
 
     private func clearPreferences() {
-        [key1, key2, key3, key4, key5].forEach { UserDefaults.dam.removeObject(forKey: $0) }
+        [key1, key2, key3, key4, key5, key6].forEach { UserDefaults.dam.removeObject(forKey: $0) }
     }
 
     // MARK: - modifierString
@@ -188,6 +189,16 @@ final class HotkeyPreferenceTests: XCTestCase {
         XCTAssertEqual(HotkeyPreference.currentMainDisplay, custom)
     }
 
+    func testPersistence_currentResolution_defaultWhenNeverSet() {
+        XCTAssertEqual(HotkeyPreference.currentResolution, HotkeyPreference.defaultResolution)
+    }
+
+    func testPersistence_currentResolution_roundTrip() {
+        let custom = HotkeyPreference(keyCode: UInt32(kVK_ANSI_J), modifiers: UInt32(optionKey | cmdKey))
+        HotkeyPreference.currentResolution = custom
+        XCTAssertEqual(HotkeyPreference.currentResolution, custom)
+    }
+
     func testPersistence_writeOneKey_doesNotAffectOthers() {
         let customMain = HotkeyPreference(keyCode: UInt32(kVK_ANSI_Z), modifiers: UInt32(cmdKey))
         HotkeyPreference.current = customMain
@@ -196,5 +207,6 @@ final class HotkeyPreferenceTests: XCTestCase {
         XCTAssertEqual(HotkeyPreference.currentMirrorToggle,   HotkeyPreference.defaultMirrorToggle)
         XCTAssertEqual(HotkeyPreference.currentAudioCycle,     HotkeyPreference.defaultAudioCycle)
         XCTAssertEqual(HotkeyPreference.currentMainDisplay,    HotkeyPreference.defaultMainDisplay)
+        XCTAssertEqual(HotkeyPreference.currentResolution,     HotkeyPreference.defaultResolution)
     }
 }
