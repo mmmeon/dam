@@ -45,6 +45,18 @@ final class StreamingDisplayTests: XCTestCase {
         XCTAssertEqual(listed, ["1920x1080@2x", "1920x1080", "1440x900", "1024x768"])
     }
 
+    func testListsOnlyHiDPIModesWithinItsLargestSize() {
+        let m = { (w: Int, h: Int, scale: Int) in
+            VideoManager.virtualMode(width: w, height: h, refreshRate: 60, pixelWidth: w * scale, pixelHeight: h * scale)
+        }
+        XCTAssertTrue(StreamingDisplayModes.fits(m(1920, 1080, 2)))
+        XCTAssertTrue(StreamingDisplayModes.fits(m(1440, 900, 2)))
+        XCTAssertTrue(StreamingDisplayModes.fits(m(3840, 2160, 1)))
+        // macOS offers these at 2x too: 5120 × 2880 and 3840 × 2400.
+        XCTAssertFalse(StreamingDisplayModes.fits(m(2560, 1440, 2)))
+        XCTAssertFalse(StreamingDisplayModes.fits(m(1920, 1200, 2)))
+    }
+
     // MARK: - Placement
 
     func testGoesRightOfTheOnlyDisplay() {

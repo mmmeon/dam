@@ -14,8 +14,9 @@ private let sdLog = Logger(subsystem: AppIdentity.bundleID, category: "Streaming
 
 /// The sizes and rates the streaming display offers, so it can match whatever shows it.
 enum StreamingDisplayModes {
-    /// Common 16:9, 16:10 and 4:3 sizes. With HiDPI on, a size whose double is also listed
-    /// is offered at 2x as well.
+    /// Common 16:9, 16:10 and 4:3 sizes. With HiDPI on, macOS offers each one at 2x as well,
+    /// even past `maxPixelsWide` × `maxPixelsHigh` (2560 × 1440 at 2x renders 5120 × 2880);
+    /// `fits` keeps those out of the resolutions DAM lists.
     static let sizes: [(width: Int, height: Int)] = [
         (1280, 720), (1920, 1080), (2560, 1440), (3840, 2160),
         (1280, 800), (1440, 900), (1680, 1050), (1920, 1200), (2560, 1600),
@@ -28,6 +29,11 @@ enum StreamingDisplayModes {
 
     static var maxPixelsWide: Int { sizes.map(\.width).max() ?? 0 }
     static var maxPixelsHigh: Int { sizes.map(\.height).max() ?? 0 }
+
+    /// Whether `mode` renders within the largest size listed.
+    static func fits(_ mode: DisplayMode) -> Bool {
+        mode.pixelWidth <= maxPixelsWide && mode.pixelHeight <= maxPixelsHigh
+    }
 
     /// Every size at every rate, the start mode first so the display comes up in it.
     static var advertised: [(width: Int, height: Int, refreshRate: Int)] {
