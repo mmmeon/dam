@@ -115,6 +115,13 @@ struct DisplayArrangement {
     /// Puts the captured resolutions back after the display set has changed, for as long as
     /// the app runs. WindowServer can pick other ones for the new set.
     func reapplyModes() {
+        // Only for the same displays, mirrored the same way: a set changed meanwhile (an
+        // AirPlay display joined) has resolutions of its own that the captured ones would undo.
+        let online = Self.onlineDisplayIDs()
+        guard Self.sameSet(captured: mirrorMasters, online: online, mirrorOf: { CGDisplayMirrorsDisplay($0) }) else {
+            vdLog.debug("reapplyModes: the display set changed since it was captured; leaving resolutions")
+            return
+        }
         var config: CGDisplayConfigRef?
         guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else { return }
         guard restoreModes(in: cfg, excluding: []) else {
@@ -123,6 +130,12 @@ struct DisplayArrangement {
         }
         let err = CGCompleteDisplayConfiguration(cfg, .forAppOnly)
         vdLog.debug("reapplyModes: CompleteDisplayConfiguration err=\(err.rawValue)")
+    }
+
+    /// Whether `online` are the captured displays, each mirroring what it did then.
+    static func sameSet(captured: [CGDirectDisplayID: CGDirectDisplayID], online: [CGDirectDisplayID],
+                        mirrorOf: (CGDirectDisplayID) -> CGDirectDisplayID) -> Bool {
+        Set(online) == Set(captured.keys) && online.allSatisfy { mirrorOf($0) == captured[$0] }
     }
 
     /// Puts the captured positions back once more, permanently, after the display set has
