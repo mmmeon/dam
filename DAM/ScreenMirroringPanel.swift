@@ -104,6 +104,8 @@ final class ScreenMirroringPanel {
     // MARK: - State
 
     private static var current: ScreenMirroringPanel?
+    /// Receives every logged step while set, for the debug diagnosis.
+    private static var trace: ((String) -> Void)?
 
     private let deviceName: String
     private let gate: Gate?
@@ -140,11 +142,11 @@ final class ScreenMirroringPanel {
             opener = item
             viaControlCenter = true
         } else {
-            logTree(app, maxDepth: 2)
+            logTree(app, maxDepth: 2, titles: Self.trace == nil)
             return finish(.failure(.openerNotFound))
         }
         let via = viaControlCenter ? "Control Center" : "the Screen Mirroring extra"
-        smLog.debug("opening via \(via, privacy: .public) for \(self.deviceName, privacy: .public)")
+        Self.log("opening via \(via) (\(opener?.identifier ?? "-")) for \(deviceName)", isPrivate: true)
 
         // A panel left open (say, by an interrupted toggle) would be closed by the press.
         if !isPanelShowing() {
@@ -200,8 +202,11 @@ final class ScreenMirroringPanel {
                 self.logWindows()
                 return self.finish(.failure(.deviceNotFound(self.deviceName)))
             }
+            // A diagnosis records the panel as found too, so a run that works still shows
+            // how this macOS lays it out.
+            if Self.trace != nil { self.logTree(popover, titles: true) }
             guard let gate = self.gate else { return self.press(device, in: popover) }
-            smLog.debug("holding at \(device.identifier ?? device.title ?? "?", privacy: .public)")
+            Self.log("holding at \(device.identifier ?? device.title ?? "?")", isPrivate: true)
             var answered = false
             gate { [weak self] go in
                 guard let self, !answered else { return }
@@ -209,7 +214,7 @@ final class ScreenMirroringPanel {
                 if go {
                     self.press(device, in: popover)
                 } else {
-                    smLog.debug("cancelled before the press")
+                    Self.log("cancelled before the press")
                     self.close(popover, then: .failure(.cancelled))
                 }
             }
@@ -218,7 +223,7 @@ final class ScreenMirroringPanel {
 
     private func press(_ device: AXUIElement, in popover: AXUIElement) {
         if let error = device.press() { return finish(.failure(.pressFailed(error))) }
-        smLog.debug("pressed \(device.role ?? "?", privacy: .public) \(device.identifier ?? device.title ?? "?", privacy: .public)")
+        Self.log("pressed \(device.role ?? "?") \(device.identifier ?? device.title ?? "?")", isPrivate: true)
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.settle) { self.close(popover) }
     }
 
@@ -230,7 +235,7 @@ final class ScreenMirroringPanel {
         let isOpen = { [app] in app!.windows.contains { CFEqual($0, popover) } }
         guard isOpen() else { return finish(result) }
         guard attempt <= Self.closeAttempts else {
-            smLog.error("the panel stayed open")
+            Self.log("the panel stayed open", error: true)
             return finish(result)
         }
         wait(for: [kAXUIElementDestroyedNotification], on: popover, timeout: Self.closeTimeout,
@@ -239,18 +244,30 @@ final class ScreenMirroringPanel {
             if closed { return self.finish(result) }
             self.close(popover, attempt: attempt + 1, then: result)
         }
-        if let error = opener?.press() { smLog.error("closing the panel failed: \(error.rawValue)") }
+        if let error = opener?.press() { Self.log("closing the panel failed: \(error.rawValue)", error: true) }
     }
 
     private func finish(_ result: Result<Void, ScreenMirroringPanelError>) {
         waiter?.cancel()
         waiter = nil
-        if case .failure(let error) = result { smLog.error("\(error.description, privacy: .public)") }
+        if case .failure(let error) = result { Self.log(error.description, error: true) }
         Self.current = nil
         completion(result)
     }
 
     // MARK: - Helpers
+
+    /// Logs a step, and hands it to `trace` while a diagnosis runs. `isPrivate` keeps a line
+    /// that names devices or shows other UI out of the readable log.
+    private static func log(_ line: String, error: Bool = false, isPrivate: Bool = false) {
+        switch (error, isPrivate) {
+        case (true, true):   smLog.error("\(line, privacy: .private)")
+        case (true, false):  smLog.error("\(line, privacy: .public)")
+        case (false, true):  smLog.debug("\(line, privacy: .private)")
+        case (false, false): smLog.debug("\(line, privacy: .public)")
+        }
+        trace?(line)
+    }
 
     /// Runs `probe` now, on each of `notifications` from `element`, and every 250 ms as a
     /// fallback, until it returns true or `timeout` elapses; then calls `done`.
@@ -280,19 +297,181 @@ final class ScreenMirroringPanel {
         return rows.first { $0.role == kAXCheckBoxRole } ?? rows.first
     }
 
-    /// Logs every window's element tree, for diagnosing an item that was not found.
+    /// Logs every window's element tree, for diagnosing an item that was not found. A
+    /// diagnosis leaves the titles out: these windows can show anything Control Center does
+    /// (network and device names, what is playing).
     private func logWindows() {
-        for window in app.windows { logTree(window) }
+        for window in app.windows { logTree(window, titles: Self.trace == nil) }
     }
 
     /// Logs an element tree, for diagnosing an item that was not found.
-    private func logTree(_ root: AXUIElement, depth: Int = 0, maxDepth: Int = 5) {
+    private func logTree(_ root: AXUIElement, depth: Int = 0, maxDepth: Int = 5, titles: Bool) {
         let indent = String(repeating: "  ", count: depth)
-        smLog.debug("\(indent, privacy: .public)\(root.role ?? "?", privacy: .public) id=\(root.identifier ?? "-", privacy: .public) title=\(root.title ?? "-", privacy: .public)")
+        let title = titles ? (root.title ?? "-") : (root.title == nil ? "-" : "…")
+        Self.log("\(indent)\(root.role ?? "?") id=\(root.identifier ?? "-") title=\(title)", isPrivate: true)
         guard depth < maxDepth else { return }
-        for child in root.children { logTree(child, depth: depth + 1, maxDepth: maxDepth) }
+        for child in root.children { logTree(child, depth: depth + 1, maxDepth: maxDepth, titles: titles) }
     }
 }
+
+// MARK: - Report redaction
+
+/// Replaces names in a diagnosis report with tokens, so it can be shared without naming
+/// anyone's devices: AirPlay displays become "Display 1", "Display 2"…, iPads "iPad 1"…,
+/// and the user's and the Mac's names "the user" and "this Mac".
+struct ReportRedactor {
+
+    /// Name and token pairs, longest name first, so a name that contains another is replaced
+    /// whole.
+    private let replacements: [(name: String, token: String)]
+
+    init(displays: [String], iPads: [String],
+         userNames: [String] = [NSFullUserName(), NSUserName()],
+         computerNames: [String] = [Host.current().localizedName].compactMap { $0 }) {
+        var pairs: [(name: String, token: String)] = []
+        func add(_ names: [String], token: (Int) -> String) {
+            var n = 0
+            for name in names where name.count >= 3 && !pairs.contains(where: { $0.name == name }) {
+                n += 1
+                pairs.append((name, token(n)))
+            }
+        }
+        add(displays) { "Display \($0)" }
+        add(iPads) { "iPad \($0)" }
+        add(userNames) { _ in "the user" }
+        add(computerNames) { _ in "this Mac" }
+        replacements = pairs.sorted { $0.name.count > $1.name.count }
+    }
+
+    func redact(_ text: String) -> String {
+        replacements.reduce(text) { $0.replacingOccurrences(of: $1.name, with: $1.token) }
+    }
+}
+
+#if DEBUG
+// MARK: - Diagnosis
+
+extension ScreenMirroringPanel {
+
+    /// Toggles `deviceName` without pressing it: opens Screen Mirroring, finds the device's
+    /// row and closes the panel again. `done` gets a report of the setup and every step,
+    /// with Control Center's element trees, and whether the row was found. `displays` are the
+    /// AirPlay displays the app found and `iPads` the Sidecar ones; their names, the user's
+    /// and the Mac's are replaced with tokens throughout the report.
+    static func diagnose(deviceName: String, displays: [(name: String, isConnected: Bool)], iPads: [String],
+                         done: @escaping (_ report: String, _ ok: Bool) -> Void) {
+        let redactor = ReportRedactor(displays: displays.map(\.name), iPads: iPads)
+        var lines = [
+            "Device, user and computer names are replaced with tokens, and other apps' menu bar",
+            "items are left out. A name \(AppIdentity.name) did not find on the network can still",
+            "appear: read the report before posting it.",
+            "",
+        ]
+        lines += setupSummary()
+        lines.append("AirPlay displays found: \(displays.count)")
+        lines += displays.map { "  " + $0.name + ($0.isConnected ? " (connected)" : "") }
+        lines += statusItemDefaults()
+        lines += ["", "Dry run for \"\(deviceName)\":"]
+        trace = { lines.append("  " + $0) }
+        toggle(deviceName: deviceName, gate: { $0(false) }) { result in
+            trace = nil
+            let ok: Bool
+            switch result {
+            case .failure(.cancelled):
+                ok = true
+                lines += ["", "Result: OK, the device was found (and not pressed)"]
+            case .failure(let error):
+                ok = false
+                lines += ["", "Result: FAILED, \(error.description)"]
+            case .success:
+                ok = true
+                lines += ["", "Result: the device was pressed"]
+            }
+            done(redactor.redact(lines.joined(separator: "\n")), ok)
+        }
+    }
+
+    /// The app, the system, the permissions and Control Center's menu bar items, as the
+    /// first step finds them.
+    private static func setupSummary() -> [String] {
+        let info = Bundle.main.infoDictionary
+        let version = "\(info?["CFBundleShortVersionString"] as? String ?? "?") (\(info?["CFBundleVersion"] as? String ?? "?"))"
+        #if arch(arm64)
+        let arch = "arm64"
+        #else
+        let arch = "x86_64"
+        #endif
+        var lines = [
+            "\(AppIdentity.name) \(version)",
+            "macOS \(ProcessInfo.processInfo.operatingSystemVersionString), \(arch)",
+            "Accessibility access: \(AXIsProcessTrusted() ? "yes" : "no")",
+            "Screen Mirroring in the menu bar: \(isExtraVisible ? "always" : "not always")",
+        ]
+        lines += menuBarAgentTree()
+        guard let cc = NSRunningApplication
+            .runningApplications(withBundleIdentifier: "com.apple.controlcenter").first
+        else { return lines + ["Control Center: not running"] }
+        let app = AXUIElementCreateApplication(cc.processIdentifier)
+        AXUIElementSetMessagingTimeout(app, 2)
+        let items = app.menuBarItems
+        lines.append("Control Center menu bar items:")
+        if items.isEmpty { lines.append("  none readable") }
+        // Identifiers only: the titles show the time, the battery and the user's name.
+        lines += items.map { "  \($0.role ?? "?") id=\($0.identifier ?? "-")" }
+        return lines
+    }
+
+    /// Control Center's NSStatusItem preferences, which record which of its items show in the
+    /// menu bar; the keys have changed across releases.
+    private static func statusItemDefaults() -> [String] {
+        let domain = "com.apple.controlcenter" as CFString
+        let keys = [kCFPreferencesAnyHost, kCFPreferencesCurrentHost].flatMap { host in
+            (CFPreferencesCopyKeyList(domain, kCFPreferencesCurrentUser, host) as? [String]) ?? []
+        }
+        let statusKeys = Set(keys.filter { $0.hasPrefix("NSStatusItem") }).sorted()
+        var lines = ["Control Center NSStatusItem preferences:"]
+        if statusKeys.isEmpty { lines.append("  none") }
+        lines += statusKeys.map { key in
+            let value = CFPreferencesCopyAppValue(key as CFString, domain).map { "\($0)" } ?? "?"
+            return "  \(key) = \(value)"
+        }
+        return lines
+    }
+
+    /// The menu bar slots of MenuBarAgent, which hosts every display's menu bar items from
+    /// macOS 27 (one window per display, one child per item slot), so the system extras may be
+    /// found there rather than in Control Center's menu bar. A slot's content comes from the
+    /// process that made the item; only the agent's own (the system extras) are read, for
+    /// their identifiers. Other apps' items are never asked anything: they can show anything,
+    /// and an unresponsive app would stall the report.
+    private static func menuBarAgentTree() -> [String] {
+        guard let agent = NSRunningApplication
+            .runningApplications(withBundleIdentifier: "com.apple.MenuBarAgent").first
+        else { return ["MenuBarAgent: not running"] }
+        let app = AXUIElementCreateApplication(agent.processIdentifier)
+        AXUIElementSetMessagingTimeout(app, 2)
+        let windows = app.windows
+        var lines = ["MenuBarAgent windows:"]
+        if windows.isEmpty { lines.append("  none readable") }
+        for (i, window) in windows.enumerated() {
+            lines.append("  window \(i + 1)")
+            for slot in window.children {
+                guard let content = slot.children.first else {
+                    lines.append("    slot with no content (the overflow chevron?)")
+                    continue
+                }
+                guard content.pid == agent.processIdentifier else {
+                    lines.append("    another app's item")
+                    continue
+                }
+                let extra = content.children.first ?? content
+                lines.append("    system extra id=\(extra.identifier ?? content.identifier ?? "-")")
+            }
+        }
+        return lines
+    }
+}
+#endif
 
 // MARK: - AXWaiter
 
@@ -413,6 +592,11 @@ private extension AXUIElement {
     var role: String?           { string(kAXRoleAttribute) }
     var identifier: String?     { string(kAXIdentifierAttribute) }
     var title: String?          { string(kAXTitleAttribute) }
+    /// The process that vends the element; asks nothing of that process.
+    var pid: pid_t? {
+        var pid: pid_t = 0
+        return AXUIElementGetPid(self, &pid) == .success ? pid : nil
+    }
 
     /// Performs AXPress; nil on success.
     func press() -> AXError? {
