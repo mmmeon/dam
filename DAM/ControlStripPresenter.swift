@@ -500,6 +500,14 @@ final class ControlStripPresenter: NSObject {
     /// the rates page. AirPlay lists its native sizes, then its virtual ones.
     private func makeResolutionSegItem(id: NSTouchBarItem.Identifier,
                                        display: DisplayInfo) -> NSTouchBarItem {
+        // Same rule as the menu: a display mirroring an anchored iPad runs at the anchor's
+        // size, and setting a mode on it would make the anchor mirror it instead.
+        if let vm = videoManager, let master = vm.anchoredMaster(of: display) {
+            let size = vm.currentModes(for: master).anchor.map { " · \($0.shortLabel)" } ?? ""
+            let item = NSCustomTouchBarItem(identifier: id)
+            item.view = placeholder("Follows \(truncated(master.label, max: 16))\(size)")
+            return item
+        }
         let options  = resolutionChoices(for: display)
         let window   = Self.window(options.modes, around: options.current, limit: 5)
         let selected = options.current.map { $0 - window.startIndex }
