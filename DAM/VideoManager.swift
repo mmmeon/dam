@@ -182,6 +182,10 @@ final class VideoManager: ObservableObject {
     /// no display at all, and dropped once the iPad has a display of its own to sit with.
     var bootstrapDisplay: AnyObject?
     var bootstrapDisplayID: CGDirectDisplayID = 0
+    /// The streaming display, its ID once online, and the layout from before it was added.
+    var streamingDisplay: AnyObject?
+    var streamingDisplayID: CGDirectDisplayID = 0
+    var streamingArrangement: DisplayArrangement?
 
     /// Start continuous Bonjour discovery. Call once on launch; runs until the app quits.
     func startDiscovery() {
@@ -1083,6 +1087,7 @@ final class VideoManager: ObservableObject {
         let airPlayIDs = Set(newAirPlay.map(\.cgDisplayID))
         var anchorIDs  = Set(virtualAnchorCGIDs.values)
         if bootstrapDisplayID != 0 { anchorIDs.insert(bootstrapDisplayID) }
+        if streamingDisplayID != 0 { anchorIDs.insert(streamingDisplayID) }
 
         var physical: [DisplayInfo] = []
         for cgID in onlineIDs {

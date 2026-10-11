@@ -450,6 +450,18 @@ extension AppDelegate: NSMenuDelegate {
         wc.show()
     }
 
+    /// Adds or removes the streaming display, for a screen-streaming app to capture.
+    @objc func toggleStreamingDisplay(_ sender: NSMenuItem) {
+        if videoManager.hasStreamingDisplay {
+            SpeechSynthesizer.shared.announce("Removing the streaming display")
+            videoManager.disableStreamingDisplay()
+        } else {
+            SpeechSynthesizer.shared.announce("Adding a streaming display")
+            videoManager.enableStreamingDisplay()
+        }
+        rebuild()
+    }
+
     /// A "Position" pick: puts the display on the chosen side of another one.
     @objc func positionDisplay(_ sender: NSMenuItem) {
         guard let selection = sender.representedObject as? PositionSelection else { return }

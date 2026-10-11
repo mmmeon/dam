@@ -112,6 +112,19 @@ struct DisplayArrangement {
         return moved
     }
 
+    /// Puts the captured resolutions back after the display set has changed, for as long as
+    /// the app runs. WindowServer can pick other ones for the new set.
+    func reapplyModes() {
+        var config: CGDisplayConfigRef?
+        guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else { return }
+        guard restoreModes(in: cfg, excluding: []) else {
+            CGCancelDisplayConfiguration(cfg)
+            return
+        }
+        let err = CGCompleteDisplayConfiguration(cfg, .forAppOnly)
+        vdLog.debug("reapplyModes: CompleteDisplayConfiguration err=\(err.rawValue)")
+    }
+
     /// Puts the captured positions back once more, permanently, after the display set has
     /// changed. Releasing an anchor shrinks the set, and WindowServer then applies the layout
     /// it last saved for that smaller set, which can undo a main display chosen meanwhile.

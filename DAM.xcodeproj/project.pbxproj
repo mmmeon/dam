@@ -19,6 +19,7 @@
 		A0A1D0000000000000000F04 /* ABOUT.txt in Resources */ = {isa = PBXBuildFile; fileRef = A0A1D0000000000000000F03 /* ABOUT.txt */; };
 		AA0001002F8D60780090E796 /* ControlStripPresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000FF2F8D60780090E796 /* ControlStripPresenter.swift */; };
 		AA0003002F8D60780090E796 /* GlobalHotkey.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0002FF2F8D60780090E796 /* GlobalHotkey.swift */; };
+		AA1001112F9D00000090E796 /* VideoManager+StreamingDisplay.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1001102F9D00000090E796 /* VideoManager+StreamingDisplay.swift */; };
 		AA1001002F9D00000090E796 /* VideoManager+VirtualAnchor.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1000FF2F9D00000090E796 /* VideoManager+VirtualAnchor.swift */; };
 		AA100B002F8D607C0090E796 /* VisibilityPreferencesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA100A002F8D607C0090E796 /* VisibilityPreferencesTests.swift */; };
 		AA200B002F8D607C0090E796 /* AudioManagerFilterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA200A002F8D607C0090E796 /* AudioManagerFilterTests.swift */; };
@@ -50,6 +51,7 @@
 		DD100B002F8D607C0090E796 /* DisplayLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A002F8D607C0090E796 /* DisplayLayoutTests.swift */; };
 		DD100B012F8D607C0090E796 /* ArrangeTouchBarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A012F8D607C0090E796 /* ArrangeTouchBarTests.swift */; };
 		DD100B0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift */; };
+		DD100B1B2F8D607C0090E7A1 /* StreamingDisplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A1B2F8D607C0090E7A1 /* StreamingDisplayTests.swift */; };
 		DD100B0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift */; };
 		EE200B012F8D60780090E796 /* MenuBarIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE200A012F8D60780090E796 /* MenuBarIcon.swift */; };
 		EE200B022F8D607C0090E796 /* MenuBarIconTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE200A022F8D607C0090E796 /* MenuBarIconTests.swift */; };
@@ -81,6 +83,7 @@
 		A0A1D0000000000000000F03 /* ABOUT.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = ABOUT.txt; sourceTree = SOURCE_ROOT; };
 		AA0000FF2F8D60780090E796 /* ControlStripPresenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlStripPresenter.swift; sourceTree = "<group>"; };
 		AA0002FF2F8D60780090E796 /* GlobalHotkey.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlobalHotkey.swift; sourceTree = "<group>"; };
+		AA1001102F9D00000090E796 /* VideoManager+StreamingDisplay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "VideoManager+StreamingDisplay.swift"; sourceTree = "<group>"; };
 		AA1000FF2F9D00000090E796 /* VideoManager+VirtualAnchor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "VideoManager+VirtualAnchor.swift"; sourceTree = "<group>"; };
 		AA100A002F8D607C0090E796 /* VisibilityPreferencesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisibilityPreferencesTests.swift; sourceTree = "<group>"; };
 		AA200A002F8D607C0090E796 /* AudioManagerFilterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioManagerFilterTests.swift; sourceTree = "<group>"; };
@@ -112,6 +115,7 @@
 		DD100A002F8D607C0090E796 /* DisplayLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayLayoutTests.swift; sourceTree = "<group>"; };
 		DD100A012F8D607C0090E796 /* ArrangeTouchBarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArrangeTouchBarTests.swift; sourceTree = "<group>"; };
 		DD100A0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayNicknameTests.swift; sourceTree = "<group>"; };
+		DD100A1B2F8D607C0090E7A1 /* StreamingDisplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamingDisplayTests.swift; sourceTree = "<group>"; };
 		DD100A0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarDisplayTests.swift; sourceTree = "<group>"; };
 		EE200A012F8D60780090E796 /* MenuBarIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarIcon.swift; sourceTree = "<group>"; };
 		EE200A022F8D607C0090E796 /* MenuBarIconTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarIconTests.swift; sourceTree = "<group>"; };
@@ -164,6 +168,7 @@
 				8BFD3C0C2F8D60780090E796 /* AudioManager.swift */,
 				8BFD3C0E2F8D60780090E796 /* VideoManager.swift */,
 				AA1000FF2F9D00000090E796 /* VideoManager+VirtualAnchor.swift */,
+				AA1001102F9D00000090E796 /* VideoManager+StreamingDisplay.swift */,
 				8BFD3C102F8D60780090E796 /* MenuBuilder.swift */,
 				AA0000FF2F8D60780090E796 /* ControlStripPresenter.swift */,
 				AA0002FF2F8D60780090E796 /* GlobalHotkey.swift */,
@@ -218,6 +223,7 @@
 				DD100A012F8D607C0090E796 /* ArrangeTouchBarTests.swift */,
 				DD100A0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift */,
 				DD100A0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift */,
+				DD100A1B2F8D607C0090E7A1 /* StreamingDisplayTests.swift */,
 			);
 			path = DAMTests;
 			sourceTree = "<group>";
@@ -349,6 +355,7 @@
 				8BFD3C0D2F8D60780090E796 /* AudioManager.swift in Sources */,
 				8BFD3C0F2F8D60780090E796 /* VideoManager.swift in Sources */,
 				AA1001002F9D00000090E796 /* VideoManager+VirtualAnchor.swift in Sources */,
+				AA1001112F9D00000090E796 /* VideoManager+StreamingDisplay.swift in Sources */,
 				8BFD3C112F8D60780090E796 /* MenuBuilder.swift in Sources */,
 				AA0001002F8D60780090E796 /* ControlStripPresenter.swift in Sources */,
 				AA0003002F8D60780090E796 /* GlobalHotkey.swift in Sources */,
@@ -392,6 +399,7 @@
 				DD100B012F8D607C0090E796 /* ArrangeTouchBarTests.swift in Sources */,
 				DD100B0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift in Sources */,
 				DD100B0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift in Sources */,
+				DD100B1B2F8D607C0090E7A1 /* StreamingDisplayTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
