@@ -183,8 +183,10 @@ extension VideoManager {
         }
         let origin = Self.streamingDisplayOrigin(others: others)
         CGConfigureDisplayOrigin(cfg, id, Int32(origin.x), Int32(origin.y))
+        // For the session, not the app: when another app's own changes end, WindowServer goes
+        // back to the session's layout, which would undo app-only ones.
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let err = CGCompleteDisplayConfiguration(cfg, .forAppOnly)
+            let err = CGCompleteDisplayConfiguration(cfg, .forSession)
             sdLog.debug("place: CompleteDisplayConfiguration err=\(err.rawValue)")
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self?.mergeDevices() }
         }
