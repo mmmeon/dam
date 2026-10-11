@@ -30,6 +30,7 @@
 		AA700B002F8D607C0090E796 /* MirrorPlanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA700A002F8D607C0090E796 /* MirrorPlanTests.swift */; };
 		AA800B002F8D607C0090E796 /* MirrorPickerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA800A002F8D607C0090E796 /* MirrorPickerTests.swift */; };
 		AA900B002F8D607C0090E796 /* MainDisplayPickerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA900A002F8D607C0090E796 /* MainDisplayPickerTests.swift */; };
+		AA900B012F8D607C0090E796 /* ResolutionPickerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA900A012F8D607C0090E796 /* ResolutionPickerTests.swift */; };
 		BB0002002F8D60780090E796 /* HotkeyPreference.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0001002F8D60780090E796 /* HotkeyPreference.swift */; };
 		BB0004002F8D60780090E796 /* KeyRecorderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0003002F8D60780090E796 /* KeyRecorderView.swift */; };
 		BB0006002F8D60780090E796 /* SettingsWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0005002F8D60780090E796 /* SettingsWindowController.swift */; };
@@ -44,6 +45,7 @@
 		CC100C012F8D60780090E796 /* ChoicePicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC100B012F8D60780090E796 /* ChoicePicker.swift */; };
 		CC100C022F8D60780090E796 /* MirrorPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC100B022F8D60780090E796 /* MirrorPicker.swift */; };
 		CC100C032F8D60780090E796 /* MainDisplayPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC100B032F8D60780090E796 /* MainDisplayPicker.swift */; };
+		CC100C042F8D60780090E796 /* ResolutionPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC100B042F8D60780090E796 /* ResolutionPicker.swift */; };
 		DD000C012F8D60780090E796 /* DisplayLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD000B012F8D60780090E796 /* DisplayLayout.swift */; };
 		DD000C022F8D60780090E796 /* VideoManager+Arrangement.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD000B022F8D60780090E796 /* VideoManager+Arrangement.swift */; };
 		DD000C032F8D60780090E796 /* ArrangeDisplaysWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD000B032F8D60780090E796 /* ArrangeDisplaysWindowController.swift */; };
@@ -94,6 +96,7 @@
 		AA700A002F8D607C0090E796 /* MirrorPlanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirrorPlanTests.swift; sourceTree = "<group>"; };
 		AA800A002F8D607C0090E796 /* MirrorPickerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirrorPickerTests.swift; sourceTree = "<group>"; };
 		AA900A002F8D607C0090E796 /* MainDisplayPickerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainDisplayPickerTests.swift; sourceTree = "<group>"; };
+		AA900A012F8D607C0090E796 /* ResolutionPickerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResolutionPickerTests.swift; sourceTree = "<group>"; };
 		BB0001002F8D60780090E796 /* HotkeyPreference.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyPreference.swift; sourceTree = "<group>"; };
 		BB0003002F8D60780090E796 /* KeyRecorderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyRecorderView.swift; sourceTree = "<group>"; };
 		BB0005002F8D60780090E796 /* SettingsWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsWindowController.swift; sourceTree = "<group>"; };
@@ -108,6 +111,7 @@
 		CC100B012F8D60780090E796 /* ChoicePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChoicePicker.swift; sourceTree = "<group>"; };
 		CC100B022F8D60780090E796 /* MirrorPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirrorPicker.swift; sourceTree = "<group>"; };
 		CC100B032F8D60780090E796 /* MainDisplayPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainDisplayPicker.swift; sourceTree = "<group>"; };
+		CC100B042F8D60780090E796 /* ResolutionPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResolutionPicker.swift; sourceTree = "<group>"; };
 		DD000B012F8D60780090E796 /* DisplayLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayLayout.swift; sourceTree = "<group>"; };
 		DD000B022F8D60780090E796 /* VideoManager+Arrangement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "VideoManager+Arrangement.swift"; sourceTree = "<group>"; };
 		DD000B032F8D60780090E796 /* ArrangeDisplaysWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArrangeDisplaysWindowController.swift; sourceTree = "<group>"; };
@@ -182,6 +186,7 @@
 				CC100B012F8D60780090E796 /* ChoicePicker.swift */,
 				CC100B022F8D60780090E796 /* MirrorPicker.swift */,
 				CC100B032F8D60780090E796 /* MainDisplayPicker.swift */,
+				CC100B042F8D60780090E796 /* ResolutionPicker.swift */,
 				CC000B302F8D60780090E796 /* ScreenMirroringPanel.swift */,
 				CC000B312F8D60780090E796 /* SidecarManager.swift */,
 				CC000B012F8D60780090E796 /* HUD.swift */,
@@ -216,6 +221,7 @@
 				AA700A002F8D607C0090E796 /* MirrorPlanTests.swift */,
 				AA800A002F8D607C0090E796 /* MirrorPickerTests.swift */,
 				AA900A002F8D607C0090E796 /* MainDisplayPickerTests.swift */,
+				AA900A012F8D607C0090E796 /* ResolutionPickerTests.swift */,
 				AA400A002F8D607C0090E796 /* HotkeyPreferenceTests.swift */,
 				EE200A022F8D607C0090E796 /* MenuBarIconTests.swift */,
 				AA500A002F8D607C0090E796 /* ControlStripPresenterTests.swift */,
@@ -369,6 +375,7 @@
 				CC100C012F8D60780090E796 /* ChoicePicker.swift in Sources */,
 				CC100C022F8D60780090E796 /* MirrorPicker.swift in Sources */,
 				CC100C032F8D60780090E796 /* MainDisplayPicker.swift in Sources */,
+				CC100C042F8D60780090E796 /* ResolutionPicker.swift in Sources */,
 				CC000C302F8D60780090E796 /* ScreenMirroringPanel.swift in Sources */,
 				CC000C312F8D60780090E796 /* SidecarManager.swift in Sources */,
 				CC000C012F8D60780090E796 /* HUD.swift in Sources */,
@@ -392,6 +399,7 @@
 				AA700B002F8D607C0090E796 /* MirrorPlanTests.swift in Sources */,
 				AA800B002F8D607C0090E796 /* MirrorPickerTests.swift in Sources */,
 				AA900B002F8D607C0090E796 /* MainDisplayPickerTests.swift in Sources */,
+				AA900B012F8D607C0090E796 /* ResolutionPickerTests.swift in Sources */,
 				AA400B002F8D607C0090E796 /* HotkeyPreferenceTests.swift in Sources */,
 				EE200B022F8D607C0090E796 /* MenuBarIconTests.swift in Sources */,
 				AA500B002F8D607C0090E796 /* ControlStripPresenterTests.swift in Sources */,

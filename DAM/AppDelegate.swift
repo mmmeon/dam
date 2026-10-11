@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mirrorToggleHotkey: GlobalHotkey!
     private var audioCycleHotkey: GlobalHotkey!
     private var mainDisplayHotkey: GlobalHotkey!
+    private var resolutionHotkey: GlobalHotkey!
     private var settingsWindow: SettingsWindowController?
     private var aboutWindow: NSWindow?
     private var arrangeWindow: ArrangeDisplaysWindowController?
@@ -45,6 +46,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AudioOutputPicker.shared.configure(audioManager: audioManager)
         MirrorPicker.shared.configure(videoManager: videoManager)
         MainDisplayPicker.shared.configure(videoManager: videoManager)
+        ResolutionPicker.shared.configure(videoManager: videoManager) { [weak self] mode, display in
+            if mode.isVirtual {
+                self?.applyVirtualResolution(mode, for: display)
+            } else {
+                self?.applyResolution(mode, cgDisplayID: display.cgDisplayID)
+            }
+        }
         hotkey = GlobalHotkey(preference: HotkeyPreference.current) { [weak self] in
             self?.openSwitcher()
         }
@@ -59,6 +67,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         mainDisplayHotkey = GlobalHotkey(preference: HotkeyPreference.currentMainDisplay) {
             MainDisplayPicker.shared.advance()
+        }
+        resolutionHotkey = GlobalHotkey(preference: HotkeyPreference.currentResolution) {
+            ResolutionPicker.shared.advance()
         }
 
         redirectSwiftUISettingsWindow()
@@ -268,6 +279,10 @@ extension AppDelegate: NSMenuDelegate {
         MainDisplayPicker.shared.playDebugPreview()
     }
 
+    @objc func debugPlayResolutionPicker(_ sender: Any?) {
+        ResolutionPicker.shared.playDebugPreview()
+    }
+
     @objc func debugPreviewConnectingHUD(_ sender: Any?) {
         AirPlayQuickConnect.shared.showDebugPreview(connecting: true)
     }
@@ -404,6 +419,7 @@ extension AppDelegate: NSMenuDelegate {
             currentMirrorToggle: HotkeyPreference.currentMirrorToggle,
             currentAudioCycle: HotkeyPreference.currentAudioCycle,
             currentMainDisplay: HotkeyPreference.currentMainDisplay,
+            currentResolution: HotkeyPreference.currentResolution,
             audioManager: audioManager,
             videoManager: videoManager,
             sidecarManager: sidecarManager
@@ -436,6 +452,12 @@ extension AppDelegate: NSMenuDelegate {
             HotkeyPreference.currentMainDisplay = pref
             self?.mainDisplayHotkey = GlobalHotkey(preference: pref) {
                 MainDisplayPicker.shared.advance()
+            }
+        }
+        wc.onSaveResolution = { [weak self] pref in
+            HotkeyPreference.currentResolution = pref
+            self?.resolutionHotkey = GlobalHotkey(preference: pref) {
+                ResolutionPicker.shared.advance()
             }
         }
         wc.onRebuild = { [weak self] in self?.rebuild() }
@@ -538,25 +560,36 @@ extension AppDelegate: NSMenuDelegate {
 
     @objc func selectResolution(_ sender: NSMenuItem) {
         guard let sel = sender.representedObject as? ResolutionSelection else { return }
-        // When a native resolution is chosen and a virtual anchor is active for the
-        // display that owns this cgDisplayID, disable the anchor first so the display
-        // is freed from mirror mode before we set the native mode.
-        let matchingDisplay = (videoManager.airPlayDevices + videoManager.connectedDisplays).first {
-            $0.cgDisplayID == sel.cgDisplayID
-        }
-        if let ap = matchingDisplay, videoManager.hasVirtualAnchor(for: ap.name) {
-            videoManager.disableVirtualAnchor(for: ap)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
-                self?.videoManager.setMode(sel.mode, for: sel.cgDisplayID) { _ in self?.rebuild() }
-            }
-        } else {
-            videoManager.setMode(sel.mode, for: sel.cgDisplayID) { [weak self] _ in self?.rebuild() }
-        }
+        applyResolution(sel.mode, cgDisplayID: sel.cgDisplayID)
     }
 
     @objc func selectVirtualResolution(_ sender: NSMenuItem) {
         guard let sel = sender.representedObject as? VirtualResolutionSelection else { return }
-        videoManager.selectVirtualMode(sel.mode, for: sel.display)
+        applyVirtualResolution(sel.mode, for: sel.display)
+    }
+
+    /// Sets a native mode, picked in the menu or the resolution picker.
+    private func applyResolution(_ mode: DisplayMode, cgDisplayID: CGDirectDisplayID) {
+        // When a native resolution is chosen and a virtual anchor is active for the
+        // display that owns this cgDisplayID, disable the anchor first so the display
+        // is freed from mirror mode before we set the native mode.
+        let matchingDisplay = (videoManager.airPlayDevices + videoManager.connectedDisplays).first {
+            $0.cgDisplayID == cgDisplayID
+        }
+        if let ap = matchingDisplay, videoManager.hasVirtualAnchor(for: ap.name) {
+            videoManager.disableVirtualAnchor(for: ap)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                self?.videoManager.setMode(mode, for: cgDisplayID) { _ in self?.rebuild() }
+            }
+        } else {
+            videoManager.setMode(mode, for: cgDisplayID) { [weak self] _ in self?.rebuild() }
+        }
+    }
+
+    /// Sets a virtual mode through the display's anchor, picked in the menu or the
+    /// resolution picker.
+    private func applyVirtualResolution(_ mode: DisplayMode, for display: DisplayInfo) {
+        videoManager.selectVirtualMode(mode, for: display)
         // Rebuild after the anchor has time to activate and the mode to settle.
         DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) { [weak self] in
             self?.rebuild()
