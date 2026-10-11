@@ -282,9 +282,9 @@ extension VideoManager {
             ? sidecarNativeMode(for: display.cgDisplayID).map { ($0.pixelWidth, $0.pixelHeight) }
             : Self.nativeSize(of: all)
         // The streaming display has no panel to fit: every size it offers, in every shape,
-        // at 1x and at HiDPI.
+        // at 1x and at HiDPI, short of the HiDPI ones macOS adds past its largest size.
         var modes = display.isStreaming
-            ? Self.everyResolution(all)
+            ? Self.everyResolution(all.filter(StreamingDisplayModes.fits))
             : Self.pickerResolutions(Self.onePerSize(all, native: native), native: native, current: current,
                                      includeLarger1x: includeLarger1x)
         if let rate = current?.roundedRefreshRate {
