@@ -202,7 +202,9 @@ final class VideoManager: ObservableObject {
                 self?.mergeDevices()
             }
         }
-        browser.start(queue: .global(qos: .utility))
+        // A serial queue: NWBrowser's Swift handler isn't safe on a concurrent one, and
+        // crashed there when results changed twice at once.
+        browser.start(queue: .main)
         self.browser = browser
         observeDisplayChanges()
         observeSleepAndWake()
