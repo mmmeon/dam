@@ -85,6 +85,9 @@ struct DisplayInfo: Identifiable, Hashable {
     /// True for an iPad connected over Sidecar. Its `name` is the iPad's name, so the entry
     /// matches the device in the Sidecar section and shares its nickname.
     var isSidecar: Bool = false
+    /// True for DAM's streaming display (see VideoManager+StreamingDisplay.swift). It is
+    /// virtual, so it is never given a virtual anchor.
+    var isStreaming: Bool = false
 
     /// What the app shows for this display: its nickname if the user set one, else its name.
     /// `name` stays the identity used to find the display and key its settings.
@@ -1087,7 +1090,6 @@ final class VideoManager: ObservableObject {
         let airPlayIDs = Set(newAirPlay.map(\.cgDisplayID))
         var anchorIDs  = Set(virtualAnchorCGIDs.values)
         if bootstrapDisplayID != 0 { anchorIDs.insert(bootstrapDisplayID) }
-        if streamingDisplayID != 0 { anchorIDs.insert(streamingDisplayID) }
 
         var physical: [DisplayInfo] = []
         for cgID in onlineIDs {
@@ -1104,7 +1106,8 @@ final class VideoManager: ObservableObject {
                                         isMirroring: userMirrorMaster(of: cgID) != nil,
                                         isBuiltIn: isBuiltIn,
                                         isMain: CGDisplayIsMain(cgID) != 0,
-                                        isSidecar: sidecarIDs.contains(cgID)))
+                                        isSidecar: sidecarIDs.contains(cgID),
+                                        isStreaming: cgID == streamingDisplayID))
         }
         // Built-in first, then external sorted by name.
         let newPhysical = physical.sorted { l, r in

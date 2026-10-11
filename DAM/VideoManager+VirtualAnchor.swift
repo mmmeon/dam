@@ -507,7 +507,7 @@ extension VideoManager {
     /// it appears in the system display list and wires up the mirror relationship.
     /// `initialMode`, if given, is applied to the anchor once mirroring is in place.
     func enableVirtualAnchor(for display: DisplayInfo, initialMode: DisplayMode? = nil) {
-        guard display.cgDisplayID != 0, !hasVirtualAnchor(for: display.name) else {
+        guard display.cgDisplayID != 0, !display.isStreaming, !hasVirtualAnchor(for: display.name) else {
             vdLog.debug("enableVirtualAnchor: skipped '\(display.name)' cgID=\(display.cgDisplayID) hasAnchor=\(self.hasVirtualAnchor(for: display.name))")
             return
         }

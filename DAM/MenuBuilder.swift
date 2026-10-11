@@ -288,8 +288,9 @@ private func buildResolutionSubmenu(display: DisplayInfo, video: VideoManager) -
             }
         }
 
-        addRateSections(to: submenu, rates: video.refreshRateOptions(for: display)?.modes ?? [],
-                        display: display, current: current)
+        // The streaming display is virtual already; it gets no anchor, so no virtual rates.
+        let rates = (video.refreshRateOptions(for: display)?.modes ?? []).filter { !display.isStreaming || !$0.isVirtual }
+        addRateSections(to: submenu, rates: rates, display: display, current: current)
     }
     return submenu
 }
