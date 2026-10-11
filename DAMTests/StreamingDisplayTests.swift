@@ -48,3 +48,19 @@ final class StreamingDisplayTests: XCTestCase {
         XCTAssertEqual(VideoManager.streamingDisplayOrigin(others: []), .zero)
     }
 }
+
+final class DisplayArrangementSameSetTests: XCTestCase {
+    func testSameDisplaysMirroredTheSameWayMatch() {
+        XCTAssertTrue(DisplayArrangement.sameSet(captured: [1: 0, 2: 1], online: [2, 1],
+                                                 mirrorOf: { [1: 0, 2: 1][$0] ?? 0 }))
+    }
+
+    func testADisplayThatJoinedDoesNotMatch() {
+        XCTAssertFalse(DisplayArrangement.sameSet(captured: [1: 0], online: [1, 3], mirrorOf: { _ in 0 }))
+    }
+
+    func testADisplayNowMirroringDoesNotMatch() {
+        XCTAssertFalse(DisplayArrangement.sameSet(captured: [1: 0, 3: 0], online: [1, 3],
+                                                  mirrorOf: { $0 == 1 ? 3 : 0 }))
+    }
+}
