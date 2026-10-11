@@ -82,7 +82,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Displays window, `settings` opens Settings, and `switcher` and `airplay` act as their hotkeys do; `connect-airplay` connects the
         // first available AirPlay display without the HUD, and `disconnect-airplay`
         // disconnects the connected one. `icon` steps the menu bar icon through
-        // connection counts to show its animation.
+        // connection counts to show its animation. `diagnose-mirroring` runs the Screen
+        // Mirroring diagnosis.
         if let mode = UserDefaults.standard.string(forKey: "DAMDebugHUD") {
             switch mode {
             case "connecting": debugPreviewConnectingHUD(nil)
@@ -95,6 +96,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case "arrange":    DispatchQueue.main.async { self.openArrangeDisplays(nil) }
             case "settings":   DispatchQueue.main.async { self.openSettings(nil) }
             case "switcher":   DispatchQueue.main.async { self.openSwitcher() }
+            case "diagnose-mirroring": // after discovery has had time to find displays
+                DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+                    self?.debugDiagnoseScreenMirroring(nil)
+                }
             case "airplay":    // after discovery has had time to find displays
                 DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
                     AirPlayQuickConnect.shared.activate()
@@ -273,6 +278,34 @@ extension AppDelegate: NSMenuDelegate {
     }
 
     /// Announces an example status message through the normal speech and caption path.
+    /// Opens Screen Mirroring and finds an AirPlay display without connecting it, then saves
+    /// a report, with device names replaced, on the Desktop. The display is the first one listed that isn't
+    /// connected; with none listed, a made-up name still checks that the panel opens, and the
+    /// report then shows the panel's contents.
+    @objc func debugDiagnoseScreenMirroring(_ sender: Any?) {
+        let devices = videoManager.allAirPlayDevices
+        let name = (devices.first { !$0.isConnected } ?? devices.first)?.name ?? "No AirPlay display listed"
+        SpeechSynthesizer.shared.announce("Checking Screen Mirroring")
+        sidecarManager.refresh()
+        ScreenMirroringPanel.diagnose(deviceName: name,
+                                      displays: devices.map { ($0.name, $0.isConnected) },
+                                      iPads: sidecarManager.devices.map(\.name)) { report, ok in
+            let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
+            let url = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Desktop/\(AppIdentity.name) Screen Mirroring \(stamp).txt")
+            let saved: String
+            do {
+                try report.write(to: url, atomically: true, encoding: .utf8)
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+                saved = "Report saved on the Desktop"
+            } catch {
+                NSLog("\(AppIdentity.name): writing the Screen Mirroring report failed: \(error)")
+                saved = "The report could not be saved"
+            }
+            SpeechSynthesizer.shared.announce((ok ? "Screen Mirroring works. " : "Screen Mirroring failed. ") + saved)
+        }
+    }
+
     @objc func debugPreviewCaptionHUD(_ sender: Any?) {
         SpeechSynthesizer.shared.announce("Mirroring Living Room TV")
     }
