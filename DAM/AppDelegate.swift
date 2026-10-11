@@ -450,7 +450,7 @@ extension AppDelegate: NSMenuDelegate {
         wc.show()
     }
 
-    /// Adds or removes the streaming display, for a screen-streaming app to capture.
+    /// Adds or removes the streaming display, for a streaming or remote-desktop app to capture.
     @objc func toggleStreamingDisplay(_ sender: NSMenuItem) {
         if videoManager.hasStreamingDisplay {
             SpeechSynthesizer.shared.announce("Removing the streaming display")

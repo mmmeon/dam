@@ -266,9 +266,12 @@ extension VideoManager {
         let native = display.isSidecar
             ? sidecarNativeMode(for: display.cgDisplayID).map { ($0.pixelWidth, $0.pixelHeight) }
             : Self.nativeSize(of: all)
-        let perSize = Self.onePerSize(all, native: native)
-        var modes = Self.pickerResolutions(perSize, native: native, current: current,
-                                           includeLarger1x: includeLarger1x)
+        // The streaming display has no panel to fit: every size it offers, in every shape,
+        // at 1x and at HiDPI.
+        var modes = display.isStreaming
+            ? Self.everyResolution(all)
+            : Self.pickerResolutions(Self.onePerSize(all, native: native), native: native, current: current,
+                                     includeLarger1x: includeLarger1x)
         if let rate = current?.roundedRefreshRate {
             modes = modes.map { best in
                 all.first {
@@ -278,9 +281,20 @@ extension VideoManager {
             }
         }
         let currentIndex = current.flatMap { cur in
-            modes.firstIndex { $0.width == cur.width && $0.height == cur.height }
+            modes.firstIndex {
+                $0.width == cur.width && $0.height == cur.height
+                    && (!display.isStreaming || $0.isHiDPI == cur.isHiDPI)
+            }
         }
         return (modes, currentIndex)
+    }
+
+    /// One mode per size and scale, largest UI size first, HiDPI before 1x at the same size.
+    static func everyResolution(_ modes: [DisplayMode]) -> [DisplayMode] {
+        var seen = Set<String>()
+        return modes
+            .sorted { ($0.width, $0.height, $0.isHiDPI ? 1 : 0) > ($1.width, $1.height, $1.isHiDPI ? 1 : 0) }
+            .filter { seen.insert("\($0.width)x\($0.height)\($0.isHiDPI ? "@2x" : "")").inserted }
     }
 
     /// The panel's native size: its largest 1x mode (HiDPI modes can be backed by more pixels

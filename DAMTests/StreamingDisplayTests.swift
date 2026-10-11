@@ -4,19 +4,26 @@ import CoreGraphics
 
 final class StreamingDisplayTests: XCTestCase {
 
-    // MARK: - Preset
+    // MARK: - Modes
 
-    func testIPadPresetLooksLikeHalfItsPanel() {
-        let preset = StreamingDisplayPreset.iPadPro9_7
-        XCTAssertEqual(preset.width, 1024)
-        XCTAssertEqual(preset.height, 768)
-        XCTAssertEqual(preset.refreshRate, 60)
+    func testComesUpAt1080p60() {
+        let first = StreamingDisplayModes.advertised.first
+        XCTAssertEqual(first?.width, 1920)
+        XCTAssertEqual(first?.height, 1080)
+        XCTAssertEqual(first?.refreshRate, 60)
     }
 
-    func testPresetAdvertisesBackingThenLogicalSize() {
-        let sizes = StreamingDisplayPreset.iPadPro9_7.advertisedSizes
-        XCTAssertEqual(sizes.map(\.width), [2048, 1024])
-        XCTAssertEqual(sizes.map(\.height), [1536, 768])
+    func testOffersEverySizeAtEveryRateOnce() {
+        let modes = StreamingDisplayModes.advertised
+        XCTAssertEqual(modes.count, StreamingDisplayModes.sizes.count * StreamingDisplayModes.refreshRates.count)
+        XCTAssertEqual(Set(modes.map { "\($0.width)x\($0.height)@\($0.refreshRate)" }).count, modes.count)
+    }
+
+    func testOffers1080pAtHiDPI() {
+        // HiDPI 1920 × 1080 needs 3840 × 2160 listed too.
+        XCTAssertTrue(StreamingDisplayModes.sizes.contains { $0 == (3840, 2160) })
+        XCTAssertEqual(StreamingDisplayModes.maxPixelsWide, 3840)
+        XCTAssertEqual(StreamingDisplayModes.maxPixelsHigh, 2160)
     }
 
     func testStreamingProductDiffersFromAnchorAndStandIn() {
@@ -26,6 +33,16 @@ final class StreamingDisplayTests: XCTestCase {
 
     func testStreamingDisplayIsNotOneOfTheMacsOwn() {
         XCTAssertFalse(VideoManager.hasOwnDisplay([(VideoManager.anchorVendorID, VideoManager.streamingProductID)]))
+    }
+
+    func testListsEveryShapeAndBothScales() {
+        let m = { (w: Int, h: Int, hz: Int, scale: Int) in
+            VideoManager.virtualMode(width: w, height: h, refreshRate: hz, pixelWidth: w * scale, pixelHeight: h * scale)
+        }
+        let modes = [m(1920, 1080, 60, 1), m(1920, 1080, 30, 1), m(1920, 1080, 60, 2),
+                     m(1024, 768, 60, 1), m(1440, 900, 60, 1)]
+        let listed = VideoManager.everyResolution(modes).map { "\($0.width)x\($0.height)\($0.isHiDPI ? "@2x" : "")" }
+        XCTAssertEqual(listed, ["1920x1080@2x", "1920x1080", "1440x900", "1024x768"])
     }
 
     // MARK: - Placement

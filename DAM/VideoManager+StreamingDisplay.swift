@@ -1,9 +1,9 @@
 //
 //  VideoManager+StreamingDisplay.swift
 //
-//  Streaming display: a standalone virtual display, sized like the device it is streamed
-//  to, for a screen-streaming app (RustDesk, Sunshine) to capture. DAM only creates and
-//  places it; the streaming app picks it like any other display.
+//  Streaming display: a standalone virtual display for a screen-streaming or remote-desktop
+//  app (RustDesk, Sunshine, VNC, …) to capture. DAM only creates and places it; the app
+//  picks it like any other display, and its size and rate are chosen like any other's.
 //
 
 import CoreGraphics
@@ -12,25 +12,30 @@ import os.log
 
 private let sdLog = Logger(subsystem: AppIdentity.bundleID, category: "StreamingDisplay")
 
-/// A device a streaming display can be sized for: its panel in pixels, shown at 2x.
-struct StreamingDisplayPreset: Equatable {
-    let name: String
-    let pixelWidth: Int
-    let pixelHeight: Int
-    let refreshRate: Int
+/// The sizes and rates the streaming display offers, so it can match whatever shows it.
+enum StreamingDisplayModes {
+    /// Common 16:9, 16:10 and 4:3 sizes. With HiDPI on, a size whose double is also listed
+    /// is offered at 2x as well.
+    static let sizes: [(width: Int, height: Int)] = [
+        (1280, 720), (1920, 1080), (2560, 1440), (3840, 2160),
+        (1280, 800), (1440, 900), (1680, 1050), (1920, 1200), (2560, 1600),
+        (1024, 768), (1600, 1200), (2048, 1536)
+    ]
+    static let refreshRates = [60, 30, 120]
 
-    /// iPad Pro 9.7-inch (iPad6,3): 2048 × 1536 at 60 Hz, looks like 1024 × 768.
-    static let iPadPro9_7 = StreamingDisplayPreset(name: "iPad Pro 9.7-inch",
-                                                   pixelWidth: 2048, pixelHeight: 1536, refreshRate: 60)
+    /// The mode it comes up in: 1920 × 1080 at 60 Hz, at 1x.
+    static let start = (width: 1920, height: 1080, refreshRate: 60)
 
-    /// The size the display looks like: half the panel, as it runs HiDPI.
-    var width: Int { pixelWidth / 2 }
-    var height: Int { pixelHeight / 2 }
+    static var maxPixelsWide: Int { sizes.map(\.width).max() ?? 0 }
+    static var maxPixelsHigh: Int { sizes.map(\.height).max() ?? 0 }
 
-    /// The sizes the virtual display advertises: the backing and the logical size, so it
-    /// offers the logical size at 2x however the system derives HiDPI variants.
-    var advertisedSizes: [(width: Int, height: Int)] {
-        [(pixelWidth, pixelHeight), (width, height)]
+    /// Every size at every rate, the start mode first so the display comes up in it.
+    static var advertised: [(width: Int, height: Int, refreshRate: Int)] {
+        let all = sizes.flatMap { size in refreshRates.map { (size.width, size.height, $0) } }
+        let isStart = { (m: (width: Int, height: Int, refreshRate: Int)) in
+            m.width == start.width && m.height == start.height && m.refreshRate == start.refreshRate
+        }
+        return all.filter(isStart) + all.filter { !isStart($0) }
     }
 }
 
@@ -48,19 +53,19 @@ extension VideoManager {
         CGPoint(x: others.map(\.maxX).max() ?? 0, y: 0)
     }
 
-    /// Creates the streaming display for `preset` and places it right of the other displays.
-    /// The arrangement before it is put back when it is removed.
-    func enableStreamingDisplay(_ preset: StreamingDisplayPreset = .iPadPro9_7) {
+    /// Creates the streaming display and places it right of the other displays. The
+    /// arrangement before it is put back when it is removed.
+    func enableStreamingDisplay() {
         guard streamingDisplay == nil else { return }
-        sdLog.debug("enable: \(preset.name) \(preset.pixelWidth)×\(preset.pixelHeight) @\(preset.refreshRate)Hz")
+        sdLog.debug("enable")
 
         let descriptor = CGVirtualDisplayDescriptor()
         // Must call setDispatchQueue: (see enableVirtualAnchor).
         descriptor.setDispatchQueue(.main)
         descriptor.name = "\(AppIdentity.name) Streaming"
-        descriptor.sizeInMillimeters = CGSize(width: 197, height: 148)
-        descriptor.maxPixelsWide = UInt32(preset.pixelWidth)
-        descriptor.maxPixelsHigh = UInt32(preset.pixelHeight)
+        descriptor.sizeInMillimeters = CGSize(width: 600, height: 340)
+        descriptor.maxPixelsWide = UInt32(StreamingDisplayModes.maxPixelsWide)
+        descriptor.maxPixelsHigh = UInt32(StreamingDisplayModes.maxPixelsHigh)
         descriptor.vendorID  = Self.anchorVendorID
         descriptor.productID = Self.streamingProductID
         descriptor.serialNum = 0x0004
@@ -78,9 +83,9 @@ extension VideoManager {
         let vd = CGVirtualDisplay(descriptor: descriptor)
         let settings = CGVirtualDisplaySettings()
         settings.hiDPI = 1
-        settings.modes = preset.advertisedSizes.map {
+        settings.modes = StreamingDisplayModes.advertised.map {
             CGVirtualDisplayMode(width: UInt($0.width), height: UInt($0.height),
-                                 refreshRate: Double(preset.refreshRate))
+                                 refreshRate: Double($0.refreshRate))
         }
         guard vd.apply(settings) else {
             sdLog.error("enable: applySettings failed")
@@ -88,7 +93,7 @@ extension VideoManager {
             return
         }
         streamingDisplay = vd
-        waitForStreamingDisplay(vd, preset: preset, attempt: 0)
+        waitForStreamingDisplay(vd, attempt: 0)
     }
 
     /// Removes the streaming display and puts the arrangement from before it back.
@@ -110,8 +115,7 @@ extension VideoManager {
         }
     }
 
-    private func waitForStreamingDisplay(_ vd: CGVirtualDisplay, preset: StreamingDisplayPreset,
-                                         attempt: Int) {
+    private func waitForStreamingDisplay(_ vd: CGVirtualDisplay, attempt: Int) {
         guard streamingDisplay === vd else { return }
         let online = DisplayArrangement.onlineDisplayIDs()
         let id = vd.displayID != 0 && online.contains(vd.displayID)
@@ -126,7 +130,7 @@ extension VideoManager {
             // Let WindowServer lay out the new set first; it would undo a placement made before.
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                 guard self?.streamingDisplay === vd else { return }
-                self?.placeStreamingDisplay(id, preset: preset)
+                self?.placeStreamingDisplay(id)
             }
             return
         }
@@ -137,13 +141,13 @@ extension VideoManager {
             return
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-            self?.waitForStreamingDisplay(vd, preset: preset, attempt: attempt + 1)
+            self?.waitForStreamingDisplay(vd, attempt: attempt + 1)
         }
     }
 
-    /// Puts the other displays back where they were, switches the new display to the
-    /// preset's HiDPI mode, and sets it right of the rest.
-    private func placeStreamingDisplay(_ id: CGDirectDisplayID, preset: StreamingDisplayPreset) {
+    /// Puts the other displays back where they were, switches the new display to its start
+    /// mode, and sets it right of the rest.
+    private func placeStreamingDisplay(_ id: CGDirectDisplayID) {
         var config: CGDisplayConfigRef?
         guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else {
             mergeDevices()
@@ -156,12 +160,14 @@ extension VideoManager {
         streamingArrangement?.restoreModes(in: cfg, excluding: [id])
         let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
         let modes = CGDisplayCopyAllDisplayModes(id, options) as? [CGDisplayMode] ?? []
+        let start = StreamingDisplayModes.start
         if let mode = modes.first(where: {
-            $0.width == preset.width && $0.height == preset.height && $0.pixelWidth == preset.pixelWidth
+            $0.width == start.width && $0.height == start.height && $0.pixelWidth == start.width
+                && Int($0.refreshRate.rounded()) == start.refreshRate
         }) {
             CGConfigureDisplayWithDisplayMode(cfg, id, mode, nil)
         } else {
-            sdLog.error("place: no \(preset.width)×\(preset.height) HiDPI mode among \(modes.count)")
+            sdLog.error("place: no \(start.width)×\(start.height) mode among \(modes.count)")
         }
         let others = (streamingArrangement?.origins ?? [:]).compactMap { otherID, origin -> CGRect? in
             guard otherID != id, streamingArrangement?.mirrorMasters[otherID] == 0 else { return nil }
