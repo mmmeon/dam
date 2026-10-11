@@ -131,6 +131,7 @@ func buildStatusMenu(audio: AudioManager,
             menu.addItem(item)
         }
     }
+    menu.addItem(streamingDisplayItem(video: video))
 
     menu.addItem(.separator())
     if video.currentLayout().displayCount >= 2 {
@@ -202,6 +203,19 @@ private func debugMenuItem() -> NSMenuItem {
     return item
 }
 #endif
+
+/// Turns the streaming display, sized for an iPad, on or off.
+private func streamingDisplayItem(video: VideoManager) -> NSMenuItem {
+    let preset = StreamingDisplayPreset.iPadPro9_7
+    let item = NSMenuItem(title: "Streaming Display",
+                          action: #selector(AppDelegate.toggleStreamingDisplay(_:)),
+                          keyEquivalent: "")
+    item.state = video.hasStreamingDisplay ? .on : .off
+    item.image = menuIcon("rectangle.on.rectangle")
+    item.toolTip = "A virtual \(preset.width) × \(preset.height) HiDPI display for \(preset.name), " +
+                   "for a streaming app such as RustDesk or Sunshine to show."
+    return item
+}
 
 private func sectionHeader(_ title: String) -> NSMenuItem {
     let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
