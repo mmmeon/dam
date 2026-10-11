@@ -245,48 +245,46 @@ private func buildResolutionSubmenu(display: DisplayInfo, video: VideoManager) -
         return submenu
     }
 
-    if display.isSidecar, video.hasVirtualAnchor(for: display.name) {
+    switch video.resolutionChoices(for: display, includeLarger1x: true) {
+    case let .sidecar(modes, currentIndex):
         // The anchor's sizes, scaled onto the iPad. Sidecar runs at 60 Hz only.
-        let resolutions = video.sidecarResolutionOptions(for: display)
         submenu.addItem(sectionHeader("Resolution"))
-        for (i, mode) in resolutions.modes.enumerated() {
+        for (i, mode) in modes.enumerated() {
             submenu.addItem(modeItem(title: mode.resolutionLabel, mode: mode, display: display,
-                                     isCurrent: i == resolutions.currentIndex))
+                                     isCurrent: i == currentIndex))
         }
-    } else if video.displayContext(for: display) == .airPlay {
+    case let .airPlay(native, virtual, currentIndex):
         // Resolutions in a native and a virtual group, each picked at the current rate where
         // it can be; then the rates at the current resolution, split the same way.
-        let resolutions = video.airPlayResolutionOptions(for: display)
         submenu.addItem(sectionHeader("Resolution"))
-        if resolutions.native.isEmpty {
+        if native.isEmpty {
             submenu.addItem(disabledItem("No modes available"))
         } else {
-            for (i, mode) in resolutions.native.enumerated() {
+            for (i, mode) in native.enumerated() {
                 submenu.addItem(modeItem(title: mode.resolutionLabel, mode: mode, display: display,
-                                         isCurrent: i == resolutions.current.native))
+                                         isCurrent: i == currentIndex.native))
             }
         }
 
         submenu.addItem(sectionHeader("Virtual Resolution"))
-        for (i, mode) in resolutions.virtual.enumerated() {
+        for (i, mode) in virtual.enumerated() {
             submenu.addItem(modeItem(title: mode.resolutionLabel, mode: mode, display: display,
-                                     isCurrent: i == resolutions.current.virtual))
+                                     isCurrent: i == currentIndex.virtual))
         }
 
         addRateSections(to: submenu, rates: video.airPlayRateOptions(for: display),
                         display: display, current: current)
-    } else {
+    case let .panel(modes, currentIndex):
         // External or built-in — Resolution picker + Refresh Rate picker for the current
         // resolution. Native rates use native mode settings; non-native rates activate the
         // virtual anchor.
         submenu.addItem(sectionHeader("Resolution"))
-        let resolutions = video.resolutionOptions(for: display, includeLarger1x: true)
-        if resolutions.modes.isEmpty {
+        if modes.isEmpty {
             submenu.addItem(disabledItem("No modes available"))
         } else {
-            for (i, mode) in resolutions.modes.enumerated() {
+            for (i, mode) in modes.enumerated() {
                 submenu.addItem(modeItem(title: mode.resolutionLabel, mode: mode, display: display,
-                                         isCurrent: i == resolutions.currentIndex))
+                                         isCurrent: i == currentIndex))
             }
         }
 
