@@ -59,6 +59,32 @@ extension VideoManager {
         CGPoint(x: others.map(\.maxX).max() ?? 0, y: 0)
     }
 
+    /// The display to make main in place of the streaming display, which nobody looks at:
+    /// the one that was main before it came if it is among `candidates`, else the first of
+    /// them. Nil when there is none.
+    static func displayToMakeMain(candidates: [CGDirectDisplayID],
+                                  previousMain: CGDirectDisplayID?) -> CGDirectDisplayID? {
+        previousMain.flatMap { candidates.contains($0) ? $0 : nil } ?? candidates.first
+    }
+
+    /// Hands the menu bar and Dock back to another display when the streaming display has
+    /// become main, as it does when the display that was main is unplugged; WindowServer
+    /// leaves it main when that display comes back.
+    func keepStreamingDisplayOffMain() {
+        guard streamingDisplayID != 0, CGDisplayIsMain(streamingDisplayID) != 0 else { return }
+        // Displays showing their own desktop; a disabled one stays online but has no screen.
+        let candidates = allConnectedDisplays.filter {
+            $0.isConnected && !$0.isStreaming && CGDisplayMirrorsDisplay($0.cgDisplayID) == 0
+        }
+        let previousMain = streamingArrangement.flatMap { arrangement in
+            arrangement.origins.first { $0.value == .zero && arrangement.mirrorMasters[$0.key] == 0 }?.key
+        }
+        guard let id = Self.displayToMakeMain(candidates: candidates.map(\.cgDisplayID), previousMain: previousMain),
+              let display = candidates.first(where: { $0.cgDisplayID == id }) else { return }
+        sdLog.debug("streaming display is main; making \(id) main")
+        setMainDisplay(display)
+    }
+
     /// Creates the streaming display and places it right of the other displays. The
     /// arrangement before it is put back when it is removed.
     func enableStreamingDisplay() {

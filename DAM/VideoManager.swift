@@ -307,6 +307,7 @@ final class VideoManager: ObservableObject {
         let work = DispatchWorkItem { [weak self] in
             self?.reassertAnchorLayout()
             self?.mergeDevices()
+            self?.keepStreamingDisplayOffMain()
             // WindowServer places a display that arrives beside a virtual anchor on top of
             // it (an AirPlay TV joining an anchored iPad); move it off.
             if let self, !self.virtualAnchorCGIDs.isEmpty, !self.virtualAnchorReassertInFlight {

@@ -57,6 +57,21 @@ final class StreamingDisplayTests: XCTestCase {
         XCTAssertFalse(StreamingDisplayModes.fits(m(1920, 1200, 2)))
     }
 
+    // MARK: - Main display
+
+    func testHandsMainBackToTheDisplayThatHadIt() {
+        XCTAssertEqual(VideoManager.displayToMakeMain(candidates: [7, 3], previousMain: 3), 3)
+    }
+
+    func testHandsMainToAnotherDisplayWhenThatOneIsGone() {
+        XCTAssertEqual(VideoManager.displayToMakeMain(candidates: [7, 3], previousMain: 5), 7)
+        XCTAssertEqual(VideoManager.displayToMakeMain(candidates: [7], previousMain: nil), 7)
+    }
+
+    func testKeepsMainWithNoOtherDisplay() {
+        XCTAssertNil(VideoManager.displayToMakeMain(candidates: [], previousMain: 3))
+    }
+
     // MARK: - Placement
 
     func testGoesRightOfTheOnlyDisplay() {
