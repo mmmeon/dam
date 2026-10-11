@@ -181,6 +181,9 @@ private func debugMenuItem() -> NSMenuItem {
     submenu.addItem(withTitle: "Play Main Display Picker",
                     action: #selector(AppDelegate.debugPlayMainDisplayPicker(_:)),
                     keyEquivalent: "")
+    submenu.addItem(withTitle: "Diagnose Screen Mirroring",
+                    action: #selector(AppDelegate.debugDiagnoseScreenMirroring(_:)),
+                    keyEquivalent: "")
     submenu.addItem(withTitle: "Preview Connecting HUD",
                     action: #selector(AppDelegate.debugPreviewConnectingHUD(_:)),
                     keyEquivalent: "")
