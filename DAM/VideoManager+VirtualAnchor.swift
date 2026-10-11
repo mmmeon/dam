@@ -247,6 +247,21 @@ extension VideoManager {
         return nil
     }
 
+    /// What `display` offers to pick from, by what drives it, for the menu, the Touch Bar and
+    /// the resolution picker. `includeLarger1x` is passed on to `resolutionOptions`.
+    func resolutionChoices(for display: DisplayInfo, includeLarger1x: Bool = false) -> ResolutionChoices {
+        if display.isSidecar, hasVirtualAnchor(for: display.name) {
+            let options = sidecarResolutionOptions(for: display)
+            return .sidecar(modes: options.modes, current: options.currentIndex)
+        }
+        if displayContext(for: display) == .airPlay {
+            let options = airPlayResolutionOptions(for: display)
+            return .airPlay(native: options.native, virtual: options.virtual, current: options.current)
+        }
+        let options = resolutionOptions(for: display, includeLarger1x: includeLarger1x)
+        return .panel(modes: options.modes, current: options.currentIndex)
+    }
+
     /// Resolution choices for an external or built-in display: one native mode per logical
     /// size (HiDPI preferred), trimmed and ordered by `pickerResolutions`. Each is at the
     /// current refresh rate when the display supports it there, otherwise its highest rate.
@@ -1267,5 +1282,37 @@ extension VideoManager {
     private static func matches(_ cgMode: CGDisplayMode, _ mode: DisplayMode) -> Bool {
         cgMode.width == mode.width && cgMode.height == mode.height
             && cgMode.pixelWidth == mode.pixelWidth && cgMode.pixelHeight == mode.pixelHeight
+    }
+}
+
+/// The resolutions a display offers, by what drives it (see `VideoManager.resolutionChoices`).
+enum ResolutionChoices {
+    /// An iPad driven by its anchor: the anchor's sizes, scaled onto the iPad.
+    case sidecar(modes: [DisplayMode], current: Int?)
+    /// An AirPlay display: its native sizes and the anchor's virtual ones, kept apart, with
+    /// the current index in the pool that drives the display.
+    case airPlay(native: [DisplayMode], virtual: [DisplayMode], current: (native: Int?, virtual: Int?))
+    /// A built-in, external or streaming display.
+    case panel(modes: [DisplayMode], current: Int?)
+
+    /// Every size in one list and the index of the one in effect. An AirPlay display's
+    /// native sizes come before its virtual ones; `nativeInLargestAspect` keeps only the
+    /// native sizes in the aspect ratio of the largest, for the Touch Bar's few segments.
+    func flattened(nativeInLargestAspect: Bool = false) -> (modes: [DisplayMode], current: Int?) {
+        switch self {
+        case let .sidecar(modes, current), let .panel(modes, current):
+            return (modes, current)
+        case let .airPlay(native, virtual, current):
+            func gcd(_ a: Int, _ b: Int) -> Int { b == 0 ? a : gcd(b, a % b) }
+            func aspect(_ m: DisplayMode) -> (Int, Int) {
+                let g = gcd(m.width, m.height)
+                return (m.width / g, m.height / g)
+            }
+            let largest = nativeInLargestAspect ? native.first.map(aspect) : nil
+            let kept = native.indices.filter { i in largest.map { aspect(native[i]) == $0 } ?? true }
+            let index = current.native.flatMap { kept.firstIndex(of: $0) }
+                ?? current.virtual.map { kept.count + $0 }
+            return (kept.map { native[$0] } + virtual, index)
+        }
     }
 }

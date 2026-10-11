@@ -30,7 +30,7 @@
 		AA700B002F8D607C0090E796 /* MirrorPlanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA700A002F8D607C0090E796 /* MirrorPlanTests.swift */; };
 		AA800B002F8D607C0090E796 /* MirrorPickerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA800A002F8D607C0090E796 /* MirrorPickerTests.swift */; };
 		AA900B002F8D607C0090E796 /* MainDisplayPickerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA900A002F8D607C0090E796 /* MainDisplayPickerTests.swift */; };
-		AA900B012F8D607C0090E796 /* ResolutionPickerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA900A012F8D607C0090E796 /* ResolutionPickerTests.swift */; };
+		AA900B012F8D607C0090E796 /* ResolutionChoicesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA900A012F8D607C0090E796 /* ResolutionChoicesTests.swift */; };
 		BB0002002F8D60780090E796 /* HotkeyPreference.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0001002F8D60780090E796 /* HotkeyPreference.swift */; };
 		BB0004002F8D60780090E796 /* KeyRecorderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0003002F8D60780090E796 /* KeyRecorderView.swift */; };
 		BB0006002F8D60780090E796 /* SettingsWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0005002F8D60780090E796 /* SettingsWindowController.swift */; };
@@ -96,7 +96,7 @@
 		AA700A002F8D607C0090E796 /* MirrorPlanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirrorPlanTests.swift; sourceTree = "<group>"; };
 		AA800A002F8D607C0090E796 /* MirrorPickerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirrorPickerTests.swift; sourceTree = "<group>"; };
 		AA900A002F8D607C0090E796 /* MainDisplayPickerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainDisplayPickerTests.swift; sourceTree = "<group>"; };
-		AA900A012F8D607C0090E796 /* ResolutionPickerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResolutionPickerTests.swift; sourceTree = "<group>"; };
+		AA900A012F8D607C0090E796 /* ResolutionChoicesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResolutionChoicesTests.swift; sourceTree = "<group>"; };
 		BB0001002F8D60780090E796 /* HotkeyPreference.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyPreference.swift; sourceTree = "<group>"; };
 		BB0003002F8D60780090E796 /* KeyRecorderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyRecorderView.swift; sourceTree = "<group>"; };
 		BB0005002F8D60780090E796 /* SettingsWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsWindowController.swift; sourceTree = "<group>"; };
@@ -221,7 +221,7 @@
 				AA700A002F8D607C0090E796 /* MirrorPlanTests.swift */,
 				AA800A002F8D607C0090E796 /* MirrorPickerTests.swift */,
 				AA900A002F8D607C0090E796 /* MainDisplayPickerTests.swift */,
-				AA900A012F8D607C0090E796 /* ResolutionPickerTests.swift */,
+				AA900A012F8D607C0090E796 /* ResolutionChoicesTests.swift */,
 				AA400A002F8D607C0090E796 /* HotkeyPreferenceTests.swift */,
 				EE200A022F8D607C0090E796 /* MenuBarIconTests.swift */,
 				AA500A002F8D607C0090E796 /* ControlStripPresenterTests.swift */,
@@ -399,7 +399,7 @@
 				AA700B002F8D607C0090E796 /* MirrorPlanTests.swift in Sources */,
 				AA800B002F8D607C0090E796 /* MirrorPickerTests.swift in Sources */,
 				AA900B002F8D607C0090E796 /* MainDisplayPickerTests.swift in Sources */,
-				AA900B012F8D607C0090E796 /* ResolutionPickerTests.swift in Sources */,
+				AA900B012F8D607C0090E796 /* ResolutionChoicesTests.swift in Sources */,
 				AA400B002F8D607C0090E796 /* HotkeyPreferenceTests.swift in Sources */,
 				EE200B022F8D607C0090E796 /* MenuBarIconTests.swift in Sources */,
 				AA500B002F8D607C0090E796 /* ControlStripPresenterTests.swift in Sources */,
