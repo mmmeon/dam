@@ -52,6 +52,13 @@ struct DisplayArrangement {
                            mirrorMasters: mirrorMasters, modes: modes)
     }
 
+    /// The same arrangement without display `id`, for the set it has left.
+    func excluding(_ id: CGDirectDisplayID) -> DisplayArrangement {
+        DisplayArrangement(origins: origins.filter { $0.key != id },
+                           mirrorMasters: mirrorMasters.filter { $0.key != id },
+                           modes: modes.filter { $0.key != id })
+    }
+
     static func onlineDisplayIDs() -> [CGDirectDisplayID] {
         var count: CGDisplayCount = 0
         CGGetOnlineDisplayList(0, nil, &count)

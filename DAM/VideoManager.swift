@@ -85,7 +85,7 @@ struct DisplayInfo: Identifiable, Hashable {
     /// True for an iPad connected over Sidecar. Its `name` is the iPad's name, so the entry
     /// matches the device in the Sidecar section and shares its nickname.
     var isSidecar: Bool = false
-    /// True for DAM's streaming display (see VideoManager+StreamingDisplay.swift). It is
+    /// True for one of DAM's streaming displays (see VideoManager+StreamingDisplay.swift). It is
     /// virtual, so it is never given a virtual anchor.
     var isStreaming: Bool = false
 
@@ -185,16 +185,23 @@ final class VideoManager: ObservableObject {
     /// no display at all, and dropped once the iPad has a display of its own to sit with.
     var bootstrapDisplay: AnyObject?
     var bootstrapDisplayID: CGDirectDisplayID = 0
-    /// The streaming display, its ID once online, and the layout from before it was added.
-    var streamingDisplay: AnyObject?
-    var streamingDisplayID: CGDirectDisplayID = 0
+    /// The streaming displays, in the order they were added.
+    var streamingDisplays: [StreamingDisplay] = []
+    /// How many streaming displays the user asked for.
+    var streamingDisplayTarget = 0
+    /// The layout from before the first streaming display was added.
     var streamingArrangement: DisplayArrangement?
-    /// Whether the user made the streaming display main, which DAM then leaves it.
+    /// Whether the user made a streaming display main, which DAM then leaves it.
     var streamingDisplayIsMainByChoice = false
-    /// Whether the streaming display is still to be placed; placing it puts main back.
-    var streamingPlacementPending = false
-    /// Whether main is being handed from the streaming display to another display.
+    /// Whether a streaming display is being added or removed; the next change waits for it.
+    var streamingChangeInFlight = false
+    /// Whether main is being handed from a streaming display to another display.
     var streamingMainHandBackInFlight = false
+    /// The layout to keep after a streaming display was removed, and until when.
+    /// WindowServer can change resolutions for the smaller set some seconds later.
+    var streamingSettle: (arrangement: DisplayArrangement, until: Date)?
+    /// Whether that layout is being put back; later changes wait for the one it causes.
+    var streamingReassertInFlight = false
 
     /// Start continuous Bonjour discovery. Call once on launch; runs until the app quits.
     func startDiscovery() {
@@ -312,6 +319,7 @@ final class VideoManager: ObservableObject {
         reconfigureWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             self?.reassertAnchorLayout()
+            self?.reassertStreamingLayout()
             self?.mergeDevices()
             self?.keepStreamingDisplayOffMain()
             // WindowServer places a display that arrives beside a virtual anchor on top of
@@ -652,7 +660,7 @@ final class VideoManager: ObservableObject {
             self.streamingArrangement = self.streamingArrangement?.makingMain(display.cgDisplayID)
         }
         // Set before the commit: the change it causes is checked before it reports back.
-        streamingDisplayIsMainByChoice = streamingDisplayID != 0 && display.cgDisplayID == streamingDisplayID
+        streamingDisplayIsMainByChoice = streamingDisplayIDs.contains(display.cgDisplayID)
         guard CGDisplayIsMain(mainID) == 0 else { rebase(); completion?(.success(())); return }
         let online  = DisplayArrangement.onlineDisplayIDs()
         let bounds  = Dictionary(uniqueKeysWithValues: online.map { ($0, CGDisplayBounds($0)) })
@@ -1103,6 +1111,7 @@ final class VideoManager: ObservableObject {
         var anchorIDs  = Set(virtualAnchorCGIDs.values)
         if bootstrapDisplayID != 0 { anchorIDs.insert(bootstrapDisplayID) }
 
+        let streamingIDs = streamingDisplayIDs
         var physical: [DisplayInfo] = []
         for cgID in onlineIDs {
             guard !airPlayIDs.contains(cgID) else { continue }
@@ -1119,7 +1128,7 @@ final class VideoManager: ObservableObject {
                                         isBuiltIn: isBuiltIn,
                                         isMain: CGDisplayIsMain(cgID) != 0,
                                         isSidecar: sidecarIDs.contains(cgID),
-                                        isStreaming: cgID == streamingDisplayID))
+                                        isStreaming: streamingIDs.contains(cgID)))
         }
         // Built-in first, then external sorted by name.
         let newPhysical = physical.sorted { l, r in

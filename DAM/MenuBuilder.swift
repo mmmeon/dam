@@ -131,7 +131,7 @@ func buildStatusMenu(audio: AudioManager,
             menu.addItem(item)
         }
     }
-    menu.addItem(streamingDisplayItem(video: video))
+    menu.addItem(streamingDisplaysItem(video: video))
 
     menu.addItem(.separator())
     if video.currentLayout().displayCount >= 2 {
@@ -210,15 +210,23 @@ private func debugMenuItem() -> NSMenuItem {
 }
 #endif
 
-/// Turns the streaming display on or off.
-private func streamingDisplayItem(video: VideoManager) -> NSMenuItem {
-    let item = NSMenuItem(title: "Streaming Display",
-                          action: #selector(AppDelegate.toggleStreamingDisplay(_:)),
-                          keyEquivalent: "")
-    item.state = video.hasStreamingDisplay ? .on : .off
+/// Picks how many streaming displays there are.
+private func streamingDisplaysItem(video: VideoManager) -> NSMenuItem {
+    let item = NSMenuItem(title: "Streaming Displays", action: nil, keyEquivalent: "")
+    item.state = video.streamingDisplayTarget > 0 ? .on : .off
     item.image = menuIcon("rectangle.on.rectangle")
-    item.toolTip = "A virtual display for a streaming or remote-desktop app to show. " +
-                   "Set its resolution and refresh rate under Connected Displays."
+    item.toolTip = "Virtual displays for streaming or remote-desktop apps to show, one per stream. " +
+                   "Set their resolutions and refresh rates under Connected Displays."
+    let submenu = NSMenu()
+    for count in 0...VideoManager.maxStreamingDisplays {
+        let choice = NSMenuItem(title: count == 0 ? "Off" : count == 1 ? "1 Display" : "\(count) Displays",
+                                action: #selector(AppDelegate.setStreamingDisplayCount(_:)),
+                                keyEquivalent: "")
+        choice.tag = count
+        choice.state = video.streamingDisplayTarget == count ? .on : .off
+        submenu.addItem(choice)
+    }
+    item.submenu = submenu
     return item
 }
 

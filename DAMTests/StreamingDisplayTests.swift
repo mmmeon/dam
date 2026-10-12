@@ -57,6 +57,36 @@ final class StreamingDisplayTests: XCTestCase {
         XCTAssertFalse(StreamingDisplayModes.fits(m(1920, 1200, 2)))
     }
 
+    // MARK: - Several displays
+
+    func testEachDisplayHasItsOwnSerialAndName() {
+        let indices = 0..<VideoManager.maxStreamingDisplays
+        XCTAssertEqual(Set(indices.map(VideoManager.streamingSerial)).count, indices.count)
+        XCTAssertEqual(Set(indices.map(VideoManager.streamingDisplayName)).count, indices.count)
+    }
+
+    func testFirstDisplayKeepsItsSerialAndName() {
+        // macOS keys the place and resolution it saved for the display on these.
+        XCTAssertEqual(VideoManager.streamingSerial(0), 0x0004)
+        XCTAssertEqual(VideoManager.streamingDisplayName(0), "\(AppIdentity.name) Streaming")
+        XCTAssertEqual(VideoManager.streamingDisplayName(1), "\(AppIdentity.name) Streaming 2")
+    }
+
+    func testSerialsDifferFromTheOtherVirtualDisplays() {
+        // The anchors use 0x0002, the stand-in 0x0003.
+        let serials = (0..<VideoManager.maxStreamingDisplays).map(VideoManager.streamingSerial)
+        XCTAssertFalse(serials.contains(0x0002))
+        XCTAssertFalse(serials.contains(0x0003))
+    }
+
+    func testArrangementWithoutARemovedDisplay() {
+        let arrangement = DisplayArrangement(origins: [1: .zero, 2: CGPoint(x: 1440, y: 0)],
+                                             mirrorMasters: [1: 0, 2: 0])
+        let without = arrangement.excluding(2)
+        XCTAssertEqual(without.origins, [1: .zero])
+        XCTAssertEqual(without.mirrorMasters, [1: 0])
+    }
+
     // MARK: - Main display
 
     func testHandsMainBackToTheDisplayThatHadIt() {
