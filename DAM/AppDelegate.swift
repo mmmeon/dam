@@ -53,6 +53,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if self?.moonlightPINAlert != nil { NSApp.abortModal() }
         }
         moonlightHost.onChange = { [weak self] in self?.rebuild() }
+        moonlightHost.makeDisplay = { [weak self] width, height, fps, done in
+            guard let self else { return done(nil) }
+            self.videoManager.createStreamingDisplay(
+                mode: StreamingDisplayModes.forStream(width: width, height: height, fps: fps), completion: done)
+        }
+        moonlightHost.removeDisplay = { [weak self] id in self?.videoManager.removeStreamingDisplay(id: id) }
         if MoonlightHost.isEnabled { moonlightHost.start() }
         AudioOutputPicker.shared.configure(audioManager: audioManager)
         MirrorPicker.shared.configure(videoManager: videoManager)
@@ -169,7 +175,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func rebuild() {
         moonlightHost.apps = videoManager.streamingDisplays.compactMap { streaming in
             videoManager.connectedDisplays.first { $0.cgDisplayID == streaming.id }
-                .map { MoonlightApp(id: streaming.index + 1, title: $0.label) }
+                .map { MoonlightApp(id: streaming.index + 1, title: $0.label, displayID: streaming.id) }
         }
         let menu = NSMenu()
         menu.delegate = self
@@ -545,6 +551,8 @@ extension AppDelegate: NSMenuDelegate {
         } else {
             MoonlightHost.isEnabled = true
             moonlightHost.start()
+            // Streaming needs it; asked now rather than when a stream starts.
+            MoonlightScreenCapture.requestPermission()
             SpeechSynthesizer.shared.announce(moonlightHost.isRunning ? "Moonlight can connect"
                                               : moonlightHost.lastError ?? "Moonlight could not start")
         }

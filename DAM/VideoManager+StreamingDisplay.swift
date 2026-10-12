@@ -25,8 +25,28 @@ enum StreamingDisplayModes {
     ]
     static let refreshRates = [60, 30, 120]
 
-    /// The mode it comes up in: 1920 × 1080 at 60 Hz, at 1x.
-    static let start = (width: 1920, height: 1080, refreshRate: 60)
+    /// A mode a streaming display comes up in.
+    struct Mode: Equatable {
+        var width: Int
+        var height: Int
+        var refreshRate: Int
+        /// Drawn at twice the size in pixels.
+        var hiDPI = false
+
+        var pixelWidth: Int { hiDPI ? width * 2 : width }
+        var pixelHeight: Int { hiDPI ? height * 2 : height }
+    }
+
+    /// The mode one comes up in unless asked for another: 1920 × 1080 at 60 Hz, at 1x.
+    static let start = Mode(width: 1920, height: 1080, refreshRate: 60)
+
+    /// The mode for a stream of `width` × `height` pixels: the same at 1x, or from 2560
+    /// pixels wide, HiDPI at half the size, as a Mac picks for a screen that sharp.
+    static func forStream(width: Int, height: Int, fps: Int) -> Mode {
+        width >= 2560 && width.isMultiple(of: 2) && height.isMultiple(of: 2)
+            ? Mode(width: width / 2, height: height / 2, refreshRate: fps, hiDPI: true)
+            : Mode(width: width, height: height, refreshRate: fps)
+    }
 
     static let maxPixelsWide = sizes.map(\.width).max() ?? 0
     static let maxPixelsHigh = sizes.map(\.height).max() ?? 0
@@ -37,12 +57,15 @@ enum StreamingDisplayModes {
     }
 
     /// Every size at every rate, the start mode first so the display comes up in it.
-    static var advertised: [(width: Int, height: Int, refreshRate: Int)] {
+    static var advertised: [(width: Int, height: Int, refreshRate: Int)] { advertised(startingIn: start) }
+
+    /// Every size at every rate and `start` with them, which comes first.
+    static func advertised(startingIn start: Mode) -> [(width: Int, height: Int, refreshRate: Int)] {
         let all = sizes.flatMap { size in refreshRates.map { (size.width, size.height, $0) } }
         let isStart = { (m: (width: Int, height: Int, refreshRate: Int)) in
             m.width == start.width && m.height == start.height && m.refreshRate == start.refreshRate
         }
-        return all.filter(isStart) + all.filter { !isStart($0) }
+        return [(start.width, start.height, start.refreshRate)] + all.filter { !isStart($0) }
     }
 }
 
@@ -54,6 +77,8 @@ extension VideoManager {
         let display: AnyObject
         /// Which of the streaming displays it is, from 0; it picks the name and serial number.
         let index: Int
+        /// The mode it comes up in.
+        let start: StreamingDisplayModes.Mode
         /// Its display ID once online, else 0.
         var id: CGDirectDisplayID = 0
     }
@@ -122,31 +147,45 @@ extension VideoManager {
         setMainDisplay(display) { [weak self] _ in self?.streamingMainHandBackInFlight = false }
     }
 
-    /// An addition or removal of a streaming display, waiting its turn.
-    enum StreamingRequest: Equatable {
-        case add
+    /// An addition or removal of a streaming display, waiting its turn. An addition says
+    /// when its display is placed, with its ID, or that none could be made, with nil.
+    enum StreamingRequest {
+        case add(StreamingDisplayModes.Mode, completion: ((CGDirectDisplayID?) -> Void)?)
         case remove(index: Int)
+
+        var isAddition: Bool {
+            if case .add = self { return true }
+            return false
+        }
     }
 
     /// How many streaming displays there will be once the requests waiting are done.
     var plannedStreamingDisplayCount: Int {
-        streamingRequests.reduce(streamingDisplays.count) { $0 + ($1 == .add ? 1 : -1) }
+        streamingRequests.reduce(streamingDisplays.count) { $0 + ($1.isAddition ? 1 : -1) }
     }
 
     var canCreateStreamingDisplay: Bool { plannedStreamingDisplayCount < Self.maxStreamingDisplays }
 
-    /// Asks for one more streaming display. Additions and removals run one at a time, each
+    /// Asks for one more streaming display, in `mode`; `completion` gets its ID once it is
+    /// placed, or nil if none could be made. Additions and removals run one at a time, each
     /// once the one before has settled.
-    func createStreamingDisplay() {
-        guard canCreateStreamingDisplay else { return }
-        streamingRequests.append(.add)
+    func createStreamingDisplay(mode: StreamingDisplayModes.Mode = StreamingDisplayModes.start,
+                                completion: ((CGDirectDisplayID?) -> Void)? = nil) {
+        guard canCreateStreamingDisplay else { completion?(nil); return }
+        streamingRequests.append(.add(mode, completion: completion))
         processStreamingRequests()
     }
 
     /// Asks for the streaming display shown as `display` to be removed.
     func removeStreamingDisplay(_ display: DisplayInfo) {
-        guard let index = streamingDisplays.first(where: { $0.id == display.cgDisplayID })?.index,
-              !streamingRequests.contains(.remove(index: index)) else { return }
+        removeStreamingDisplay(id: display.cgDisplayID)
+    }
+
+    /// Asks for the streaming display `id` to be removed.
+    func removeStreamingDisplay(id: CGDirectDisplayID) {
+        guard id != 0, let index = streamingDisplays.first(where: { $0.id == id })?.index,
+              !streamingRequests.contains(where: { if case .remove(index) = $0 { return true } else { return false } })
+        else { return }
         streamingRequests.append(.remove(index: index))
         processStreamingRequests()
     }
@@ -156,33 +195,41 @@ extension VideoManager {
     private func processStreamingRequests() {
         while !streamingChangeInFlight, !streamingReassertInFlight, !streamingRequests.isEmpty {
             switch streamingRequests.removeFirst() {
-            case .add:                  addStreamingDisplay()
-            case .remove(let index):    removeStreamingDisplay(index: index)
+            case .add(let mode, let completion):    addStreamingDisplay(mode, completion: completion)
+            case .remove(let index):                removeStreamingDisplay(index: index)
             }
         }
     }
 
-    /// Ends the change under way and starts the next, if any is waiting.
-    private func finishStreamingChange() {
+    /// Ends the change under way and starts the next, if any is waiting. `placed` is the
+    /// display an addition placed, nil when it made none.
+    private func finishStreamingChange(placed: CGDirectDisplayID? = nil) {
         streamingChangeInFlight = false
+        let completion = streamingAddCompletion
+        streamingAddCompletion = nil
+        completion?(placed)
         keepStreamingDisplayOffMain()
         processStreamingRequests()
     }
 
-    /// Creates a streaming display and places it right of the other displays. The
+    /// Creates a streaming display in `mode` and places it right of the other displays. The
     /// arrangement from before the first is put back when the last is removed.
-    private func addStreamingDisplay() {
+    private func addStreamingDisplay(_ mode: StreamingDisplayModes.Mode,
+                                     completion: ((CGDirectDisplayID?) -> Void)?) {
         let used = Set(streamingDisplays.map(\.index))
-        guard let index = (0..<Self.maxStreamingDisplays).first(where: { !used.contains($0) }) else { return }
-        sdLog.debug("add \(index)")
+        guard let index = (0..<Self.maxStreamingDisplays).first(where: { !used.contains($0) }) else {
+            completion?(nil)
+            return
+        }
+        sdLog.debug("add \(index) at \(mode.width)×\(mode.height)@\(mode.refreshRate)\(mode.hiDPI ? " HiDPI" : "")")
 
         let descriptor = CGVirtualDisplayDescriptor()
         // Must call setDispatchQueue: (see enableVirtualAnchor).
         descriptor.setDispatchQueue(.main)
         descriptor.name = Self.streamingDisplayName(index)
         descriptor.sizeInMillimeters = CGSize(width: 600, height: 340)
-        descriptor.maxPixelsWide = UInt32(StreamingDisplayModes.maxPixelsWide)
-        descriptor.maxPixelsHigh = UInt32(StreamingDisplayModes.maxPixelsHigh)
+        descriptor.maxPixelsWide = UInt32(max(StreamingDisplayModes.maxPixelsWide, mode.pixelWidth))
+        descriptor.maxPixelsHigh = UInt32(max(StreamingDisplayModes.maxPixelsHigh, mode.pixelHeight))
         descriptor.vendorID  = Self.anchorVendorID
         descriptor.productID = Self.streamingProductID
         descriptor.serialNum = Self.streamingSerial(index)
@@ -203,18 +250,21 @@ extension VideoManager {
         let vd = CGVirtualDisplay(descriptor: descriptor)
         let settings = CGVirtualDisplaySettings()
         settings.hiDPI = 1
-        settings.modes = StreamingDisplayModes.advertised.map {
+        settings.modes = StreamingDisplayModes.advertised(startingIn: mode).map {
             CGVirtualDisplayMode(width: UInt($0.width), height: UInt($0.height),
                                  refreshRate: Double($0.refreshRate))
         }
         guard vd.apply(settings) else {
             sdLog.error("add: applySettings failed")
             if streamingDisplays.isEmpty { streamingArrangement = nil }
+            completion?(nil)
             // The additions waiting would fail the same way.
-            streamingRequests.removeAll { $0 == .add }
+            for case .add(_, let waiting) in streamingRequests { waiting?(nil) }
+            streamingRequests.removeAll(where: \.isAddition)
             return
         }
-        streamingDisplays.append(StreamingDisplay(display: vd, index: index))
+        streamingDisplays.append(StreamingDisplay(display: vd, index: index, start: mode))
+        streamingAddCompletion = completion
         streamingChangeInFlight = true
         waitForStreamingDisplay(vd, index: index, before: before, attempt: 0)
     }
@@ -354,9 +404,9 @@ extension VideoManager {
         before.restoreModes(in: cfg, excluding: [id])
         let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
         let modes = CGDisplayCopyAllDisplayModes(id, options) as? [CGDisplayMode] ?? []
-        let start = StreamingDisplayModes.start
+        let start = streamingDisplays.first { $0.id == id }?.start ?? StreamingDisplayModes.start
         let startMode = modes.first {
-            $0.width == start.width && $0.height == start.height && $0.pixelWidth == start.width
+            $0.width == start.width && $0.height == start.height && $0.pixelWidth == start.pixelWidth
                 && Int($0.refreshRate.rounded()) == start.refreshRate
         }
         if let mode = startMode {
@@ -385,7 +435,7 @@ extension VideoManager {
                 self?.mergeDevices()
                 // The display that was main may be gone, and a commit that changes nothing
                 // fires no reconfiguration to check this.
-                self?.finishStreamingChange()
+                self?.finishStreamingChange(placed: id)
             }
         }
     }

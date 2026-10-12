@@ -57,6 +57,32 @@ final class StreamingDisplayTests: XCTestCase {
         XCTAssertFalse(StreamingDisplayModes.fits(m(1920, 1200, 2)))
     }
 
+    // MARK: - Displays made for a stream
+
+    func testAStreamUpTo2560WideGetsADisplayOfItsSize() {
+        XCTAssertEqual(StreamingDisplayModes.forStream(width: 1920, height: 1200, fps: 60),
+                       .init(width: 1920, height: 1200, refreshRate: 60))
+        XCTAssertEqual(StreamingDisplayModes.forStream(width: 1366, height: 768, fps: 30),
+                       .init(width: 1366, height: 768, refreshRate: 30))
+    }
+
+    func testASharperStreamGetsAHiDPIDisplayOfHalfItsSize() {
+        let mode = StreamingDisplayModes.forStream(width: 2880, height: 1800, fps: 120)
+        XCTAssertEqual(mode, .init(width: 1440, height: 900, refreshRate: 120, hiDPI: true))
+        XCTAssertEqual(mode.pixelWidth, 2880)
+        XCTAssertEqual(mode.pixelHeight, 1800)
+    }
+
+    func testOffersTheStreamsModeFirstAndOnce() {
+        let start = StreamingDisplayModes.Mode(width: 1366, height: 768, refreshRate: 60)
+        let modes = StreamingDisplayModes.advertised(startingIn: start)
+        XCTAssertEqual(modes.first?.width, 1366)
+        XCTAssertEqual(modes.first?.refreshRate, 60)
+        XCTAssertEqual(modes.count, StreamingDisplayModes.advertised.count + 1)
+        let standard = StreamingDisplayModes.advertised(startingIn: StreamingDisplayModes.start)
+        XCTAssertEqual(standard.count, StreamingDisplayModes.advertised.count, "a listed mode is not listed twice")
+    }
+
     // MARK: - Several displays
 
     func testEachDisplayHasItsOwnSerialAndName() {

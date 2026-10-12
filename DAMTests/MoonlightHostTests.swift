@@ -1,4 +1,5 @@
 import XCTest
+import CryptoKit
 import Network
 import Security
 @testable import DAM
@@ -15,6 +16,7 @@ final class MoonlightHostTests: XCTestCase {
         let base = UInt16.random(in: 40000...59000)
         host = MoonlightHost(httpPort: NWEndpoint.Port(rawValue: base)!,
                              httpsPort: NWEndpoint.Port(rawValue: base + 1)!,
+                             rtspPort: NWEndpoint.Port(rawValue: base + 2)!,
                              directory: directory, advertises: false)
     }
 
@@ -153,7 +155,7 @@ final class MoonlightHostTests: XCTestCase {
 
     func testPairsWithTheRightPIN() throws {
         host.requestPIN = { _, answer in answer("4821") }
-        host.apps = [MoonlightApp(id: 1, title: "DAM Streaming")]
+        host.apps = [MoonlightApp(id: 1, title: "DAM Streaming", displayID: 0)]
         startHost()
         let client = try Client.make()
         XCTAssertTrue(try pair(client, pin: "4821"))
@@ -218,5 +220,220 @@ final class MoonlightHostTests: XCTestCase {
         wait(for: [asked], timeout: 5)
         connection.cancel()
         wait(for: [abandoned], timeout: 5)
+    }
+
+    // MARK: - Displays made on demand
+
+    func testNewDisplayIsListedAndLaunchingItMakesADisplayThatCancelRemoves() throws {
+        var made: [Int] = []
+        var removed: [CGDirectDisplayID] = []
+        host.requestPIN = { _, answer in answer("1234") }
+        host.makeDisplay = { width, height, fps, done in
+            made = [width, height, fps]
+            // Placing a display takes a while; the launch waits for it.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { done(42) }
+        }
+        host.removeDisplay = { removed.append($0) }
+        startHost()
+        let client = try Client.make()
+        XCTAssertTrue(try pair(client, pin: "1234"))
+
+        let apps = try get("/applist", secure: true, identity: client.identity)
+        XCTAssertEqual(field("AppTitle", in: apps), "New Display")
+        XCTAssertEqual(field("ID", in: apps), "\(MoonlightHost.newDisplayAppID)")
+
+        let key = MoonlightCrypto.hex(MoonlightPairing.randomBytes(16))
+        let launch = try get("/launch?appid=\(MoonlightHost.newDisplayAppID)&mode=2880x1800x120&rikey=\(key)&rikeyid=1",
+                             secure: true, identity: client.identity)
+        XCTAssertEqual(field("gamesession", in: launch), "1")
+        XCTAssertEqual(made, [2880, 1800, 120])
+        XCTAssertEqual(host.launch?.displayID, 42)
+        XCTAssertEqual(field("currentgame", in: try get("/serverinfo", secure: true, identity: client.identity)),
+                       "\(MoonlightHost.newDisplayAppID)")
+
+        XCTAssertEqual(field("cancel", in: try get("/cancel", secure: true, identity: client.identity)), "1")
+        XCTAssertEqual(removed, [42])
+    }
+
+    func testAnAppWhoseDisplayIsGoneGetsANewOne() throws {
+        var made = false
+        host.requestPIN = { _, answer in answer("1234") }
+        host.makeDisplay = { _, _, _, done in made = true; done(7) }
+        startHost()
+        let client = try Client.make()
+        XCTAssertTrue(try pair(client, pin: "1234"))
+        let key = MoonlightCrypto.hex(MoonlightPairing.randomBytes(16))
+        let launch = try get("/launch?appid=1&mode=1920x1080x60&rikey=\(key)&rikeyid=1", secure: true, identity: client.identity)
+        XCTAssertEqual(field("gamesession", in: launch), "1")
+        XCTAssertTrue(made)
+    }
+
+    func testSaysSoWhenNoDisplayCanBeMade() throws {
+        host.requestPIN = { _, answer in answer("1234") }
+        host.makeDisplay = { _, _, _, done in done(nil) }
+        startHost()
+        let client = try Client.make()
+        XCTAssertTrue(try pair(client, pin: "1234"))
+        let key = MoonlightCrypto.hex(MoonlightPairing.randomBytes(16))
+        let launch = try get("/launch?appid=100&mode=1920x1080x60&rikey=\(key)&rikeyid=1", secure: true, identity: client.identity)
+        XCTAssertEqual(status(launch), "503")
+        XCTAssertNil(host.launch)
+    }
+
+    // MARK: - Streaming, end to end
+
+    /// Sends `text` as one RTSP request on a connection of its own and reads to the end, as
+    /// Moonlight does.
+    private func rtsp(_ text: String) -> String {
+        let connection = NWConnection(host: "127.0.0.1", port: host.rtspPort, using: .tcp)
+        connection.start(queue: .global())
+        connection.send(content: Data(text.utf8), completion: .idempotent)
+        let done = expectation(description: "rtsp")
+        var response = Data()
+        func read() {
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { data, _, isComplete, error in
+                if let data { response.append(data) }
+                if isComplete || error != nil { done.fulfill() } else { read() }
+            }
+        }
+        read()
+        wait(for: [done], timeout: 10)
+        connection.cancel()
+        return String(decoding: response, as: UTF8.self)
+    }
+
+    private func header(_ name: String, in reply: String) -> String? {
+        reply.components(separatedBy: "\r\n").first { $0.hasPrefix("\(name): ") }.map { String($0.dropFirst(name.count + 2)) }
+    }
+
+    private func streamingDisplay() -> CGDirectDisplayID? {
+        DisplayArrangement.onlineDisplayIDs().first {
+            CGDisplayVendorNumber($0) == VideoManager.anchorVendorID && CGDisplayModelNumber($0) == VideoManager.streamingProductID
+        }
+    }
+
+    private func localhost(_ port: UInt16) -> sockaddr_in {
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = port.bigEndian
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        return address
+    }
+
+    /// Pairs, launches, shakes hands over RTSP, connects to the control stream and pings for
+    /// video, as Moonlight does; checks the first frame when DAM may record the screen, else
+    /// that the stream ends saying why; then cancels.
+    func testLaunchesAndStreamsAsMoonlightExpects() throws {
+        let display = try XCTUnwrap(streamingDisplay() ?? Optional(0))
+        host.requestPIN = { _, answer in answer("1234") }
+        host.apps = [MoonlightApp(id: 1, title: "DAM Streaming", displayID: display)]
+        startHost()
+        let client = try Client.make()
+        XCTAssertTrue(try pair(client, pin: "1234"))
+
+        // /launch
+        let key = MoonlightPairing.randomBytes(16)
+        let launch = try get("/launch?appid=1&mode=1280x720x60&additionalStates=1&sops=0&rikey=\(MoonlightCrypto.hex(key).lowercased())&rikeyid=-1294967296&localAudioPlayMode=0&surroundAudioInfo=196610",
+                             secure: true, identity: client.identity)
+        XCTAssertEqual(field("gamesession", in: launch), "1")
+        XCTAssertEqual(field("sessionUrl0", in: launch), "rtsp://127.0.0.1:\(host.rtspPort.rawValue)")
+        let busy = try get("/serverinfo", secure: true, identity: client.identity)
+        XCTAssertEqual(field("state", in: busy), "SUNSHINE_SERVER_BUSY")
+        XCTAssertEqual(field("currentgame", in: busy), "1")
+
+        // RTSP
+        let common = "X-GS-ClientVersion: 14\r\nHost: 127.0.0.1\r\n"
+        XCTAssertTrue(rtsp("OPTIONS rtsp://127.0.0.1:48010 RTSP/1.0\r\nCSeq: 1\r\n\(common)\r\n").hasPrefix("RTSP/1.0 200 OK\r\nCSeq: 1\r\n"))
+        let describe = rtsp("DESCRIBE rtsp://127.0.0.1:48010 RTSP/1.0\r\nCSeq: 2\r\n\(common)Accept: application/sdp\r\n\r\n")
+        XCTAssertTrue(describe.contains("a=x-ss-general.encryptionSupported:1"))
+        let audio = rtsp("SETUP streamid=audio/0/0 RTSP/1.0\r\nCSeq: 3\r\n\(common)Transport: unicast;X-GS-ClientPort=50000-50001\r\n\r\n")
+        let session = try XCTUnwrap(header("Session", in: audio)?.components(separatedBy: ";").first)
+        let video = rtsp("SETUP streamid=video/0/0 RTSP/1.0\r\nCSeq: 4\r\n\(common)Session: \(session)\r\n\r\n")
+        let pingPayload = try XCTUnwrap(header("X-SS-Ping-Payload", in: video))
+        XCTAssertEqual(pingPayload.count, 16)
+        let control = rtsp("SETUP streamid=control/13/0 RTSP/1.0\r\nCSeq: 5\r\n\(common)Session: \(session)\r\n\r\n")
+        let connectData = try XCTUnwrap(header("X-SS-Connect-Data", in: control).flatMap { UInt32($0) })
+        let sdp = "v=0\r\na=x-ss-general.encryptionEnabled:1 \r\na=x-nv-video[0].clientViewportWd:1280 \r\n" +
+                  "a=x-nv-video[0].clientViewportHt:720 \r\na=x-nv-video[0].maxFPS:60 \r\n" +
+                  "a=x-nv-video[0].packetSize:1392 \r\na=x-nv-vqos[0].bw.maximumBitrateKbps:8000 \r\n" +
+                  "a=x-nv-vqos[0].bitStreamFormat:0 \r\n"
+        let announce = rtsp("ANNOUNCE streamid=control/13/0 RTSP/1.0\r\nCSeq: 6\r\n\(common)Session: \(session)\r\n" +
+                            "Content-type: application/sdp\r\nContent-length: \(sdp.utf8.count)\r\n\r\n\(sdp)")
+        XCTAssertTrue(announce.hasPrefix("RTSP/1.0 200 OK"), announce)
+        XCTAssertTrue(rtsp("PLAY / RTSP/1.0\r\nCSeq: 7\r\n\(common)Session: \(session)\r\n\r\n").hasPrefix("RTSP/1.0 200 OK"))
+
+        // Control: connect with the token, then ask for a keyframe as Moonlight's Start A does.
+        let enet = try XCTUnwrap(enet_host_create(nil, 1, 48, 0, 0))
+        defer { enet_host_destroy(enet) }
+        var address = ENetAddress(host: 0, port: MoonlightStream.controlPort)
+        enet_address_set_host_ip(&address, "127.0.0.1")
+        let peer = try XCTUnwrap(enet_host_connect(enet, &address, 48, connectData))
+        var event = ENetEvent()
+        var connected = false
+        let deadline = Date().addingTimeInterval(5)
+        while !connected, Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+            if enet_host_service(enet, &event, 10) > 0, event.type == ENET_EVENT_TYPE_CONNECT { connected = true }
+        }
+        XCTAssertTrue(connected, "control stream connected")
+        let sessionKey = SymmetricKey(data: key)
+        let start = try MoonlightControlCrypto.seal(type: 0x0302, payload: Data([0, 0]), sequence: 0, key: sessionKey,
+                                                    direction: .clientToHost)
+        start.withUnsafeBytes { enet_peer_send(peer, 1, enet_packet_create($0.baseAddress, start.count, ENET_PACKET_FLAG_RELIABLE.rawValue)) }
+        enet_host_flush(enet)
+
+        // Video: ping, then read packets.
+        let socket = try MoonlightUDPSocket(port: 0)
+        var ping = Data(pingPayload.utf8)
+        ping.append(bigEndian: UInt32(1))
+        socket.send(ping, to: localhost(MoonlightStream.videoPort))
+        if MoonlightScreenCapture.hasPermission, display != 0 {
+            var firstFrame: [Data] = []
+            let videoDeadline = Date().addingTimeInterval(5)
+            while Date() < videoDeadline {
+                _ = enet_host_service(enet, &event, 0)
+                RunLoop.main.run(until: Date().addingTimeInterval(0.001))
+                guard let (packet, _) = socket.receive(timeout: 0.05) else { continue }
+                XCTAssertEqual(packet.count, 1392 + 16)
+                let bytes = [UInt8](packet)
+                let frameIndex = UInt32(bytes[20]) | UInt32(bytes[21]) << 8 | UInt32(bytes[22]) << 16 | UInt32(bytes[23]) << 24
+                guard frameIndex == 1 else { continue }
+                firstFrame.append(packet)
+                if bytes[24] & 0x02 != 0 { break }
+            }
+            let payload = firstFrame.reduce(Data()) { $0 + $1.dropFirst(32) }
+            XCTAssertGreaterThan(firstFrame.count, 0, "video arrived")
+            XCTAssertEqual(payload.prefix(1), Data([0x01]), "8-byte frame header")
+            XCTAssertEqual([UInt8](payload)[3], 2, "an IDR first")
+            let unit = [UInt8](payload.dropFirst(8))
+            XCTAssertEqual(Array(unit.prefix(5)), [0, 0, 0, 1, 0x67], "SPS first")
+        } else {
+            let ended = expectation(description: "stream ended")
+            ended.assertForOverFulfill = false
+            host.onChange = { [weak host] in if host?.lastStreamEnd != nil { ended.fulfill() } }
+            wait(for: [ended], timeout: 5)
+            XCTAssertEqual(host.lastStreamEnd, "\(AppIdentity.name) may not record the screen")
+        }
+
+        // /cancel frees the host, and Moonlight hears the stream ended.
+        XCTAssertEqual(field("cancel", in: try get("/cancel", secure: true, identity: client.identity)), "1")
+        let free = try get("/serverinfo", secure: true, identity: client.identity)
+        XCTAssertEqual(field("state", in: free), "SUNSHINE_SERVER_FREE")
+        XCTAssertEqual(field("currentgame", in: free), "0")
+        if MoonlightScreenCapture.hasPermission, display != 0 {
+            var termination: (type: UInt16, payload: Data)?
+            let endDeadline = Date().addingTimeInterval(3)
+            while termination == nil, Date() < endDeadline {
+                RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+                guard enet_host_service(enet, &event, 10) > 0, event.type == ENET_EVENT_TYPE_RECEIVE else { continue }
+                let data = Data(bytes: event.packet.pointee.data, count: Int(event.packet.pointee.dataLength))
+                enet_packet_destroy(event.packet)
+                termination = MoonlightControlCrypto.open(data, key: sessionKey, direction: .hostToClient)
+            }
+            XCTAssertEqual(termination?.type, 0x0109)
+            XCTAssertEqual(termination?.payload, Data([0x80, 0x03, 0x00, 0x23]))
+        }
+        socket.close()
     }
 }

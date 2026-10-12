@@ -187,8 +187,10 @@ final class VideoManager: ObservableObject {
     var bootstrapDisplayID: CGDirectDisplayID = 0
     /// The streaming displays, in the order they were added.
     var streamingDisplays: [StreamingDisplay] = []
-    /// Additions and removals of streaming displays the user asked for, in order.
+    /// Additions and removals of streaming displays asked for, in order.
     var streamingRequests: [StreamingRequest] = []
+    /// Called when the addition under way has placed its display, or made none.
+    var streamingAddCompletion: ((CGDirectDisplayID?) -> Void)?
     /// The layout from before the first streaming display was added.
     var streamingArrangement: DisplayArrangement?
     /// Whether the user made a streaming display main, which DAM then leaves it.
