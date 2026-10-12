@@ -505,15 +505,18 @@ extension AppDelegate: NSMenuDelegate {
         wc.show()
     }
 
-    /// Sets how many streaming displays there are, for streaming or remote-desktop apps to
-    /// capture; the item's tag is the count.
-    @objc func setStreamingDisplayCount(_ sender: NSMenuItem) {
-        let count = sender.tag
-        guard count != videoManager.streamingDisplayTarget else { return }
-        SpeechSynthesizer.shared.announce(count == 0 ? "Removing the streaming displays"
-                                          : count == 1 ? "One streaming display"
-                                          : "\(count) streaming displays")
-        videoManager.setStreamingDisplayCount(count)
+    /// Adds a streaming display, for a streaming or remote-desktop app to capture.
+    @objc func createStreamingDisplay(_ sender: NSMenuItem) {
+        SpeechSynthesizer.shared.announce("Creating a streaming display")
+        videoManager.createStreamingDisplay()
+        rebuild()
+    }
+
+    /// Removes the streaming display in the item's `representedObject`.
+    @objc func removeStreamingDisplay(_ sender: NSMenuItem) {
+        guard let display = sender.representedObject as? DisplayInfo else { return }
+        SpeechSynthesizer.shared.announce("Removing \(display.label)")
+        videoManager.removeStreamingDisplay(display)
         rebuild()
     }
 

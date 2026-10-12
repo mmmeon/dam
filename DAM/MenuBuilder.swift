@@ -110,10 +110,38 @@ func buildStatusMenu(audio: AudioManager,
         }
     }
 
-    // — Connected Displays section — physical displays; a Sidecar iPad is listed above
+    // — Streaming Displays section — DAM's own, for streaming or remote-desktop apps
+    menu.addItem(.separator())
+    menu.addItem(sectionHeader("Streaming Displays"))
+    for display in video.connectedDisplays where display.isStreaming {
+        let item = NSMenuItem(title: display.label, action: nil, keyEquivalent: "")
+        item.state = .on
+        item.image = displayIcon(for: display, video: video)
+        let submenu = buildResolutionSubmenu(display: display, video: video)
+        submenu.addItem(.separator())
+        addDisplayControls(to: submenu, for: display, video: video, canMirror: canMirrorDisplays)
+        let remove = NSMenuItem(title: "Remove",
+                                action: #selector(AppDelegate.removeStreamingDisplay(_:)),
+                                keyEquivalent: "")
+        remove.representedObject = display
+        submenu.addItem(remove)
+        item.submenu = submenu
+        menu.addItem(item)
+    }
+    let create = NSMenuItem(title: "Create Streaming Display",
+                            action: video.canCreateStreamingDisplay
+                                ? #selector(AppDelegate.createStreamingDisplay(_:)) : nil,
+                            keyEquivalent: "")
+    create.toolTip = video.canCreateStreamingDisplay
+        ? "A virtual display for a streaming or remote-desktop app to show, one per stream."
+        : "There can be up to \(VideoManager.maxStreamingDisplays) streaming displays."
+    menu.addItem(create)
+
+    // — Connected Displays section — physical displays; Sidecar iPads and streaming
+    // displays are listed above
     menu.addItem(.separator())
     menu.addItem(sectionHeader("Connected Displays"))
-    let physicalDisplays = video.connectedDisplays.filter { !$0.isSidecar }
+    let physicalDisplays = video.connectedDisplays.filter { !$0.isSidecar && !$0.isStreaming }
     if physicalDisplays.isEmpty {
         menu.addItem(disabledItem("None"))
     } else {
@@ -131,7 +159,6 @@ func buildStatusMenu(audio: AudioManager,
             menu.addItem(item)
         }
     }
-    menu.addItem(streamingDisplaysItem(video: video))
 
     menu.addItem(.separator())
     if video.currentLayout().displayCount >= 2 {
@@ -209,26 +236,6 @@ private func debugMenuItem() -> NSMenuItem {
     return item
 }
 #endif
-
-/// Picks how many streaming displays there are.
-private func streamingDisplaysItem(video: VideoManager) -> NSMenuItem {
-    let item = NSMenuItem(title: "Streaming Displays", action: nil, keyEquivalent: "")
-    item.state = video.streamingDisplayTarget > 0 ? .on : .off
-    item.image = menuIcon("rectangle.on.rectangle")
-    item.toolTip = "Virtual displays for streaming or remote-desktop apps to show, one per stream. " +
-                   "Set their resolutions and refresh rates under Connected Displays."
-    let submenu = NSMenu()
-    for count in 0...VideoManager.maxStreamingDisplays {
-        let choice = NSMenuItem(title: count == 0 ? "Off" : count == 1 ? "1 Display" : "\(count) Displays",
-                                action: #selector(AppDelegate.setStreamingDisplayCount(_:)),
-                                keyEquivalent: "")
-        choice.tag = count
-        choice.state = video.streamingDisplayTarget == count ? .on : .off
-        submenu.addItem(choice)
-    }
-    item.submenu = submenu
-    return item
-}
 
 private func sectionHeader(_ title: String) -> NSMenuItem {
     let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")

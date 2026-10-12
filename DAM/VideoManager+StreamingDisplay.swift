@@ -122,29 +122,51 @@ extension VideoManager {
         setMainDisplay(display) { [weak self] _ in self?.streamingMainHandBackInFlight = false }
     }
 
-    /// Asks for `count` streaming displays. They are added or removed one at a time, each
-    /// once the one before has settled; the last added goes first.
-    func setStreamingDisplayCount(_ count: Int) {
-        streamingDisplayTarget = min(max(count, 0), Self.maxStreamingDisplays)
-        reconcileStreamingDisplays()
+    /// An addition or removal of a streaming display, waiting its turn.
+    enum StreamingRequest: Equatable {
+        case add
+        case remove(index: Int)
     }
 
-    /// Adds or removes one streaming display towards the count asked for, unless a change
-    /// is under way; that one calls this again when it is done.
-    private func reconcileStreamingDisplays() {
-        guard !streamingChangeInFlight, !streamingReassertInFlight else { return }
-        if streamingDisplays.count < streamingDisplayTarget {
-            addStreamingDisplay()
-        } else if streamingDisplays.count > streamingDisplayTarget {
-            removeStreamingDisplay()
+    /// How many streaming displays there will be once the requests waiting are done.
+    var plannedStreamingDisplayCount: Int {
+        streamingRequests.reduce(streamingDisplays.count) { $0 + ($1 == .add ? 1 : -1) }
+    }
+
+    var canCreateStreamingDisplay: Bool { plannedStreamingDisplayCount < Self.maxStreamingDisplays }
+
+    /// Asks for one more streaming display. Additions and removals run one at a time, each
+    /// once the one before has settled.
+    func createStreamingDisplay() {
+        guard canCreateStreamingDisplay else { return }
+        streamingRequests.append(.add)
+        processStreamingRequests()
+    }
+
+    /// Asks for the streaming display shown as `display` to be removed.
+    func removeStreamingDisplay(_ display: DisplayInfo) {
+        guard let index = streamingDisplays.first(where: { $0.id == display.cgDisplayID })?.index,
+              !streamingRequests.contains(.remove(index: index)) else { return }
+        streamingRequests.append(.remove(index: index))
+        processStreamingRequests()
+    }
+
+    /// Starts the next request, unless a change is under way; that one calls this again
+    /// when it is done.
+    private func processStreamingRequests() {
+        while !streamingChangeInFlight, !streamingReassertInFlight, !streamingRequests.isEmpty {
+            switch streamingRequests.removeFirst() {
+            case .add:                  addStreamingDisplay()
+            case .remove(let index):    removeStreamingDisplay(index: index)
+            }
         }
     }
 
-    /// Ends the change under way and starts the next, if more are asked for.
+    /// Ends the change under way and starts the next, if any is waiting.
     private func finishStreamingChange() {
         streamingChangeInFlight = false
         keepStreamingDisplayOffMain()
-        reconcileStreamingDisplays()
+        processStreamingRequests()
     }
 
     /// Creates a streaming display and places it right of the other displays. The
@@ -169,8 +191,9 @@ extension VideoManager {
         }
 
         // Taken before the display comes, to put the others back once WindowServer has laid
-        // the new set out; it holds the streaming displays already there.
-        let before = DisplayArrangement.current()
+        // the new set out; it holds the streaming displays already there. Right after another
+        // change, the layout kept for it: WindowServer may still be changing the current one.
+        let before = activeStreamingSettle ?? DisplayArrangement.current()
         // Kept for the set without the new display, which it would no longer match.
         streamingSettle = nil
         if streamingDisplays.isEmpty {
@@ -187,8 +210,8 @@ extension VideoManager {
         guard vd.apply(settings) else {
             sdLog.error("add: applySettings failed")
             if streamingDisplays.isEmpty { streamingArrangement = nil }
-            // Asking again would fail the same way.
-            streamingDisplayTarget = streamingDisplays.count
+            // The additions waiting would fail the same way.
+            streamingRequests.removeAll { $0 == .add }
             return
         }
         streamingDisplays.append(StreamingDisplay(display: vd, index: index))
@@ -196,24 +219,24 @@ extension VideoManager {
         waitForStreamingDisplay(vd, index: index, before: before, attempt: 0)
     }
 
-    /// Removes the streaming display added last and puts the others back where they were:
-    /// where they were before the first came once it is the last.
-    private func removeStreamingDisplay() {
-        guard let last = streamingDisplays.last else { return }
+    /// Removes streaming display `index`, if it is still there, and puts the others back
+    /// where they were: where they were before the first came once it is the last.
+    private func removeStreamingDisplay(index: Int) {
+        guard let i = streamingDisplays.firstIndex(where: { $0.index == index }) else { return }
+        let last = streamingDisplays[i]
         sdLog.debug("remove \(last.index): \(last.id)")
-        // Right after another removal, the layout kept for it: WindowServer may still be
+        // Right after another change, the layout kept for it: WindowServer may still be
         // changing the current one.
-        let settled = streamingSettle.flatMap { $0.until > Date() ? $0.arrangement : nil }
         let arrangement = streamingDisplays.count == 1
             ? streamingArrangement
-            : (settled ?? DisplayArrangement.current()).excluding(last.id)
+            : (activeStreamingSettle ?? DisplayArrangement.current()).excluding(last.id)
         if streamingDisplays.count == 1 || CGDisplayIsMain(last.id) != 0 {
             streamingDisplayIsMainByChoice = false
         }
         // Dropping the last reference removes the display. While the set settles without
         // it, each change puts the resolutions and positions back if WindowServer's saved
         // layout for the smaller set changed them.
-        streamingDisplays.removeLast()
+        streamingDisplays.remove(at: i)
         if streamingDisplays.isEmpty { streamingArrangement = nil }
         streamingSettle = arrangement.map { ($0, Date().addingTimeInterval(5)) }
         streamingChangeInFlight = true
@@ -227,7 +250,12 @@ extension VideoManager {
         }
     }
 
-    /// Puts back the layout kept after a streaming display was removed, until it expires,
+    /// The layout kept after the last change, until it expires.
+    private var activeStreamingSettle: DisplayArrangement? {
+        streamingSettle.flatMap { $0.until > Date() ? $0.arrangement : nil }
+    }
+
+    /// Puts back the layout kept after a streaming display was added or removed, until it expires,
     /// in one commit at a time. Commits only what differs, so its own commits end the cycle.
     /// Permanently: they are the layout the set had, which WindowServer's saved one undid.
     func reassertStreamingLayout() {
@@ -254,18 +282,16 @@ extension VideoManager {
                 // A change that arrived meanwhile was skipped; look now.
                 self.streamingReassertInFlight = false
                 self.reassertStreamingLayout()
-                self.reconcileStreamingDisplays()
+                self.processStreamingRequests()
             }
         }
     }
 
-    /// Forgets streaming display `index` after WindowServer ended it, and stops asking for
-    /// it back.
+    /// Forgets streaming display `index` after WindowServer ended it.
     private func streamingDisplayEnded(index: Int) {
         guard let i = streamingDisplays.firstIndex(where: { $0.index == index }) else { return }
         sdLog.debug("terminationHandler: streaming display \(index) ended")
         streamingDisplays.remove(at: i)
-        streamingDisplayTarget = min(streamingDisplayTarget, streamingDisplays.count)
         if streamingDisplays.isEmpty {
             streamingArrangement = nil
             streamingDisplayIsMainByChoice = false
@@ -305,7 +331,6 @@ extension VideoManager {
             sdLog.error("\(index) never came online — dropping it")
             streamingDisplays.removeAll { $0.display === vd }
             if streamingDisplays.isEmpty { streamingArrangement = nil }
-            streamingDisplayTarget = streamingDisplays.count
             return finishStreamingChange()
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
@@ -330,10 +355,11 @@ extension VideoManager {
         let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
         let modes = CGDisplayCopyAllDisplayModes(id, options) as? [CGDisplayMode] ?? []
         let start = StreamingDisplayModes.start
-        if let mode = modes.first(where: {
+        let startMode = modes.first {
             $0.width == start.width && $0.height == start.height && $0.pixelWidth == start.width
                 && Int($0.refreshRate.rounded()) == start.refreshRate
-        }) {
+        }
+        if let mode = startMode {
             CGConfigureDisplayWithDisplayMode(cfg, id, mode, nil)
         } else {
             sdLog.error("place: no \(start.width)×\(start.height) mode among \(modes.count)")
@@ -346,12 +372,16 @@ extension VideoManager {
         }
         let origin = Self.streamingDisplayOrigin(others: others)
         CGConfigureDisplayOrigin(cfg, id, Int32(origin.x), Int32(origin.y))
+        let placed = before.adding(id, origin: origin, mode: startMode ?? CGDisplayCopyDisplayMode(id))
         // For the session, not the app: when another app's own changes end, WindowServer goes
         // back to the session's layout, which would undo app-only ones.
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let err = CGCompleteDisplayConfiguration(cfg, .forSession)
             sdLog.debug("place: CompleteDisplayConfiguration err=\(err.rawValue)")
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                // WindowServer can still change the others' resolutions for the new set.
+                self?.streamingSettle = (placed, Date().addingTimeInterval(5))
+                self?.reassertStreamingLayout()
                 self?.mergeDevices()
                 // The display that was main may be gone, and a commit that changes nothing
                 // fires no reconfiguration to check this.

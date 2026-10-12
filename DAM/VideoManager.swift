@@ -187,8 +187,8 @@ final class VideoManager: ObservableObject {
     var bootstrapDisplayID: CGDirectDisplayID = 0
     /// The streaming displays, in the order they were added.
     var streamingDisplays: [StreamingDisplay] = []
-    /// How many streaming displays the user asked for.
-    var streamingDisplayTarget = 0
+    /// Additions and removals of streaming displays the user asked for, in order.
+    var streamingRequests: [StreamingRequest] = []
     /// The layout from before the first streaming display was added.
     var streamingArrangement: DisplayArrangement?
     /// Whether the user made a streaming display main, which DAM then leaves it.
@@ -197,8 +197,8 @@ final class VideoManager: ObservableObject {
     var streamingChangeInFlight = false
     /// Whether main is being handed from a streaming display to another display.
     var streamingMainHandBackInFlight = false
-    /// The layout to keep after a streaming display was removed, and until when.
-    /// WindowServer can change resolutions for the smaller set some seconds later.
+    /// The layout to keep after a streaming display was added or removed, and until when.
+    /// WindowServer can change resolutions for the new set some seconds later.
     var streamingSettle: (arrangement: DisplayArrangement, until: Date)?
     /// Whether that layout is being put back; later changes wait for the one it causes.
     var streamingReassertInFlight = false
