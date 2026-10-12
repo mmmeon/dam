@@ -43,6 +43,9 @@
 		CC000C022F8D60780090E796 /* AudioOutputPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B022F8D60780090E796 /* AudioOutputPicker.swift */; };
 		CC000C302F8D60780090E796 /* ScreenMirroringPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B302F8D60780090E796 /* ScreenMirroringPanel.swift */; };
 		CC000C312F8D60780090E796 /* SidecarManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B312F8D60780090E796 /* SidecarManager.swift */; };
+		97B51B21B02316453D1AA752 /* MoonlightCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C8E74953F71FE05D48FC1A7 /* MoonlightCrypto.swift */; };
+		BD482437F53EEE0A125502BF /* MoonlightPairing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A28EDF0DA41FDB067A73C72 /* MoonlightPairing.swift */; };
+		02A99799EC392553BDFAB04C /* MoonlightHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = C68B3D68AC12D5598EE8B8E9 /* MoonlightHost.swift */; };
 		CC100C012F8D60780090E796 /* ChoicePicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC100B012F8D60780090E796 /* ChoicePicker.swift */; };
 		CC100C022F8D60780090E796 /* MirrorPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC100B022F8D60780090E796 /* MirrorPicker.swift */; };
 		CC100C032F8D60780090E796 /* MainDisplayPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC100B032F8D60780090E796 /* MainDisplayPicker.swift */; };
@@ -55,6 +58,8 @@
 		DD100B012F8D607C0090E796 /* ArrangeTouchBarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A012F8D607C0090E796 /* ArrangeTouchBarTests.swift */; };
 		DD100B0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift */; };
 		DD100B1B2F8D607C0090E7A1 /* StreamingDisplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A1B2F8D607C0090E7A1 /* StreamingDisplayTests.swift */; };
+		3574EAA6216A48EEBA6BBE4A /* MoonlightPairingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9735AC4A58E6545843504CEA /* MoonlightPairingTests.swift */; };
+		CFDD9A328A7A0EA0990B70EF /* MoonlightHostTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4455386FE67430944B0A55CB /* MoonlightHostTests.swift */; };
 		DD100B0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift */; };
 		EE200B012F8D60780090E796 /* MenuBarIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE200A012F8D60780090E796 /* MenuBarIcon.swift */; };
 		EE200B022F8D607C0090E796 /* MenuBarIconTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE200A022F8D607C0090E796 /* MenuBarIconTests.swift */; };
@@ -110,6 +115,9 @@
 		CC000B022F8D60780090E796 /* AudioOutputPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioOutputPicker.swift; sourceTree = "<group>"; };
 		CC000B302F8D60780090E796 /* ScreenMirroringPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenMirroringPanel.swift; sourceTree = "<group>"; };
 		CC000B312F8D60780090E796 /* SidecarManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarManager.swift; sourceTree = "<group>"; };
+		9C8E74953F71FE05D48FC1A7 /* MoonlightCrypto.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightCrypto.swift; sourceTree = "<group>"; };
+		4A28EDF0DA41FDB067A73C72 /* MoonlightPairing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightPairing.swift; sourceTree = "<group>"; };
+		C68B3D68AC12D5598EE8B8E9 /* MoonlightHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightHost.swift; sourceTree = "<group>"; };
 		CC100B012F8D60780090E796 /* ChoicePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChoicePicker.swift; sourceTree = "<group>"; };
 		CC100B022F8D60780090E796 /* MirrorPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirrorPicker.swift; sourceTree = "<group>"; };
 		CC100B032F8D60780090E796 /* MainDisplayPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainDisplayPicker.swift; sourceTree = "<group>"; };
@@ -122,6 +130,8 @@
 		DD100A012F8D607C0090E796 /* ArrangeTouchBarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArrangeTouchBarTests.swift; sourceTree = "<group>"; };
 		DD100A0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayNicknameTests.swift; sourceTree = "<group>"; };
 		DD100A1B2F8D607C0090E7A1 /* StreamingDisplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamingDisplayTests.swift; sourceTree = "<group>"; };
+		9735AC4A58E6545843504CEA /* MoonlightPairingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightPairingTests.swift; sourceTree = "<group>"; };
+		4455386FE67430944B0A55CB /* MoonlightHostTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightHostTests.swift; sourceTree = "<group>"; };
 		DD100A0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarDisplayTests.swift; sourceTree = "<group>"; };
 		EE200A012F8D60780090E796 /* MenuBarIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarIcon.swift; sourceTree = "<group>"; };
 		EE200A022F8D607C0090E796 /* MenuBarIconTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarIconTests.swift; sourceTree = "<group>"; };
@@ -191,6 +201,9 @@
 				CC100B042F8D60780090E796 /* ResolutionPicker.swift */,
 				CC000B302F8D60780090E796 /* ScreenMirroringPanel.swift */,
 				CC000B312F8D60780090E796 /* SidecarManager.swift */,
+				9C8E74953F71FE05D48FC1A7 /* MoonlightCrypto.swift */,
+				4A28EDF0DA41FDB067A73C72 /* MoonlightPairing.swift */,
+				C68B3D68AC12D5598EE8B8E9 /* MoonlightHost.swift */,
 				CC000B012F8D60780090E796 /* HUD.swift */,
 				EE200A012F8D60780090E796 /* MenuBarIcon.swift */,
 				BB520B012F8D60780090E796 /* DisplayRegistry.swift */,
@@ -233,6 +246,8 @@
 				DD100A0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift */,
 				DD100A0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift */,
 				DD100A1B2F8D607C0090E7A1 /* StreamingDisplayTests.swift */,
+				9735AC4A58E6545843504CEA /* MoonlightPairingTests.swift */,
+				4455386FE67430944B0A55CB /* MoonlightHostTests.swift */,
 			);
 			path = DAMTests;
 			sourceTree = "<group>";
@@ -381,6 +396,9 @@
 				CC100C042F8D60780090E796 /* ResolutionPicker.swift in Sources */,
 				CC000C302F8D60780090E796 /* ScreenMirroringPanel.swift in Sources */,
 				CC000C312F8D60780090E796 /* SidecarManager.swift in Sources */,
+				97B51B21B02316453D1AA752 /* MoonlightCrypto.swift in Sources */,
+				BD482437F53EEE0A125502BF /* MoonlightPairing.swift in Sources */,
+				02A99799EC392553BDFAB04C /* MoonlightHost.swift in Sources */,
 				CC000C012F8D60780090E796 /* HUD.swift in Sources */,
 				EE200B012F8D60780090E796 /* MenuBarIcon.swift in Sources */,
 				BB520C012F8D60780090E796 /* DisplayRegistry.swift in Sources */,
@@ -412,6 +430,8 @@
 				DD100B0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift in Sources */,
 				DD100B0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift in Sources */,
 				DD100B1B2F8D607C0090E7A1 /* StreamingDisplayTests.swift in Sources */,
+				3574EAA6216A48EEBA6BBE4A /* MoonlightPairingTests.swift in Sources */,
+				CFDD9A328A7A0EA0990B70EF /* MoonlightHostTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
