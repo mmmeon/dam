@@ -7,6 +7,7 @@ import AppKit
 func buildStatusMenu(audio: AudioManager,
                      video: VideoManager,
                      sidecar: SidecarManager,
+                     moonlight: MoonlightHost,
                      onRefresh: @escaping () -> Void) -> NSMenu {
     let menu = NSMenu()
 
@@ -136,6 +137,7 @@ func buildStatusMenu(audio: AudioManager,
         ? "A virtual display for a streaming or remote-desktop app to show, one per stream."
         : "There can be up to \(VideoManager.maxStreamingDisplays) streaming displays."
     menu.addItem(create)
+    menu.addItem(moonlightItem(host: moonlight))
 
     // — Connected Displays section — physical displays; Sidecar iPads and streaming
     // displays are listed above
@@ -236,6 +238,33 @@ private func debugMenuItem() -> NSMenuItem {
     return item
 }
 #endif
+
+/// Hosting for Moonlight, on or off, and the devices paired with it.
+private func moonlightItem(host: MoonlightHost) -> NSMenuItem {
+    let item = NSMenuItem(title: "Moonlight", action: nil, keyEquivalent: "")
+    item.state = host.isRunning ? .on : .off
+    let submenu = NSMenu()
+    let toggle = NSMenuItem(title: "Allow Moonlight to Connect",
+                            action: #selector(AppDelegate.toggleMoonlightHost(_:)),
+                            keyEquivalent: "")
+    toggle.state = host.isRunning ? .on : .off
+    toggle.toolTip = "Lets Moonlight on another device find this Mac and pair with it. " +
+                     "Each streaming display is listed in Moonlight as an app."
+    submenu.addItem(toggle)
+    if let error = host.lastError { submenu.addItem(disabledItem(error)) }
+    if !host.clients.isEmpty {
+        submenu.addItem(.separator())
+        for client in host.clients {
+            let forget = NSMenuItem(title: "Forget \(client.name)",
+                                    action: #selector(AppDelegate.forgetMoonlightClient(_:)),
+                                    keyEquivalent: "")
+            forget.representedObject = client
+            submenu.addItem(forget)
+        }
+    }
+    item.submenu = submenu
+    return item
+}
 
 private func sectionHeader(_ title: String) -> NSMenuItem {
     let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")

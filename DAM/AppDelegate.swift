@@ -11,6 +11,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let audioManager = AudioManager()
     private let videoManager = VideoManager()
     private let sidecarManager = SidecarManager()
+    private let moonlightHost = MoonlightHost()
+    /// The PIN prompt for Moonlight pairing, while it shows.
+    private var moonlightPINAlert: NSAlert?
     private var sidecarAutoConnector: SidecarAutoConnector?
     private var controlStrip: ControlStripPresenter!
     private var hotkey: GlobalHotkey!
@@ -43,6 +46,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AirPlayQuickConnect.shared.configure(videoManager: videoManager, sidecarManager: sidecarManager)
         sidecarAutoConnector = SidecarAutoConnector(sidecar: sidecarManager, video: videoManager)
         sidecarAutoConnector?.start()
+        moonlightHost.requestPIN = { [weak self] address, answer in
+            self?.promptForMoonlightPIN(address: address, answer: answer)
+        }
+        moonlightHost.pairingAbandoned = { [weak self] in
+            if self?.moonlightPINAlert != nil { NSApp.abortModal() }
+        }
+        moonlightHost.onChange = { [weak self] in self?.rebuild() }
+        if MoonlightHost.isEnabled { moonlightHost.start() }
         AudioOutputPicker.shared.configure(audioManager: audioManager)
         MirrorPicker.shared.configure(videoManager: videoManager)
         MainDisplayPicker.shared.configure(videoManager: videoManager)
@@ -156,6 +167,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func rebuild() {
+        moonlightHost.apps = videoManager.streamingDisplays.compactMap { streaming in
+            videoManager.connectedDisplays.first { $0.cgDisplayID == streaming.id }
+                .map { MoonlightApp(id: streaming.index + 1, title: $0.label) }
+        }
         let menu = NSMenu()
         menu.delegate = self
         fill(menu)
@@ -177,6 +192,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             audio: audioManager,
             video: videoManager,
             sidecar: sidecarManager,
+            moonlight: moonlightHost,
             onRefresh: { [weak self] in self?.refreshAll(nil) }
         )
         menu.removeAllItems()
@@ -518,6 +534,56 @@ extension AppDelegate: NSMenuDelegate {
         SpeechSynthesizer.shared.announce("Removing \(display.label)")
         videoManager.removeStreamingDisplay(display)
         rebuild()
+    }
+
+    /// Turns hosting for Moonlight on or off.
+    @objc func toggleMoonlightHost(_ sender: NSMenuItem) {
+        if moonlightHost.isRunning {
+            MoonlightHost.isEnabled = false
+            moonlightHost.stop()
+            SpeechSynthesizer.shared.announce("Moonlight can no longer connect")
+        } else {
+            MoonlightHost.isEnabled = true
+            moonlightHost.start()
+            SpeechSynthesizer.shared.announce(moonlightHost.isRunning ? "Moonlight can connect"
+                                              : moonlightHost.lastError ?? "Moonlight could not start")
+        }
+        rebuild()
+    }
+
+    /// Unpairs the Moonlight device in the item's `representedObject`.
+    @objc func forgetMoonlightClient(_ sender: NSMenuItem) {
+        guard let client = sender.representedObject as? MoonlightClient else { return }
+        moonlightHost.forget(client)
+        SpeechSynthesizer.shared.announce("Forgot \(client.name)")
+        rebuild()
+    }
+
+    /// Asks for the PIN Moonlight shows while pairing. The answer is nil when the user
+    /// declines, or when the device gave up meanwhile.
+    private func promptForMoonlightPIN(address: String, answer: @escaping (String?) -> Void) {
+        // From the run loop rather than the main queue: a modal prompt run inside a main
+        // queue block would hold every other one, the network's and the display changes',
+        // until it closed.
+        RunLoop.main.perform(inModes: [.default]) { [weak self] in
+            guard let self else { return answer(nil) }
+            let alert = NSAlert()
+            alert.messageText = "Pair with Moonlight?"
+            alert.informativeText = "Moonlight on \(address) wants to stream from \(AppIdentity.name). " +
+                                    "Type the PIN it shows."
+            let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 120, height: 24))
+            field.placeholderString = "PIN"
+            alert.accessoryView = field
+            alert.addButton(withTitle: "Pair")
+            alert.addButton(withTitle: "Cancel")
+            alert.window.initialFirstResponder = field
+            SpeechSynthesizer.shared.announce("Moonlight wants to pair. Type the PIN it shows.")
+            NSApp.activate(ignoringOtherApps: true)
+            self.moonlightPINAlert = alert
+            let response = alert.runModal()
+            self.moonlightPINAlert = nil
+            answer(response == .alertFirstButtonReturn ? field.stringValue : nil)
+        }
     }
 
     /// A "Position" pick: puts the display on the chosen side of another one.

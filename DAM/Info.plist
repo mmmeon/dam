@@ -5,6 +5,7 @@
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_airplay._tcp</string>
+		<string>_nvstream._tcp</string>
 	</array>
 </dict>
 </plist>
