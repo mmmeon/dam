@@ -108,10 +108,14 @@ final class MoonlightVideoSender {
     /// Called on the ping thread when the first ping arrives.
     var onFirstPing: (() -> Void)?
 
-    init(port: UInt16, pingPayload: String, packetSize: Int) throws {
+    /// Parity for a fifth of each block's data, as Sunshine sends by default.
+    static let fecPercentage = 20
+
+    init(port: UInt16, pingPayload: String, packetSize: Int, minimumParity: Int) throws {
         socket = try MoonlightUDPSocket(port: port)
         self.pingPayload = Data(pingPayload.utf8)
-        packetizer = MoonlightPacketizer(packetSize: packetSize)
+        packetizer = MoonlightPacketizer(packetSize: packetSize, fecPercentage: Self.fecPercentage,
+                                         minimumParity: minimumParity)
     }
 
     var hasPeer: Bool {
@@ -159,14 +163,19 @@ final class MoonlightVideoSender {
         let now = DispatchTime.now().uptimeNanoseconds
         let timestamp = UInt32(truncatingIfNeeded: (frame.submitted - start) * 9 / 100_000)
         let latency = UInt16(min((now - frame.submitted) / 100_000, UInt64(UInt16.max)))
-        let packets = packetizer.packets(for: frame.data, isKeyFrame: frame.isKeyFrame,
-                                         timestamp: timestamp, latency: latency)
+        let blocks = packetizer.blocks(for: frame.data, isKeyFrame: frame.isKeyFrame,
+                                       timestamp: timestamp, latency: latency)
         lock.unlock()
-        guard let packets else {
+        guard let blocks else {
             msLog.error("frame of \(frame.data.count) bytes too large to send")
             return false
         }
-        for packet in packets { socket.send(packet, to: peer) }
+        // Each block's data at once, then its parity: Moonlight needs the parity only when
+        // data was lost, and gives up on a block once the next one starts.
+        for block in blocks {
+            for packet in block.packets { socket.send(packet, to: peer) }
+            for packet in MoonlightPacketizer.parity(for: block) { socket.send(packet, to: peer) }
+        }
         return true
     }
 
@@ -317,7 +326,8 @@ final class MoonlightStream {
          pingPayload: String, connectData: UInt32) throws {
         self.config = config
         self.displayID = displayID
-        video = try MoonlightVideoSender(port: Self.videoPort, pingPayload: pingPayload, packetSize: config.packetSize)
+        video = try MoonlightVideoSender(port: Self.videoPort, pingPayload: pingPayload, packetSize: config.packetSize,
+                                         minimumParity: config.minimumParity)
         control = try MoonlightControlServer(port: Self.controlPort, key: key, connectData: connectData)
         audio = try MoonlightUDPSocket(port: Self.audioPort)
     }

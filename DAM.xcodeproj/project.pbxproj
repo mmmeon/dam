@@ -54,6 +54,7 @@
 		97B51B21B02316453D1AA752 /* MoonlightCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C8E74953F71FE05D48FC1A7 /* MoonlightCrypto.swift */; };
 		BD482437F53EEE0A125502BF /* MoonlightPairing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A28EDF0DA41FDB067A73C72 /* MoonlightPairing.swift */; };
 		02A99799EC392553BDFAB04C /* MoonlightHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = C68B3D68AC12D5598EE8B8E9 /* MoonlightHost.swift */; };
+		D26BBD89F3A1C3D7C03604CF /* MoonlightFEC.swift in Sources */ = {isa = PBXBuildFile; fileRef = 784629ADB6669294FEA5ADF1 /* MoonlightFEC.swift */; };
 		7E7DDBC779EC68B41D7D10EF /* MoonlightRTSP.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFC8C61841BBB205D3EA9391 /* MoonlightRTSP.swift */; };
 		624C00ADF377331C64CA5675 /* MoonlightStream.swift in Sources */ = {isa = PBXBuildFile; fileRef = F773308ADEA915FD2424ABA0 /* MoonlightStream.swift */; };
 		292B82ED857C094FE67B1321 /* MoonlightProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86EAA97394CE979125862EBE /* MoonlightProtocol.swift */; };
@@ -73,6 +74,7 @@
 		DD100B1B2F8D607C0090E7A1 /* StreamingDisplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A1B2F8D607C0090E7A1 /* StreamingDisplayTests.swift */; };
 		3574EAA6216A48EEBA6BBE4A /* MoonlightPairingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9735AC4A58E6545843504CEA /* MoonlightPairingTests.swift */; };
 		CFDD9A328A7A0EA0990B70EF /* MoonlightHostTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4455386FE67430944B0A55CB /* MoonlightHostTests.swift */; };
+		AB5D97B89462D5963F680736 /* MoonlightFECTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6E199A368AAB648D2E6834F /* MoonlightFECTests.swift */; };
 		7DF2AC72D7898D5D7743470D /* MoonlightRTSPTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 099344138B995E7D8BA5D18F /* MoonlightRTSPTests.swift */; };
 		358CF5FF29CD6C1A162D1005 /* MoonlightProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9CBD2E4642EC3C66CD4EA92 /* MoonlightProtocolTests.swift */; };
 		DAB2123AFCAFA563C55F10EA /* MoonlightScreenCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 257CBE83156D2C54B408C340 /* MoonlightScreenCaptureTests.swift */; };
@@ -143,6 +145,7 @@
 		9C8E74953F71FE05D48FC1A7 /* MoonlightCrypto.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightCrypto.swift; sourceTree = "<group>"; };
 		4A28EDF0DA41FDB067A73C72 /* MoonlightPairing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightPairing.swift; sourceTree = "<group>"; };
 		C68B3D68AC12D5598EE8B8E9 /* MoonlightHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightHost.swift; sourceTree = "<group>"; };
+		784629ADB6669294FEA5ADF1 /* MoonlightFEC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightFEC.swift; sourceTree = "<group>"; };
 		BFC8C61841BBB205D3EA9391 /* MoonlightRTSP.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightRTSP.swift; sourceTree = "<group>"; };
 		F773308ADEA915FD2424ABA0 /* MoonlightStream.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightStream.swift; sourceTree = "<group>"; };
 		86EAA97394CE979125862EBE /* MoonlightProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightProtocol.swift; sourceTree = "<group>"; };
@@ -162,6 +165,7 @@
 		DD100A1B2F8D607C0090E7A1 /* StreamingDisplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamingDisplayTests.swift; sourceTree = "<group>"; };
 		9735AC4A58E6545843504CEA /* MoonlightPairingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightPairingTests.swift; sourceTree = "<group>"; };
 		4455386FE67430944B0A55CB /* MoonlightHostTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightHostTests.swift; sourceTree = "<group>"; };
+		A6E199A368AAB648D2E6834F /* MoonlightFECTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightFECTests.swift; sourceTree = "<group>"; };
 		099344138B995E7D8BA5D18F /* MoonlightRTSPTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightRTSPTests.swift; sourceTree = "<group>"; };
 		F9CBD2E4642EC3C66CD4EA92 /* MoonlightProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightProtocolTests.swift; sourceTree = "<group>"; };
 		257CBE83156D2C54B408C340 /* MoonlightScreenCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightScreenCaptureTests.swift; sourceTree = "<group>"; };
@@ -255,6 +259,7 @@
 				9C8E74953F71FE05D48FC1A7 /* MoonlightCrypto.swift */,
 				4A28EDF0DA41FDB067A73C72 /* MoonlightPairing.swift */,
 				C68B3D68AC12D5598EE8B8E9 /* MoonlightHost.swift */,
+				784629ADB6669294FEA5ADF1 /* MoonlightFEC.swift */,
 				BFC8C61841BBB205D3EA9391 /* MoonlightRTSP.swift */,
 				F773308ADEA915FD2424ABA0 /* MoonlightStream.swift */,
 				86EAA97394CE979125862EBE /* MoonlightProtocol.swift */,
@@ -304,6 +309,7 @@
 				DD100A1B2F8D607C0090E7A1 /* StreamingDisplayTests.swift */,
 				9735AC4A58E6545843504CEA /* MoonlightPairingTests.swift */,
 				4455386FE67430944B0A55CB /* MoonlightHostTests.swift */,
+				A6E199A368AAB648D2E6834F /* MoonlightFECTests.swift */,
 				099344138B995E7D8BA5D18F /* MoonlightRTSPTests.swift */,
 				F9CBD2E4642EC3C66CD4EA92 /* MoonlightProtocolTests.swift */,
 				257CBE83156D2C54B408C340 /* MoonlightScreenCaptureTests.swift */,
@@ -467,6 +473,7 @@
 				97B51B21B02316453D1AA752 /* MoonlightCrypto.swift in Sources */,
 				BD482437F53EEE0A125502BF /* MoonlightPairing.swift in Sources */,
 				02A99799EC392553BDFAB04C /* MoonlightHost.swift in Sources */,
+				D26BBD89F3A1C3D7C03604CF /* MoonlightFEC.swift in Sources */,
 				7E7DDBC779EC68B41D7D10EF /* MoonlightRTSP.swift in Sources */,
 				624C00ADF377331C64CA5675 /* MoonlightStream.swift in Sources */,
 				292B82ED857C094FE67B1321 /* MoonlightProtocol.swift in Sources */,
@@ -505,6 +512,7 @@
 				DD100B1B2F8D607C0090E7A1 /* StreamingDisplayTests.swift in Sources */,
 				3574EAA6216A48EEBA6BBE4A /* MoonlightPairingTests.swift in Sources */,
 				CFDD9A328A7A0EA0990B70EF /* MoonlightHostTests.swift in Sources */,
+				AB5D97B89462D5963F680736 /* MoonlightFECTests.swift in Sources */,
 				7DF2AC72D7898D5D7743470D /* MoonlightRTSPTests.swift in Sources */,
 				358CF5FF29CD6C1A162D1005 /* MoonlightProtocolTests.swift in Sources */,
 				DAB2123AFCAFA563C55F10EA /* MoonlightScreenCaptureTests.swift in Sources */,
