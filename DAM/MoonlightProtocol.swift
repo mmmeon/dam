@@ -24,6 +24,12 @@ struct MoonlightStreamConfig: Equatable {
     var encryptionEnabled: Int
     /// The fewest parity packets Moonlight asks for in each block.
     var minimumParity = 0
+    /// Milliseconds of sound in each audio packet: 5, or 10 at low bitrates.
+    var audioPacketDuration = 5
+    /// Whether audio goes encrypted, as Moonlight on a Mac or PC always asks.
+    var audioEncrypted = false
+    /// Whether stereo may take a high bitrate; set from the ANNOUNCE request's Host.
+    var highQualityAudio = false
 
     /// The settings in an ANNOUNCE body, nil when one it needs is missing.
     static func parse(sdp: String) -> MoonlightStreamConfig? {
@@ -41,7 +47,11 @@ struct MoonlightStreamConfig: Equatable {
         return MoonlightStreamConfig(width: width, height: height, fps: fps, packetSize: packetSize,
                                      bitrateKbps: bitrate, videoFormat: int("x-nv-vqos[0].bitStreamFormat") ?? 0,
                                      encryptionEnabled: int("x-ss-general.encryptionEnabled") ?? 0,
-                                     minimumParity: int("x-nv-vqos[0].fec.minRequiredFecPackets") ?? 0)
+                                     minimumParity: int("x-nv-vqos[0].fec.minRequiredFecPackets") ?? 0,
+                                     audioPacketDuration: int("x-nv-aqos.packetDuration") ?? 5,
+                                     // Asked for either way: the legacy flag 0x20, or the newer bit 0x04.
+                                     audioEncrypted: (int("x-nv-general.featureFlags") ?? 0) & 0x20 != 0
+                                         || (int("x-ss-general.encryptionEnabled") ?? 0) & 0x04 != 0)
     }
 }
 
@@ -182,6 +192,109 @@ struct MoonlightPacketizer {
             put(fecInfo(dataShards: count, index: count + row, percentage: block.percentage).littleEndian, at: 28)
             return packet
         }
+    }
+}
+
+/// Answers Moonlight's keyframe requests with at most one keyframe per interval. On a lossy
+/// link requests come in bursts, one per frame lost; a keyframe for each is a run of large
+/// frames, each likelier to be lost again. The first request is answered at once; any more
+/// within the interval are answered together once it is over, so none goes unanswered.
+struct MoonlightKeyFrameThrottle {
+    enum Decision: Equatable {
+        case now
+        /// After this many nanoseconds, asking again.
+        case later(UInt64)
+        /// One is already due later.
+        case alreadyDue
+    }
+
+    let interval: UInt64
+    private var last: UInt64?
+    private var due = false
+
+    init(interval: UInt64 = 250_000_000) {
+        self.interval = interval
+    }
+
+    mutating func request(at now: UInt64) -> Decision {
+        if let last, now &- last < interval {
+            if due { return .alreadyDue }
+            due = true
+            return .later(interval - (now &- last))
+        }
+        last = now
+        due = false
+        return .now
+    }
+}
+
+/// Puts Opus packets in Moonlight's audio packets: a 12-byte RTP header (payload type 97,
+/// sequence, a timestamp in milliseconds), then the Opus packet, encrypted with AES-128-CBC
+/// when asked. After every fourth packet come two parity packets (type 127) for the four,
+/// which Moonlight rebuilds up to two lost ones from.
+struct MoonlightAudioPacketizer {
+    static let dataType: UInt8 = 97
+    static let parityType: UInt8 = 127
+
+    let packetDuration: Int
+    /// The session key and the counter its IVs start from; nil sends audio in the clear.
+    let key: Data?
+    let keyID: UInt32
+    private(set) var sequence: UInt16 = 0
+    private(set) var timestamp: UInt32 = 0
+    /// This block's payloads so far, as sent.
+    private var block: [Data] = []
+
+    init(packetDuration: Int, key: Data?, keyID: UInt32) {
+        self.packetDuration = packetDuration
+        self.key = key
+        self.keyID = keyID
+    }
+
+    /// The packets to send for one Opus packet: its own, then the block's parity after the
+    /// fourth. Nil when it could not be encrypted.
+    mutating func packets(for opus: Data) -> [Data]? {
+        let payload: Data
+        if let key {
+            var iv = Data()
+            iv.append(bigEndian: keyID &+ UInt32(sequence))
+            iv.append(Data(count: 12))
+            guard let sealed = try? MoonlightCrypto.aesCBC(opus, key: key, iv: iv) else { return nil }
+            payload = sealed
+        } else {
+            payload = opus
+        }
+        var packet = Self.header(type: Self.dataType, sequence: sequence, timestamp: timestamp)
+        packet.append(payload)
+        var packets = [packet]
+
+        // A block is the packets numbered 4k to 4k + 3.
+        if sequence % 4 == 0 { block = [] }
+        block.append(payload)
+        if sequence % 4 == 3, block.count == 4, block.allSatisfy({ $0.count == payload.count }) {
+            let base = sequence &- 3
+            let baseTimestamp = timestamp &- UInt32(3 * packetDuration)
+            for (index, parity) in MoonlightFEC.parity(of: block, rows: MoonlightFEC.audioRows).enumerated() {
+                var fec = Self.header(type: Self.parityType, sequence: sequence &+ 1 &+ UInt16(index), timestamp: 0)
+                fec.append(contentsOf: [UInt8(index), Self.dataType])
+                fec.append(bigEndian: base)
+                fec.append(bigEndian: baseTimestamp)
+                fec.append(bigEndian: UInt32(0))
+                fec.append(parity)
+                packets.append(fec)
+            }
+        }
+        sequence &+= 1
+        timestamp &+= UInt32(packetDuration)
+        return packets
+    }
+
+    private static func header(type: UInt8, sequence: UInt16, timestamp: UInt32) -> Data {
+        var header = Data([0x80, type])
+        header.append(bigEndian: sequence)
+        header.append(bigEndian: timestamp)
+        header.append(bigEndian: UInt32(0))
+        return header
     }
 }
 

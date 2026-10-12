@@ -50,6 +50,26 @@ enum MoonlightCrypto {
         return out.prefix(moved)
     }
 
+    /// AES-128-CBC with PKCS#7 padding, as Moonlight's audio is encrypted.
+    static func aesCBC(_ data: Data, key: Data, iv: Data) throws -> Data {
+        var out = Data(count: data.count + kCCBlockSizeAES128)
+        var moved = 0
+        let outCount = out.count
+        let status = out.withUnsafeMutableBytes { outBuf in
+            data.withUnsafeBytes { inBuf in
+                key.withUnsafeBytes { keyBuf in
+                    iv.withUnsafeBytes { ivBuf in
+                        CCCrypt(CCOperation(kCCEncrypt), CCAlgorithm(kCCAlgorithmAES), CCOptions(kCCOptionPKCS7Padding),
+                                keyBuf.baseAddress, key.count, ivBuf.baseAddress,
+                                inBuf.baseAddress, data.count, outBuf.baseAddress, outCount, &moved)
+                    }
+                }
+            }
+        }
+        guard status == kCCSuccess else { throw MoonlightCryptoError.cipher(status) }
+        return out.prefix(moved)
+    }
+
     // MARK: - Signatures
 
     static func sign(_ data: Data, with key: SecKey) throws -> Data {

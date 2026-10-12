@@ -54,15 +54,27 @@ enum MoonlightFEC {
 
     /// `count` parity shards for `shards`, which are all one length.
     static func parity(of shards: [Data], count: Int) -> [Data] {
-        guard count > 0, let length = shards.first?.count else { return [] }
-        precondition(shards.count + count <= maxShards && shards.allSatisfy { $0.count == length })
+        guard count > 0 else { return [] }
+        let rows = (0..<count).map { row in (0..<shards.count).map { coefficient(row: row, column: $0, parityCount: count) } }
+        return parity(of: shards, rows: rows)
+    }
+
+    /// Parity for audio, which uses a fixed matrix rather than the Cauchy one: four data
+    /// shards, two parity shards, as NVIDIA's encoder (and Moonlight) has it.
+    static let audioRows: [[UInt8]] = [[0x77, 0x40, 0x38, 0x0E], [0xC7, 0xA7, 0x0D, 0x6C]]
+
+    /// A parity shard per row of `rows`, each row holding a coefficient per data shard.
+    static func parity(of shards: [Data], rows: [[UInt8]]) -> [Data] {
+        guard let length = shards.first?.count else { return [] }
+        precondition(shards.count + rows.count <= maxShards && shards.allSatisfy { $0.count == length }
+                     && rows.allSatisfy { $0.count == shards.count })
         return products.withUnsafeBufferPointer { products in
-            (0..<count).map { row in
+            rows.map { coefficients in
                 var out = Data(count: length)
                 out.withUnsafeMutableBytes { (target: UnsafeMutableRawBufferPointer) in
                     let parity = target.bindMemory(to: UInt8.self)
                     for (column, shard) in shards.enumerated() {
-                        let row = Int(coefficient(row: row, column: column, parityCount: count)) << 8
+                        let row = Int(coefficients[column]) << 8
                         shard.withUnsafeBytes { (source: UnsafeRawBufferPointer) in
                             let data = source.bindMemory(to: UInt8.self)
                             for index in 0..<length { parity[index] ^= products[row | Int(data[index])] }
