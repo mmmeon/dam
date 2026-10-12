@@ -27,8 +27,8 @@ enum StreamingDisplayModes {
     /// The mode it comes up in: 1920 × 1080 at 60 Hz, at 1x.
     static let start = (width: 1920, height: 1080, refreshRate: 60)
 
-    static var maxPixelsWide: Int { sizes.map(\.width).max() ?? 0 }
-    static var maxPixelsHigh: Int { sizes.map(\.height).max() ?? 0 }
+    static let maxPixelsWide = sizes.map(\.width).max() ?? 0
+    static let maxPixelsHigh = sizes.map(\.height).max() ?? 0
 
     /// Whether `mode` renders within the largest size listed.
     static func fits(_ mode: DisplayMode) -> Bool {
@@ -69,20 +69,28 @@ extension VideoManager {
 
     /// Hands the menu bar and Dock back to another display when the streaming display has
     /// become main, as it does when the display that was main is unplugged; WindowServer
-    /// leaves it main when that display comes back.
+    /// leaves it main when that display comes back. Not when the user made it main.
     func keepStreamingDisplayOffMain() {
-        guard streamingDisplayID != 0, CGDisplayIsMain(streamingDisplayID) != 0 else { return }
-        // Displays showing their own desktop; a disabled one stays online but has no screen.
-        let candidates = allConnectedDisplays.filter {
-            $0.isConnected && !$0.isStreaming && CGDisplayMirrorsDisplay($0.cgDisplayID) == 0
+        guard streamingDisplayID != 0, CGDisplayIsMain(streamingDisplayID) != 0,
+              !streamingDisplayIsMainByChoice,
+              // Placing it puts main back itself; the others' commits would race this one.
+              !streamingPlacementPending, !streamingMainHandBackInFlight,
+              !virtualAnchorReassertInFlight else { return }
+        // Displays showing their own desktop, on their own or through an anchor; a disabled
+        // one stays online but has no screen.
+        let candidates = (allConnectedDisplays + allAirPlayDevices).filter {
+            $0.isConnected && $0.cgDisplayID != 0 && $0.cgDisplayID != streamingDisplayID
+                && userMirrorMaster(of: $0.cgDisplayID) == nil
         }
+        // An anchored display was main through its anchor.
         let previousMain = streamingArrangement.flatMap { arrangement in
             arrangement.origins.first { $0.value == .zero && arrangement.mirrorMasters[$0.key] == 0 }?.key
-        }
+        }.map { anchorTarget(of: $0) ?? $0 }
         guard let id = Self.displayToMakeMain(candidates: candidates.map(\.cgDisplayID), previousMain: previousMain),
               let display = candidates.first(where: { $0.cgDisplayID == id }) else { return }
         sdLog.debug("streaming display is main; making \(id) main")
-        setMainDisplay(display)
+        streamingMainHandBackInFlight = true
+        setMainDisplay(display) { [weak self] _ in self?.streamingMainHandBackInFlight = false }
     }
 
     /// Creates the streaming display and places it right of the other displays. The
@@ -90,6 +98,7 @@ extension VideoManager {
     func enableStreamingDisplay() {
         guard streamingDisplay == nil else { return }
         sdLog.debug("enable")
+        streamingDisplayIsMainByChoice = false
 
         let descriptor = CGVirtualDisplayDescriptor()
         // Must call setDispatchQueue: (see enableVirtualAnchor).
@@ -107,6 +116,8 @@ extension VideoManager {
                 self?.streamingDisplay = nil
                 self?.streamingDisplayID = 0
                 self?.streamingArrangement = nil
+                self?.streamingPlacementPending = false
+                self?.streamingDisplayIsMainByChoice = false
                 self?.mergeDevices()
             }
         }
@@ -125,6 +136,7 @@ extension VideoManager {
             return
         }
         streamingDisplay = vd
+        streamingPlacementPending = true
         waitForStreamingDisplay(vd, attempt: 0)
     }
 
@@ -137,6 +149,8 @@ extension VideoManager {
         streamingDisplay = nil
         streamingDisplayID = 0
         streamingArrangement = nil
+        streamingPlacementPending = false
+        streamingDisplayIsMainByChoice = false
         // Dropping the last reference above removes the display. Once the set has settled
         // without it, put the positions back if WindowServer's saved layout moved them.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.mergeDevices() }
@@ -170,6 +184,7 @@ extension VideoManager {
             sdLog.error("never came online — dropping it")
             streamingDisplay = nil
             streamingArrangement = nil
+            streamingPlacementPending = false
             return
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
@@ -182,7 +197,9 @@ extension VideoManager {
     private func placeStreamingDisplay(_ id: CGDirectDisplayID) {
         var config: CGDisplayConfigRef?
         guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else {
+            streamingPlacementPending = false
             mergeDevices()
+            keepStreamingDisplayOffMain()
             return
         }
         // WindowServer may have mirrored or moved the others for the new set.
@@ -214,7 +231,13 @@ extension VideoManager {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let err = CGCompleteDisplayConfiguration(cfg, .forSession)
             sdLog.debug("place: CompleteDisplayConfiguration err=\(err.rawValue)")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self?.mergeDevices() }
+            DispatchQueue.main.async { self?.streamingPlacementPending = false }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                self?.mergeDevices()
+                // The display that was main may be gone, and a commit that changes nothing
+                // fires no reconfiguration to check this.
+                self?.keepStreamingDisplayOffMain()
+            }
         }
     }
 }

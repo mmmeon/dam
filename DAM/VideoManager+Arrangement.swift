@@ -85,6 +85,8 @@ extension VideoManager {
         for placement in layout.placements {
             for member in placement.memberIDs { captured[member] = origins[placement.id] }
         }
+        // Set before the commit: the change it causes is checked before it reports back.
+        if let main, streamingDisplayID != 0 { streamingDisplayIsMainByChoice = main == streamingDisplayID }
         commitDisplayChange({ cfg in
             for (id, origin) in origins {
                 CGConfigureDisplayOrigin(cfg, id, Int32(origin.x), Int32(origin.y))
@@ -98,6 +100,7 @@ extension VideoManager {
                 for (name, arrangement) in self.virtualAnchorArrangements {
                     self.virtualAnchorArrangements[name] = arrangement.replacingOrigins(captured)
                 }
+                self.streamingArrangement = self.streamingArrangement?.replacingOrigins(captured)
             }
             completion?(result)
         }
