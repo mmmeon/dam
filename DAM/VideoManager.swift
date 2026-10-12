@@ -189,6 +189,12 @@ final class VideoManager: ObservableObject {
     var streamingDisplay: AnyObject?
     var streamingDisplayID: CGDirectDisplayID = 0
     var streamingArrangement: DisplayArrangement?
+    /// Whether the user made the streaming display main, which DAM then leaves it.
+    var streamingDisplayIsMainByChoice = false
+    /// Whether the streaming display is still to be placed; placing it puts main back.
+    var streamingPlacementPending = false
+    /// Whether main is being handed from the streaming display to another display.
+    var streamingMainHandBackInFlight = false
 
     /// Start continuous Bonjour discovery. Call once on launch; runs until the app quits.
     func startDiscovery() {
@@ -643,7 +649,10 @@ final class VideoManager: ObservableObject {
             for (name, arrangement) in self.virtualAnchorArrangements {
                 self.virtualAnchorArrangements[name] = arrangement.makingMain(display.cgDisplayID)
             }
+            self.streamingArrangement = self.streamingArrangement?.makingMain(display.cgDisplayID)
         }
+        // Set before the commit: the change it causes is checked before it reports back.
+        streamingDisplayIsMainByChoice = streamingDisplayID != 0 && display.cgDisplayID == streamingDisplayID
         guard CGDisplayIsMain(mainID) == 0 else { rebase(); completion?(.success(())); return }
         let online  = DisplayArrangement.onlineDisplayIDs()
         let bounds  = Dictionary(uniqueKeysWithValues: online.map { ($0, CGDisplayBounds($0)) })
