@@ -1,4 +1,5 @@
 import XCTest
+import CommonCrypto
 import CryptoKit
 import Network
 import Security
@@ -346,9 +347,10 @@ final class MoonlightHostTests: XCTestCase {
         let common = "X-GS-ClientVersion: 14\r\nHost: 127.0.0.1\r\n"
         XCTAssertTrue(rtsp("OPTIONS rtsp://127.0.0.1:48010 RTSP/1.0\r\nCSeq: 1\r\n\(common)\r\n").hasPrefix("RTSP/1.0 200 OK\r\nCSeq: 1\r\n"))
         let describe = rtsp("DESCRIBE rtsp://127.0.0.1:48010 RTSP/1.0\r\nCSeq: 2\r\n\(common)Accept: application/sdp\r\n\r\n")
-        XCTAssertTrue(describe.contains("a=x-ss-general.encryptionSupported:1"))
+        XCTAssertTrue(describe.contains("a=x-ss-general.encryptionSupported:5"))
         let audio = rtsp("SETUP streamid=audio/0/0 RTSP/1.0\r\nCSeq: 3\r\n\(common)Transport: unicast;X-GS-ClientPort=50000-50001\r\n\r\n")
         let session = try XCTUnwrap(header("Session", in: audio)?.components(separatedBy: ";").first)
+        let audioPing = try XCTUnwrap(header("X-SS-Ping-Payload", in: audio))
         let video = rtsp("SETUP streamid=video/0/0 RTSP/1.0\r\nCSeq: 4\r\n\(common)Session: \(session)\r\n\r\n")
         let pingPayload = try XCTUnwrap(header("X-SS-Ping-Payload", in: video))
         XCTAssertEqual(pingPayload.count, 16)
@@ -357,7 +359,8 @@ final class MoonlightHostTests: XCTestCase {
         let sdp = "v=0\r\na=x-ss-general.encryptionEnabled:1 \r\na=x-nv-video[0].clientViewportWd:1280 \r\n" +
                   "a=x-nv-video[0].clientViewportHt:720 \r\na=x-nv-video[0].maxFPS:60 \r\n" +
                   "a=x-nv-video[0].packetSize:1392 \r\na=x-nv-vqos[0].bw.maximumBitrateKbps:8000 \r\n" +
-                  "a=x-nv-vqos[0].bitStreamFormat:0 \r\n"
+                  "a=x-nv-vqos[0].bitStreamFormat:0 \r\na=x-nv-general.featureFlags:167 \r\n" +
+                  "a=x-nv-aqos.packetDuration:5 \r\n"
         let announce = rtsp("ANNOUNCE streamid=control/13/0 RTSP/1.0\r\nCSeq: 6\r\n\(common)Session: \(session)\r\n" +
                             "Content-type: application/sdp\r\nContent-length: \(sdp.utf8.count)\r\n\r\n\(sdp)")
         XCTAssertTrue(announce.hasPrefix("RTSP/1.0 200 OK"), announce)
@@ -383,12 +386,49 @@ final class MoonlightHostTests: XCTestCase {
         start.withUnsafeBytes { enet_peer_send(peer, 1, enet_packet_create($0.baseAddress, start.count, ENET_PACKET_FLAG_RELIABLE.rawValue)) }
         enet_host_flush(enet)
 
-        // Video: ping, then read packets.
+        // Audio: ping as Moonlight does after SETUP; silence comes until sound is captured,
+        // encrypted with the session key and an IV of the key ID plus the sequence number.
+        let audioSocket = try MoonlightUDPSocket(port: 0)
+        var audioPingData = Data(audioPing.utf8)
+        audioPingData.append(bigEndian: UInt32(1))
+        audioSocket.send(audioPingData, to: localhost(MoonlightStream.audioPort))
+        var audioPackets: [Data] = []
+        let audioDeadline = Date().addingTimeInterval(3)
+        while audioPackets.count < 12, Date() < audioDeadline {
+            _ = enet_host_service(enet, &event, 0)
+            RunLoop.main.run(until: Date().addingTimeInterval(0.001))
+            if let (packet, _) = audioSocket.receive(timeout: 0.02) { audioPackets.append(packet) }
+        }
+        let data = audioPackets.filter { $0[1] == 97 }
+        XCTAssertGreaterThanOrEqual(data.count, 8, "audio flowing")
+        XCTAssertTrue(audioPackets.contains { $0[1] == 127 }, "parity after every fourth")
+        let first = try XCTUnwrap(data.first)
+        // Host names the address, as Moonlight does when stereo may be high quality: 512 kbit/s.
+        XCTAssertEqual(first.count, 12 + 336, "320 bytes of Opus, encrypted and padded")
+        let sequence = UInt32(first[2]) << 8 | UInt32(first[3])
+        var iv = Data()
+        iv.append(bigEndian: UInt32(bitPattern: -1_294_967_296) &+ sequence)
+        iv.append(Data(count: 12))
+        var plain = [UInt8](repeating: 0, count: 400)
+        var moved = 0
+        let cipher = [UInt8](first.dropFirst(12))
+        let status = key.withUnsafeBytes { k in iv.withUnsafeBytes { v in
+            CCCrypt(CCOperation(kCCDecrypt), CCAlgorithm(kCCAlgorithmAES), CCOptions(kCCOptionPKCS7Padding),
+                    k.baseAddress, 16, v.baseAddress, cipher, cipher.count, &plain, plain.count, &moved) } }
+        XCTAssertEqual(status, CCCryptorStatus(kCCSuccess))
+        XCTAssertEqual(moved, 320, "one 5 ms Opus packet at 512 kbit/s")
+        audioSocket.close()
+
+        // Video: the ping starts screen capture, which this test leaves to a process that may
+        // record (DAM_TEST_CAPTURE=1). Under xcodebuild capture gets no frames, and a test
+        // process killed mid-capture can leave macOS's capture service (replayd) refusing
+        // every app afterwards, DAM included.
+        let checkFrames = ProcessInfo.processInfo.environment["DAM_TEST_CAPTURE"] == "1" && display != 0
         let socket = try MoonlightUDPSocket(port: 0)
-        var ping = Data(pingPayload.utf8)
-        ping.append(bigEndian: UInt32(1))
-        socket.send(ping, to: localhost(MoonlightStream.videoPort))
-        if MoonlightScreenCapture.hasPermission, display != 0 {
+        if checkFrames {
+            var ping = Data(pingPayload.utf8)
+            ping.append(bigEndian: UInt32(1))
+            socket.send(ping, to: localhost(MoonlightStream.videoPort))
             var firstFrame: [Data] = []
             let videoDeadline = Date().addingTimeInterval(5)
             while Date() < videoDeadline {
@@ -403,17 +443,12 @@ final class MoonlightHostTests: XCTestCase {
                 if bytes[24] & 0x02 != 0 { break }
             }
             let payload = firstFrame.reduce(Data()) { $0 + $1.dropFirst(32) }
-            XCTAssertGreaterThan(firstFrame.count, 0, "video arrived")
+            XCTAssertGreaterThan(firstFrame.count, 0, "video arrived; stream end: \(host.lastStreamEnd ?? "none")")
             XCTAssertEqual(payload.prefix(1), Data([0x01]), "8-byte frame header")
             XCTAssertEqual([UInt8](payload)[3], 2, "an IDR first")
             let unit = [UInt8](payload.dropFirst(8))
-            XCTAssertEqual(Array(unit.prefix(5)), [0, 0, 0, 1, 0x67], "SPS first")
-        } else {
-            let ended = expectation(description: "stream ended")
-            ended.assertForOverFulfill = false
-            host.onChange = { [weak host] in if host?.lastStreamEnd != nil { ended.fulfill() } }
-            wait(for: [ended], timeout: 5)
-            XCTAssertEqual(host.lastStreamEnd, "\(AppIdentity.name) may not record the screen")
+            XCTAssertEqual(Array(unit.prefix(4)), [0, 0, 0, 1])
+            XCTAssertEqual(unit[4] & 0x1F, 7, "SPS first")
         }
 
         // /cancel frees the host, and Moonlight hears the stream ended.
@@ -421,7 +456,7 @@ final class MoonlightHostTests: XCTestCase {
         let free = try get("/serverinfo", secure: true, identity: client.identity)
         XCTAssertEqual(field("state", in: free), "SUNSHINE_SERVER_FREE")
         XCTAssertEqual(field("currentgame", in: free), "0")
-        if MoonlightScreenCapture.hasPermission, display != 0 {
+        if host.lastStreamEnd == nil {
             var termination: (type: UInt16, payload: Data)?
             let endDeadline = Date().addingTimeInterval(3)
             while termination == nil, Date() < endDeadline {

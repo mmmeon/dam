@@ -19,6 +19,8 @@ struct MoonlightLaunch {
     let displayID: CGDirectDisplayID
     /// The session's AES key, from the launch request.
     let key: Data
+    /// What the audio's IVs count from (rikeyid, sent signed).
+    let keyID: UInt32
     /// Sixteen characters Moonlight echoes in its video and audio pings.
     let pingPayload: String
     /// The token Moonlight connects to the control stream with.
@@ -27,10 +29,11 @@ struct MoonlightLaunch {
     /// Whether the display was made for this launch, and goes with it.
     let ownsDisplay: Bool
 
-    init(appID: Int, displayID: CGDirectDisplayID, key: Data, ownsDisplay: Bool = false) {
+    init(appID: Int, displayID: CGDirectDisplayID, key: Data, keyID: UInt32 = 0, ownsDisplay: Bool = false) {
         self.appID = appID
         self.displayID = displayID
         self.key = key
+        self.keyID = keyID
         self.ownsDisplay = ownsDisplay
         pingPayload = MoonlightCrypto.hex(MoonlightPairing.randomBytes(8))
         connectData = UInt32.random(in: 1...UInt32.max)
@@ -122,9 +125,10 @@ final class MoonlightRTSP {
         case "OPTIONS", "PLAY":
             return reply("200 OK")
         case "DESCRIBE":
-            // No HEVC or AV1 markers, so H.264; control encryption v2 only, so plain video.
+            // No HEVC or AV1 markers, so H.264; control encryption v2 and audio encryption,
+            // which Moonlight asks for regardless, but plain video.
             return reply("200 OK", body: "a=x-ss-general.featureFlags:0\r\n" +
-                                         "a=x-ss-general.encryptionSupported:1\r\n" +
+                                         "a=x-ss-general.encryptionSupported:5\r\n" +
                                          "a=x-ss-general.encryptionRequested:0\r\n")
         case "SETUP":
             let stream = request.target.split(separator: "=").dropFirst().first?.split(separator: "/").first ?? ""
@@ -142,7 +146,9 @@ final class MoonlightRTSP {
                 return reply("404 Not Found")
             }
         case "ANNOUNCE":
-            guard let config = MoonlightStreamConfig.parse(sdp: request.body) else { return reply("400 Bad Request") }
+            guard var config = MoonlightStreamConfig.parse(sdp: request.body) else { return reply("400 Bad Request") }
+            // Moonlight names the host in Host only when stereo may be high quality.
+            config.highQualityAudio = !(request.headers["Host"] ?? "0.0.0.0").contains("0.0.0.0")
             guard config.videoFormat == 0, config.encryptionEnabled & 0x02 == 0 else {
                 return reply("400 Bad Request")
             }

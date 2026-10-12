@@ -2,8 +2,10 @@
 //  MoonlightScreenCapture.swift
 //
 //  Captures one display for Moonlight with ScreenCaptureKit, at the stream's size and rate,
-//  in the 4:2:0 format the encoder takes as is. Each new frame is handed on the moment it
-//  arrives; capture holds no more frames than ScreenCaptureKit's minimum.
+//  in the 4:2:0 format the encoder takes as is, and, when asked, what the Mac plays at
+//  48 kHz stereo, DAM's own sounds left out. Each new frame and each piece of sound is
+//  handed on the moment it arrives; capture holds no more frames than ScreenCaptureKit's
+//  minimum.
 //
 
 import CoreMedia
@@ -27,6 +29,11 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     private let frame: (CVPixelBuffer, CMTime) -> Void
     private let queue = DispatchQueue(label: "\(AppIdentity.bundleID).moonlight.capture", qos: .userInteractive)
     private var stream: SCStream?
+
+    /// Called on `audioQueue` with each piece of the Mac's sound; set before `start` to
+    /// capture sound too.
+    var audio: ((CMSampleBuffer) -> Void)?
+    var audioQueue = DispatchQueue(label: "\(AppIdentity.bundleID).moonlight.capture.audio", qos: .userInteractive)
 
     /// `frame` is called on the capture thread with each frame whose picture changed.
     init(displayID: CGDirectDisplayID, width: Int, height: Int, fps: Int,
@@ -69,10 +76,19 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
             configuration.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
             configuration.queueDepth = 3
             configuration.showsCursor = true
+            if self.audio != nil {
+                configuration.capturesAudio = true
+                configuration.sampleRate = MoonlightAudioEncoder.sampleRate
+                configuration.channelCount = MoonlightAudioEncoder.channels
+                configuration.excludesCurrentProcessAudio = true
+            }
             let stream = SCStream(filter: SCContentFilter(display: display, excludingWindows: []),
                                   configuration: configuration, delegate: self)
             do {
                 try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: self.queue)
+                if self.audio != nil {
+                    try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: self.audioQueue)
+                }
             } catch {
                 return completion(error)
             }
@@ -90,6 +106,10 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sample: CMSampleBuffer, of type: SCStreamOutputType) {
+        if type == .audio {
+            if sample.isValid { audio?(sample) }
+            return
+        }
         guard type == .screen, sample.isValid,
               let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: false)
                 as? [[SCStreamFrameInfo: Any]],

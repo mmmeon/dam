@@ -129,4 +129,24 @@ final class MoonlightProtocolTests: XCTestCase {
         XCTAssertNil(MoonlightControlCrypto.open(sealed, key: key, direction: .hostToClient))
         XCTAssertNil(MoonlightControlCrypto.open(sealed, key: SymmetricKey(size: .bits128)))
     }
+
+    // MARK: - Keyframe requests
+
+    func testABurstOfKeyFrameRequestsCostsAtMostTwoKeyFrames() {
+        var throttle = MoonlightKeyFrameThrottle(interval: 250)
+        XCTAssertEqual(throttle.request(at: 1000), .now)
+        XCTAssertEqual(throttle.request(at: 1050), .later(200), "answered once the interval is over")
+        XCTAssertEqual(throttle.request(at: 1100), .alreadyDue)
+        XCTAssertEqual(throttle.request(at: 1200), .alreadyDue)
+        // The deferred one asks again when due, and goes out.
+        XCTAssertEqual(throttle.request(at: 1250), .now)
+        XCTAssertEqual(throttle.request(at: 1300), .later(200))
+    }
+
+    func testRequestsFarApartAreEachAnsweredAtOnce() {
+        var throttle = MoonlightKeyFrameThrottle(interval: 250)
+        XCTAssertEqual(throttle.request(at: 0), .now)
+        XCTAssertEqual(throttle.request(at: 300), .now)
+        XCTAssertEqual(throttle.request(at: 1000), .now)
+    }
 }

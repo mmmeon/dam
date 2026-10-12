@@ -2,8 +2,8 @@ import XCTest
 import CoreGraphics
 @testable import DAM
 
-/// Captures a streaming display, never one the user looks at; skipped when there is none
-/// or DAM may not record the screen.
+/// Captures a streaming display, never one the user looks at; skipped when there is none,
+/// when DAM may not record the screen, and unless asked for (see below).
 final class MoonlightScreenCaptureTests: XCTestCase {
 
     private func streamingDisplay() throws -> CGDirectDisplayID {
@@ -15,6 +15,11 @@ final class MoonlightScreenCaptureTests: XCTestCase {
     }
 
     func testCapturesFramesAtTheStreamSize() throws {
+        // Under xcodebuild capture gets no frames: macOS judges Screen Recording by the process
+        // that started the tests. Run with DAM_TEST_CAPTURE=1 from one that may record.
+        guard ProcessInfo.processInfo.environment["DAM_TEST_CAPTURE"] == "1" else {
+            throw XCTSkip("capture checked only with DAM_TEST_CAPTURE=1")
+        }
         guard MoonlightScreenCapture.hasPermission else { throw XCTSkip("no Screen Recording permission") }
         let id = try streamingDisplay()
         let lock = NSLock()

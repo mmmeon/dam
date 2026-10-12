@@ -23,7 +23,7 @@ final class MoonlightRTSPTests: XCTestCase {
     func testDescribeOffersControlEncryptionOnlyAndNoOtherCodec() {
         let reply = respond(request("DESCRIBE", "rtsp://10.0.0.2:48010"))
         let body = reply.components(separatedBy: "\r\n\r\n")[1]
-        XCTAssertTrue(body.contains("a=x-ss-general.encryptionSupported:1"))
+        XCTAssertTrue(body.contains("a=x-ss-general.encryptionSupported:5"), "control and audio")
         XCTAssertFalse(body.contains("sprop-parameter-sets=AAAAAU"), "would choose HEVC")
         XCTAssertFalse(body.contains("AV1/90000"))
         XCTAssertFalse(body.contains("refPicInvalidation"))

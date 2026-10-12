@@ -359,6 +359,8 @@ final class MoonlightHost {
         guard let key = request.query["rikey"].flatMap(MoonlightCrypto.data(hex:)), key.count == 16 else {
             return reply(Self.xml(status: 400, message: "Missing key"), to: connection)
         }
+        // Signed, as Moonlight prints it; the bits are what count.
+        let keyID = UInt32(bitPattern: request.query["rikeyid"].flatMap { Int32($0) } ?? 0)
         let appID = request.query["appid"].flatMap(Int.init) ?? launch?.appID ?? Self.newDisplayAppID
         let address = Self.address(connection.currentPath?.localEndpoint)
         let answer = { [weak self] (launch: MoonlightLaunch) in
@@ -374,13 +376,13 @@ final class MoonlightHost {
         if let current = launch, current.appID == appID || current.displayID == listed,
            DisplayArrangement.onlineDisplayIDs().contains(current.displayID) {
             mlLog.debug("\(resume ? "resume" : "launch", privacy: .public) on display \(current.displayID)")
-            return answer(MoonlightLaunch(appID: appID, displayID: current.displayID, key: key,
+            return answer(MoonlightLaunch(appID: appID, displayID: current.displayID, key: key, keyID: keyID,
                                           ownsDisplay: current.ownsDisplay))
         }
         endLaunch()
         if appID != Self.newDisplayAppID, let app = apps.first(where: { $0.id == appID }) {
             mlLog.debug("launch \(app.title, privacy: .public)")
-            return answer(MoonlightLaunch(appID: appID, displayID: app.displayID, key: key))
+            return answer(MoonlightLaunch(appID: appID, displayID: app.displayID, key: key, keyID: keyID))
         }
         let mode = (request.query["mode"] ?? "").split(separator: "x").compactMap { Int($0) }
         guard mode.count == 3, mode[0] > 0, mode[1] > 0, let makeDisplay else {
@@ -393,7 +395,7 @@ final class MoonlightHost {
                 return self.reply(Self.xml(status: 503, message: "\(AppIdentity.name) could not make a display."),
                                   to: connection)
             }
-            answer(MoonlightLaunch(appID: appID, displayID: id, key: key, ownsDisplay: true))
+            answer(MoonlightLaunch(appID: appID, displayID: id, key: key, keyID: keyID, ownsDisplay: true))
         }
     }
 
@@ -409,7 +411,8 @@ final class MoonlightHost {
         endStream()
         do {
             let stream = try MoonlightStream(config: config, displayID: launch.displayID, key: launch.key,
-                                             pingPayload: launch.pingPayload, connectData: launch.connectData)
+                                             keyID: launch.keyID, pingPayload: launch.pingPayload,
+                                             connectData: launch.connectData)
             stream.onEnd = { [weak self, weak stream] reason in
                 guard let self, let stream, self.stream === stream else { return }
                 self.stream = nil

@@ -70,18 +70,21 @@ final class MoonlightUDPSocket {
         return (Data(buffer[0..<count]), from)
     }
 
-    func send(_ data: Data, to address: sockaddr_in) {
+    /// Sends `data`; false when macOS would not take it, as when its send queue is full.
+    @discardableResult
+    func send(_ data: Data, to address: sockaddr_in) -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        guard !closed else { return }
+        guard !closed else { return false }
         var to = address
-        data.withUnsafeBytes { bytes in
-            _ = withUnsafePointer(to: &to) {
+        let sent = data.withUnsafeBytes { bytes in
+            withUnsafePointer(to: &to) {
                 $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
                     sendto(descriptor, bytes.baseAddress, data.count, 0, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
                 }
             }
         }
+        return sent == data.count
     }
 
     func close() {
@@ -95,7 +98,44 @@ final class MoonlightUDPSocket {
 
 // MARK: - Video
 
-/// Learns where Moonlight wants video from its pings, and sends frames there.
+/// Counts of what a stream sent and what went wrong, logged every few seconds.
+final class MoonlightStreamStats {
+    private let lock = NSLock()
+    private var frames = 0, keyFrames = 0, videoPackets = 0, videoBytes = 0, videoRefused = 0
+    private var audioPackets = 0, audioRefused = 0, keyFrameRequests = 0
+
+    func video(packets: Int, bytes: Int, refused: Int, keyFrame: Bool) {
+        lock.lock(); defer { lock.unlock() }
+        frames += 1; keyFrames += keyFrame ? 1 : 0; videoPackets += packets; videoBytes += bytes; videoRefused += refused
+    }
+
+    func audio(packets: Int, refused: Int) {
+        lock.lock(); defer { lock.unlock() }
+        audioPackets += packets; audioRefused += refused
+    }
+
+    func keyFrameRequested() {
+        lock.lock(); defer { lock.unlock() }
+        keyFrameRequests += 1
+    }
+
+    /// The counts since the last call, as a line for the log.
+    func take(seconds: Double) -> String {
+        lock.lock(); defer { lock.unlock() }
+        let line = String(format: "%.1f fps (%d keyframes), %.1f Mbit/s, %d keyframe requests; " +
+                          "packets refused: video %d of %d, audio %d of %d",
+                          Double(frames) / seconds, keyFrames, Double(videoBytes) * 8 / seconds / 1e6, keyFrameRequests,
+                          videoRefused, videoPackets, audioRefused, audioPackets)
+        frames = 0; keyFrames = 0; videoPackets = 0; videoBytes = 0; videoRefused = 0
+        audioPackets = 0; audioRefused = 0; keyFrameRequests = 0
+        return line
+    }
+}
+
+/// Learns where Moonlight wants video from its pings, and sends frames there, paced: a
+/// frame's packets go out spread at a few times the stream's bitrate rather than at once,
+/// as a burst at full speed overflows Wi-Fi queues and loses packets. Pacing happens on the
+/// encoder's thread, so a newer frame waits in the encoder's slot meanwhile, not in a queue.
 final class MoonlightVideoSender {
     private let socket: MoonlightUDPSocket
     private let pingPayload: Data
@@ -104,6 +144,9 @@ final class MoonlightVideoSender {
     private var running = true
     private var packetizer: MoonlightPacketizer
     private let start = DispatchTime.now().uptimeNanoseconds
+    /// Nanoseconds each byte may take on the way out.
+    private let nanosecondsPerByte: Double
+    let stats = MoonlightStreamStats()
 
     /// Called on the ping thread when the first ping arrives.
     var onFirstPing: (() -> Void)?
@@ -111,8 +154,12 @@ final class MoonlightVideoSender {
     /// Parity for a fifth of each block's data, as Sunshine sends by default.
     static let fecPercentage = 20
 
-    init(port: UInt16, pingPayload: String, packetSize: Int, minimumParity: Int) throws {
+    init(port: UInt16, pingPayload: String, packetSize: Int, minimumParity: Int, bitrateKbps: Int) throws {
         socket = try MoonlightUDPSocket(port: port)
+        // Four times the stream's rate, within 40 to 400 Mbit/s: a typical frame in well under
+        // a frame's time, a keyframe spread over a few milliseconds more.
+        let rate = Double(min(max(bitrateKbps * 4, 40_000), 400_000)) * 1000
+        nanosecondsPerByte = 8e9 / rate
         self.pingPayload = Data(pingPayload.utf8)
         packetizer = MoonlightPacketizer(packetSize: packetSize, fecPercentage: Self.fecPercentage,
                                          minimumParity: minimumParity)
@@ -170,12 +217,22 @@ final class MoonlightVideoSender {
             msLog.error("frame of \(frame.data.count) bytes too large to send")
             return false
         }
-        // Each block's data at once, then its parity: Moonlight needs the parity only when
-        // data was lost, and gives up on a block once the next one starts.
+        // Each block's data, then its parity: Moonlight needs the parity only when data was
+        // lost, and gives up on a block once the next one starts.
+        let began = DispatchTime.now().uptimeNanoseconds
+        var bytes = 0, packets = 0, refused = 0
         for block in blocks {
-            for packet in block.packets { socket.send(packet, to: peer) }
-            for packet in MoonlightPacketizer.parity(for: block) { socket.send(packet, to: peer) }
+            for packet in block.packets + MoonlightPacketizer.parity(for: block) {
+                // Paced: wait until this packet's share of the rate is due.
+                let due = began + UInt64(Double(bytes) * nanosecondsPerByte)
+                let now = DispatchTime.now().uptimeNanoseconds
+                if due > now + 50_000 { usleep(useconds_t((due - now) / 1000)) }
+                if !socket.send(packet, to: peer) { refused += 1 }
+                bytes += packet.count
+                packets += 1
+            }
         }
+        stats.video(packets: packets, bytes: bytes, refused: refused, keyFrame: frame.isKeyFrame)
         return true
     }
 
@@ -184,6 +241,118 @@ final class MoonlightVideoSender {
         var text = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
         inet_ntop(AF_INET, &addr, &text, socklen_t(INET_ADDRSTRLEN))
         return "\(String(cString: text)):\(UInt16(bigEndian: address.sin_port))"
+    }
+}
+
+// MARK: - Audio
+
+/// Learns where Moonlight wants sound from its pings, and sends it the Mac's sound as Opus,
+/// one packet per packet's time. Capture hands sound over in pieces of about 20 ms, which
+/// would reach Moonlight as bursts; Moonlight drops sound once more than 30 ms of it waits,
+/// so packets go out evenly instead, from a line kept short: at most 40 ms, the oldest
+/// dropped beyond that. While nothing is captured it sends encoded silence, so the first
+/// half second Moonlight throws away at the start is silence, not sound.
+final class MoonlightAudioSender {
+    /// Encoding and sending happen here, captured sound and silence alike.
+    let queue = DispatchQueue(label: "\(AppIdentity.bundleID).moonlight.audio", qos: .userInteractive)
+    private let socket: MoonlightUDPSocket
+    private let pingPayload: Data
+    private let lock = NSLock()
+    private var peer: sockaddr_in?
+    private var running = true
+    private var encoder: MoonlightAudioEncoder?
+    private var packetizer: MoonlightAudioPacketizer
+    private let packetDuration: Int
+    private var lastCaptured: UInt64 = 0
+    /// Encoded packets waiting for their turn; on `queue`.
+    private var waiting: [Data] = []
+    private static let maxWaiting = 8
+    private var pacer: DispatchSourceTimer?
+    private let stats: MoonlightStreamStats
+
+    init(port: UInt16, pingPayload: String, config: MoonlightStreamConfig, key: Data, keyID: UInt32,
+         stats: MoonlightStreamStats) throws {
+        socket = try MoonlightUDPSocket(port: port)
+        self.stats = stats
+        self.pingPayload = Data(pingPayload.utf8)
+        packetDuration = config.audioPacketDuration
+        packetizer = MoonlightAudioPacketizer(packetDuration: config.audioPacketDuration,
+                                              key: config.audioEncrypted ? key : nil, keyID: keyID)
+        // Sunshine's stereo rates: 512 kbit/s when Moonlight allows high quality, else 96.
+        encoder = try MoonlightAudioEncoder(packetDuration: config.audioPacketDuration,
+                                            bitrate: config.highQualityAudio ? 512_000 : 96_000) { [weak self] opus in
+            guard let self else { return }
+            self.waiting.append(opus)
+            if self.waiting.count > Self.maxWaiting { self.waiting.removeFirst() }
+        }
+    }
+
+    func startListening() {
+        Thread.detachNewThread { [self] in
+            Thread.current.name = "Moonlight audio pings"
+            while isRunning {
+                guard let (data, from) = socket.receive(timeout: 0.25) else { continue }
+                guard data.prefix(16) == pingPayload || data == Data("PING".utf8) else { continue }
+                lock.lock()
+                let first = peer == nil
+                peer = from
+                lock.unlock()
+                if first {
+                    msLog.debug("audio ping from \(MoonlightVideoSender.describe(from), privacy: .public)")
+                    queue.async { self.startPacing() }
+                }
+            }
+            socket.close()
+        }
+    }
+
+    private var isRunning: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return running
+    }
+
+    func stop() {
+        lock.lock()
+        running = false
+        lock.unlock()
+        queue.async { [self] in
+            pacer?.cancel()
+            pacer = nil
+        }
+    }
+
+    /// Takes a piece of captured sound; on `queue`.
+    func encode(_ sample: CMSampleBuffer) {
+        lastCaptured = DispatchTime.now().uptimeNanoseconds
+        encoder?.encode(sample)
+    }
+
+    /// Every packet's time, sends the next packet waiting; with nothing captured for a while,
+    /// a packet of silence. Captured sound arrives about 20 ms apart, so it waits longer than that.
+    private func startPacing() {
+        let silence = [Float](repeating: 0, count: MoonlightAudioEncoder.sampleRate * packetDuration / 1000 * 2)
+        let timer = DispatchSource.makeTimerSource(flags: .strict, queue: queue)
+        timer.schedule(deadline: .now(), repeating: .milliseconds(packetDuration), leeway: .microseconds(500))
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            if self.waiting.isEmpty, DispatchTime.now().uptimeNanoseconds - self.lastCaptured > 100_000_000 {
+                silence.withUnsafeBufferPointer { self.encoder?.encode(interleaved: $0) }
+            }
+            guard !self.waiting.isEmpty else { return }
+            self.send(self.waiting.removeFirst())
+        }
+        pacer = timer
+        timer.resume()
+    }
+
+    /// Packs and sends one Opus packet, and its block's parity after every fourth.
+    private func send(_ opus: Data) {
+        lock.lock()
+        let peer = self.peer
+        lock.unlock()
+        guard let peer, let packets = packetizer.packets(for: opus) else { return }
+        let refused = packets.filter { !socket.send($0, to: peer) }.count
+        stats.audio(packets: packets.count, refused: refused)
     }
 }
 
@@ -311,33 +480,55 @@ final class MoonlightStream {
     let displayID: CGDirectDisplayID
     private let video: MoonlightVideoSender
     private let control: MoonlightControlServer
-    private let audio: MoonlightUDPSocket
+    private let audio: MoonlightAudioSender
     private let lock = NSLock()
     private var encoder: MoonlightVideoEncoder?
     private var capture: MoonlightScreenCapture?
     private var lastFrame: (buffer: CVPixelBuffer, time: CMTime, at: UInt64)?
     private var repeater: DispatchSourceTimer?
     private var ended = false
+    private var keyFrames = MoonlightKeyFrameThrottle()
 
     /// Called once on the main queue when the stream ends on its own, with why.
     var onEnd: ((String) -> Void)?
+    /// Keeps macOS from throttling DAM (App Nap) and the Mac from sleeping while streaming:
+    /// DAM shows no window, and the stream's threads and timers must keep time.
+    private var activity: NSObjectProtocol?
+    private var statsTimer: DispatchSourceTimer?
 
-    init(config: MoonlightStreamConfig, displayID: CGDirectDisplayID, key: Data,
+    init(config: MoonlightStreamConfig, displayID: CGDirectDisplayID, key: Data, keyID: UInt32,
          pingPayload: String, connectData: UInt32) throws {
         self.config = config
         self.displayID = displayID
         video = try MoonlightVideoSender(port: Self.videoPort, pingPayload: pingPayload, packetSize: config.packetSize,
-                                         minimumParity: config.minimumParity)
+                                         minimumParity: config.minimumParity, bitrateKbps: config.bitrateKbps)
         control = try MoonlightControlServer(port: Self.controlPort, key: key, connectData: connectData)
-        audio = try MoonlightUDPSocket(port: Self.audioPort)
+        audio = try MoonlightAudioSender(port: Self.audioPort, pingPayload: pingPayload, config: config,
+                                         key: key, keyID: keyID, stats: video.stats)
     }
 
     func start() {
-        control.onKeyFrameRequest = { [weak self] in self?.sendKeyFrame() }
+        control.onKeyFrameRequest = { [weak self] in
+            self?.video.stats.keyFrameRequested()
+            self?.sendKeyFrame()
+        }
+        // What went out and what went wrong, every 5 seconds.
+        let stats = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        stats.schedule(deadline: .now() + 5, repeating: 5)
+        stats.setEventHandler { [weak self] in
+            guard let self else { return }
+            msLog.debug("stats: \(self.video.stats.take(seconds: 5), privacy: .public)")
+        }
+        statsTimer = stats
+        stats.resume()
         control.onDisconnect = { [weak self] in self?.end("Moonlight disconnected") }
         video.onFirstPing = { [weak self] in self?.startPicture() }
+        activity = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiated, .latencyCritical, .idleSystemSleepDisabled, .idleDisplaySleepDisabled],
+            reason: "Streaming to Moonlight")
         control.start()
         video.startListening()
+        audio.startListening()
         DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
             guard let self, !self.video.hasPeer else { return }
             self.end("Moonlight never asked for video")
@@ -357,7 +548,11 @@ final class MoonlightStream {
         capture?.stop()
         control.stop()
         video.stop()
-        audio.close()
+        audio.stop()
+        if let activity { ProcessInfo.processInfo.endActivity(activity) }
+        activity = nil
+        statsTimer?.cancel()
+        statsTimer = nil
     }
 
     private func end(_ reason: String) {
@@ -387,6 +582,10 @@ final class MoonlightStream {
                 self.lock.unlock()
                 encoder.encode(buffer, at: time)
             }
+            // What the Mac plays, as it plays it; where it plays is left alone.
+            let audio = self.audio
+            capture.audioQueue = audio.queue
+            capture.audio = { audio.encode($0) }
             lock.lock()
             self.encoder = encoder
             self.capture = capture
@@ -396,6 +595,15 @@ final class MoonlightStream {
                 self?.end(error is MoonlightCaptureError ? "\(AppIdentity.name) may not record the screen"
                                                          : "Capture failed: \(error.localizedDescription)")
             }
+            // macOS's screen capture service can fail to answer at all; say so rather than
+            // leave Moonlight waiting for video that will not come.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+                guard let self else { return }
+                self.lock.lock()
+                let captured = self.lastFrame != nil
+                self.lock.unlock()
+                if !captured { self.end("Screen capture did not start") }
+            }
             startRepeating()
         } catch {
             end("The encoder could not start")
@@ -403,9 +611,23 @@ final class MoonlightStream {
     }
 
     /// The next frame as a keyframe, made from the last picture at once when the screen is
-    /// still and no new frame would come.
+    /// still and no new frame would come; no more than one a quarter second (see
+    /// MoonlightKeyFrameThrottle).
     private func sendKeyFrame() {
         lock.lock()
+        switch keyFrames.request(at: DispatchTime.now().uptimeNanoseconds) {
+        case .now:
+            break
+        case .later(let wait):
+            lock.unlock()
+            DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + .nanoseconds(Int(wait))) {
+                [weak self] in self?.sendKeyFrame()
+            }
+            return
+        case .alreadyDue:
+            lock.unlock()
+            return
+        }
         let encoder = self.encoder
         let last = lastFrame
         lock.unlock()
