@@ -86,7 +86,7 @@ extension VideoManager {
             for member in placement.memberIDs { captured[member] = origins[placement.id] }
         }
         // Set before the commit: the change it causes is checked before it reports back.
-        if let main, streamingDisplayID != 0 { streamingDisplayIsMainByChoice = main == streamingDisplayID }
+        if let main, !streamingDisplays.isEmpty { streamingDisplayIsMainByChoice = streamingDisplayIDs.contains(main) }
         commitDisplayChange({ cfg in
             for (id, origin) in origins {
                 CGConfigureDisplayOrigin(cfg, id, Int32(origin.x), Int32(origin.y))
