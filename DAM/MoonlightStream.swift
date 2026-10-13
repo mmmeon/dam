@@ -592,12 +592,19 @@ final class MoonlightStream {
             lock.unlock()
             capture.start { [weak self] error in
                 guard let error else { return }
-                self?.end(error is MoonlightCaptureError ? "\(AppIdentity.name) may not record the screen"
-                                                         : "Capture failed: \(error.localizedDescription)")
+                switch error {
+                case MoonlightCaptureError.serviceNotAnswering:
+                    self?.end("macOS's screen capture service is not answering")
+                case is MoonlightCaptureError:
+                    self?.end("\(AppIdentity.name) may not record the screen")
+                default:
+                    self?.end("Capture failed: \(error.localizedDescription)")
+                }
             }
-            // macOS's screen capture service can fail to answer at all; say so rather than
-            // leave Moonlight waiting for video that will not come.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+            // Capture can start and still send nothing; say so rather than leave Moonlight
+            // waiting for video that will not come. Allows for capture restarting replayd.
+            let wait = 5 + MoonlightScreenCapture.answerTimeout + 1
+            DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
                 guard let self else { return }
                 self.lock.lock()
                 let captured = self.lastFrame != nil
