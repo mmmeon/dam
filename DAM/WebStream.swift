@@ -756,7 +756,7 @@ enum WebStreamPage {
     </style>
     </head>
     <body>
-    <video id="v" muted autoplay playsinline></video>
+    <video id="v" muted playsinline></video>
     <div id="msg" hidden></div>
     <div id="bar">
       <label>Display <select id="app"></select></label>
@@ -778,7 +778,7 @@ enum WebStreamPage {
       let info = { apps: [], profile: 'interactive', bitrates: {}, buffers: {} };
       let profile = params.get('profile'), bitrate = params.get('bitrate'), app = params.get('app');
       let buffer = params.get('buffer');
-      let abort = null, source = null, sb = null, queue = [], bytes = 0;
+      let abort = null, source = null, sb = null, queue = [], bytes = 0, held = true, stalls = 0;
 
       const MS = window.ManagedMediaSource || window.MediaSource;
       if (!MS) { $('msg').hidden = false; $('msg').textContent = 'This browser cannot play streams (no Media Source Extensions).'; return; }
@@ -793,7 +793,7 @@ enum WebStreamPage {
 
       function start() {
         stop();
-        queue = []; bytes = 0;
+        queue = []; bytes = 0; held = true; stalls = 0;
         source = new MS();
         video.disableRemotePlayback = true;
         video.src = URL.createObjectURL(source);
@@ -824,6 +824,7 @@ enum WebStreamPage {
         sb = source.addSourceBuffer(mime);
         sb.mode = 'segments';
         sb.addEventListener('updateend', pump);
+        sb.addEventListener('updateend', follow);
         const reader = response.body.getReader();
         try {
           for (;;) {
@@ -854,7 +855,8 @@ enum WebStreamPage {
       function fail(text) { stop(); $('msg').hidden = false; $('msg').textContent = text; }
 
       // Keeps playback `buffer` seconds behind the latest frame: a jump when far off, a
-      // slightly faster rate when a little, and over any gap the still screen left.
+      // slightly faster or slower rate when a little, over any gap the still screen left,
+      // and, when the picture runs dry, a hold until the buffer is back.
       function follow() {
         if (!sb || !sb.buffered.length) return;
         const b = sb.buffered, end = b.end(b.length - 1), t = video.currentTime;
@@ -863,18 +865,23 @@ enum WebStreamPage {
           if (t >= b.start(i) - 0.05 && t <= b.end(i) + 0.05) inside = true;
           else if (b.start(i) > t && next === null) next = b.start(i);
         }
-        const lag = end - t;
-        if (!inside && next !== null) video.currentTime = Math.max(next, end - buffer);
-        else if (lag > buffer + 0.3) video.currentTime = Math.max(end - buffer, 0);
-        video.playbackRate = lag > buffer + 0.08 ? 1.05 : 1;
-        if (video.paused) video.play().catch(() => {});
+        let lag = end - t;
+        if (!inside && next !== null) { video.currentTime = Math.max(next, end - buffer); lag = end - video.currentTime; }
+        else if (lag > buffer + 0.3) { video.currentTime = Math.max(end - buffer, 0); lag = end - video.currentTime; }
+        video.playbackRate = lag > buffer + 0.08 ? 1.05 : lag < buffer - 0.08 ? 0.95 : 1;
+        if (held && lag >= buffer) held = false;
+        if (!held && video.paused) video.play().catch(() => {});
         const q = video.getVideoPlaybackQuality ? video.getVideoPlaybackQuality() : null;
         $('stats').textContent = (video.videoWidth ? video.videoWidth + '×' + video.videoHeight + ' · ' : '')
           + Math.round(Math.max(lag, 0) * 1000) + ' ms behind'
+          + (stalls ? ' · ' + stalls + ' stall' + (stalls > 1 ? 's' : '') : '')
           + (q ? ' · ' + q.droppedVideoFrames + ' dropped' : '');
       }
       setInterval(follow, 100);
-      video.addEventListener('waiting', follow);
+      // Out of picture: hold until `buffer` seconds are in hand again, rather than play each
+      // frame the moment it lands and stutter.
+      video.addEventListener('waiting', () => { if (!held && !video.seeking) { held = true; stalls++; video.pause(); } follow(); });
+      video.addEventListener('playing', follow);
 
       // Controls.
       function setBuffer(seconds) { buffer = seconds; $('buffer').value = Math.round(seconds * 1000); $('bufferText').textContent = Math.round(seconds * 1000) + ' ms'; }
@@ -882,7 +889,7 @@ enum WebStreamPage {
       $('bitrate').onchange = () => { bitrate = +$('bitrate').value || 20; start(); };
       $('app').onchange = () => { app = $('app').value || null; start(); };
       $('buffer').oninput = () => setBuffer(+$('buffer').value / 1000);
-      $('mute').onclick = () => { video.muted = !video.muted; $('mute').textContent = video.muted ? 'Unmute' : 'Mute'; if (video.paused) video.play().catch(() => {}); };
+      $('mute').onclick = () => { video.muted = !video.muted; $('mute').textContent = video.muted ? 'Unmute' : 'Mute'; follow(); };
       $('full').onclick = () => { (video.requestFullscreen || video.webkitEnterFullscreen || (() => {})).call(video); };
       let idle; function awake() { document.body.classList.remove('idle'); clearTimeout(idle); idle = setTimeout(() => document.body.classList.add('idle'), 3000); }
       ['mousemove', 'touchstart', 'keydown'].forEach(e => addEventListener(e, awake)); awake();
