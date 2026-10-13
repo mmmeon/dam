@@ -38,12 +38,26 @@ final class MoonlightVideoEncoder {
         var height: Int
         var fps: Int
         var bitrateKbps: Int
+        /// Whether frames may be predicted from later ones (B-frames): smaller for the
+        /// same picture, at a couple of frames' delay. Never for Moonlight.
+        var reordering = false
+        /// No more than `rateLimitMultiple` times the bitrate over any `rateLimitWindow`
+        /// seconds, which keeps a keyframe from being many times a frame's share.
+        var rateLimitMultiple = 1.5
+        var rateLimitWindow = 0.25
+        /// Seconds between keyframes; 0 for only when asked.
+        var keyFrameInterval = 0
+        /// Whether the encoder may trade picture quality for speed.
+        var prioritizeSpeed = false
     }
 
     /// One encoded frame as an H.264 Annex B access unit; a keyframe starts with its SPS and PPS.
     struct Frame {
         let data: Data
         let isKeyFrame: Bool
+        /// The frame as the encoder handed it back, with its parameter sets in the format
+        /// description and length-prefixed NAL units (see `avcc` and `parameterSets`).
+        let sample: CMSampleBuffer
         /// The time it was given with.
         let time: CMTime
         /// When the frame was given to the encoder.
@@ -107,23 +121,30 @@ final class MoonlightVideoEncoder {
                               allocator: nil, valueOut: &hardware)
         isHardware = (hardware as? Bool) ?? false
 
-        let properties: [CFString: Any] = [
+        let keyFrameSeconds = settings.keyFrameInterval > 0 ? settings.keyFrameInterval : 3600
+        var properties: [CFString: Any] = [
             kVTCompressionPropertyKey_RealTime: true,
-            kVTCompressionPropertyKey_AllowFrameReordering: false,
-            kVTCompressionPropertyKey_MaxFrameDelayCount: 0,
+            kVTCompressionPropertyKey_AllowFrameReordering: settings.reordering,
             kVTCompressionPropertyKey_ProfileLevel: kVTProfileLevel_H264_High_AutoLevel,
             kVTCompressionPropertyKey_H264EntropyMode: kVTH264EntropyMode_CABAC,
             kVTCompressionPropertyKey_AverageBitRate: settings.bitrateKbps * 1000,
-            // Keeps a keyframe from being many times a frame's share of the bitrate: no more
-            // than one and a half times the rate over any quarter second, so it fits within
-            // the packets Moonlight takes with parity and goes out in a few frames' time.
-            kVTCompressionPropertyKey_DataRateLimits: [NSNumber(value: settings.bitrateKbps * 1000 / 8 * 3 / 8),
-                                                       NSNumber(value: 0.25)],
+            // Keeps a keyframe from being many times a frame's share of the bitrate: for
+            // Moonlight no more than one and a half times the rate over any quarter second,
+            // so it fits within the packets Moonlight takes with parity and goes out in a
+            // few frames' time.
+            kVTCompressionPropertyKey_DataRateLimits: [
+                NSNumber(value: Int(Double(settings.bitrateKbps * 1000 / 8) * settings.rateLimitMultiple
+                                    * settings.rateLimitWindow)),
+                NSNumber(value: settings.rateLimitWindow)],
             kVTCompressionPropertyKey_ExpectedFrameRate: settings.fps,
-            // Keyframes only when Moonlight asks, after losing packets; an hour apart otherwise.
-            kVTCompressionPropertyKey_MaxKeyFrameInterval: settings.fps * 3600,
-            kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration: 3600,
+            // Keyframes only when asked for (Moonlight asks after losing packets), an hour
+            // apart otherwise, unless the settings want them regularly.
+            kVTCompressionPropertyKey_MaxKeyFrameInterval: settings.fps * keyFrameSeconds,
+            kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration: keyFrameSeconds,
         ]
+        // Without reordering, no frame is held back for one that follows.
+        if !settings.reordering { properties[kVTCompressionPropertyKey_MaxFrameDelayCount] = 0 }
+        if settings.prioritizeSpeed { properties[kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality] = true }
         for (key, value) in properties {
             let status = VTSessionSetProperty(session, key: key, value: value as CFTypeRef)
             if status != noErr { veLog.debug("encoder property \(key as String, privacy: .public): \(status)") }
@@ -205,7 +226,7 @@ final class MoonlightVideoEncoder {
                 if keyFrame { self.requestKeyFrame() }
                 return
             }
-            self.output(Frame(data: data, isKeyFrame: isKeyFrame, time: rising, submitted: submitted,
+            self.output(Frame(data: data, isKeyFrame: isKeyFrame, sample: sample, time: rising, submitted: submitted,
                               encoded: DispatchTime.now().uptimeNanoseconds))
         }
         guard status == noErr else {
@@ -218,50 +239,84 @@ final class MoonlightVideoEncoder {
         return true
     }
 
-    /// The access unit in `sample` with Annex B start codes, its SPS and PPS first when it is
-    /// a keyframe, and whether it is one.
-    static func annexB(_ sample: CMSampleBuffer) -> (Data, Bool)? {
-        guard let block = CMSampleBufferGetDataBuffer(sample),
-              let format = CMSampleBufferGetFormatDescription(sample) else { return nil }
+    /// Whether `sample` is a keyframe.
+    static func isKeyFrame(_ sample: CMSampleBuffer) -> Bool {
         let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: false) as? [[CFString: Any]]
-        let isKeyFrame = !((attachments?.first?[kCMSampleAttachmentKey_NotSync] as? Bool) ?? false)
-        let startCode = Data([0, 0, 0, 1])
-        var out = Data()
+        return !((attachments?.first?[kCMSampleAttachmentKey_NotSync] as? Bool) ?? false)
+    }
 
-        var parameterSets = 0
+    /// The parameter sets in `sample`'s format description, SPS first, and the size of the
+    /// length before each NAL unit in its data.
+    static func parameterSets(_ sample: CMSampleBuffer) -> (sets: [Data], lengthSize: Int)? {
+        guard let format = CMSampleBufferGetFormatDescription(sample) else { return nil }
+        var count = 0
         var lengthSize: Int32 = 4
         CMVideoFormatDescriptionGetH264ParameterSetAtIndex(format, parameterSetIndex: 0, parameterSetPointerOut: nil,
-                                                           parameterSetSizeOut: nil,
-                                                           parameterSetCountOut: &parameterSets,
+                                                           parameterSetSizeOut: nil, parameterSetCountOut: &count,
                                                            nalUnitHeaderLengthOut: &lengthSize)
-        if isKeyFrame {
-            for index in 0..<parameterSets {
-                var pointer: UnsafePointer<UInt8>?
-                var size = 0
-                guard CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
-                    format, parameterSetIndex: index, parameterSetPointerOut: &pointer, parameterSetSizeOut: &size,
-                    parameterSetCountOut: nil, nalUnitHeaderLengthOut: nil) == noErr, let pointer else { return nil }
-                out.append(startCode)
-                out.append(pointer, count: size)
-            }
+        var sets: [Data] = []
+        for index in 0..<count {
+            var pointer: UnsafePointer<UInt8>?
+            var size = 0
+            guard CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
+                format, parameterSetIndex: index, parameterSetPointerOut: &pointer, parameterSetSizeOut: &size,
+                parameterSetCountOut: nil, nalUnitHeaderLengthOut: nil) == noErr, let pointer else { return nil }
+            sets.append(Data(bytes: pointer, count: size))
         }
+        return (sets, Int(lengthSize))
+    }
 
+    /// The NAL units in `sample`, each after its length, as they are.
+    private static func nalUnits(_ sample: CMSampleBuffer) -> (units: [Data], lengthSize: Int)? {
+        guard let block = CMSampleBufferGetDataBuffer(sample),
+              let (_, lengthSize) = parameterSets(sample) else { return nil }
         let total = CMBlockBufferGetDataLength(block)
         var bytes = [UInt8](repeating: 0, count: total)
         guard CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: total, destination: &bytes) == noErr else {
             return nil
         }
-        // Length-prefixed NAL units to start-code-prefixed ones.
+        var units: [Data] = []
         var offset = 0
-        let width = Int(lengthSize)
-        while offset + width <= total {
-            let length = bytes[offset..<(offset + width)].reduce(0) { $0 << 8 | Int($1) }
-            offset += width
+        while offset + lengthSize <= total {
+            let length = bytes[offset..<(offset + lengthSize)].reduce(0) { $0 << 8 | Int($1) }
+            offset += lengthSize
             guard length > 0, offset + length <= total else { return nil }
-            out.append(startCode)
-            out.append(contentsOf: bytes[offset..<(offset + length)])
+            units.append(Data(bytes[offset..<(offset + length)]))
             offset += length
         }
+        return (units, lengthSize)
+    }
+
+    /// The access unit in `sample` with Annex B start codes, its SPS and PPS first when it is
+    /// a keyframe, and whether it is one.
+    static func annexB(_ sample: CMSampleBuffer) -> (Data, Bool)? {
+        guard let (sets, _) = parameterSets(sample), let (units, _) = nalUnits(sample) else { return nil }
+        let isKeyFrame = isKeyFrame(sample)
+        let startCode = Data([0, 0, 0, 1])
+        var out = Data()
+        for unit in (isKeyFrame ? sets : []) + units {
+            out.append(startCode)
+            out.append(unit)
+        }
         return (out, isKeyFrame)
+    }
+
+    /// The access unit in `sample` with 4-byte lengths before its NAL units, as MP4 wants it.
+    static func avcc(_ sample: CMSampleBuffer) -> Data? {
+        guard let block = CMSampleBufferGetDataBuffer(sample), let (units, lengthSize) = nalUnits(sample) else { return nil }
+        if lengthSize == 4 {
+            let total = CMBlockBufferGetDataLength(block)
+            var bytes = Data(count: total)
+            let copied = bytes.withUnsafeMutableBytes {
+                CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: total, destination: $0.baseAddress!)
+            }
+            return copied == noErr ? bytes : nil
+        }
+        var out = Data()
+        for unit in units {
+            out.append(contentsOf: (0..<4).map { UInt8(unit.count >> (24 - 8 * $0) & 0xFF) })
+            out.append(unit)
+        }
+        return out
     }
 }

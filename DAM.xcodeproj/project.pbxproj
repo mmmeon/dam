@@ -85,6 +85,10 @@
 		DD100B0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift */; };
 		EE200B012F8D60780090E796 /* MenuBarIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE200A012F8D60780090E796 /* MenuBarIcon.swift */; };
 		EE200B022F8D607C0090E796 /* MenuBarIconTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE200A022F8D607C0090E796 /* MenuBarIconTests.swift */; };
+		66F9582C81ED74C1C1531F5A /* MP4Fragmenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE0CD9E5791F871CE7094055 /* MP4Fragmenter.swift */; };
+		E6043C4BC52D9BAB1E864C77 /* WebStream.swift in Sources */ = {isa = PBXBuildFile; fileRef = A327655CF2C53297256286B4 /* WebStream.swift */; };
+		3AFBEAD2E1BBF03AFA1A8BEC /* MP4FragmenterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BA07475618CF8DB04DE3FB9 /* MP4FragmenterTests.swift */; };
+		F6E46A746FC7A24D2BD7EE7D /* WebStreamTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2056DD5F10F1AC3A231B9ACB /* WebStreamTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -179,6 +183,10 @@
 		DD100A0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarDisplayTests.swift; sourceTree = "<group>"; };
 		EE200A012F8D60780090E796 /* MenuBarIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarIcon.swift; sourceTree = "<group>"; };
 		EE200A022F8D607C0090E796 /* MenuBarIconTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarIconTests.swift; sourceTree = "<group>"; };
+		EE0CD9E5791F871CE7094055 /* MP4Fragmenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MP4Fragmenter.swift; sourceTree = "<group>"; };
+		A327655CF2C53297256286B4 /* WebStream.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebStream.swift; sourceTree = "<group>"; };
+		3BA07475618CF8DB04DE3FB9 /* MP4FragmenterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MP4FragmenterTests.swift; sourceTree = "<group>"; };
+		2056DD5F10F1AC3A231B9ACB /* WebStreamTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebStreamTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -272,6 +280,8 @@
 				86EAA97394CE979125862EBE /* MoonlightProtocol.swift */,
 				38905ABA7904998AD23A9CDC /* MoonlightScreenCapture.swift */,
 				F90877A6A2E4EDCC6C0ECDBD /* MoonlightVideoEncoder.swift */,
+				A327655CF2C53297256286B4 /* WebStream.swift */,
+				EE0CD9E5791F871CE7094055 /* MP4Fragmenter.swift */,
 				CC000B012F8D60780090E796 /* HUD.swift */,
 				EE200A012F8D60780090E796 /* MenuBarIcon.swift */,
 				BB520B012F8D60780090E796 /* DisplayRegistry.swift */,
@@ -323,6 +333,8 @@
 				F9CBD2E4642EC3C66CD4EA92 /* MoonlightProtocolTests.swift */,
 				257CBE83156D2C54B408C340 /* MoonlightScreenCaptureTests.swift */,
 				E478FDA4DCA68FE2F15F7231 /* MoonlightVideoEncoderTests.swift */,
+				2056DD5F10F1AC3A231B9ACB /* WebStreamTests.swift */,
+				3BA07475618CF8DB04DE3FB9 /* MP4FragmenterTests.swift */,
 			);
 			path = DAMTests;
 			sourceTree = "<group>";
@@ -489,6 +501,8 @@
 				292B82ED857C094FE67B1321 /* MoonlightProtocol.swift in Sources */,
 				73D3008B61C3C434EB9B5FAA /* MoonlightScreenCapture.swift in Sources */,
 				B3179E05ECB1DAEEC490D1D6 /* MoonlightVideoEncoder.swift in Sources */,
+				E6043C4BC52D9BAB1E864C77 /* WebStream.swift in Sources */,
+				66F9582C81ED74C1C1531F5A /* MP4Fragmenter.swift in Sources */,
 				CC000C012F8D60780090E796 /* HUD.swift in Sources */,
 				EE200B012F8D60780090E796 /* MenuBarIcon.swift in Sources */,
 				BB520C012F8D60780090E796 /* DisplayRegistry.swift in Sources */,
@@ -529,6 +543,8 @@
 				358CF5FF29CD6C1A162D1005 /* MoonlightProtocolTests.swift in Sources */,
 				DAB2123AFCAFA563C55F10EA /* MoonlightScreenCaptureTests.swift in Sources */,
 				580A6E0D6DE5B7F5E0FC5B7E /* MoonlightVideoEncoderTests.swift in Sources */,
+				F6E46A746FC7A24D2BD7EE7D /* WebStreamTests.swift in Sources */,
+				3AFBEAD2E1BBF03AFA1A8BEC /* MP4FragmenterTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

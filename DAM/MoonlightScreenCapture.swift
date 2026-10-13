@@ -55,6 +55,8 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     /// capture sound too.
     var audio: ((CMSampleBuffer) -> Void)?
     var audioQueue = DispatchQueue(label: "\(AppIdentity.bundleID).moonlight.capture.audio", qos: .userInteractive)
+    /// Called when capture stops on its own, as when the display goes away.
+    var onStop: ((Error) -> Void)?
 
     /// `frame` is called on the capture thread with each frame whose picture changed.
     init(displayID: CGDirectDisplayID, width: Int, height: Int, fps: Int,
@@ -180,5 +182,6 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
         scLog.error("stopped: \(error.localizedDescription, privacy: .public)")
+        if !isStopped { onStop?(error) }
     }
 }
