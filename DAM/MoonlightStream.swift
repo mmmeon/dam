@@ -3,8 +3,9 @@
 //
 //  One Moonlight session after its RTSP handshake: the screen captured, encoded and sent
 //  as video packets to where Moonlight's pings come from, the control stream it connects
-//  over ENet, and an audio port that stays quiet for now. Nothing waits in a queue: a frame
-//  is packetized and sent on the encoder's thread the moment it is encoded.
+//  over ENet, and the Mac's sound as Opus. Capture, encoding and sending each run on a
+//  thread of their own, handing frames on the moment they are ready; when sending is
+//  behind, frames are skipped before they are encoded, never after.
 //
 
 import CoreMedia
@@ -134,31 +135,42 @@ final class MoonlightStreamStats {
 
 /// Learns where Moonlight wants video from its pings, and sends frames there, paced: a
 /// frame's packets go out spread at a few times the stream's bitrate rather than at once,
-/// as a burst at full speed overflows Wi-Fi queues and loses packets. Pacing happens on the
-/// encoder's thread, so a newer frame waits in the encoder's slot meanwhile, not in a queue.
+/// as a burst at full speed overflows Wi-Fi queues and loses packets. Sending happens on a
+/// thread of its own, so the encoder goes on with the next frame while one is on its way.
+/// Encoded frames are never dropped, as each one is what the next is predicted from; when
+/// sending falls behind (a keyframe takes many frames' time), `isBehind` says so and the
+/// capture side skips frames before they are encoded instead.
 final class MoonlightVideoSender {
     private let socket: MoonlightUDPSocket
     private let pingPayload: Data
     private let lock = NSLock()
     private var peer: sockaddr_in?
     private var running = true
+    /// Only touched on `queue`.
     private var packetizer: MoonlightPacketizer
     private let start = DispatchTime.now().uptimeNanoseconds
     /// Nanoseconds each byte may take on the way out.
     private let nanosecondsPerByte: Double
     let stats = MoonlightStreamStats()
+    private let queue = DispatchQueue(label: "\(AppIdentity.bundleID).moonlight.video.send", qos: .userInteractive)
+    /// Frames encoded and not yet sent, oldest first; the one being sent is not among them.
+    private var waiting: [MoonlightVideoEncoder.Frame] = []
+    /// Whether the sending thread is taking frames from `waiting`.
+    private var sending = false
 
     /// Called on the ping thread when the first ping arrives.
     var onFirstPing: (() -> Void)?
+    /// Called on the sending thread when a frame could not be sent, so the next can be a keyframe.
+    var onFrameTooLarge: (() -> Void)?
 
     /// Parity for a fifth of each block's data, as Sunshine sends by default.
     static let fecPercentage = 20
 
     init(port: UInt16, pingPayload: String, packetSize: Int, minimumParity: Int, bitrateKbps: Int) throws {
         socket = try MoonlightUDPSocket(port: port)
-        // Four times the stream's rate, within 40 to 400 Mbit/s: a typical frame in well under
-        // a frame's time, a keyframe spread over a few milliseconds more.
-        let rate = Double(min(max(bitrateKbps * 4, 40_000), 400_000)) * 1000
+        // Six times the stream's rate, within 60 to 400 Mbit/s: a typical frame in a fraction
+        // of a frame's time, a keyframe spread over a few frames'.
+        let rate = Double(min(max(bitrateKbps * 6, 60_000), 400_000)) * 1000
         nanosecondsPerByte = 8e9 / rate
         self.pingPayload = Data(pingPayload.utf8)
         packetizer = MoonlightPacketizer(packetSize: packetSize, fecPercentage: Self.fecPercentage,
@@ -201,39 +213,69 @@ final class MoonlightVideoSender {
         lock.unlock()
     }
 
-    /// Packetizes and sends `frame` now, on the caller's thread. Returns false when the
-    /// frame was too large to send.
-    @discardableResult
-    func send(_ frame: MoonlightVideoEncoder.Frame) -> Bool {
+    /// Whether a frame is still waiting behind the one being sent: encoding another now would
+    /// only make it later, so the caller had better skip it.
+    var isBehind: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return !waiting.isEmpty
+    }
+
+    /// Queues `frame` for the sending thread and returns at once.
+    func send(_ frame: MoonlightVideoEncoder.Frame) {
         lock.lock()
-        guard let peer else { lock.unlock(); return true }
+        guard peer != nil, running else { lock.unlock(); return }
+        waiting.append(frame)
+        let start = !sending
+        sending = true
+        lock.unlock()
+        if start { queue.async { self.drain() } }
+    }
+
+    /// Sends frames from `waiting` until it is empty.
+    private func drain() {
+        while true {
+            lock.lock()
+            guard running, let peer, !waiting.isEmpty else {
+                sending = false
+                lock.unlock()
+                return
+            }
+            let frame = waiting.removeFirst()
+            lock.unlock()
+            sendNow(frame, to: peer)
+        }
+    }
+
+    /// Packetizes and sends one frame, paced.
+    private func sendNow(_ frame: MoonlightVideoEncoder.Frame, to peer: sockaddr_in) {
         let now = DispatchTime.now().uptimeNanoseconds
         let timestamp = UInt32(truncatingIfNeeded: (frame.submitted - start) * 9 / 100_000)
         let latency = UInt16(min((now - frame.submitted) / 100_000, UInt64(UInt16.max)))
-        let blocks = packetizer.blocks(for: frame.data, isKeyFrame: frame.isKeyFrame,
-                                       timestamp: timestamp, latency: latency)
-        lock.unlock()
-        guard let blocks else {
+        guard let blocks = packetizer.blocks(for: frame.data, isKeyFrame: frame.isKeyFrame,
+                                             timestamp: timestamp, latency: latency) else {
             msLog.error("frame of \(frame.data.count) bytes too large to send")
-            return false
+            onFrameTooLarge?()
+            return
         }
-        // Each block's data, then its parity: Moonlight needs the parity only when data was
-        // lost, and gives up on a block once the next one starts.
+        // Each block's data, then its parity, worked out only once the data is on its way:
+        // Moonlight needs the parity only when data was lost, and gives up on a block once
+        // the next one starts.
         let began = DispatchTime.now().uptimeNanoseconds
         var bytes = 0, packets = 0, refused = 0
+        func send(_ packet: Data) {
+            // Paced: wait until this packet's share of the rate is due.
+            let due = began + UInt64(Double(bytes) * nanosecondsPerByte)
+            let now = DispatchTime.now().uptimeNanoseconds
+            if due > now + 50_000 { usleep(useconds_t((due - now) / 1000)) }
+            if !socket.send(packet, to: peer) { refused += 1 }
+            bytes += packet.count
+            packets += 1
+        }
         for block in blocks {
-            for packet in block.packets + MoonlightPacketizer.parity(for: block) {
-                // Paced: wait until this packet's share of the rate is due.
-                let due = began + UInt64(Double(bytes) * nanosecondsPerByte)
-                let now = DispatchTime.now().uptimeNanoseconds
-                if due > now + 50_000 { usleep(useconds_t((due - now) / 1000)) }
-                if !socket.send(packet, to: peer) { refused += 1 }
-                bytes += packet.count
-                packets += 1
-            }
+            for packet in block.packets { send(packet) }
+            for packet in MoonlightPacketizer.parity(for: block) { send(packet) }
         }
         stats.video(packets: packets, bytes: bytes, refused: refused, keyFrame: frame.isKeyFrame)
-        return true
     }
 
     static func describe(_ address: sockaddr_in) -> String {
@@ -571,15 +613,18 @@ final class MoonlightStream {
             let encoder = try MoonlightVideoEncoder(
                 settings: .init(width: config.width, height: config.height, fps: config.fps,
                                 bitrateKbps: config.bitrateKbps)) { [weak self] frame in
-                guard let self, !self.video.send(frame) else { return }
-                self.sendKeyFrame()
+                self?.video.send(frame)
             }
+            video.onFrameTooLarge = { [weak self] in self?.sendKeyFrame() }
             let capture = MoonlightScreenCapture(displayID: displayID, width: config.width, height: config.height,
                                                  fps: config.fps) { [weak self] buffer, time in
                 guard let self else { return }
                 self.lock.lock()
                 self.lastFrame = (buffer, time, DispatchTime.now().uptimeNanoseconds)
                 self.lock.unlock()
+                // Encoded while a keyframe is still going out, this frame would only wait
+                // behind it; it is kept as the last picture and left out instead.
+                guard !self.video.isBehind else { return }
                 encoder.encode(buffer, at: time)
             }
             // What the Mac plays, as it plays it; where it plays is left alone.

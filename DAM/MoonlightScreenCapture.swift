@@ -4,8 +4,7 @@
 //  Captures one display for Moonlight with ScreenCaptureKit, at the stream's size and rate,
 //  in the 4:2:0 format the encoder takes as is, and, when asked, what the Mac plays at
 //  48 kHz stereo, DAM's own sounds left out. Each new frame and each piece of sound is
-//  handed on the moment it arrives; capture holds no more frames than ScreenCaptureKit's
-//  minimum.
+//  handed on the moment it arrives.
 //
 
 import CoreMedia
@@ -129,7 +128,10 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         configuration.height = self.height
         configuration.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(self.fps))
         configuration.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
-        configuration.queueDepth = 3
+        // The stream holds up to three frames at once (the last picture, the encoder's slot
+        // and the one being encoded); with only that many, ScreenCaptureKit has nothing to
+        // draw into and skips frames.
+        configuration.queueDepth = 6
         configuration.showsCursor = true
         if self.audio != nil {
             configuration.capturesAudio = true

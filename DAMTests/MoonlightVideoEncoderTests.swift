@@ -43,20 +43,31 @@ final class MoonlightVideoEncoderTests: XCTestCase {
         return types
     }
 
+    private func time(_ seed: Int) -> CMTime { CMTime(value: CMTimeValue(seed), timescale: 60) }
+
+    /// Collects frames as they come. The encoder brings a frame out by giving it the same
+    /// picture again when no other follows, so the frames given here come interleaved
+    /// with repeats of them, told apart by their time: a repeat's is moved on by a millisecond.
     private final class Collector {
         let lock = NSLock()
         var frames: [MoonlightVideoEncoder.Frame] = []
-        var onFrame: (() -> Void)?
+        var onFrame: ((MoonlightVideoEncoder.Frame) -> Void)?
         func add(_ frame: MoonlightVideoEncoder.Frame) {
             lock.lock(); frames.append(frame); lock.unlock()
-            onFrame?()
+            onFrame?(frame)
+        }
+        /// The frames given, without the repeats.
+        var given: [MoonlightVideoEncoder.Frame] {
+            lock.lock(); defer { lock.unlock() }
+            return frames.filter { $0.time.timescale == 60 }
         }
     }
 
     private func encodeOne(_ encoder: MoonlightVideoEncoder, _ collector: Collector, seed: Int) throws {
         let done = expectation(description: "frame \(seed)")
-        collector.onFrame = { done.fulfill() }
-        encoder.encode(try frame(seed), at: CMTime(value: CMTimeValue(seed), timescale: 60))
+        let expected = time(seed)
+        collector.onFrame = { if $0.time == expected { done.fulfill() } }
+        encoder.encode(try frame(seed), at: expected)
         wait(for: [done], timeout: 5)
     }
 
@@ -64,7 +75,7 @@ final class MoonlightVideoEncoderTests: XCTestCase {
         let collector = Collector()
         let encoder = try MoonlightVideoEncoder(settings: settings, output: collector.add)
         try encodeOne(encoder, collector, seed: 0)
-        let first = try XCTUnwrap(collector.frames.first)
+        let first = try XCTUnwrap(collector.given.first)
         XCTAssertTrue(first.isKeyFrame)
         XCTAssertEqual(Array(nalTypes(first.data).prefix(2)), [7, 8], "SPS and PPS first")
         XCTAssertTrue(nalTypes(first.data).contains(5), "an IDR slice")
@@ -74,39 +85,53 @@ final class MoonlightVideoEncoderTests: XCTestCase {
         let collector = Collector()
         let encoder = try MoonlightVideoEncoder(settings: settings, output: collector.add)
         for seed in 0..<5 { try encodeOne(encoder, collector, seed: seed) }
-        XCTAssertEqual(collector.frames.map(\.isKeyFrame), [true, false, false, false, false])
-        XCTAssertFalse(nalTypes(collector.frames[1].data).contains(7))
+        XCTAssertEqual(collector.given.map(\.isKeyFrame), [true, false, false, false, false])
+        XCTAssertFalse(nalTypes(collector.given[1].data).contains(7))
+        XCTAssertTrue(collector.frames.allSatisfy { $0.isKeyFrame == ($0.time == time(0)) }, "repeats are not keyframes either")
 
         encoder.requestKeyFrame()
         try encodeOne(encoder, collector, seed: 5)
-        XCTAssertTrue(try XCTUnwrap(collector.frames.last).isKeyFrame)
+        XCTAssertTrue(try XCTUnwrap(collector.given.last).isKeyFrame)
         try encodeOne(encoder, collector, seed: 6)
-        XCTAssertFalse(try XCTUnwrap(collector.frames.last).isKeyFrame)
+        XCTAssertFalse(try XCTUnwrap(collector.given.last).isKeyFrame)
     }
 
-    func testFramesArrivingFasterThanTheEncoderSkipToTheLatest() throws {
+    func testAFrameLeftAloneIsBroughtOutWithinAFewFramesTime() throws {
+        let collector = Collector()
+        let encoder = try MoonlightVideoEncoder(settings: settings, output: collector.add)
+        let began = DispatchTime.now().uptimeNanoseconds
+        try encodeOne(encoder, collector, seed: 0)
+        try encodeOne(encoder, collector, seed: 1)
+        let took = Double(DispatchTime.now().uptimeNanoseconds - began) / 1_000_000
+        XCTAssertLessThan(took, 2 * 2.5 * 1000 / 60, "two frames, each nudged out, in well under five frames' time")
+    }
+
+    func testFramesArrivingFasterThanTheEncoderComeOutInOrder() throws {
         let collector = Collector()
         let encoder = try MoonlightVideoEncoder(settings: settings, output: collector.add)
         let frames = try (0..<20).map(frame)
         let last = expectation(description: "last frame")
-        collector.onFrame = { if collector.frames.last?.time.value == 19 { last.fulfill() } }
+        collector.onFrame = { if $0.time == self.time(19) { last.fulfill() } }
         for (seed, pixels) in frames.enumerated() {
-            encoder.encode(pixels, at: CMTime(value: CMTimeValue(seed), timescale: 60))
+            encoder.encode(pixels, at: time(seed))
         }
         wait(for: [last], timeout: 5)
         RunLoop.main.run(until: Date().addingTimeInterval(0.3))
-        XCTAssertLessThan(collector.frames.count, 20, "some frames skipped rather than queued")
-        XCTAssertEqual(collector.frames.map(\.time.value), collector.frames.map(\.time.value).sorted())
+        let given = collector.given.map(\.time.value)
+        XCTAssertLessThanOrEqual(given.count, 20)
+        XCTAssertEqual(given, given.sorted())
+        XCTAssertEqual(given.last, 19)
     }
 
     func testReportsHowLongEncodingTakes() throws {
         let collector = Collector()
         let encoder = try MoonlightVideoEncoder(settings: settings, output: collector.add)
         for seed in 0..<30 { try encodeOne(encoder, collector, seed: seed) }
-        let times = collector.frames.dropFirst().map { Double($0.encoded - $0.submitted) / 1_000_000 }.sorted()
+        // One frame at a time, each held by the encoder until brought out a frame's time later.
+        let times = collector.given.dropFirst().map { Double($0.encoded - $0.submitted) / 1_000_000 }.sorted()
         let median = times[times.count / 2]
-        NSLog("%@", "encoder: hardware \(encoder.isHardware), low-latency rate control \(encoder.hasLowLatencyRateControl), " +
+        NSLog("%@", "encoder: hardware \(encoder.isHardware), " +
               "median \(String(format: "%.2f", median)) ms, worst \(String(format: "%.2f", times.last ?? 0)) ms at 720p")
-        XCTAssertLessThan(median, 16.7, "slower than a frame at 60 Hz")
+        XCTAssertLessThan(median, 2 * 1000 / 60, "slower than two frames at 60 Hz")
     }
 }
