@@ -1,10 +1,11 @@
 //
 //  MoonlightAudioEncoder.swift
 //
-//  Encodes the Mac's sound to Opus for Moonlight with macOS's own encoder: 48 kHz stereo,
-//  in packets as short as Moonlight asks for (5 ms by default), at a constant bitrate so
-//  every packet is one size, as Moonlight needs within each block of four. Samples are
-//  encoded as soon as a packet's worth has come; nothing is held back beyond that.
+//  Encodes the Mac's sound with macOS's own encoders, 48 kHz stereo either way: to Opus
+//  for Moonlight, in packets as short as it asks for (5 ms by default), at a constant
+//  bitrate so every packet is one size, as Moonlight needs within each block of four; or
+//  to AAC for browsers and players, in packets of 1024 samples. Samples are encoded as
+//  soon as a packet's worth has come; nothing is held back beyond that.
 //
 
 import AudioToolbox
@@ -26,6 +27,14 @@ final class MoonlightAudioEncoder {
     /// none with noErr would end the stream, and the encoder would start each packet afresh.
     static let waitingForInput = OSStatus(bitPattern: 0x6D6F_7265)   // 'more'
 
+    enum Codec: Equatable {
+        /// Packets of `packetDuration` milliseconds at a constant bitrate.
+        case opus(packetDuration: Int)
+        /// AAC LC in packets of 1024 samples.
+        case aac
+    }
+
+    let codec: Codec
     /// Samples per channel in each packet.
     let frameCount: Int
     let bitrate: Int
@@ -36,31 +45,48 @@ final class MoonlightAudioEncoder {
     private var pending: [Float] = []
     private let maxPacketSize: Int
 
-    /// `packetDuration` is in milliseconds; `output` gets each Opus packet on the caller's thread.
-    init(packetDuration: Int = 5, bitrate: Int = 96_000, output: @escaping (Data) -> Void) throws {
-        frameCount = Self.sampleRate * packetDuration / 1000
+    /// Opus; `packetDuration` is in milliseconds. `output` gets each packet on the caller's thread.
+    convenience init(packetDuration: Int = 5, bitrate: Int = 96_000, output: @escaping (Data) -> Void) throws {
+        try self.init(codec: .opus(packetDuration: packetDuration), bitrate: bitrate, output: output)
+    }
+
+    init(codec: Codec, bitrate: Int, output: @escaping (Data) -> Void) throws {
+        self.codec = codec
         self.bitrate = bitrate
         self.output = output
         var pcm = Self.pcmFormat
-        var opus = AudioStreamBasicDescription(mSampleRate: Double(Self.sampleRate), mFormatID: kAudioFormatOpus,
-                                               mFormatFlags: 0, mBytesPerPacket: 0, mFramesPerPacket: UInt32(frameCount),
-                                               mBytesPerFrame: 0, mChannelsPerFrame: UInt32(Self.channels),
-                                               mBitsPerChannel: 0, mReserved: 0)
+        var encoded: AudioStreamBasicDescription
+        switch codec {
+        case .opus(let packetDuration):
+            frameCount = Self.sampleRate * packetDuration / 1000
+            encoded = AudioStreamBasicDescription(mSampleRate: Double(Self.sampleRate), mFormatID: kAudioFormatOpus,
+                                                  mFormatFlags: 0, mBytesPerPacket: 0, mFramesPerPacket: UInt32(frameCount),
+                                                  mBytesPerFrame: 0, mChannelsPerFrame: UInt32(Self.channels),
+                                                  mBitsPerChannel: 0, mReserved: 0)
+        case .aac:
+            frameCount = 1024
+            encoded = AudioStreamBasicDescription(mSampleRate: Double(Self.sampleRate), mFormatID: kAudioFormatMPEG4AAC,
+                                                  mFormatFlags: UInt32(MPEG4ObjectID.AAC_LC.rawValue), mBytesPerPacket: 0,
+                                                  mFramesPerPacket: UInt32(frameCount), mBytesPerFrame: 0,
+                                                  mChannelsPerFrame: UInt32(Self.channels), mBitsPerChannel: 0, mReserved: 0)
+        }
         var made: AudioConverterRef?
-        let status = AudioConverterNew(&pcm, &opus, &made)
+        let status = AudioConverterNew(&pcm, &encoded, &made)
         guard status == noErr, let made else { throw MoonlightAudioError.converter(status) }
         converter = made
         var rate = UInt32(bitrate)
         AudioConverterSetProperty(converter, kAudioConverterEncodeBitRate, UInt32(MemoryLayout<UInt32>.size), &rate)
-        var constant = UInt32(kAudioCodecBitRateControlMode_Constant)
-        AudioConverterSetProperty(converter, kAudioCodecPropertyBitRateControlMode,
-                                  UInt32(MemoryLayout<UInt32>.size), &constant)
+        if case .opus = codec {
+            var constant = UInt32(kAudioCodecBitRateControlMode_Constant)
+            AudioConverterSetProperty(converter, kAudioCodecPropertyBitRateControlMode,
+                                      UInt32(MemoryLayout<UInt32>.size), &constant)
+        }
         var size = UInt32(MemoryLayout<UInt32>.size)
         var maximum: UInt32 = 0
         AudioConverterGetProperty(converter, kAudioConverterPropertyMaximumOutputPacketSize, &size, &maximum)
         maxPacketSize = max(Int(maximum), 1500)
         pending.reserveCapacity(frameCount * Self.channels)
-        aeLog.debug("Opus \(packetDuration) ms packets at \(bitrate / 1000) kbps")
+        aeLog.debug("\(String(describing: codec), privacy: .public) packets of \(self.frameCount) samples at \(bitrate / 1000) kbps")
     }
 
     deinit {
@@ -157,10 +183,12 @@ final class MoonlightAudioEncoder {
                 }, Unmanaged.passUnretained(feed).toOpaque(), &packetCount, &buffers, &description)
             }
         }
-        guard status == noErr || status == Self.waitingForInput, packetCount == 1, description.mDataByteSize > 0 else {
+        guard status == noErr || status == Self.waitingForInput else {
             aeLog.error("encode: \(status), \(packetCount) packets")
             return nil
         }
+        // The AAC encoder keeps the first packet's worth to itself and gives nothing back yet.
+        guard packetCount == 1, description.mDataByteSize > 0 else { return nil }
         let start = Int(description.mStartOffset)
         return Data(packet[start..<(start + Int(description.mDataByteSize))])
     }

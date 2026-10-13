@@ -559,6 +559,27 @@ extension AppDelegate: NSMenuDelegate {
         rebuild()
     }
 
+    /// Opens the stream's player page in the browser.
+    @objc func openWebStream(_ sender: NSMenuItem) {
+        MoonlightScreenCapture.requestPermission()
+        NSWorkspace.shared.open(moonlightHost.localWatchURL)
+    }
+
+    /// Puts the player page's address on the clipboard, for a browser on another device.
+    @objc func copyWebStreamAddress(_ sender: NSMenuItem) {
+        let address = moonlightHost.watchURL.absoluteString
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(address, forType: .string)
+        SpeechSynthesizer.shared.announce("Copied \(address)")
+    }
+
+    /// Makes the profile in the item's `representedObject` the one streams get by default.
+    @objc func setStreamProfile(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let profile = StreamProfile(rawValue: raw) else { return }
+        StreamProfile.preferred = profile
+        rebuild()
+    }
+
     /// Unpairs the Moonlight device in the item's `representedObject`.
     @objc func forgetMoonlightClient(_ sender: NSMenuItem) {
         guard let client = sender.representedObject as? MoonlightClient else { return }

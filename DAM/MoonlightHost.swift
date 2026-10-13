@@ -6,6 +6,7 @@
 //  _nvstream._tcp, an HTTP server for discovery and pairing, and an HTTPS server, open only
 //  to paired devices' certificates, for everything after. Each streaming display is an app;
 //  launching one leads to the RTSP handshake (MoonlightRTSP) and the stream (MoonlightStream).
+//  The HTTP server also serves the displays to browsers and players (WebStream).
 //
 
 import Foundation
@@ -74,6 +75,8 @@ final class MoonlightHost {
     var pairingAbandoned: (() -> Void)?
     /// Something the menu shows changed.
     var onChange: (() -> Void)?
+    /// Streams for browsers and players, on the HTTP port.
+    let webStream = WebStreamServer()
 
     let httpPort: NWEndpoint.Port
     let httpsPort: NWEndpoint.Port
@@ -130,6 +133,13 @@ final class MoonlightHost {
             let httpsListener = try NWListener(using: tlsParameters(identity: identity.secIdentity), on: httpsPort)
             let rtspListener = try NWListener(using: http, on: rtspPort)
             listeners = [httpListener, httpsListener, rtspListener]
+            webStream.apps = { [weak self] in self?.apps ?? [] }
+            webStream.makeDisplay = { [weak self] width, height, fps, done in
+                guard let self, let makeDisplay = self.makeDisplay else { return done(nil) }
+                makeDisplay(width, height, fps, done)
+            }
+            webStream.removeDisplay = { [weak self] id in self?.removeDisplay?(id) }
+            webStream.onChange = { [weak self] in self?.onChange?() }
             rtsp.launch = { [weak self] in self?.launch }
             rtsp.announce = { [weak self] launch, config in
                 guard let self else { return "Stopped" }
@@ -185,6 +195,7 @@ final class MoonlightHost {
         }
         listeners = []
         readyListeners = []
+        webStream.stopAll()
         connections.values.forEach { $0.cancel() }
         rtsp.closeAll()
         endLaunch()
@@ -208,6 +219,16 @@ final class MoonlightHost {
 
     private static var hostName: String {
         Host.current().localizedName ?? ProcessInfo.processInfo.hostName
+    }
+
+    /// Where a browser on the network finds the player page.
+    var watchURL: URL {
+        URL(string: "http://\(ProcessInfo.processInfo.hostName):\(httpPort.rawValue)/watch")!
+    }
+
+    /// The player page on this Mac.
+    var localWatchURL: URL {
+        URL(string: "http://localhost:\(httpPort.rawValue)/watch")!
     }
 
     private static func describe(_ error: NWError) -> String {
@@ -293,6 +314,7 @@ final class MoonlightHost {
             return reply(Self.xml(status: 401, message: "The client is not authorized. Certificate verification failed."),
                          to: connection)
         }
+        if !secure, webStream.handle(path: request.path, query: request.query, on: connection) { return }
         switch request.path {
         case "/serverinfo":
             reply(serverInfo(paired: secure, localAddress: Self.address(connection.currentPath?.localEndpoint)),

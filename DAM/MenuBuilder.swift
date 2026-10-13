@@ -252,6 +252,31 @@ private func moonlightItem(host: MoonlightHost) -> NSMenuItem {
                      "Each streaming display is listed in Moonlight as an app."
     submenu.addItem(toggle)
     if let error = host.lastError { submenu.addItem(disabledItem(error)) }
+    if host.isRunning {
+        submenu.addItem(.separator())
+        submenu.addItem(sectionHeader("Browser Stream"))
+        let open = NSMenuItem(title: "Open in Browser", action: #selector(AppDelegate.openWebStream(_:)), keyEquivalent: "")
+        open.toolTip = "Plays a streaming display in this Mac's browser, as any browser or player on the network can at " +
+                       host.watchURL.absoluteString
+        submenu.addItem(open)
+        let copy = NSMenuItem(title: "Copy Address", action: #selector(AppDelegate.copyWebStreamAddress(_:)), keyEquivalent: "")
+        copy.toolTip = "Copies \(host.watchURL.absoluteString). Players like mpv and VLC take the stream itself at " +
+                       "\(host.watchURL.deletingLastPathComponent().absoluteString)stream.mp4."
+        submenu.addItem(copy)
+        let quality = NSMenuItem(title: "Profile", action: nil, keyEquivalent: "")
+        let profiles = NSMenu()
+        for profile in StreamProfile.allCases {
+            let item = NSMenuItem(title: profile.title, action: #selector(AppDelegate.setStreamProfile(_:)), keyEquivalent: "")
+            item.representedObject = profile.rawValue
+            item.state = profile == StreamProfile.preferred ? .on : .off
+            item.toolTip = profile.summary
+            profiles.addItem(item)
+        }
+        quality.submenu = profiles
+        submenu.addItem(quality)
+        let watching = host.webStream.viewerCount
+        if watching > 0 { submenu.addItem(disabledItem(watching == 1 ? "1 watching" : "\(watching) watching")) }
+    }
     if !host.clients.isEmpty {
         submenu.addItem(.separator())
         for client in host.clients {
