@@ -40,4 +40,66 @@ final class MoonlightScreenCaptureTests: XCTestCase {
         lock.lock(); defer { lock.unlock() }
         XCTAssertEqual(sizes.first, CGSize(width: 1280, height: 720))
     }
+
+    // MARK: replayd not answering
+
+    private var savedFetch = MoonlightScreenCapture.fetchContent
+    private var savedRestart = MoonlightScreenCapture.restartService
+    private var savedTimeout = MoonlightScreenCapture.answerTimeout
+
+    override func setUp() {
+        super.setUp()
+        savedFetch = MoonlightScreenCapture.fetchContent
+        savedRestart = MoonlightScreenCapture.restartService
+        savedTimeout = MoonlightScreenCapture.answerTimeout
+        MoonlightScreenCapture.answerTimeout = 0.1
+    }
+
+    override func tearDown() {
+        MoonlightScreenCapture.fetchContent = savedFetch
+        MoonlightScreenCapture.restartService = savedRestart
+        MoonlightScreenCapture.answerTimeout = savedTimeout
+        super.tearDown()
+    }
+
+    /// Starts a capture whose lookups are answered by `answers` in turn; nil never answers.
+    private func start(answers: [Error?]) -> (error: Error?, asked: Int, restarts: Int) {
+        let lock = NSLock()
+        var asked = 0, restarts = 0
+        MoonlightScreenCapture.fetchContent = { reply in
+            lock.lock(); let answer = asked < answers.count ? answers[asked] : nil; asked += 1; lock.unlock()
+            if let answer { reply(nil, answer) }
+        }
+        MoonlightScreenCapture.restartService = { lock.lock(); restarts += 1; lock.unlock() }
+        let capture = MoonlightScreenCapture(displayID: 1, width: 64, height: 64, fps: 30) { _, _ in }
+        let done = expectation(description: "start answered")
+        var result: Error?
+        capture.start { result = $0; done.fulfill() }
+        wait(for: [done], timeout: 5)
+        lock.lock(); defer { lock.unlock() }
+        return (result, asked, restarts)
+    }
+
+    func testRestartsReplaydAndAsksAgainWhenScreenCaptureKitDoesNotAnswer() {
+        let notFound = NSError(domain: "test", code: 1)
+        let (error, asked, restarts) = start(answers: [nil, notFound])
+        XCTAssertEqual(restarts, 1)
+        XCTAssertEqual(asked, 2)
+        XCTAssertEqual(error as NSError?, notFound)
+    }
+
+    func testGivesUpWhenReplaydStillDoesNotAnswerOnceRestarted() {
+        let (error, asked, restarts) = start(answers: [nil, nil])
+        XCTAssertEqual(restarts, 1)
+        XCTAssertEqual(asked, 2)
+        guard case MoonlightCaptureError.serviceNotAnswering? = error else {
+            return XCTFail("expected serviceNotAnswering, got \(String(describing: error))")
+        }
+    }
+
+    func testLeavesReplaydAloneWhenScreenCaptureKitAnswers() {
+        let (_, asked, restarts) = start(answers: [NSError(domain: "test", code: 1)])
+        XCTAssertEqual(restarts, 0)
+        XCTAssertEqual(asked, 1)
+    }
 }
