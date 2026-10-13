@@ -128,6 +128,8 @@ final class MoonlightHost {
             clients = loadClients()
             let http = NWParameters.tcp
             http.allowLocalEndpointReuse = true
+            // Each frame goes out the moment it is ready, not held for an acknowledgement.
+            (http.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options)?.noDelay = true
             let httpListener = try NWListener(using: http, on: httpPort)
             if advertises { httpListener.service = NWListener.Service(name: Self.hostName, type: Self.serviceType) }
             let httpsListener = try NWListener(using: tlsParameters(identity: identity.secIdentity), on: httpsPort)
