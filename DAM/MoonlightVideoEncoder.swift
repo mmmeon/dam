@@ -2,10 +2,22 @@
 //  MoonlightVideoEncoder.swift
 //
 //  Encodes frames to H.264 for Moonlight with as little delay as the encoder allows: in
-//  real time, without reordering frames or holding any back, and with keyframes only when
-//  asked for. Frames are handed over through a single slot that a newer frame takes over,
-//  and encoded one at a time on a thread of their own, so the caller never waits for the
-//  encoder, the next frame encoded is always the latest, and nothing queues up.
+//  real time, without reordering frames, with one reference frame, and with keyframes only
+//  when asked for. Frames are handed over through a single slot that a newer frame takes
+//  over, and given to the encoder one at a time on a thread of their own, so the caller
+//  never waits for the encoder and the next frame encoded is always the latest.
+//
+//  The plain real-time encoder (an Intel Mac's, at least) hands a frame back only once
+//  the next one is in, so while the screen moves each frame comes out a frame's time late,
+//  and when it stops the last frame is nudged out by giving the encoder the same picture
+//  again. Apple's low-latency rate control would hand each frame back on its own, but on
+//  this encoder it predicts from long-term reference frames while its SPS allows one;
+//  FFmpeg, which Moonlight decodes with on Linux and Windows, then discards a reference
+//  every frame and the picture breaks up until the next keyframe, and Moonlight rewrites
+//  any SPS it gets to one reference frame, so neither the SPS nor the encoder's
+//  properties (ReferenceBufferCount, EnableLTR: ignored) can mend it. Asking the encoder to
+//  complete a frame would also bring it out at once, but starts the next afresh as a
+//  keyframe.
 //
 
 import CoreMedia
@@ -43,8 +55,6 @@ final class MoonlightVideoEncoder {
     let settings: Settings
     /// Whether the encoder runs on the GPU's media engine rather than the CPU.
     let isHardware: Bool
-    /// Whether the encoder takes Apple's low-latency rate control, which not every Mac has.
-    let hasLowLatencyRateControl: Bool
 
     private let session: VTCompressionSession
     private let output: (Frame) -> Void
@@ -54,33 +64,44 @@ final class MoonlightVideoEncoder {
     private var busy = false
     private var waiting: (buffer: CVPixelBuffer, time: CMTime)?
     private var keyFrameRequested = true
+    /// Frames given to the encoder and not yet handed back; under `lock`.
+    private var pending = 0
+    /// Counts frames given to the encoder, to tell whether another came after one; on the encoding thread.
+    private var submissions = 0
     /// The last time given to the encoder, which needs them to rise; on the encoding thread.
     private var lastTime = CMTime.negativeInfinity
+    private var lastBuffer: CVPixelBuffer?
+    /// How long after a frame is given to the encoder, with none after it, the same picture
+    /// is given again to bring it out: a little over a frame's time, so that while the
+    /// screen moves the next frame does it instead.
+    private let nudgeDelay: DispatchTimeInterval
 
-    /// `output` is called on the encoding thread for each frame, as soon as it is encoded.
+    /// `output` is called on the encoder's thread for each frame, as soon as it is encoded.
+    /// With the default MoonlightH264Dump naming a file, every frame is appended to it as
+    /// well, as an Annex B stream to look at with other tools.
     init(settings: Settings, output: @escaping (Frame) -> Void) throws {
         self.settings = settings
-        self.output = output
-        var made: (VTCompressionSession, Bool)?
-        // Low-latency rate control where the encoder takes it, else the plain real-time one.
-        for lowLatency in [true, false] {
-            var specification: [CFString: Any] = [kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder: true]
-            if lowLatency { specification[kVTVideoEncoderSpecification_EnableLowLatencyRateControl] = true }
-            var session: VTCompressionSession?
-            let status = VTCompressionSessionCreate(allocator: nil, width: Int32(settings.width),
-                                                    height: Int32(settings.height), codecType: kCMVideoCodecType_H264,
-                                                    encoderSpecification: specification as CFDictionary,
-                                                    imageBufferAttributes: nil, compressedDataAllocator: nil,
-                                                    outputCallback: nil, refcon: nil, compressionSessionOut: &session)
-            if status == noErr, let session {
-                made = (session, lowLatency)
-                break
+        nudgeDelay = .microseconds(1_250_000 / max(settings.fps, 1))
+        if let path = UserDefaults.standard.string(forKey: "MoonlightH264Dump"),
+           FileManager.default.createFile(atPath: path, contents: nil),
+           let dump = FileHandle(forWritingAtPath: path) {
+            veLog.debug("dumping the stream to \(path, privacy: .public)")
+            self.output = { frame in
+                dump.write(frame.data)
+                output(frame)
             }
-            veLog.debug("encoder with low-latency rate control \(lowLatency): \(status)")
+        } else {
+            self.output = output
         }
-        guard let (session, lowLatency) = made else { throw MoonlightVideoError.session(kVTVideoEncoderNotAvailableNowErr) }
+        let specification: [CFString: Any] = [kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder: true]
+        var made: VTCompressionSession?
+        let status = VTCompressionSessionCreate(allocator: nil, width: Int32(settings.width),
+                                                height: Int32(settings.height), codecType: kCMVideoCodecType_H264,
+                                                encoderSpecification: specification as CFDictionary,
+                                                imageBufferAttributes: nil, compressedDataAllocator: nil,
+                                                outputCallback: nil, refcon: nil, compressionSessionOut: &made)
+        guard status == noErr, let session = made else { throw MoonlightVideoError.session(status) }
         self.session = session
-        hasLowLatencyRateControl = lowLatency
         var hardware: CFBoolean?
         VTSessionCopyProperty(session, key: kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder,
                               allocator: nil, valueOut: &hardware)
@@ -93,6 +114,11 @@ final class MoonlightVideoEncoder {
             kVTCompressionPropertyKey_ProfileLevel: kVTProfileLevel_H264_High_AutoLevel,
             kVTCompressionPropertyKey_H264EntropyMode: kVTH264EntropyMode_CABAC,
             kVTCompressionPropertyKey_AverageBitRate: settings.bitrateKbps * 1000,
+            // Keeps a keyframe from being many times a frame's share of the bitrate: no more
+            // than one and a half times the rate over any quarter second, so it fits within
+            // the packets Moonlight takes with parity and goes out in a few frames' time.
+            kVTCompressionPropertyKey_DataRateLimits: [NSNumber(value: settings.bitrateKbps * 1000 / 8 * 3 / 8),
+                                                       NSNumber(value: 0.25)],
             kVTCompressionPropertyKey_ExpectedFrameRate: settings.fps,
             // Keyframes only when Moonlight asks, after losing packets; an hour apart otherwise.
             kVTCompressionPropertyKey_MaxKeyFrameInterval: settings.fps * 3600,
@@ -103,7 +129,7 @@ final class MoonlightVideoEncoder {
             if status != noErr { veLog.debug("encoder property \(key as String, privacy: .public): \(status)") }
         }
         VTCompressionSessionPrepareToEncodeFrames(session)
-        veLog.debug("encoder \(settings.width)×\(settings.height)@\(settings.fps) \(settings.bitrateKbps) kbps, hardware \(self.isHardware), low-latency \(lowLatency)")
+        veLog.debug("encoder \(settings.width)×\(settings.height)@\(settings.fps) \(settings.bitrateKbps) kbps, hardware \(self.isHardware)")
     }
 
     deinit {
@@ -127,7 +153,7 @@ final class MoonlightVideoEncoder {
         if start { queue.async { self.drain() } }
     }
 
-    /// Encodes frames from the slot until it is empty.
+    /// Gives the encoder frames from the slot until it is empty.
     private func drain() {
         while true {
             lock.lock()
@@ -140,36 +166,56 @@ final class MoonlightVideoEncoder {
             let key = keyFrameRequested
             keyFrameRequested = false
             lock.unlock()
-            // A picture sent again comes with the time it had; move it past the last one.
-            let rising = time > lastTime ? time : CMTimeAdd(lastTime, CMTime(value: 1, timescale: 1000))
-            lastTime = rising
-            if !encodeNow(buffer, at: rising, keyFrame: key), key { requestKeyFrame() }
+            if !submit(buffer, at: time, keyFrame: key), key { requestKeyFrame() }
+            lastBuffer = buffer
+            // Bring this frame out should no other follow it.
+            let generation = submissions
+            queue.asyncAfter(deadline: .now() + nudgeDelay) { [weak self] in
+                guard let self, self.submissions == generation, let last = self.lastBuffer else { return }
+                self.lock.lock()
+                let held = self.pending > 0
+                self.lock.unlock()
+                if held { _ = self.submit(last, at: self.lastTime, keyFrame: false) }
+            }
         }
     }
 
-    /// Encodes one frame and waits for it, so the encoder holds no more than one.
-    private func encodeNow(_ buffer: CVPixelBuffer, at time: CMTime, keyFrame: Bool) -> Bool {
+    /// Gives the encoder one frame; it is handed back on the encoder's own thread, in order.
+    /// Returns false when the encoder would not take it.
+    private func submit(_ buffer: CVPixelBuffer, at time: CMTime, keyFrame: Bool) -> Bool {
+        // A picture given again comes with the time it had; move it past the last one.
+        let rising = time > lastTime ? time : CMTimeAdd(lastTime, CMTime(value: 1, timescale: 1000))
+        lastTime = rising
+        submissions += 1
         let options = keyFrame ? [kVTEncodeFrameOptionKey_ForceKeyFrame: true] as CFDictionary : nil
         let submitted = DispatchTime.now().uptimeNanoseconds
-        var encoded = false
-        let status = VTCompressionSessionEncodeFrame(session, imageBuffer: buffer, presentationTimeStamp: time,
+        lock.lock()
+        pending += 1
+        lock.unlock()
+        let status = VTCompressionSessionEncodeFrame(session, imageBuffer: buffer, presentationTimeStamp: rising,
                                                      duration: .invalid, frameProperties: options,
                                                      infoFlagsOut: nil) { [weak self] status, flags, sample in
-            guard let self, status == noErr, !flags.contains(.frameDropped), let sample,
+            guard let self else { return }
+            self.lock.lock()
+            self.pending -= 1
+            self.lock.unlock()
+            guard status == noErr, !flags.contains(.frameDropped), let sample,
                   let (data, isKeyFrame) = Self.annexB(sample) else {
                 veLog.error("encode: \(status)")
+                if keyFrame { self.requestKeyFrame() }
                 return
             }
-            encoded = true
-            self.output(Frame(data: data, isKeyFrame: isKeyFrame, time: time, submitted: submitted,
+            self.output(Frame(data: data, isKeyFrame: isKeyFrame, time: rising, submitted: submitted,
                               encoded: DispatchTime.now().uptimeNanoseconds))
         }
         guard status == noErr else {
             veLog.error("encode frame: \(status)")
+            lock.lock()
+            pending -= 1
+            lock.unlock()
             return false
         }
-        VTCompressionSessionCompleteFrames(session, untilPresentationTimeStamp: time)
-        return encoded
+        return true
     }
 
     /// The access unit in `sample` with Annex B start codes, its SPS and PPS first when it is
