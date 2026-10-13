@@ -66,6 +66,8 @@ enum StreamProfile: String, CaseIterable {
 
     func encoderSettings(width: Int, height: Int, fps: Int, bitrateKbps: Int) -> MoonlightVideoEncoder.Settings {
         var settings = MoonlightVideoEncoder.Settings(width: width, height: height, fps: fps, bitrateKbps: bitrateKbps)
+        // The stream repeats a still screen's frame itself, on its grid.
+        settings.nudges = false
         switch self {
         case .interactive:
             settings.prioritizeSpeed = true
@@ -105,10 +107,13 @@ struct WebStreamRequest: Equatable {
     var height: Int?
     /// The size and rate of a display made for the stream when none is listed.
     var newDisplay = (width: 1920, height: 1080, fps: 60)
+    /// Whether the stream carries sound. Without it, players show each frame as it lands;
+    /// with it, they wait for the sound of the same moment, which comes a little later.
+    var audio = true
 
     static func == (a: WebStreamRequest, b: WebStreamRequest) -> Bool {
         a.app == b.app && a.profile == b.profile && a.bitrateKbps == b.bitrateKbps && a.fps == b.fps
-            && a.width == b.width && a.height == b.height && a.newDisplay == b.newDisplay
+            && a.width == b.width && a.height == b.height && a.newDisplay == b.newDisplay && a.audio == b.audio
     }
 
     /// The most pixels a stream takes from a display: a HiDPI display is scaled down to fit.
@@ -129,6 +134,7 @@ struct WebStreamRequest: Equatable {
         if mode.count == 3, mode[0] >= 640, mode[1] >= 360, mode[0] * mode[1] <= maxPixels, mode[2] >= 30 {
             request.newDisplay = (mode[0], mode[1], min(mode[2], 120))
         }
+        if let audio = query["audio"]?.lowercased(), ["0", "false", "no", "off"].contains(audio) { request.audio = false }
         return request
     }
 }
@@ -247,7 +253,7 @@ final class WebStreamServer {
             sessions[key] = session
             session.start()
         }
-        let viewer = WebStreamViewer(connection: connection, maxInFlight: request.bitrateKbps * 125)
+        let viewer = WebStreamViewer(connection: connection, maxInFlight: request.bitrateKbps * 125, audio: request.audio)
         session.add(viewer)
     }
 
@@ -312,6 +318,8 @@ final class WebStreamSession {
     private let queue = DispatchQueue(label: "\(AppIdentity.bundleID).webstream.session", qos: .userInteractive)
     private let fragmenter = MP4Fragmenter()
     private var encoder: MoonlightVideoEncoder?
+    /// Whether the encoder sends frames out of order (B-frames).
+    private let reorders: Bool
     private var capture: MoonlightScreenCapture?
     private var aac: MoonlightAudioEncoder?
     private var viewers: [WebStreamViewer] = []
@@ -319,7 +327,10 @@ final class WebStreamSession {
     /// Whether the last viewer has left and the session ends unless one comes.
     private var closing = false
     private let lock = NSLock()
+    /// The last picture captured, its slot on the grid, and when it came.
     private var lastFrame: (buffer: CVPixelBuffer, time: CMTime, at: UInt64)?
+    /// Frames' slots; on `queue`.
+    private var grid: FrameGrid
     private var repeater: DispatchSourceTimer?
     private var keyFrames = MoonlightKeyFrameThrottle()
     /// Keyframes for viewers that fell behind come rarer: each costs everyone.
@@ -327,11 +338,14 @@ final class WebStreamSession {
     private var activity: NSObjectProtocol?
     private var statsTimer: DispatchSourceTimer?
     private let stats = MoonlightStreamStats()
+    /// Nanoseconds frames spent in the encoder, and how many; under `lock`.
+    private var encodeTime: (total: UInt64, frames: Int) = (0, 0)
 
     // The stream's clock, on `queue`: the first frame's time is its zero.
     private var anchor: CMTime?
-    private var initSegment: Data?
-    private var codecs = ""
+    /// The init segment and codecs for viewers with sound and without.
+    private var initSegment: (sound: Data, silent: Data)?
+    private var codecs = (sound: "", silent: "")
     /// Where sound's samples stand on the stream's clock, in 48 kHz units: the time of the
     /// first sample given to the encoder, and how many followed it.
     private var audioStart: Int64?
@@ -349,8 +363,10 @@ final class WebStreamSession {
 
     init(key: Key) throws {
         self.key = key
+        grid = FrameGrid(fps: key.fps)
         let settings = key.profile.encoderSettings(width: key.width, height: key.height, fps: key.fps,
                                                    bitrateKbps: key.bitrateKbps)
+        reorders = settings.reordering
         encoder = try MoonlightVideoEncoder(settings: settings) { [weak self] frame in
             self?.queue.async { self?.took(frame) }
         }
@@ -366,11 +382,8 @@ final class WebStreamSession {
         let capture = MoonlightScreenCapture(displayID: key.displayID, width: key.width, height: key.height,
                                              fps: key.fps) { [weak self] buffer, time in
             guard let self else { return }
-            self.lock.lock()
-            self.lastFrame = (buffer, time, DispatchTime.now().uptimeNanoseconds)
-            let encoder = self.encoder
-            self.lock.unlock()
-            encoder?.encode(buffer, at: time)
+            let at = DispatchTime.now().uptimeNanoseconds
+            self.queue.async { self.encode(buffer, captured: time, at: at) }
         }
         capture.audioQueue = queue
         capture.audio = { [weak self] sample in self?.took(audio: sample) }
@@ -383,12 +396,12 @@ final class WebStreamSession {
             self?.end("capture: \(error.localizedDescription)")
         }
         let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now() + 0.5, repeating: 0.5)
+        timer.schedule(deadline: .now() + 0.5, repeating: 1 / Double(key.fps), leeway: .milliseconds(2))
         timer.setEventHandler { [weak self] in self?.repeatIfStill() }
         repeater = timer
         timer.resume()
         let silence = DispatchSource.makeTimerSource(queue: queue)
-        silence.schedule(deadline: .now() + 0.1, repeating: 0.1)
+        silence.schedule(deadline: .now() + 0.1, repeating: 0.02, leeway: .milliseconds(5))
         silence.setEventHandler { [weak self] in self?.padSilence() }
         silenceTimer = silence
         silence.resume()
@@ -396,7 +409,12 @@ final class WebStreamSession {
         statsTimer.schedule(deadline: .now() + 5, repeating: 5)
         statsTimer.setEventHandler { [weak self] in
             guard let self else { return }
-            wsLog.debug("stats (\(self.viewerCount) watching): \(self.stats.take(seconds: 5), privacy: .public)")
+            self.lock.lock()
+            let encode = self.encodeTime
+            self.encodeTime = (0, 0)
+            self.lock.unlock()
+            let encodeMs = encode.frames > 0 ? Double(encode.total / UInt64(encode.frames)) / 1e6 : 0
+            wsLog.debug("stats (\(self.viewerCount) watching): \(self.stats.take(seconds: 5), privacy: .public); encode \(encodeMs, format: .fixed(precision: 1)) ms")
         }
         self.statsTimer = statsTimer
         statsTimer.resume()
@@ -415,7 +433,7 @@ final class WebStreamSession {
         }
         viewer.watch()
         wsLog.debug("viewer joined: \(self.viewerCount) watching")
-        requestKeyFrame(catchingUp: false)
+        queue.async { [weak self] in self?.requestKeyFrame(catchingUp: false) }
         DispatchQueue.main.async { self.onChange?() }
     }
 
@@ -476,31 +494,58 @@ final class WebStreamSession {
 
     // MARK: Video
 
+    /// A frame's interval, in nanoseconds.
+    private var interval: UInt64 { 1_000_000_000 / UInt64(key.fps) }
+
+    /// Gives the encoder a fresh picture, in its slot on the grid. Everything the encoder
+    /// is given comes through `queue`, so frames reach it in the order of their slots.
+    private func encode(_ buffer: CVPixelBuffer, captured time: CMTime, at: UInt64) {
+        let slot = grid.snap(time)
+        lock.lock()
+        lastFrame = (buffer, slot, at)
+        let encoder = self.encoder
+        lock.unlock()
+        encoder?.encode(buffer, at: slot)
+    }
+
+    /// `time` on the stream's clock, in its timescale, snapped to the nearest slot.
+    private func onGrid(_ time: CMTime, from anchor: CMTime) -> Int64 {
+        let slot = Int64((CMTimeGetSeconds(CMTimeSubtract(time, anchor)) * Double(key.fps)).rounded())
+        return slot * Int64(MP4Fragmenter.videoTimescale) / Int64(key.fps)
+    }
+
     /// Fragments a frame and hands it to the viewers; on `queue`.
     private func took(_ frame: MoonlightVideoEncoder.Frame) {
         let decode = CMSampleBufferGetDecodeTimeStamp(frame.sample)
-        let decodeTime = decode.isValid ? decode : frame.time
+        // The encoder's decode times matter only when it reorders frames; otherwise they
+        // are the presentation times, give or take its rounding.
+        let decodeTime = reorders && decode.isValid ? decode : frame.time
         if anchor == nil { anchor = CMTimeMinimum(decodeTime, frame.time) }
         guard let anchor, let sample = MoonlightVideoEncoder.avcc(frame.sample) else { return }
         if frame.isKeyFrame, let (sets, _) = MoonlightVideoEncoder.parameterSets(frame.sample) {
             let sps = sets.filter { $0.first.map { $0 & 0x1F == 7 } ?? false }
             let pps = sets.filter { $0.first.map { $0 & 0x1F == 8 } ?? false }
-            initSegment = fragmenter.initSegment(video: .init(width: key.width, height: key.height, sps: sps, pps: pps),
-                                                 audio: true)
-            codecs = MP4Fragmenter.codecs(sps: sps.first ?? Data(), audio: true)
+            let video = MP4Fragmenter.VideoConfig(width: key.width, height: key.height, sps: sps, pps: pps)
+            initSegment = (fragmenter.initSegment(video: video, audio: true), fragmenter.initSegment(video: video, audio: false))
+            codecs = (MP4Fragmenter.codecs(sps: sps.first ?? Data(), audio: true),
+                      MP4Fragmenter.codecs(sps: sps.first ?? Data(), audio: false))
         }
         guard let initSegment else { return }
-        let scale = Int32(MP4Fragmenter.videoTimescale)
-        let dts = CMTimeConvertScale(CMTimeSubtract(decodeTime, anchor), timescale: scale, method: .default).value
-        let offset = CMTimeConvertScale(CMTimeSubtract(frame.time, decodeTime), timescale: scale, method: .default).value
+        // Both times sit on the grid, whatever rounding the encoder did on the way.
+        let dts = onGrid(decodeTime, from: anchor)
+        let pts = onGrid(frame.time, from: anchor)
         let fragment = fragmenter.videoFragment(sample, decodeTime: dts, duration: MP4Fragmenter.videoTimescale / key.fps,
-                                                compositionOffset: Int(offset), keyFrame: frame.isKeyFrame)
+                                                compositionOffset: Int(pts - dts), keyFrame: frame.isKeyFrame)
         lock.lock()
         let viewers = self.viewers
+        encodeTime.total += frame.encoded - frame.submitted
+        encodeTime.frames += 1
         lock.unlock()
         var waiting = false, behind = false
         for viewer in viewers {
-            switch viewer.take(video: fragment, keyFrame: frame.isKeyFrame, codecs: codecs, initSegment: initSegment) {
+            switch viewer.take(video: fragment, keyFrame: frame.isKeyFrame,
+                               codecs: viewer.audio ? codecs.sound : codecs.silent,
+                               initSegment: viewer.audio ? initSegment.sound : initSegment.silent) {
             case .taken: break
             case .waitingForKeyFrame: waiting = true
             case .fellBehind: behind = true
@@ -534,20 +579,23 @@ final class WebStreamSession {
         lock.unlock()
         stats.keyFrameRequested()
         encoder?.requestKeyFrame()
-        if let last { encoder?.encode(last.buffer, at: last.time) }
+        // A still screen gets its keyframe from the last picture at once; a moving one
+        // from its next frame.
+        if let last, DispatchTime.now().uptimeNanoseconds - last.at > interval * 3 / 2 {
+            encoder?.encode(last.buffer, at: grid.snap(CMClockGetTime(CMClockGetHostTimeClock())))
+        }
     }
 
-    /// Gives the encoder the last picture again while the screen is still, every half
-    /// second, so players never go long without a frame.
+    /// Gives the encoder the last picture again, in each slot of the grid the screen is
+    /// still for. Players then get a frame every interval, as the stream promises them, and
+    /// never wait on a gap; a still picture costs the encoder next to nothing. On `queue`.
     private func repeatIfStill() {
         lock.lock()
         let encoder = self.encoder
         let last = lastFrame
         lock.unlock()
-        guard let last, DispatchTime.now().uptimeNanoseconds - last.at > 500_000_000 else { return }
-        let time = CMTimeAdd(last.time, CMTime(value: Int64(DispatchTime.now().uptimeNanoseconds - last.at),
-                                               timescale: 1_000_000_000))
-        encoder?.encode(last.buffer, at: time)
+        guard let last, DispatchTime.now().uptimeNanoseconds - last.at > interval * 3 / 2 else { return }
+        encoder?.encode(last.buffer, at: grid.snap(CMClockGetTime(CMClockGetHostTimeClock())))
     }
 
     // MARK: Sound
@@ -574,17 +622,17 @@ final class WebStreamSession {
         flushAAC()
     }
 
-    /// Fills the sound up to a moment ago with silence when nothing is playing, so the
-    /// sound track never falls behind the picture; on `queue`.
+    /// Fills the sound up to 50 ms ago with silence when nothing is playing, so the sound
+    /// track never falls far behind the picture; on `queue`, every 20 ms.
     private func padSilence() {
         guard let anchor, aac != nil else { return }
         let now = CMTimeSubtract(CMClockGetTime(CMClockGetHostTimeClock()), anchor)
         let actual = CMTimeConvertScale(now, timescale: Int32(MP4Fragmenter.audioTimescale), method: .default).value
-        let upTo = actual - Int64(MP4Fragmenter.audioTimescale / 12)
+        let upTo = actual - Int64(MP4Fragmenter.audioTimescale / 20)
         if audioStart == nil { audioStart = max(upTo, 0) }
         guard let start = audioStart else { return }
         let missing = upTo - (start + Int64(audioFed))
-        guard missing > 1920 else { return }
+        guard missing >= Int64(MP4Fragmenter.aacFrameLength) else { return }
         feedSilence(samples: Int(min(missing, Int64(2 * MP4Fragmenter.audioTimescale))))
         flushAAC()
     }
@@ -623,6 +671,31 @@ final class WebStreamSession {
     }
 }
 
+// MARK: - Frame grid
+
+/// Frames' times snapped to a steady grid of `fps` a second, each in a later slot than the
+/// last. Browsers take the stream's word for each frame's duration and stall at any gap
+/// between one frame and the next; on the grid, with a still screen's slots filled by
+/// repeats, there are none.
+struct FrameGrid {
+    let fps: Int
+    private var origin: CMTime?
+    private(set) var lastSlot: Int64 = -1
+
+    init(fps: Int) { self.fps = fps }
+
+    /// The time of the slot `time` falls in, or of the one after the last if that one is
+    /// taken already; the first time snapped is the grid's origin.
+    mutating func snap(_ time: CMTime) -> CMTime {
+        let origin = self.origin ?? time
+        self.origin = origin
+        let seconds = CMTimeGetSeconds(CMTimeSubtract(time, origin))
+        let slot = max(Int64((seconds * Double(fps)).rounded(.down)), lastSlot + 1)
+        lastSlot = slot
+        return CMTimeAdd(origin, CMTime(value: slot, timescale: CMTimeScale(fps)))
+    }
+}
+
 // MARK: - Viewer
 
 /// One client's connection, given the stream from a keyframe on.
@@ -639,6 +712,8 @@ final class WebStreamViewer {
     private let connection: NWConnection
     /// Bytes handed to the connection and not yet taken by the network.
     private let maxInFlight: Int
+    /// Whether the viewer takes the sound track.
+    let audio: Bool
     private let lock = NSLock()
     private var inFlight = 0
     private var closed = false
@@ -647,9 +722,10 @@ final class WebStreamViewer {
     /// Called once, from any thread, when the client has gone.
     var onClose: (() -> Void)?
 
-    init(connection: NWConnection, maxInFlight: Int) {
+    init(connection: NWConnection, maxInFlight: Int, audio: Bool = true) {
         self.connection = connection
         self.maxInFlight = max(maxInFlight, 256 * 1024)
+        self.audio = audio
     }
 
     /// Notices the client closing the connection.
@@ -691,6 +767,7 @@ final class WebStreamViewer {
     }
 
     func take(audio fragment: Data) {
+        guard audio else { return }
         lock.lock()
         let streaming = started && !waitingForKeyFrame && !closed
         lock.unlock()
@@ -752,6 +829,7 @@ enum WebStreamPage {
       input[type=range] { width: 140px; }
       #stats { margin-left: auto; opacity: .7; font-variant-numeric: tabular-nums; }
       #msg { position: fixed; inset: 0; display: grid; place-items: center; text-align: center; padding: 20px; }
+      #msg[hidden] { display: none; }
       code { user-select: all; }
     </style>
     </head>
@@ -783,11 +861,13 @@ enum WebStreamPage {
       const MS = window.ManagedMediaSource || window.MediaSource;
       if (!MS) { $('msg').hidden = false; $('msg').textContent = 'This browser cannot play streams (no Media Source Extensions).'; return; }
 
+      // Sound comes only when wanted: with it, each frame waits for the sound of its moment.
       function url() {
         const q = new URLSearchParams();
         if (app) q.set('app', app);
         q.set('profile', profile);
         q.set('bitrate', Math.round(bitrate * 1000));
+        if (video.muted) q.set('audio', '0');
         return '/stream.mp4?' + q;
       }
 
@@ -889,7 +969,7 @@ enum WebStreamPage {
       $('bitrate').onchange = () => { bitrate = +$('bitrate').value || 20; start(); };
       $('app').onchange = () => { app = $('app').value || null; start(); };
       $('buffer').oninput = () => setBuffer(+$('buffer').value / 1000);
-      $('mute').onclick = () => { video.muted = !video.muted; $('mute').textContent = video.muted ? 'Unmute' : 'Mute'; follow(); };
+      $('mute').onclick = () => { video.muted = !video.muted; $('mute').textContent = video.muted ? 'Unmute' : 'Mute'; start(); };
       $('full').onclick = () => { (video.requestFullscreen || video.webkitEnterFullscreen || (() => {})).call(video); };
       let idle; function awake() { document.body.classList.remove('idle'); clearTimeout(idle); idle = setTimeout(() => document.body.classList.add('idle'), 3000); }
       ['mousemove', 'touchstart', 'keydown'].forEach(e => addEventListener(e, awake)); awake();

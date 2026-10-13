@@ -1,4 +1,5 @@
 import XCTest
+import CoreMedia
 import Network
 @testable import DAM
 
@@ -26,6 +27,10 @@ final class WebStreamTests: XCTestCase {
         XCTAssertEqual(request.height, 720)
         XCTAssertEqual(request.app, 2)
         XCTAssertTrue(request.newDisplay == (2560, 1440, 60))
+        XCTAssertTrue(request.audio, "sound unless turned off")
+        XCTAssertFalse(WebStreamRequest.parse(["audio": "0"], preferred: .interactive).audio)
+        XCTAssertFalse(WebStreamRequest.parse(["audio": "no"], preferred: .interactive).audio)
+        XCTAssertTrue(WebStreamRequest.parse(["audio": "1"], preferred: .interactive).audio)
     }
 
     func testRequestKeepsNonsenseWithinBounds() {
@@ -43,6 +48,7 @@ final class WebStreamTests: XCTestCase {
     func testProfilesSetTheEncoderApart() {
         let interactive = StreamProfile.interactive.encoderSettings(width: 1920, height: 1080, fps: 60, bitrateKbps: 20_000)
         XCTAssertFalse(interactive.reordering)
+        XCTAssertFalse(interactive.nudges, "the stream repeats frames itself")
         XCTAssertTrue(interactive.prioritizeSpeed)
         XCTAssertEqual(interactive.keyFrameInterval, 0)
         XCTAssertEqual(interactive.rateLimitWindow, 0.25)
@@ -59,6 +65,42 @@ final class WebStreamTests: XCTestCase {
         StreamProfile.preferred = .viewing
         XCTAssertEqual(StreamProfile.preferred, .viewing)
         StreamProfile.preferred = .interactive
+    }
+
+    // MARK: - The frame grid
+
+    private func seconds(_ time: CMTime) -> Double { CMTimeGetSeconds(time) }
+
+    func testFramesSnapToTheGridAndNeverShareASlot() {
+        var grid = FrameGrid(fps: 60)
+        let origin = CMTime(value: 1_000_000_000_000, timescale: 1_000_000_000)
+        XCTAssertEqual(grid.snap(origin), origin, "the first frame is the origin")
+        XCTAssertEqual(grid.lastSlot, 0)
+        let jittered = CMTimeAdd(origin, CMTime(value: 15_000_000, timescale: 1_000_000_000))
+        XCTAssertEqual(seconds(grid.snap(jittered)), seconds(origin) + 1.0 / 60, accuracy: 1e-6,
+                       "a frame a bit early still takes the next slot")
+        XCTAssertEqual(grid.lastSlot, 1)
+        let same = CMTimeAdd(origin, CMTime(value: 20_000_000, timescale: 1_000_000_000))
+        XCTAssertEqual(seconds(grid.snap(same)), seconds(origin) + 2.0 / 60, accuracy: 1e-6,
+                       "a frame in a taken slot moves to the one after")
+        let later = CMTimeAdd(origin, CMTime(value: 500_000_000, timescale: 1_000_000_000))
+        XCTAssertEqual(grid.lastSlot, 2)
+        XCTAssertEqual(seconds(grid.snap(later)), seconds(origin) + 30.0 / 60, accuracy: 1e-6, "slots may be skipped")
+        XCTAssertEqual(grid.lastSlot, 30)
+        XCTAssertEqual(seconds(grid.snap(later)), seconds(origin) + 31.0 / 60, accuracy: 1e-6, "but never doubled up")
+    }
+
+    func testTheGridFollowsTheClockWhenRepeatsFillIt() {
+        var grid = FrameGrid(fps: 60)
+        let origin = CMTime(value: 7, timescale: 1)
+        _ = grid.snap(origin)
+        // A timer firing every interval, each time a little later than the slot's own time.
+        for i in 1...600 {
+            let now = CMTimeAdd(origin, CMTime(value: Int64(i) * 16_666_667 + 8_000_000, timescale: 1_000_000_000))
+            let slot = grid.snap(now)
+            XCTAssertEqual(grid.lastSlot, Int64(i), "one slot a firing, none missed")
+            XCTAssertLessThanOrEqual(abs(seconds(slot) - seconds(now)), 1.0 / 60)
+        }
     }
 
     // MARK: - Sound
@@ -163,6 +205,22 @@ final class WebStreamTests: XCTestCase {
         viewer.watch()
         loopback.client.cancel()
         wait(for: [closed], timeout: 5)
+    }
+
+    func testViewerWithoutSoundTakesNoSound() throws {
+        let loopback = try Loopback()
+        let viewer = WebStreamViewer(connection: try XCTUnwrap(loopback.server), maxInFlight: 1 << 20, audio: false)
+        XCTAssertFalse(viewer.audio)
+        XCTAssertEqual(viewer.take(video: Data("K1".utf8), keyFrame: true, codecs: "avc1.640033", initSegment: Data("INIT".utf8)),
+                       .taken)
+        viewer.take(audio: Data("A2".utf8))
+        XCTAssertEqual(viewer.take(video: Data("P3".utf8), keyFrame: false, codecs: "avc1.640033", initSegment: Data("INIT".utf8)),
+                       .taken)
+        let expected = WebStreamViewer.head(codecs: "avc1.640033") + "INITK1P3"
+        loopback.waitForBytes(expected.utf8.count)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        XCTAssertEqual(String(decoding: loopback.receivedSoFar(), as: UTF8.self), expected)
+        viewer.close()
     }
 
     func testViewerFallenBehindSkipsToTheNextKeyFrame() throws {

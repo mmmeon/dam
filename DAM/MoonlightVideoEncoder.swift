@@ -49,6 +49,11 @@ final class MoonlightVideoEncoder {
         var keyFrameInterval = 0
         /// Whether the encoder may trade picture quality for speed.
         var prioritizeSpeed = false
+        /// Whether a frame with none after it is nudged out by giving the encoder the same
+        /// picture again a little later (see `nudgeDelay`). Right for frames that come as
+        /// the screen changes; wrong for a steady stream, which brings its own repeats and
+        /// would have the nudges' doubles in the way of them.
+        var nudges = true
     }
 
     /// One encoded frame as an H.264 Annex B access unit; a keyframe starts with its SPS and PPS.
@@ -189,6 +194,7 @@ final class MoonlightVideoEncoder {
             lock.unlock()
             if !submit(buffer, at: time, keyFrame: key), key { requestKeyFrame() }
             lastBuffer = buffer
+            guard settings.nudges else { continue }
             // Bring this frame out should no other follow it.
             let generation = submissions
             queue.asyncAfter(deadline: .now() + nudgeDelay) { [weak self] in
