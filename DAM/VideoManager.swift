@@ -790,7 +790,8 @@ final class VideoManager: ObservableObject {
                         completion: ((Bool) -> Void)? = nil) {
         guard Self.hasAccessibilityAccess(prompting: true) else {
             SpeechSynthesizer.shared.announce(
-                "\(AppIdentity.name) needs Accessibility access to connect AirPlay")
+                "\(AppIdentity.name) needs Accessibility access to connect AirPlay. "
+                + "Allow it in Privacy and Security settings, or use Screen Mirroring in Control Center")
             completion?(false)
             return
         }
