@@ -57,6 +57,12 @@ Grouped by what they do for the app. Links go to Apple's developer documentation
 | [CoreImage](https://developer.apple.com/documentation/CoreImage)       |       |
 | [AVFoundation](https://developer.apple.com/documentation/AVFoundation) |       |
 
+## Tried and rejected
+
+| Framework | What we tried | Why it failed |
+| --------- | ------------- | ------------- |
+| `AVOutputContext` (private part of AVFoundation, no public docs) | Driving AirPlay screen routing directly, as the built-in AirPlay Touch Bar and Control Center items do: `+sharedSystemScreenContext`, `-addOutputDevice:`, `-setOutputDevices:` (which would also allow several AirPlay screens at once) | It needs Apple-only restricted entitlements (`com.apple.avfoundation.allow-system-wide-context`, `allows-access-to-device-list`, `allows-set-output-device`). Without them `sharedSystemScreenContext` returns nil. Claiming them gets the app SIGKILLed at launch ("Taskgated Invalid Signature"), whether it is signed with an Apple Development identity or ad-hoc. DAM drives Control Center's UI instead. See [airplay-api-notes.md](airplay-api-notes.md). |
+
 ## C and POSIX headers
 
 `string.h`, `stdlib.h`, `unistd.h`, `time.h`, `stdio.h`, `errno.h`, `fcntl.h`, `poll.h`, `netdb.h`, `sys/types.h`, `sys/time.h`, `sys/socket.h`, `sys/ioctl.h`, `netinet/tcp.h`, `netinet/in.h`, `arpa/inet.h`
