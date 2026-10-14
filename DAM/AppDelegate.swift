@@ -11,6 +11,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let audioManager = AudioManager()
     private let videoManager = VideoManager()
     private let sidecarManager = SidecarManager()
+    private let moonlightHost = MoonlightHost()
+    /// The PIN prompt for Moonlight pairing, while it shows.
+    private var moonlightPINAlert: NSAlert?
     private var sidecarAutoConnector: SidecarAutoConnector?
     private var controlStrip: ControlStripPresenter!
     private var hotkey: GlobalHotkey!
@@ -18,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mirrorToggleHotkey: GlobalHotkey!
     private var audioCycleHotkey: GlobalHotkey!
     private var mainDisplayHotkey: GlobalHotkey!
+    private var resolutionHotkey: GlobalHotkey!
     private var settingsWindow: SettingsWindowController?
     private var aboutWindow: NSWindow?
     private var arrangeWindow: ArrangeDisplaysWindowController?
@@ -42,9 +46,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AirPlayQuickConnect.shared.configure(videoManager: videoManager, sidecarManager: sidecarManager)
         sidecarAutoConnector = SidecarAutoConnector(sidecar: sidecarManager, video: videoManager)
         sidecarAutoConnector?.start()
+        moonlightHost.requestPIN = { [weak self] address, answer in
+            self?.promptForMoonlightPIN(address: address, answer: answer)
+        }
+        moonlightHost.pairingAbandoned = { [weak self] in
+            if self?.moonlightPINAlert != nil { NSApp.abortModal() }
+        }
+        moonlightHost.onChange = { [weak self] in self?.rebuild() }
+        moonlightHost.makeDisplay = { [weak self] width, height, fps, done in
+            guard let self else { return done(nil) }
+            self.videoManager.createStreamingDisplay(
+                mode: StreamingDisplayModes.forStream(width: width, height: height, fps: fps), completion: done)
+        }
+        moonlightHost.removeDisplay = { [weak self] id in self?.videoManager.removeStreamingDisplay(id: id) }
+        if MoonlightHost.isEnabled { moonlightHost.start() }
         AudioOutputPicker.shared.configure(audioManager: audioManager)
         MirrorPicker.shared.configure(videoManager: videoManager)
         MainDisplayPicker.shared.configure(videoManager: videoManager)
+        ResolutionPicker.shared.configure(videoManager: videoManager) { [weak self] mode, display in
+            if mode.isVirtual {
+                self?.applyVirtualResolution(mode, for: display)
+            } else {
+                self?.applyResolution(mode, cgDisplayID: display.cgDisplayID)
+            }
+        }
         hotkey = GlobalHotkey(preference: HotkeyPreference.current) { [weak self] in
             self?.openSwitcher()
         }
@@ -59,6 +84,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         mainDisplayHotkey = GlobalHotkey(preference: HotkeyPreference.currentMainDisplay) {
             MainDisplayPicker.shared.advance()
+        }
+        resolutionHotkey = GlobalHotkey(preference: HotkeyPreference.currentResolution) {
+            ResolutionPicker.shared.advance()
         }
 
         redirectSwiftUISettingsWindow()
@@ -145,6 +173,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func rebuild() {
+        moonlightHost.apps = videoManager.streamingDisplays.compactMap { streaming in
+            videoManager.connectedDisplays.first { $0.cgDisplayID == streaming.id }
+                .map { MoonlightApp(id: streaming.index + 1, title: $0.label, displayID: streaming.id) }
+        }
         let menu = NSMenu()
         menu.delegate = self
         fill(menu)
@@ -166,6 +198,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             audio: audioManager,
             video: videoManager,
             sidecar: sidecarManager,
+            moonlight: moonlightHost,
             onRefresh: { [weak self] in self?.refreshAll(nil) }
         )
         menu.removeAllItems()
@@ -271,6 +304,10 @@ extension AppDelegate: NSMenuDelegate {
 
     @objc func debugPlayMainDisplayPicker(_ sender: Any?) {
         MainDisplayPicker.shared.playDebugPreview()
+    }
+
+    @objc func debugPlayResolutionPicker(_ sender: Any?) {
+        ResolutionPicker.shared.playDebugPreview()
     }
 
     @objc func debugPreviewConnectingHUD(_ sender: Any?) {
@@ -437,6 +474,7 @@ extension AppDelegate: NSMenuDelegate {
             currentMirrorToggle: HotkeyPreference.currentMirrorToggle,
             currentAudioCycle: HotkeyPreference.currentAudioCycle,
             currentMainDisplay: HotkeyPreference.currentMainDisplay,
+            currentResolution: HotkeyPreference.currentResolution,
             audioManager: audioManager,
             videoManager: videoManager,
             sidecarManager: sidecarManager
@@ -471,6 +509,12 @@ extension AppDelegate: NSMenuDelegate {
                 MainDisplayPicker.shared.advance()
             }
         }
+        wc.onSaveResolution = { [weak self] pref in
+            HotkeyPreference.currentResolution = pref
+            self?.resolutionHotkey = GlobalHotkey(preference: pref) {
+                ResolutionPicker.shared.advance()
+            }
+        }
         wc.onRebuild = { [weak self] in self?.rebuild() }
         settingsWindow = wc
         wc.show()
@@ -481,6 +525,94 @@ extension AppDelegate: NSMenuDelegate {
         let wc = arrangeWindow ?? ArrangeDisplaysWindowController(videoManager: videoManager)
         arrangeWindow = wc
         wc.show()
+    }
+
+    /// Adds a streaming display, for a streaming or remote-desktop app to capture.
+    @objc func createStreamingDisplay(_ sender: NSMenuItem) {
+        SpeechSynthesizer.shared.announce("Creating a streaming display")
+        videoManager.createStreamingDisplay()
+        rebuild()
+    }
+
+    /// Removes the streaming display in the item's `representedObject`.
+    @objc func removeStreamingDisplay(_ sender: NSMenuItem) {
+        guard let display = sender.representedObject as? DisplayInfo else { return }
+        SpeechSynthesizer.shared.announce("Removing \(display.label)")
+        videoManager.removeStreamingDisplay(display)
+        rebuild()
+    }
+
+    /// Turns hosting for Moonlight on or off.
+    @objc func toggleMoonlightHost(_ sender: NSMenuItem) {
+        if moonlightHost.isRunning {
+            MoonlightHost.isEnabled = false
+            moonlightHost.stop()
+            SpeechSynthesizer.shared.announce("Moonlight can no longer connect")
+        } else {
+            MoonlightHost.isEnabled = true
+            moonlightHost.start()
+            // Streaming needs it; asked now rather than when a stream starts.
+            MoonlightScreenCapture.requestPermission()
+            SpeechSynthesizer.shared.announce(moonlightHost.isRunning ? "Moonlight can connect"
+                                              : moonlightHost.lastError ?? "Moonlight could not start")
+        }
+        rebuild()
+    }
+
+    /// Opens the stream's player page in the browser.
+    @objc func openWebStream(_ sender: NSMenuItem) {
+        MoonlightScreenCapture.requestPermission()
+        NSWorkspace.shared.open(moonlightHost.localWatchURL)
+    }
+
+    /// Puts the player page's address on the clipboard, for a browser on another device.
+    @objc func copyWebStreamAddress(_ sender: NSMenuItem) {
+        let address = moonlightHost.watchURL.absoluteString
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(address, forType: .string)
+        SpeechSynthesizer.shared.announce("Copied \(address)")
+    }
+
+    /// Makes the profile in the item's `representedObject` the one streams get by default.
+    @objc func setStreamProfile(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let profile = StreamProfile(rawValue: raw) else { return }
+        StreamProfile.preferred = profile
+        rebuild()
+    }
+
+    /// Unpairs the Moonlight device in the item's `representedObject`.
+    @objc func forgetMoonlightClient(_ sender: NSMenuItem) {
+        guard let client = sender.representedObject as? MoonlightClient else { return }
+        moonlightHost.forget(client)
+        SpeechSynthesizer.shared.announce("Forgot \(client.name)")
+        rebuild()
+    }
+
+    /// Asks for the PIN Moonlight shows while pairing. The answer is nil when the user
+    /// declines, or when the device gave up meanwhile.
+    private func promptForMoonlightPIN(address: String, answer: @escaping (String?) -> Void) {
+        // From the run loop rather than the main queue: a modal prompt run inside a main
+        // queue block would hold every other one, the network's and the display changes',
+        // until it closed.
+        RunLoop.main.perform(inModes: [.default]) { [weak self] in
+            guard let self else { return answer(nil) }
+            let alert = NSAlert()
+            alert.messageText = "Pair with Moonlight?"
+            alert.informativeText = "Moonlight on \(address) wants to stream from \(AppIdentity.name). " +
+                                    "Type the PIN it shows."
+            let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 120, height: 24))
+            field.placeholderString = "PIN"
+            alert.accessoryView = field
+            alert.addButton(withTitle: "Pair")
+            alert.addButton(withTitle: "Cancel")
+            alert.window.initialFirstResponder = field
+            SpeechSynthesizer.shared.announce("Moonlight wants to pair. Type the PIN it shows.")
+            NSApp.activate(ignoringOtherApps: true)
+            self.moonlightPINAlert = alert
+            let response = alert.runModal()
+            self.moonlightPINAlert = nil
+            answer(response == .alertFirstButtonReturn ? field.stringValue : nil)
+        }
     }
 
     /// A "Position" pick: puts the display on the chosen side of another one.
@@ -559,25 +691,36 @@ extension AppDelegate: NSMenuDelegate {
 
     @objc func selectResolution(_ sender: NSMenuItem) {
         guard let sel = sender.representedObject as? ResolutionSelection else { return }
-        // When a native resolution is chosen and a virtual anchor is active for the
-        // display that owns this cgDisplayID, disable the anchor first so the display
-        // is freed from mirror mode before we set the native mode.
-        let matchingDisplay = (videoManager.airPlayDevices + videoManager.connectedDisplays).first {
-            $0.cgDisplayID == sel.cgDisplayID
-        }
-        if let ap = matchingDisplay, videoManager.hasVirtualAnchor(for: ap.name) {
-            videoManager.disableVirtualAnchor(for: ap)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
-                self?.videoManager.setMode(sel.mode, for: sel.cgDisplayID) { _ in self?.rebuild() }
-            }
-        } else {
-            videoManager.setMode(sel.mode, for: sel.cgDisplayID) { [weak self] _ in self?.rebuild() }
-        }
+        applyResolution(sel.mode, cgDisplayID: sel.cgDisplayID)
     }
 
     @objc func selectVirtualResolution(_ sender: NSMenuItem) {
         guard let sel = sender.representedObject as? VirtualResolutionSelection else { return }
-        videoManager.selectVirtualMode(sel.mode, for: sel.display)
+        applyVirtualResolution(sel.mode, for: sel.display)
+    }
+
+    /// Sets a native mode, picked in the menu or the resolution picker.
+    private func applyResolution(_ mode: DisplayMode, cgDisplayID: CGDirectDisplayID) {
+        // When a native resolution is chosen and a virtual anchor is active for the
+        // display that owns this cgDisplayID, disable the anchor first so the display
+        // is freed from mirror mode before we set the native mode.
+        let matchingDisplay = (videoManager.airPlayDevices + videoManager.connectedDisplays).first {
+            $0.cgDisplayID == cgDisplayID
+        }
+        if let ap = matchingDisplay, videoManager.hasVirtualAnchor(for: ap.name) {
+            videoManager.disableVirtualAnchor(for: ap)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                self?.videoManager.setMode(mode, for: cgDisplayID) { _ in self?.rebuild() }
+            }
+        } else {
+            videoManager.setMode(mode, for: cgDisplayID) { [weak self] _ in self?.rebuild() }
+        }
+    }
+
+    /// Sets a virtual mode through the display's anchor, picked in the menu or the
+    /// resolution picker.
+    private func applyVirtualResolution(_ mode: DisplayMode, for display: DisplayInfo) {
+        videoManager.selectVirtualMode(mode, for: display)
         // Rebuild after the anchor has time to activate and the mode to settle.
         DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) { [weak self] in
             self?.rebuild()

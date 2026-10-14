@@ -19,6 +19,7 @@
 		A0A1D0000000000000000F04 /* ABOUT.txt in Resources */ = {isa = PBXBuildFile; fileRef = A0A1D0000000000000000F03 /* ABOUT.txt */; };
 		AA0001002F8D60780090E796 /* ControlStripPresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000FF2F8D60780090E796 /* ControlStripPresenter.swift */; };
 		AA0003002F8D60780090E796 /* GlobalHotkey.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0002FF2F8D60780090E796 /* GlobalHotkey.swift */; };
+		AA1001112F9D00000090E796 /* VideoManager+StreamingDisplay.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1001102F9D00000090E796 /* VideoManager+StreamingDisplay.swift */; };
 		AA1001002F9D00000090E796 /* VideoManager+VirtualAnchor.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1000FF2F9D00000090E796 /* VideoManager+VirtualAnchor.swift */; };
 		AA100B002F8D607C0090E796 /* VisibilityPreferencesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA100A002F8D607C0090E796 /* VisibilityPreferencesTests.swift */; };
 		AA200B002F8D607C0090E796 /* AudioManagerFilterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA200A002F8D607C0090E796 /* AudioManagerFilterTests.swift */; };
@@ -29,6 +30,7 @@
 		AA700B002F8D607C0090E796 /* MirrorPlanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA700A002F8D607C0090E796 /* MirrorPlanTests.swift */; };
 		AA800B002F8D607C0090E796 /* MirrorPickerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA800A002F8D607C0090E796 /* MirrorPickerTests.swift */; };
 		AA900B002F8D607C0090E796 /* MainDisplayPickerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA900A002F8D607C0090E796 /* MainDisplayPickerTests.swift */; };
+		AA900B012F8D607C0090E796 /* ResolutionChoicesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA900A012F8D607C0090E796 /* ResolutionChoicesTests.swift */; };
 		AA900B022F8D607C0090E796 /* ReportRedactorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA900A022F8D607C0090E796 /* ReportRedactorTests.swift */; };
 		BB0002002F8D60780090E796 /* HotkeyPreference.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0001002F8D60780090E796 /* HotkeyPreference.swift */; };
 		BB0004002F8D60780090E796 /* KeyRecorderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0003002F8D60780090E796 /* KeyRecorderView.swift */; };
@@ -41,9 +43,28 @@
 		CC000C022F8D60780090E796 /* AudioOutputPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B022F8D60780090E796 /* AudioOutputPicker.swift */; };
 		CC000C302F8D60780090E796 /* ScreenMirroringPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B302F8D60780090E796 /* ScreenMirroringPanel.swift */; };
 		CC000C312F8D60780090E796 /* SidecarManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B312F8D60780090E796 /* SidecarManager.swift */; };
+		7FA2D5C972AFA91BF026B64F /* callbacks.c in Sources */ = {isa = PBXBuildFile; fileRef = 1F0917EA16E2F3A133C6AB87 /* callbacks.c */; settings = {COMPILER_FLAGS = "-w -DHAS_FCNTL -DHAS_GETADDRINFO -DHAS_GETNAMEINFO -DHAS_INET_NTOP -DHAS_INET_PTON -DHAS_MSGHDR_FLAGS -DHAS_POLL -DHAS_SOCKLEN_T"; }; };
+		A3D33B22C62D529A5BF75DE3 /* compress.c in Sources */ = {isa = PBXBuildFile; fileRef = D29DF9B0EAA50E90D22A0AA8 /* compress.c */; settings = {COMPILER_FLAGS = "-w -DHAS_FCNTL -DHAS_GETADDRINFO -DHAS_GETNAMEINFO -DHAS_INET_NTOP -DHAS_INET_PTON -DHAS_MSGHDR_FLAGS -DHAS_POLL -DHAS_SOCKLEN_T"; }; };
+		427FBC004DC56DFD3EC92FA8 /* host.c in Sources */ = {isa = PBXBuildFile; fileRef = 3544B101F1D05676D0180FFC /* host.c */; settings = {COMPILER_FLAGS = "-w -DHAS_FCNTL -DHAS_GETADDRINFO -DHAS_GETNAMEINFO -DHAS_INET_NTOP -DHAS_INET_PTON -DHAS_MSGHDR_FLAGS -DHAS_POLL -DHAS_SOCKLEN_T"; }; };
+		1040191B1FB910E813E4D8EE /* list.c in Sources */ = {isa = PBXBuildFile; fileRef = 5FD9E52563339306341F7293 /* list.c */; settings = {COMPILER_FLAGS = "-w -DHAS_FCNTL -DHAS_GETADDRINFO -DHAS_GETNAMEINFO -DHAS_INET_NTOP -DHAS_INET_PTON -DHAS_MSGHDR_FLAGS -DHAS_POLL -DHAS_SOCKLEN_T"; }; };
+		7ABDCFD4C6CBB8243F5C810D /* packet.c in Sources */ = {isa = PBXBuildFile; fileRef = 7E586910221F1E5FCC22E84C /* packet.c */; settings = {COMPILER_FLAGS = "-w -DHAS_FCNTL -DHAS_GETADDRINFO -DHAS_GETNAMEINFO -DHAS_INET_NTOP -DHAS_INET_PTON -DHAS_MSGHDR_FLAGS -DHAS_POLL -DHAS_SOCKLEN_T"; }; };
+		BE4D62F7D4E9C6BA2CBB1AEC /* peer.c in Sources */ = {isa = PBXBuildFile; fileRef = 807EE0D9443BE6C949315DA2 /* peer.c */; settings = {COMPILER_FLAGS = "-w -DHAS_FCNTL -DHAS_GETADDRINFO -DHAS_GETNAMEINFO -DHAS_INET_NTOP -DHAS_INET_PTON -DHAS_MSGHDR_FLAGS -DHAS_POLL -DHAS_SOCKLEN_T"; }; };
+		1B7CD7B8F51EA2C9D3F791D8 /* protocol.c in Sources */ = {isa = PBXBuildFile; fileRef = F8AFAFC2414A6EE9FF040F0C /* protocol.c */; settings = {COMPILER_FLAGS = "-w -DHAS_FCNTL -DHAS_GETADDRINFO -DHAS_GETNAMEINFO -DHAS_INET_NTOP -DHAS_INET_PTON -DHAS_MSGHDR_FLAGS -DHAS_POLL -DHAS_SOCKLEN_T"; }; };
+		0742167AA5E5444012123E64 /* unix.c in Sources */ = {isa = PBXBuildFile; fileRef = BB1EF6B248ED8E5A82DEFC79 /* unix.c */; settings = {COMPILER_FLAGS = "-w -DHAS_FCNTL -DHAS_GETADDRINFO -DHAS_GETNAMEINFO -DHAS_INET_NTOP -DHAS_INET_PTON -DHAS_MSGHDR_FLAGS -DHAS_POLL -DHAS_SOCKLEN_T"; }; };
+		97B51B21B02316453D1AA752 /* MoonlightCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C8E74953F71FE05D48FC1A7 /* MoonlightCrypto.swift */; };
+		BD482437F53EEE0A125502BF /* MoonlightPairing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A28EDF0DA41FDB067A73C72 /* MoonlightPairing.swift */; };
+		02A99799EC392553BDFAB04C /* MoonlightHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = C68B3D68AC12D5598EE8B8E9 /* MoonlightHost.swift */; };
+		68BD7D187AA0EF5CAE70F117 /* MoonlightAudioEncoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB5FF30512E697DC9B7662D8 /* MoonlightAudioEncoder.swift */; };
+		D26BBD89F3A1C3D7C03604CF /* MoonlightFEC.swift in Sources */ = {isa = PBXBuildFile; fileRef = 784629ADB6669294FEA5ADF1 /* MoonlightFEC.swift */; };
+		7E7DDBC779EC68B41D7D10EF /* MoonlightRTSP.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFC8C61841BBB205D3EA9391 /* MoonlightRTSP.swift */; };
+		624C00ADF377331C64CA5675 /* MoonlightStream.swift in Sources */ = {isa = PBXBuildFile; fileRef = F773308ADEA915FD2424ABA0 /* MoonlightStream.swift */; };
+		292B82ED857C094FE67B1321 /* MoonlightProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86EAA97394CE979125862EBE /* MoonlightProtocol.swift */; };
+		73D3008B61C3C434EB9B5FAA /* MoonlightScreenCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38905ABA7904998AD23A9CDC /* MoonlightScreenCapture.swift */; };
+		B3179E05ECB1DAEEC490D1D6 /* MoonlightVideoEncoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = F90877A6A2E4EDCC6C0ECDBD /* MoonlightVideoEncoder.swift */; };
 		CC100C012F8D60780090E796 /* ChoicePicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC100B012F8D60780090E796 /* ChoicePicker.swift */; };
 		CC100C022F8D60780090E796 /* MirrorPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC100B022F8D60780090E796 /* MirrorPicker.swift */; };
 		CC100C032F8D60780090E796 /* MainDisplayPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC100B032F8D60780090E796 /* MainDisplayPicker.swift */; };
+		CC100C042F8D60780090E796 /* ResolutionPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC100B042F8D60780090E796 /* ResolutionPicker.swift */; };
 		DD000C012F8D60780090E796 /* DisplayLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD000B012F8D60780090E796 /* DisplayLayout.swift */; };
 		DD000C022F8D60780090E796 /* VideoManager+Arrangement.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD000B022F8D60780090E796 /* VideoManager+Arrangement.swift */; };
 		DD000C032F8D60780090E796 /* ArrangeDisplaysWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD000B032F8D60780090E796 /* ArrangeDisplaysWindowController.swift */; };
@@ -51,9 +72,23 @@
 		DD100B002F8D607C0090E796 /* DisplayLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A002F8D607C0090E796 /* DisplayLayoutTests.swift */; };
 		DD100B012F8D607C0090E796 /* ArrangeTouchBarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A012F8D607C0090E796 /* ArrangeTouchBarTests.swift */; };
 		DD100B0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift */; };
+		DD100B1B2F8D607C0090E7A1 /* StreamingDisplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A1B2F8D607C0090E7A1 /* StreamingDisplayTests.swift */; };
+		3574EAA6216A48EEBA6BBE4A /* MoonlightPairingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9735AC4A58E6545843504CEA /* MoonlightPairingTests.swift */; };
+		CFDD9A328A7A0EA0990B70EF /* MoonlightHostTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4455386FE67430944B0A55CB /* MoonlightHostTests.swift */; };
+		7F4AAE31590ECEFCFAB54CEA /* MoonlightAudioProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFF748CCAC3EE2416A1563B4 /* MoonlightAudioProtocolTests.swift */; };
+		5B357A9B3B762368E74DD52E /* MoonlightAudioEncoderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52D72CB2538DBEDDEF7AF121 /* MoonlightAudioEncoderTests.swift */; };
+		AB5D97B89462D5963F680736 /* MoonlightFECTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6E199A368AAB648D2E6834F /* MoonlightFECTests.swift */; };
+		7DF2AC72D7898D5D7743470D /* MoonlightRTSPTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 099344138B995E7D8BA5D18F /* MoonlightRTSPTests.swift */; };
+		358CF5FF29CD6C1A162D1005 /* MoonlightProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9CBD2E4642EC3C66CD4EA92 /* MoonlightProtocolTests.swift */; };
+		DAB2123AFCAFA563C55F10EA /* MoonlightScreenCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 257CBE83156D2C54B408C340 /* MoonlightScreenCaptureTests.swift */; };
+		580A6E0D6DE5B7F5E0FC5B7E /* MoonlightVideoEncoderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E478FDA4DCA68FE2F15F7231 /* MoonlightVideoEncoderTests.swift */; };
 		DD100B0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift */; };
 		EE200B012F8D60780090E796 /* MenuBarIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE200A012F8D60780090E796 /* MenuBarIcon.swift */; };
 		EE200B022F8D607C0090E796 /* MenuBarIconTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE200A022F8D607C0090E796 /* MenuBarIconTests.swift */; };
+		66F9582C81ED74C1C1531F5A /* MP4Fragmenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE0CD9E5791F871CE7094055 /* MP4Fragmenter.swift */; };
+		E6043C4BC52D9BAB1E864C77 /* WebStream.swift in Sources */ = {isa = PBXBuildFile; fileRef = A327655CF2C53297256286B4 /* WebStream.swift */; };
+		3AFBEAD2E1BBF03AFA1A8BEC /* MP4FragmenterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BA07475618CF8DB04DE3FB9 /* MP4FragmenterTests.swift */; };
+		F6E46A746FC7A24D2BD7EE7D /* WebStreamTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2056DD5F10F1AC3A231B9ACB /* WebStreamTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -82,6 +117,7 @@
 		A0A1D0000000000000000F03 /* ABOUT.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = ABOUT.txt; sourceTree = SOURCE_ROOT; };
 		AA0000FF2F8D60780090E796 /* ControlStripPresenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlStripPresenter.swift; sourceTree = "<group>"; };
 		AA0002FF2F8D60780090E796 /* GlobalHotkey.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlobalHotkey.swift; sourceTree = "<group>"; };
+		AA1001102F9D00000090E796 /* VideoManager+StreamingDisplay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "VideoManager+StreamingDisplay.swift"; sourceTree = "<group>"; };
 		AA1000FF2F9D00000090E796 /* VideoManager+VirtualAnchor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "VideoManager+VirtualAnchor.swift"; sourceTree = "<group>"; };
 		AA100A002F8D607C0090E796 /* VisibilityPreferencesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisibilityPreferencesTests.swift; sourceTree = "<group>"; };
 		AA200A002F8D607C0090E796 /* AudioManagerFilterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioManagerFilterTests.swift; sourceTree = "<group>"; };
@@ -92,6 +128,7 @@
 		AA700A002F8D607C0090E796 /* MirrorPlanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirrorPlanTests.swift; sourceTree = "<group>"; };
 		AA800A002F8D607C0090E796 /* MirrorPickerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirrorPickerTests.swift; sourceTree = "<group>"; };
 		AA900A002F8D607C0090E796 /* MainDisplayPickerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainDisplayPickerTests.swift; sourceTree = "<group>"; };
+		AA900A012F8D607C0090E796 /* ResolutionChoicesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResolutionChoicesTests.swift; sourceTree = "<group>"; };
 		AA900A022F8D607C0090E796 /* ReportRedactorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportRedactorTests.swift; sourceTree = "<group>"; };
 		BB0001002F8D60780090E796 /* HotkeyPreference.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyPreference.swift; sourceTree = "<group>"; };
 		BB0003002F8D60780090E796 /* KeyRecorderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyRecorderView.swift; sourceTree = "<group>"; };
@@ -104,9 +141,28 @@
 		CC000B022F8D60780090E796 /* AudioOutputPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioOutputPicker.swift; sourceTree = "<group>"; };
 		CC000B302F8D60780090E796 /* ScreenMirroringPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenMirroringPanel.swift; sourceTree = "<group>"; };
 		CC000B312F8D60780090E796 /* SidecarManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarManager.swift; sourceTree = "<group>"; };
+		1F0917EA16E2F3A133C6AB87 /* callbacks.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = callbacks.c; sourceTree = "<group>"; };
+		D29DF9B0EAA50E90D22A0AA8 /* compress.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = compress.c; sourceTree = "<group>"; };
+		3544B101F1D05676D0180FFC /* host.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = host.c; sourceTree = "<group>"; };
+		5FD9E52563339306341F7293 /* list.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = list.c; sourceTree = "<group>"; };
+		7E586910221F1E5FCC22E84C /* packet.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = packet.c; sourceTree = "<group>"; };
+		807EE0D9443BE6C949315DA2 /* peer.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = peer.c; sourceTree = "<group>"; };
+		F8AFAFC2414A6EE9FF040F0C /* protocol.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = protocol.c; sourceTree = "<group>"; };
+		BB1EF6B248ED8E5A82DEFC79 /* unix.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = unix.c; sourceTree = "<group>"; };
+		9C8E74953F71FE05D48FC1A7 /* MoonlightCrypto.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightCrypto.swift; sourceTree = "<group>"; };
+		4A28EDF0DA41FDB067A73C72 /* MoonlightPairing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightPairing.swift; sourceTree = "<group>"; };
+		C68B3D68AC12D5598EE8B8E9 /* MoonlightHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightHost.swift; sourceTree = "<group>"; };
+		EB5FF30512E697DC9B7662D8 /* MoonlightAudioEncoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightAudioEncoder.swift; sourceTree = "<group>"; };
+		784629ADB6669294FEA5ADF1 /* MoonlightFEC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightFEC.swift; sourceTree = "<group>"; };
+		BFC8C61841BBB205D3EA9391 /* MoonlightRTSP.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightRTSP.swift; sourceTree = "<group>"; };
+		F773308ADEA915FD2424ABA0 /* MoonlightStream.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightStream.swift; sourceTree = "<group>"; };
+		86EAA97394CE979125862EBE /* MoonlightProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightProtocol.swift; sourceTree = "<group>"; };
+		38905ABA7904998AD23A9CDC /* MoonlightScreenCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightScreenCapture.swift; sourceTree = "<group>"; };
+		F90877A6A2E4EDCC6C0ECDBD /* MoonlightVideoEncoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightVideoEncoder.swift; sourceTree = "<group>"; };
 		CC100B012F8D60780090E796 /* ChoicePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChoicePicker.swift; sourceTree = "<group>"; };
 		CC100B022F8D60780090E796 /* MirrorPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirrorPicker.swift; sourceTree = "<group>"; };
 		CC100B032F8D60780090E796 /* MainDisplayPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainDisplayPicker.swift; sourceTree = "<group>"; };
+		CC100B042F8D60780090E796 /* ResolutionPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResolutionPicker.swift; sourceTree = "<group>"; };
 		DD000B012F8D60780090E796 /* DisplayLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayLayout.swift; sourceTree = "<group>"; };
 		DD000B022F8D60780090E796 /* VideoManager+Arrangement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "VideoManager+Arrangement.swift"; sourceTree = "<group>"; };
 		DD000B032F8D60780090E796 /* ArrangeDisplaysWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArrangeDisplaysWindowController.swift; sourceTree = "<group>"; };
@@ -114,9 +170,23 @@
 		DD100A002F8D607C0090E796 /* DisplayLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayLayoutTests.swift; sourceTree = "<group>"; };
 		DD100A012F8D607C0090E796 /* ArrangeTouchBarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArrangeTouchBarTests.swift; sourceTree = "<group>"; };
 		DD100A0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayNicknameTests.swift; sourceTree = "<group>"; };
+		DD100A1B2F8D607C0090E7A1 /* StreamingDisplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamingDisplayTests.swift; sourceTree = "<group>"; };
+		9735AC4A58E6545843504CEA /* MoonlightPairingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightPairingTests.swift; sourceTree = "<group>"; };
+		4455386FE67430944B0A55CB /* MoonlightHostTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightHostTests.swift; sourceTree = "<group>"; };
+		CFF748CCAC3EE2416A1563B4 /* MoonlightAudioProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightAudioProtocolTests.swift; sourceTree = "<group>"; };
+		52D72CB2538DBEDDEF7AF121 /* MoonlightAudioEncoderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightAudioEncoderTests.swift; sourceTree = "<group>"; };
+		A6E199A368AAB648D2E6834F /* MoonlightFECTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightFECTests.swift; sourceTree = "<group>"; };
+		099344138B995E7D8BA5D18F /* MoonlightRTSPTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightRTSPTests.swift; sourceTree = "<group>"; };
+		F9CBD2E4642EC3C66CD4EA92 /* MoonlightProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightProtocolTests.swift; sourceTree = "<group>"; };
+		257CBE83156D2C54B408C340 /* MoonlightScreenCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightScreenCaptureTests.swift; sourceTree = "<group>"; };
+		E478FDA4DCA68FE2F15F7231 /* MoonlightVideoEncoderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightVideoEncoderTests.swift; sourceTree = "<group>"; };
 		DD100A0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarDisplayTests.swift; sourceTree = "<group>"; };
 		EE200A012F8D60780090E796 /* MenuBarIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarIcon.swift; sourceTree = "<group>"; };
 		EE200A022F8D607C0090E796 /* MenuBarIconTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarIconTests.swift; sourceTree = "<group>"; };
+		EE0CD9E5791F871CE7094055 /* MP4Fragmenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MP4Fragmenter.swift; sourceTree = "<group>"; };
+		A327655CF2C53297256286B4 /* WebStream.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebStream.swift; sourceTree = "<group>"; };
+		3BA07475618CF8DB04DE3FB9 /* MP4FragmenterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MP4FragmenterTests.swift; sourceTree = "<group>"; };
+		2056DD5F10F1AC3A231B9ACB /* WebStreamTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebStreamTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -137,6 +207,22 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		451E728FE68D6B9E5602973C /* enet */ = {
+			isa = PBXGroup;
+			children = (
+				1F0917EA16E2F3A133C6AB87 /* callbacks.c */,
+				D29DF9B0EAA50E90D22A0AA8 /* compress.c */,
+				3544B101F1D05676D0180FFC /* host.c */,
+				5FD9E52563339306341F7293 /* list.c */,
+				7E586910221F1E5FCC22E84C /* packet.c */,
+				807EE0D9443BE6C949315DA2 /* peer.c */,
+				F8AFAFC2414A6EE9FF040F0C /* protocol.c */,
+				BB1EF6B248ED8E5A82DEFC79 /* unix.c */,
+			);
+			name = enet;
+			path = Vendor/enet;
+			sourceTree = "<group>";
+		};
 		8BFD3BD22F8D60780090E796 = {
 			isa = PBXGroup;
 			children = (
@@ -166,6 +252,7 @@
 				8BFD3C0C2F8D60780090E796 /* AudioManager.swift */,
 				8BFD3C0E2F8D60780090E796 /* VideoManager.swift */,
 				AA1000FF2F9D00000090E796 /* VideoManager+VirtualAnchor.swift */,
+				AA1001102F9D00000090E796 /* VideoManager+StreamingDisplay.swift */,
 				8BFD3C102F8D60780090E796 /* MenuBuilder.swift */,
 				AA0000FF2F8D60780090E796 /* ControlStripPresenter.swift */,
 				AA0002FF2F8D60780090E796 /* GlobalHotkey.swift */,
@@ -179,8 +266,22 @@
 				CC100B012F8D60780090E796 /* ChoicePicker.swift */,
 				CC100B022F8D60780090E796 /* MirrorPicker.swift */,
 				CC100B032F8D60780090E796 /* MainDisplayPicker.swift */,
+				CC100B042F8D60780090E796 /* ResolutionPicker.swift */,
 				CC000B302F8D60780090E796 /* ScreenMirroringPanel.swift */,
 				CC000B312F8D60780090E796 /* SidecarManager.swift */,
+				451E728FE68D6B9E5602973C /* enet */,
+				9C8E74953F71FE05D48FC1A7 /* MoonlightCrypto.swift */,
+				4A28EDF0DA41FDB067A73C72 /* MoonlightPairing.swift */,
+				C68B3D68AC12D5598EE8B8E9 /* MoonlightHost.swift */,
+				EB5FF30512E697DC9B7662D8 /* MoonlightAudioEncoder.swift */,
+				784629ADB6669294FEA5ADF1 /* MoonlightFEC.swift */,
+				BFC8C61841BBB205D3EA9391 /* MoonlightRTSP.swift */,
+				F773308ADEA915FD2424ABA0 /* MoonlightStream.swift */,
+				86EAA97394CE979125862EBE /* MoonlightProtocol.swift */,
+				38905ABA7904998AD23A9CDC /* MoonlightScreenCapture.swift */,
+				F90877A6A2E4EDCC6C0ECDBD /* MoonlightVideoEncoder.swift */,
+				A327655CF2C53297256286B4 /* WebStream.swift */,
+				EE0CD9E5791F871CE7094055 /* MP4Fragmenter.swift */,
 				CC000B012F8D60780090E796 /* HUD.swift */,
 				EE200A012F8D60780090E796 /* MenuBarIcon.swift */,
 				BB520B012F8D60780090E796 /* DisplayRegistry.swift */,
@@ -213,6 +314,7 @@
 				AA700A002F8D607C0090E796 /* MirrorPlanTests.swift */,
 				AA800A002F8D607C0090E796 /* MirrorPickerTests.swift */,
 				AA900A002F8D607C0090E796 /* MainDisplayPickerTests.swift */,
+				AA900A012F8D607C0090E796 /* ResolutionChoicesTests.swift */,
 				AA900A022F8D607C0090E796 /* ReportRedactorTests.swift */,
 				AA400A002F8D607C0090E796 /* HotkeyPreferenceTests.swift */,
 				EE200A022F8D607C0090E796 /* MenuBarIconTests.swift */,
@@ -221,6 +323,18 @@
 				DD100A012F8D607C0090E796 /* ArrangeTouchBarTests.swift */,
 				DD100A0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift */,
 				DD100A0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift */,
+				DD100A1B2F8D607C0090E7A1 /* StreamingDisplayTests.swift */,
+				9735AC4A58E6545843504CEA /* MoonlightPairingTests.swift */,
+				4455386FE67430944B0A55CB /* MoonlightHostTests.swift */,
+				CFF748CCAC3EE2416A1563B4 /* MoonlightAudioProtocolTests.swift */,
+				52D72CB2538DBEDDEF7AF121 /* MoonlightAudioEncoderTests.swift */,
+				A6E199A368AAB648D2E6834F /* MoonlightFECTests.swift */,
+				099344138B995E7D8BA5D18F /* MoonlightRTSPTests.swift */,
+				F9CBD2E4642EC3C66CD4EA92 /* MoonlightProtocolTests.swift */,
+				257CBE83156D2C54B408C340 /* MoonlightScreenCaptureTests.swift */,
+				E478FDA4DCA68FE2F15F7231 /* MoonlightVideoEncoderTests.swift */,
+				2056DD5F10F1AC3A231B9ACB /* WebStreamTests.swift */,
+				3BA07475618CF8DB04DE3FB9 /* MP4FragmenterTests.swift */,
 			);
 			path = DAMTests;
 			sourceTree = "<group>";
@@ -352,6 +466,7 @@
 				8BFD3C0D2F8D60780090E796 /* AudioManager.swift in Sources */,
 				8BFD3C0F2F8D60780090E796 /* VideoManager.swift in Sources */,
 				AA1001002F9D00000090E796 /* VideoManager+VirtualAnchor.swift in Sources */,
+				AA1001112F9D00000090E796 /* VideoManager+StreamingDisplay.swift in Sources */,
 				8BFD3C112F8D60780090E796 /* MenuBuilder.swift in Sources */,
 				AA0001002F8D60780090E796 /* ControlStripPresenter.swift in Sources */,
 				AA0003002F8D60780090E796 /* GlobalHotkey.swift in Sources */,
@@ -365,8 +480,29 @@
 				CC100C012F8D60780090E796 /* ChoicePicker.swift in Sources */,
 				CC100C022F8D60780090E796 /* MirrorPicker.swift in Sources */,
 				CC100C032F8D60780090E796 /* MainDisplayPicker.swift in Sources */,
+				CC100C042F8D60780090E796 /* ResolutionPicker.swift in Sources */,
 				CC000C302F8D60780090E796 /* ScreenMirroringPanel.swift in Sources */,
 				CC000C312F8D60780090E796 /* SidecarManager.swift in Sources */,
+				7FA2D5C972AFA91BF026B64F /* callbacks.c in Sources */,
+				A3D33B22C62D529A5BF75DE3 /* compress.c in Sources */,
+				427FBC004DC56DFD3EC92FA8 /* host.c in Sources */,
+				1040191B1FB910E813E4D8EE /* list.c in Sources */,
+				7ABDCFD4C6CBB8243F5C810D /* packet.c in Sources */,
+				BE4D62F7D4E9C6BA2CBB1AEC /* peer.c in Sources */,
+				1B7CD7B8F51EA2C9D3F791D8 /* protocol.c in Sources */,
+				0742167AA5E5444012123E64 /* unix.c in Sources */,
+				97B51B21B02316453D1AA752 /* MoonlightCrypto.swift in Sources */,
+				BD482437F53EEE0A125502BF /* MoonlightPairing.swift in Sources */,
+				02A99799EC392553BDFAB04C /* MoonlightHost.swift in Sources */,
+				68BD7D187AA0EF5CAE70F117 /* MoonlightAudioEncoder.swift in Sources */,
+				D26BBD89F3A1C3D7C03604CF /* MoonlightFEC.swift in Sources */,
+				7E7DDBC779EC68B41D7D10EF /* MoonlightRTSP.swift in Sources */,
+				624C00ADF377331C64CA5675 /* MoonlightStream.swift in Sources */,
+				292B82ED857C094FE67B1321 /* MoonlightProtocol.swift in Sources */,
+				73D3008B61C3C434EB9B5FAA /* MoonlightScreenCapture.swift in Sources */,
+				B3179E05ECB1DAEEC490D1D6 /* MoonlightVideoEncoder.swift in Sources */,
+				E6043C4BC52D9BAB1E864C77 /* WebStream.swift in Sources */,
+				66F9582C81ED74C1C1531F5A /* MP4Fragmenter.swift in Sources */,
 				CC000C012F8D60780090E796 /* HUD.swift in Sources */,
 				EE200B012F8D60780090E796 /* MenuBarIcon.swift in Sources */,
 				BB520C012F8D60780090E796 /* DisplayRegistry.swift in Sources */,
@@ -388,6 +524,7 @@
 				AA700B002F8D607C0090E796 /* MirrorPlanTests.swift in Sources */,
 				AA800B002F8D607C0090E796 /* MirrorPickerTests.swift in Sources */,
 				AA900B002F8D607C0090E796 /* MainDisplayPickerTests.swift in Sources */,
+				AA900B012F8D607C0090E796 /* ResolutionChoicesTests.swift in Sources */,
 				AA900B022F8D607C0090E796 /* ReportRedactorTests.swift in Sources */,
 				AA400B002F8D607C0090E796 /* HotkeyPreferenceTests.swift in Sources */,
 				EE200B022F8D607C0090E796 /* MenuBarIconTests.swift in Sources */,
@@ -396,6 +533,18 @@
 				DD100B012F8D607C0090E796 /* ArrangeTouchBarTests.swift in Sources */,
 				DD100B0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift in Sources */,
 				DD100B0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift in Sources */,
+				DD100B1B2F8D607C0090E7A1 /* StreamingDisplayTests.swift in Sources */,
+				3574EAA6216A48EEBA6BBE4A /* MoonlightPairingTests.swift in Sources */,
+				CFDD9A328A7A0EA0990B70EF /* MoonlightHostTests.swift in Sources */,
+				7F4AAE31590ECEFCFAB54CEA /* MoonlightAudioProtocolTests.swift in Sources */,
+				5B357A9B3B762368E74DD52E /* MoonlightAudioEncoderTests.swift in Sources */,
+				AB5D97B89462D5963F680736 /* MoonlightFECTests.swift in Sources */,
+				7DF2AC72D7898D5D7743470D /* MoonlightRTSPTests.swift in Sources */,
+				358CF5FF29CD6C1A162D1005 /* MoonlightProtocolTests.swift in Sources */,
+				DAB2123AFCAFA563C55F10EA /* MoonlightScreenCaptureTests.swift in Sources */,
+				580A6E0D6DE5B7F5E0FC5B7E /* MoonlightVideoEncoderTests.swift in Sources */,
+				F6E46A746FC7A24D2BD7EE7D /* WebStreamTests.swift in Sources */,
+				3AFBEAD2E1BBF03AFA1A8BEC /* MP4FragmenterTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -536,7 +685,6 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = DAM/DAM.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
-				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -552,6 +700,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "$(APP_NAME)";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_LSUIElement = YES;
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "This gives permission to control audio devices and speak announcements. Audio input isn\U2019t used at all.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "twentytwentysix+";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "$(APP_NAME) looks for AirPlay displays on your network so you can connect to them.";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -564,6 +713,7 @@
 				PRODUCT_NAME = "$(APP_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/DAM/Vendor/enet/include";
 				SWIFT_OBJC_BRIDGING_HEADER = "DAM/DAM-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 			};
@@ -576,7 +726,6 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = DAM/DAM.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
-				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -592,6 +741,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "$(APP_NAME)";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_LSUIElement = YES;
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "This gives permission to control audio devices and speak announcements. Audio input isn\U2019t used at all.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "twentytwentysix+";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "$(APP_NAME) looks for AirPlay displays on your network so you can connect to them.";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -604,6 +754,7 @@
 				PRODUCT_NAME = "$(APP_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/DAM/Vendor/enet/include";
 				SWIFT_OBJC_BRIDGING_HEADER = "DAM/DAM-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 			};
@@ -624,6 +775,7 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/$(APP_NAME).app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/$(APP_NAME)";
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/DAM/Vendor/enet/include";
 			};
 			name = Debug;
 		};
@@ -642,6 +794,7 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/$(APP_NAME).app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/$(APP_NAME)";
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/DAM/Vendor/enet/include";
 			};
 			name = Release;
 		};

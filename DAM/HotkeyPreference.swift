@@ -42,6 +42,12 @@ struct HotkeyPreference: Codable, Equatable {
         modifiers: UInt32(controlKey | optionKey | cmdKey)
     )
 
+    /// Default shortcut for cycling the resolutions of the display under the pointer (⌃⌥⌘R).
+    static let defaultResolution = HotkeyPreference(
+        keyCode:   UInt32(kVK_ANSI_R),
+        modifiers: UInt32(controlKey | optionKey | cmdKey)
+    )
+
     // MARK: - Persistence
 
     private static let defaultsKey               = "\(AppIdentity.bundleID).hotkey"
@@ -49,6 +55,7 @@ struct HotkeyPreference: Codable, Equatable {
     private static let mirrorToggleDefaultsKey    = "\(AppIdentity.bundleID).hotkeyMirrorToggle"
     private static let audioCycleDefaultsKey      = "\(AppIdentity.bundleID).hotkeyAudioCycle"
     private static let mainDisplayDefaultsKey     = "\(AppIdentity.bundleID).hotkeyMainDisplay"
+    private static let resolutionDefaultsKey      = "\(AppIdentity.bundleID).hotkeyResolution"
 
     static var current: HotkeyPreference {
         get { load(defaultsKey, fallback: .default) }
@@ -73,6 +80,11 @@ struct HotkeyPreference: Codable, Equatable {
     static var currentMainDisplay: HotkeyPreference {
         get { load(mainDisplayDefaultsKey, fallback: .defaultMainDisplay) }
         set { store(newValue, mainDisplayDefaultsKey) }
+    }
+
+    static var currentResolution: HotkeyPreference {
+        get { load(resolutionDefaultsKey, fallback: .defaultResolution) }
+        set { store(newValue, resolutionDefaultsKey) }
     }
 
     private static func load(_ key: String, fallback: HotkeyPreference) -> HotkeyPreference {
