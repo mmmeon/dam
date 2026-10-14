@@ -116,6 +116,38 @@ nothing checks the caller. That's why it works with ordinary signing and no enti
    exercised — the extra is set to always show here and only System Settings can
    change that.
 
+## Latency (#2)
+
+*Written 2026-10-13 from the code and the research above. Nothing here is measured.*
+
+**What DAM controls on an AirPlay display.** Only what any app can set on a display:
+its mode (resolution, refresh rate, HiDPI, through a virtual display when the receiver
+lacks the mode), and what it mirrors or extends. DAM connects through Control Center, so
+the AirPlay session itself is macOS's.
+
+**What it cannot control.** The encoder, bitrate, buffering and frame pacing of AirPlay
+mirroring live in the private routing stack described above. No public API, setting or
+`defaults` key reaches them, and the private one is entitlement-gated. A lower resolution
+gives the encoder fewer pixels but leaves any buffering in the pipeline as it is. That
+would fit the report in #2 that it made no noticeable difference, though the bottleneck
+has not been isolated.
+
+**Worth testing outside DAM.** These act on the network and the receiver, not the sender:
+
+- a wired connection for the receiver, or a less congested 5 GHz band;
+- the TV's game or low-latency picture mode, which skips the TV's own processing;
+- a receiver close to the access point.
+
+**When to use another route.** For latency, use a streaming display with Moonlight: in
+the menu's Streaming Displays section, choose Create Streaming Display, then turn on
+Moonlight → Allow Moonlight to Connect. Each streaming display is listed in Moonlight as
+an app. This is the game-streaming approach #2 asks about. The Moonlight client picks the
+resolution, frame rate and bitrate. DAM's encoder runs in real time, without reordering
+frames and with one reference frame, always encodes the latest frame, and paces each
+frame's packets (`MoonlightVideoEncoder.swift`, `MoonlightStream.swift`). The receiver
+needs a Moonlight client. The browser and player streams buffer by design, so they are
+not the low-latency path.
+
 ## Sidecar (done)
 
 `SidecarManager.swift` loads `SidecarCore` at run time: `SidecarDisplayManager`
