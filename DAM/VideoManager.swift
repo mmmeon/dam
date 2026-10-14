@@ -152,6 +152,8 @@ final class VideoManager: ObservableObject {
     /// iPad for a moment while displays reconfigure; renaming the display then would orphan
     /// its anchor, which is keyed by name.
     private var sidecarNameCache: [CGDirectDisplayID: String] = [:]
+    /// Names of AirPlay screens that no Bonjour-discovered name matched, by display ID.
+    private var airPlayScreenNameCache: [CGDirectDisplayID: String] = [:]
     /// Retained CGVirtualDisplay objects keyed by AirPlay device name.
     /// Stored as AnyObject to avoid @available on the stored property.
     var virtualAnchorStore: [String: AnyObject] = [:]
@@ -372,6 +374,48 @@ final class VideoManager: ObservableObject {
 
     static func isAirPlayDisplay(_ cgID: CGDirectDisplayID) -> Bool {
         isAirPlayDisplay(vendor: CGDisplayVendorNumber(cgID), model: CGDisplayModelNumber(cgID))
+    }
+
+    /// The suffix macOS 27 adds to an AirPlay display's screen name.
+    static let airPlayScreenNameSuffix = " (AirPlay)"
+
+    /// A screen name with macOS 27's " (AirPlay)" suffix removed: the receiver's own name.
+    static func airPlayName(fromScreenName name: String) -> String {
+        name.hasSuffix(airPlayScreenNameSuffix) ? String(name.dropLast(airPlayScreenNameSuffix.count)) : name
+    }
+
+    /// Matches Bonjour-discovered AirPlay names (sorted) to online display IDs, in order:
+    ///  1. An NSScreen name equal to the Bonjour name, or to it with " (AirPlay)" after it as
+    ///     macOS 27 names them — extend mode and software mirroring.
+    ///  2. The ID cached from an earlier match, still online — a hardware mirror slave,
+    ///     which leaves NSScreen.
+    ///  3. A display reporting AirPlay's vendor and model (`airPlayIDs`), paired by sorted
+    ///     order. Unnamed ones go first; a named one is one whose screen name differs from
+    ///     the Bonjour name. A monitor is never taken for one.
+    /// `unmatched` are the AirPlay displays left over: no Bonjour name was found for them,
+    /// or none matched.
+    static func resolveAirPlay(discovered: [String], screenNames: [CGDirectDisplayID: String],
+                               cached: [String: CGDirectDisplayID], online: [CGDirectDisplayID],
+                               airPlayIDs: Set<CGDirectDisplayID>, namedIDs: Set<CGDirectDisplayID>)
+        -> (resolved: [String: CGDirectDisplayID], unmatched: [CGDirectDisplayID]) {
+        let onlineSet = Set(online)
+        var resolved: [String: CGDirectDisplayID] = [:]
+        var unresolved: [String] = []
+        for name in discovered {
+            if let cgID = screenNames.filter({ airPlayName(fromScreenName: $0.value) == name }).keys.min() {
+                resolved[name] = cgID
+            } else if let cgID = cached[name], onlineSet.contains(cgID) {
+                resolved[name] = cgID
+            } else {
+                unresolved.append(name)
+            }
+        }
+        let taken = Set(resolved.values)
+        let free = online.filter { airPlayIDs.contains($0) && !taken.contains($0) }
+        let candidates = free.filter { !namedIDs.contains($0) } + free.filter { namedIDs.contains($0) }
+        for (name, cgID) in zip(unresolved, candidates) { resolved[name] = cgID }
+        let matched = Set(resolved.values)
+        return (resolved, free.filter { !matched.contains($0) })
     }
 
     static func isSidecarDisplay(_ cgID: CGDirectDisplayID) -> Bool {
@@ -1073,33 +1117,25 @@ final class VideoManager: ObservableObject {
         pendingConnectIDs.formIntersection(onlineSet)
         previousOnlineIDs = onlineSet
 
-        // Pass 1: resolve via NSScreen or cache.
-        var resolvedIDs: [String: CGDirectDisplayID] = [:]
-        var unresolvedNames: [String] = []
-        for name in discoveredNames.sorted() {
-            if let cgID = idToScreenName.first(where: { $0.value == name })?.key {
-                cachedAirPlayCGIDs[name] = cgID
-                resolvedIDs[name] = cgID
-            } else if let cgID = cachedAirPlayCGIDs[name], onlineSet.contains(cgID) {
-                resolvedIDs[name] = cgID
-            } else {
-                unresolvedNames.append(name)
-            }
+        let resolution = Self.resolveAirPlay(
+            discovered: discoveredNames.sorted(), screenNames: idToScreenName,
+            cached: cachedAirPlayCGIDs, online: onlineIDs,
+            airPlayIDs: Set(onlineIDs.filter {
+                Self.isAirPlayDisplay($0) || idToScreenName[$0]?.hasSuffix(Self.airPlayScreenNameSuffix) == true
+            }),
+            namedIDs: Set(idToName.keys))
+        cachedAirPlayCGIDs.merge(resolution.resolved) { $1 }
+        let resolvedIDs = resolution.resolved
+        // An AirPlay screen no Bonjour name matched still gets AirPlay's choices. It keeps the
+        // name it was first seen with: it leaves NSScreen once an anchor mirrors it.
+        for cgID in resolution.unmatched where airPlayScreenNameCache[cgID] == nil {
+            airPlayScreenNameCache[cgID] = idToName[cgID].map(Self.airPlayName(fromScreenName:)) ?? "AirPlay Display"
         }
-
-        // Pass 2: match unresolved names to unnamed AirPlay displays, which slipped past
-        // NSScreen and the cache. Only displays reporting AirPlay's vendor and model count,
-        // so a monitor left without a name is never taken for one.
-        if !unresolvedNames.isEmpty {
-            let resolvedSet = Set(resolvedIDs.values)
-            let virtualIDs = onlineIDs.filter {
-                Self.isAirPlayDisplay($0) && idToName[$0] == nil && !resolvedSet.contains($0)
-            }
-            // Pair by sorted order — deterministic when counts match.
-            for (name, cgID) in zip(unresolvedNames, virtualIDs) {
-                cachedAirPlayCGIDs[name] = cgID
-                resolvedIDs[name] = cgID
-            }
+        let unmatchedAirPlay = resolution.unmatched.compactMap { cgID -> DisplayInfo? in
+            guard let name = airPlayScreenNameCache[cgID], resolvedIDs[name] == nil else { return nil }
+            return DisplayInfo(id: name, name: name, isConnected: true, cgDisplayID: cgID,
+                               isMirroring: userMirrorMaster(of: cgID) != nil, isBuiltIn: false,
+                               isMain: CGDisplayIsMain(cgID) != 0)
         }
 
         let newAirPlay = discoveredNames.sorted().map { name in
@@ -1112,7 +1148,7 @@ final class VideoManager: ObservableObject {
                                isConnected: true, cgDisplayID: cgID,
                                isMirroring: userMirrorMaster(of: cgID) != nil, isBuiltIn: false,
                                isMain: CGDisplayIsMain(cgID) != 0)
-        }
+        } + unmatchedAirPlay
 
         // Physical: all online displays not in the Bonjour list.
         // Includes the built-in panel when the lid is open (it appears in NSScreen

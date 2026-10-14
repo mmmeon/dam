@@ -35,6 +35,69 @@ final class SidecarDisplayTests: XCTestCase {
         XCTAssertFalse(VideoManager.isAirPlayDisplay(vendor: 0x30ae, model: 0x61f7))
     }
 
+    // MARK: - Matching AirPlay names to displays
+
+    private func resolve(_ discovered: [String], screenNames: [CGDirectDisplayID: String] = [:],
+                         cached: [String: CGDirectDisplayID] = [:], online: [CGDirectDisplayID],
+                         airPlay: Set<CGDirectDisplayID>, named: Set<CGDirectDisplayID>? = nil)
+        -> (resolved: [String: CGDirectDisplayID], unmatched: [CGDirectDisplayID]) {
+        VideoManager.resolveAirPlay(discovered: discovered, screenNames: screenNames, cached: cached,
+                                    online: online, airPlayIDs: airPlay,
+                                    namedIDs: named ?? Set(screenNames.keys))
+    }
+
+    func testAirPlayNameMatchesItsScreenName() {
+        let r = resolve(["Living Room"], screenNames: [1: "Built-in", 7: "Living Room"],
+                        online: [1, 7], airPlay: [7])
+        XCTAssertEqual(r.resolved, ["Living Room": 7])
+        XCTAssertEqual(r.unmatched, [])
+    }
+
+    func testCachedIDKeepsAMirroredAirPlayDisplay() {
+        let r = resolve(["Living Room"], cached: ["Living Room": 7], online: [1, 7], airPlay: [7])
+        XCTAssertEqual(r.resolved, ["Living Room": 7])
+    }
+
+    func testAirPlayDisplayNamedDifferentlyFromBonjourIsMatched() {
+        // macOS names the screen otherwise than the receiver advertises itself.
+        let r = resolve(["Living Room"], screenNames: [1: "Built-in", 7: "Samsung 4K TV"],
+                        online: [1, 7], airPlay: [7])
+        XCTAssertEqual(r.resolved, ["Living Room": 7])
+        XCTAssertEqual(r.unmatched, [])
+    }
+
+    func testMacOS27AirPlaySuffixStillMatchesTheBonjourName() {
+        // macOS 27 lists the screen as "<receiver> (AirPlay)". It matches by name, even when
+        // the display doesn't report AirPlay's vendor and model.
+        let r = resolve(["No's Fire TV"], screenNames: [1: "Built-in Retina Display", 7: "No's Fire TV (AirPlay)"],
+                        online: [1, 7], airPlay: [])
+        XCTAssertEqual(r.resolved, ["No's Fire TV": 7])
+    }
+
+    func testAirPlayNameDropsOnlyTheMacOS27Suffix() {
+        XCTAssertEqual(VideoManager.airPlayName(fromScreenName: "No's Fire TV (AirPlay)"), "No's Fire TV")
+        XCTAssertEqual(VideoManager.airPlayName(fromScreenName: "Living Room"), "Living Room")
+    }
+
+    func testUnnamedAirPlayDisplayIsPairedBeforeANamedOne() {
+        let r = resolve(["Living Room"], screenNames: [8: "Samsung 4K TV"],
+                        online: [7, 8], airPlay: [7, 8])
+        XCTAssertEqual(r.resolved, ["Living Room": 7])
+        XCTAssertEqual(r.unmatched, [8])
+    }
+
+    func testAirPlayDisplayWithNoBonjourNameIsLeftOverAsAirPlay() {
+        let r = resolve([], screenNames: [1: "Built-in", 7: "Samsung 4K TV"], online: [1, 7], airPlay: [7])
+        XCTAssertEqual(r.resolved, [:])
+        XCTAssertEqual(r.unmatched, [7])
+    }
+
+    func testMonitorIsNeverTakenForAnAirPlayDisplay() {
+        let r = resolve(["Living Room"], screenNames: [2: "DELL U2720Q"], online: [2], airPlay: [])
+        XCTAssertEqual(r.resolved, [:])
+        XCTAssertEqual(r.unmatched, [])
+    }
+
     // MARK: - Naming after the iPad
 
     func testOneDisplayTakesTheOneName() {
