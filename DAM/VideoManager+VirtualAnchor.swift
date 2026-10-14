@@ -1165,11 +1165,15 @@ extension VideoManager {
         }
         virtualAnchorArrangements[name]?.restore(in: cfg, excluding: [anchorID, slaveID])
         CGConfigureDisplayWithDisplayMode(cfg, anchorID, cgMode, nil)
+        let before = currentLayout()
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let completeErr = CGCompleteDisplayConfiguration(cfg, .forAppOnly)
             vdLog.debug("setModeOnVirtualAnchor: CompleteDisplayConfiguration err=\(completeErr.rawValue)")
-            // A larger anchor can come to overlap a display WindowServer did not move.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self?.separateOverlappingDisplays() }
+            // The anchor's neighbours keep their side of it as it grows or shrinks, and none
+            // is left overlapping it.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                self?.keepArrangement(before, around: anchorID)
+            }
         }
     }
 

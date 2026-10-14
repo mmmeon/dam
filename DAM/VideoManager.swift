@@ -978,6 +978,9 @@ final class VideoManager: ObservableObject {
 
         // Keep the choice should an anchor's layout be put back afterwards.
         for name in virtualAnchorArrangements.keys { virtualAnchorArrangements[name]?.modes[cgDisplayID] = cgMode }
+        // WindowServer re-lays out the displays for the new size; the arrangement goes back
+        // once it has.
+        let before = currentLayout()
         commitDisplayChange({ cfg in
             // If this display is currently a mirror slave, promote it to master first
             // ("Optimize for this display") so the resolution change applies to it.
@@ -986,11 +989,15 @@ final class VideoManager: ObservableObject {
                 CGConfigureDisplayMirrorOfDisplay(cfg, masterID, cgDisplayID)
             }
             CGConfigureDisplayWithDisplayMode(cfg, cgDisplayID, cgMode, nil)
-        }, settle: 0.3) { result in
-            if case .failure(let error) = result {
-                mirrorLog.error("setMode \(cgDisplayID): \(String(describing: error))")
+        }, settle: 0.3) { [weak self] result in
+            guard let self, case .success = result else {
+                if case .failure(let error) = result {
+                    mirrorLog.error("setMode \(cgDisplayID): \(String(describing: error))")
+                }
+                completion?(result)
+                return
             }
-            completion?(result)
+            self.keepArrangement(before, around: cgDisplayID) { _ in completion?(result) }
         }
     }
 

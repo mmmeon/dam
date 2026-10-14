@@ -53,18 +53,22 @@ extension VideoManager {
     /// Moves apart displays that overlap, as after an anchor grows into its neighbour: each
     /// placement that overlaps an earlier one snaps to the nearest free edge of the others.
     func separateOverlappingDisplays() {
-        var layout = currentLayout()
-        var changed = false
-        for i in layout.placements.indices {
-            let others = layout.placements.indices.filter { $0 != i }.map { layout.placements[$0].frame }
-            guard layout.placements[..<i].contains(where: {
-                DisplayLayout.overlaps($0.frame, layout.placements[i].frame)
-            }), let free = DisplayLayout.snap(layout.placements[i].frame, to: others) else { continue }
-            arrangeLog.debug("separate: \(layout.placements[i].id) overlaps; moving to \(Int(free.minX)),\(Int(free.minY))")
-            layout.placements[i].frame = free
-            changed = true
+        let layout = currentLayout()
+        let separated = layout.separated()
+        guard separated != layout else { return }
+        for (old, new) in zip(layout.placements, separated.placements) where old.frame != new.frame {
+            arrangeLog.debug("separate: \(old.id) overlaps; moving to \(Int(new.frame.minX)),\(Int(new.frame.minY))")
         }
-        if changed { arrange(layout) }
+        arrange(separated)
+    }
+
+    /// Puts the arrangement `before` back after a resolution change on display `member`,
+    /// so its neighbours stay on the side they were on (see `keepingArrangement`).
+    func keepArrangement(_ before: DisplayLayout, around member: CGDirectDisplayID,
+                         completion: ((Result<Void, MirrorError>) -> Void)? = nil) {
+        let layout = currentLayout().keepingArrangement(of: before, around: member)
+        arrangeLog.debug("keepArrangement around \(member)")
+        arrange(layout, completion: completion)
     }
 
     /// Applies `layout`: every placement gets its origin, shifted so that `main` (or the
