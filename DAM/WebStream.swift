@@ -66,8 +66,8 @@ enum StreamProfile: String, CaseIterable {
 
     func encoderSettings(width: Int, height: Int, fps: Int, bitrateKbps: Int) -> MoonlightVideoEncoder.Settings {
         var settings = MoonlightVideoEncoder.Settings(width: width, height: height, fps: fps, bitrateKbps: bitrateKbps)
-        // The stream repeats a still screen's frame itself, on its grid.
-        settings.nudges = false
+        // The stream fills its grid itself, with repeats where the screen is still.
+        settings.steady = true
         switch self {
         case .interactive:
             settings.prioritizeSpeed = true
@@ -340,6 +340,8 @@ final class WebStreamSession {
     private let stats = MoonlightStreamStats()
     /// Nanoseconds frames spent in the encoder, and how many; under `lock`.
     private var encodeTime: (total: UInt64, frames: Int) = (0, 0)
+    /// Frames given to the encoder: captured, and repeats filling the grid; under `lock`.
+    private var given: (real: Int, repeats: Int) = (0, 0)
 
     // The stream's clock, on `queue`: the first frame's time is its zero.
     private var anchor: CMTime?
@@ -411,10 +413,12 @@ final class WebStreamSession {
             guard let self else { return }
             self.lock.lock()
             let encode = self.encodeTime
+            let given = self.given
             self.encodeTime = (0, 0)
+            self.given = (0, 0)
             self.lock.unlock()
             let encodeMs = encode.frames > 0 ? Double(encode.total / UInt64(encode.frames)) / 1e6 : 0
-            wsLog.debug("stats (\(self.viewerCount) watching): \(self.stats.take(seconds: 5), privacy: .public); encode \(encodeMs, format: .fixed(precision: 1)) ms")
+            wsLog.debug("stats (\(self.viewerCount) watching): \(self.stats.take(seconds: 5), privacy: .public); given \(given.real) captured + \(given.repeats) repeats; encode \(encodeMs, format: .fixed(precision: 1)) ms")
         }
         self.statsTimer = statsTimer
         statsTimer.resume()
@@ -503,6 +507,7 @@ final class WebStreamSession {
         let slot = grid.snap(time)
         lock.lock()
         lastFrame = (buffer, slot, at)
+        given.real += 1
         let encoder = self.encoder
         lock.unlock()
         encoder?.encode(buffer, at: slot)
@@ -582,20 +587,34 @@ final class WebStreamSession {
         // A still screen gets its keyframe from the last picture at once; a moving one
         // from its next frame.
         if let last, DispatchTime.now().uptimeNanoseconds - last.at > interval * 3 / 2 {
-            encoder?.encode(last.buffer, at: grid.snap(CMClockGetTime(CMClockGetHostTimeClock())))
+            let now = CMClockGetTime(CMClockGetHostTimeClock())
+            encoder?.encode(last.buffer, at: grid.nextSlot(before: now) ?? grid.snap(now))
         }
     }
 
-    /// Gives the encoder the last picture again, in each slot of the grid the screen is
-    /// still for. Players then get a frame every interval, as the stream promises them, and
-    /// never wait on a gap; a still picture costs the encoder next to nothing. On `queue`.
+    /// Gives the encoder the last picture again for each slot of the grid gone by with no
+    /// frame of its own: every slot while the screen is still, the odd one the capture
+    /// skipped while it moves. Players then get a frame every interval, as the stream
+    /// promises them, and never wait on a gap; a still picture costs the encoder next to
+    /// nothing. A slot is given up on a frame interval after its time, and a late firing
+    /// fills every slot it missed. On `queue`.
     private func repeatIfStill() {
         lock.lock()
         let encoder = self.encoder
         let last = lastFrame
         lock.unlock()
-        guard let last, DispatchTime.now().uptimeNanoseconds - last.at > interval * 3 / 2 else { return }
-        encoder?.encode(last.buffer, at: grid.snap(CMClockGetTime(CMClockGetHostTimeClock())))
+        guard let last else { return }
+        let upTo = CMTimeSubtract(CMClockGetTime(CMClockGetHostTimeClock()), CMTime(value: 1, timescale: CMTimeScale(key.fps)))
+        var filled = 0
+        while filled < 4, let slot = grid.nextSlot(before: upTo) {
+            encoder?.encode(last.buffer, at: slot)
+            filled += 1
+        }
+        if filled > 0 {
+            lock.lock()
+            given.repeats += filled
+            lock.unlock()
+        }
     }
 
     // MARK: Sound
@@ -693,6 +712,16 @@ struct FrameGrid {
         let slot = max(Int64((seconds * Double(fps)).rounded(.down)), lastSlot + 1)
         lastSlot = slot
         return CMTimeAdd(origin, CMTime(value: slot, timescale: CMTimeScale(fps)))
+    }
+
+    /// Takes the slot after the last if its time is no later than `time`; nil if it is
+    /// still to come, or nothing has been snapped yet.
+    mutating func nextSlot(before time: CMTime) -> CMTime? {
+        guard let origin else { return nil }
+        let next = CMTimeAdd(origin, CMTime(value: lastSlot + 1, timescale: CMTimeScale(fps)))
+        guard next <= time else { return nil }
+        lastSlot += 1
+        return next
     }
 }
 
