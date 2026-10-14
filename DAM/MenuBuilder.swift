@@ -45,6 +45,12 @@ func buildStatusMenu(audio: AudioManager,
             item.representedObject = display
             item.state = display.isConnected ? .on : .off
             item.image = displayIcon(for: display, video: video)
+            // A listed display is one found on the network; selecting it is what connects,
+            // by driving Control Center's Screen Mirroring, which needs Accessibility access.
+            item.toolTip = display.isConnected
+                ? "Connected through Screen Mirroring"
+                : "Found on the network. Select to connect through Screen Mirroring "
+                  + "(needs Accessibility access)"
 
             if display.isConnected && display.cgDisplayID != 0 {
                 let submenu = buildResolutionSubmenu(display: display, video: video)
