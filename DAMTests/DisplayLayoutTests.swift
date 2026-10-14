@@ -112,6 +112,90 @@ final class DisplayLayoutTests: XCTestCase {
         XCTAssertEqual(sideBySide.moving(99, to: CGPoint(x: 5, y: 5)), sideBySide)
     }
 
+    // MARK: - resizing
+
+    func testResizing_mainShrinks_displayOnItsRightFollowsTheEdge() {
+        let row = DisplayLayout(placements: [placement(a, 0, 0, main: true), placement(b, 1920, 0)])
+        let resized = row.resizing(a, to: CGSize(width: 1280, height: 720))
+        XCTAssertEqual(resized[a]?.frame, CGRect(x: 0, y: 0, width: 1280, height: 720))
+        XCTAssertEqual(resized[b]?.frame.origin, CGPoint(x: 1280, y: 0))
+    }
+
+    func testResizing_displayOnTheLeftStaysPut() {
+        let resized = sideBySide.resizing(a, to: CGSize(width: 2560, height: 1440))
+        XCTAssertEqual(resized[b]?.frame.origin, CGPoint(x: -1920, y: 0))
+        XCTAssertTrue(resized.isConnected)
+    }
+
+    func testResizing_centredDisplayAboveStaysCentred() {
+        let layout = DisplayLayout(placements: [placement(a, 0, 0, 2560, 1440, main: true),
+                                                placement(b, 320, -1080)])
+        let resized = layout.resizing(a, to: CGSize(width: 3840, height: 2160))
+        XCTAssertEqual(resized[b]?.frame.origin, CGPoint(x: 960, y: -1080))
+    }
+
+    func testResizing_bottomAlignedNeighbourStaysBottomAligned() {
+        let layout = DisplayLayout(placements: [placement(a, 0, 0, 2560, 1440, main: true),
+                                                placement(b, 2560, 360)])
+        let resized = layout.resizing(a, to: CGSize(width: 1920, height: 1080))
+        XCTAssertEqual(resized[b]?.frame.origin, CGPoint(x: 1920, y: 0))
+    }
+
+    func testResizing_groupBeyondMovesAsOne() {
+        // a — b — c in a row; a shrinks, and c keeps its place beside b.
+        let row = DisplayLayout(placements: [placement(a, 0, 0, main: true),
+                                             placement(b, 1920, 0), placement(c, 3840, 0)])
+        let resized = row.resizing(a, to: CGSize(width: 1280, height: 720))
+        XCTAssertEqual(resized[b]?.frame.origin, CGPoint(x: 1280, y: 0))
+        XCTAssertEqual(resized[c]?.frame.origin, CGPoint(x: 3200, y: 0))
+    }
+
+    func testKeepingArrangement_putsBackWhatWindowServerMoved() {
+        // b was right of a; after a shrinks WindowServer leaves b detached far away.
+        let before = DisplayLayout(placements: [placement(a, 0, 0, main: true), placement(b, 1920, 0)])
+        let after = DisplayLayout(placements: [placement(a, 0, 0, 1280, 720, main: true),
+                                               placement(b, -1920, 900)])
+        let kept = after.keepingArrangement(of: before, around: a)
+        XCTAssertEqual(kept[a]?.frame, CGRect(x: 0, y: 0, width: 1280, height: 720))
+        XCTAssertEqual(kept[b]?.frame.origin, CGPoint(x: 1280, y: 0))
+    }
+
+    func testKeepingArrangement_slavePromotedToMaster_keepsTheSetsPlace() {
+        // a mirrors onto c, right of b; setting c's mode makes c the master.
+        let before = DisplayLayout(placements: [
+            placement(b, 0, 0, main: true),
+            DisplayPlacement(id: a, frame: CGRect(x: 1920, y: 0, width: 1920, height: 1080),
+                             names: ["a", "c"], isMain: false, memberIDs: [a, c])])
+        let after = DisplayLayout(placements: [
+            placement(b, 0, 0, main: true),
+            DisplayPlacement(id: c, frame: CGRect(x: -1280, y: 0, width: 1280, height: 720),
+                             names: ["c", "a"], isMain: false, memberIDs: [c, a])])
+        let kept = after.keepingArrangement(of: before, around: c)
+        XCTAssertEqual(kept[c]?.frame, CGRect(x: 1920, y: 0, width: 1280, height: 720))
+    }
+
+    func testKeepingArrangement_resizedAnchor_recentresTheDisplayBelow() {
+        // An iPad's anchor (a) shows the iPad (c); b sits centred below it. The anchor
+        // shrinks and WindowServer only moved b up.
+        let before = DisplayLayout(placements: [
+            DisplayPlacement(id: a, frame: CGRect(x: 0, y: 0, width: 1600, height: 1174),
+                             names: ["pad"], isMain: true, memberIDs: [c]),
+            placement(b, -160, 1174)])
+        let after = DisplayLayout(placements: [
+            DisplayPlacement(id: a, frame: CGRect(x: 0, y: 0, width: 800, height: 586),
+                             names: ["pad"], isMain: true, memberIDs: [c]),
+            placement(b, -160, 586)])
+        let kept = after.keepingArrangement(of: before, around: a)
+        XCTAssertEqual(kept[b]?.frame.origin, CGPoint(x: -560, y: 586))
+    }
+
+    func testSeparated_movesAnOverlappingDisplayOff() {
+        let layout = DisplayLayout(placements: [placement(a, 0, 0, main: true), placement(b, 1000, 0)])
+        let separated = layout.separated()
+        XCTAssertFalse(DisplayLayout.overlaps(separated[a]!.frame, separated[b]!.frame))
+        XCTAssertTrue(separated.isConnected)
+    }
+
     // MARK: - placing
 
     func testPlacing_rightOf_centresAlongTheEdge() {

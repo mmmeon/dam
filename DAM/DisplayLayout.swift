@@ -122,6 +122,83 @@ struct DisplayLayout: Equatable {
         return nil
     }
 
+    // MARK: - Resizing
+
+    /// This layout, read after a resolution change on display `member` (or the placement it
+    /// positions), with the arrangement `before` had put back: the resized display keeps its
+    /// top-left corner, and the displays around it keep the side they were on and their
+    /// alignment along it, each group beyond it moving as one. A placement matches the one
+    /// in `before` with its ID, or, when its master changed, the one that showed it.
+    func keepingArrangement(of before: DisplayLayout, around member: CGDirectDisplayID) -> DisplayLayout {
+        // `member` can be the positioning display itself, such as a virtual anchor, which
+        // is not among the displays it shows.
+        let holds = { (p: DisplayPlacement) in p.id == member || p.memberIDs.contains(member) }
+        guard let old = before.placements.first(where: holds),
+              let new = placements.first(where: holds) else { return self }
+        let resized = before.resizing(old.id, to: new.frame.size)
+        let ids = Set(placements.map(\.id))
+        var result = self
+        for i in result.placements.indices {
+            let p = result.placements[i]
+            guard let match = resized[p.id] ?? resized.placements.first(where: {
+                !ids.contains($0.id) && $0.memberIDs.contains(p.id)
+            }) else { continue }
+            result.placements[i].frame.origin = match.frame.origin
+        }
+        return result.separated().reattached(around: new.id)
+    }
+
+    /// The layout with display `id` at `size`, its top-left corner where it was, and every
+    /// group of displays around it moved to keep its place beside it.
+    func resizing(_ id: CGDirectDisplayID, to size: CGSize) -> DisplayLayout {
+        guard let index = placements.firstIndex(where: { $0.id == id }) else { return self }
+        let old = placements[index].frame
+        let new = CGRect(origin: old.origin, size: size)
+        var result = self
+        result.placements[index].frame = new
+        let rest = placements.filter { $0.id != id }
+        var done: Set<CGDirectDisplayID> = []
+        for p in rest where !done.contains(p.id) {
+            let group = Self.component(of: p.id, in: rest)
+            done.formUnion(group)
+            let members = rest.filter { group.contains($0.id) }
+            let guide = (members.first { Self.attached(old, $0.frame) } ?? p).frame
+            let dx = Self.follow(guide.minX, guide.width, old.minX, old.maxX, new.maxX) - guide.minX
+            let dy = Self.follow(guide.minY, guide.height, old.minY, old.maxY, new.maxY) - guide.minY
+            for i in result.placements.indices where group.contains(result.placements[i].id) {
+                result.placements[i].frame = result.placements[i].frame.offsetBy(dx: dx, dy: dy)
+            }
+        }
+        return result
+    }
+
+    /// Where a display spanning `start` + `length` along one axis goes when the display it
+    /// sits by, spanning `oldMin`…`oldMax`, comes to end at `newMax`: past the far edge it
+    /// moves with that edge, before the near edge it stays, and alongside it keeps the edge
+    /// it lines up with, or else its centre's relative position.
+    private static func follow(_ start: CGFloat, _ length: CGFloat,
+                               _ oldMin: CGFloat, _ oldMax: CGFloat, _ newMax: CGFloat) -> CGFloat {
+        if start >= oldMax { return start + newMax - oldMax }
+        if start + length <= oldMin || start == oldMin { return start }
+        if start + length == oldMax { return newMax - length }
+        let t = (start + length / 2 - oldMin) / (oldMax - oldMin)
+        return (oldMin + t * (newMax - oldMin) - length / 2).rounded()
+    }
+
+    /// The layout with each placement that overlaps an earlier one snapped to the nearest
+    /// free edge of the others.
+    func separated() -> DisplayLayout {
+        var result = self
+        for i in result.placements.indices {
+            let frame = result.placements[i].frame
+            let others = result.placements.indices.filter { $0 != i }.map { result.placements[$0].frame }
+            guard result.placements[..<i].contains(where: { Self.overlaps($0.frame, frame) }),
+                  let free = Self.snap(frame, to: others) else { continue }
+            result.placements[i].frame = free
+        }
+        return result
+    }
+
     // MARK: - Mirroring
 
     /// How much of the smaller of two displays a held display must cover for the other to
