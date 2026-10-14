@@ -35,4 +35,11 @@ jobs:
             -derivedDataPath build/dd \
             CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=YES CODE_SIGNING_ALLOWED=YES \
             DEVELOPMENT_TEAM= \
+            -resultBundlePath build/TestResults.xcresult \
             test
+      - name: Keep the test results when they fail
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results
+          path: build/TestResults.xcresult
