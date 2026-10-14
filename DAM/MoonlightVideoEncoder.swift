@@ -49,11 +49,11 @@ final class MoonlightVideoEncoder {
         var keyFrameInterval = 0
         /// Whether the encoder may trade picture quality for speed.
         var prioritizeSpeed = false
-        /// Whether a frame with none after it is nudged out by giving the encoder the same
-        /// picture again a little later (see `nudgeDelay`). Right for frames that come as
-        /// the screen changes; wrong for a steady stream, which brings its own repeats and
-        /// would have the nudges' doubles in the way of them.
-        var nudges = true
+        /// Whether frames come at a steady rate, every one of them to be encoded: a burst
+        /// of them queues up (a few deep) rather than each taking the place of the last,
+        /// and none is nudged out (see `nudgeDelay`), the stream bringing its own repeats.
+        /// Off for Moonlight, whose frames come as the screen changes.
+        var steady = false
     }
 
     /// One encoded frame as an H.264 Annex B access unit; a keyframe starts with its SPS and PPS.
@@ -81,7 +81,7 @@ final class MoonlightVideoEncoder {
     private let lock = NSLock()
     /// Whether the encoding thread is taking frames from the slot.
     private var busy = false
-    private var waiting: (buffer: CVPixelBuffer, time: CMTime)?
+    private var waiting: [(CVPixelBuffer, CMTime)] = []
     private var keyFrameRequested = true
     /// Frames given to the encoder and not yet handed back; under `lock`.
     private var pending = 0
@@ -169,10 +169,16 @@ final class MoonlightVideoEncoder {
         lock.unlock()
     }
 
-    /// Puts `buffer` in the slot, in place of any frame not yet taken, and returns at once.
+    /// Puts `buffer` in the slot, in place of any frame not yet taken (or, for a steady
+    /// stream, behind it), and returns at once.
     func encode(_ buffer: CVPixelBuffer, at time: CMTime) {
         lock.lock()
-        waiting = (buffer, time)
+        if settings.steady {
+            waiting.append((buffer, time))
+            if waiting.count > 4 { waiting.removeFirst() }
+        } else {
+            waiting = [(buffer, time)]
+        }
         let start = !busy
         busy = true
         lock.unlock()
@@ -183,18 +189,18 @@ final class MoonlightVideoEncoder {
     private func drain() {
         while true {
             lock.lock()
-            guard let (buffer, time) = waiting else {
+            guard let (buffer, time) = waiting.first else {
                 busy = false
                 lock.unlock()
                 return
             }
-            waiting = nil
+            waiting.removeFirst()
             let key = keyFrameRequested
             keyFrameRequested = false
             lock.unlock()
             if !submit(buffer, at: time, keyFrame: key), key { requestKeyFrame() }
             lastBuffer = buffer
-            guard settings.nudges else { continue }
+            guard !settings.steady else { continue }
             // Bring this frame out should no other follow it.
             let generation = submissions
             queue.asyncAfter(deadline: .now() + nudgeDelay) { [weak self] in

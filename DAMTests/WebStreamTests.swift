@@ -48,7 +48,7 @@ final class WebStreamTests: XCTestCase {
     func testProfilesSetTheEncoderApart() {
         let interactive = StreamProfile.interactive.encoderSettings(width: 1920, height: 1080, fps: 60, bitrateKbps: 20_000)
         XCTAssertFalse(interactive.reordering)
-        XCTAssertFalse(interactive.nudges, "the stream repeats frames itself")
+        XCTAssertTrue(interactive.steady, "the stream fills its grid itself")
         XCTAssertTrue(interactive.prioritizeSpeed)
         XCTAssertEqual(interactive.keyFrameInterval, 0)
         XCTAssertEqual(interactive.rateLimitWindow, 0.25)
@@ -88,6 +88,19 @@ final class WebStreamTests: XCTestCase {
         XCTAssertEqual(seconds(grid.snap(later)), seconds(origin) + 30.0 / 60, accuracy: 1e-6, "slots may be skipped")
         XCTAssertEqual(grid.lastSlot, 30)
         XCTAssertEqual(seconds(grid.snap(later)), seconds(origin) + 31.0 / 60, accuracy: 1e-6, "but never doubled up")
+    }
+
+    func testSlotsGoneByAreTakenOneAtATime() throws {
+        var grid = FrameGrid(fps: 60)
+        XCTAssertNil(grid.nextSlot(before: CMTime(value: 1, timescale: 1)), "nothing before the origin")
+        let origin = CMTime(value: 5, timescale: 1)
+        _ = grid.snap(origin)
+        XCTAssertNil(grid.nextSlot(before: CMTimeAdd(origin, CMTime(value: 10, timescale: 1000))), "slot 1 is still to come")
+        let later = CMTimeAdd(origin, CMTime(value: 40, timescale: 1000))
+        XCTAssertEqual(seconds(try XCTUnwrap(grid.nextSlot(before: later))), seconds(origin) + 1.0 / 60, accuracy: 1e-6)
+        XCTAssertEqual(seconds(try XCTUnwrap(grid.nextSlot(before: later))), seconds(origin) + 2.0 / 60, accuracy: 1e-6)
+        XCTAssertNil(grid.nextSlot(before: later), "slot 3 is at 50 ms")
+        XCTAssertEqual(grid.lastSlot, 2)
     }
 
     func testTheGridFollowsTheClockWhenRepeatsFillIt() {
