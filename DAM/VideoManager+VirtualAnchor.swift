@@ -52,6 +52,22 @@ struct DisplayArrangement {
                            mirrorMasters: mirrorMasters, modes: modes)
     }
 
+    /// The same arrangement with display `id` showing its own desktop at `origin` in `mode`,
+    /// for the set it has joined.
+    func adding(_ id: CGDirectDisplayID, origin: CGPoint, mode: CGDisplayMode?) -> DisplayArrangement {
+        var modes = modes
+        modes[id] = mode
+        return DisplayArrangement(origins: origins.merging([id: origin]) { $1 },
+                                  mirrorMasters: mirrorMasters.merging([id: 0]) { $1 }, modes: modes)
+    }
+
+    /// The same arrangement without display `id`, for the set it has left.
+    func excluding(_ id: CGDirectDisplayID) -> DisplayArrangement {
+        DisplayArrangement(origins: origins.filter { $0.key != id },
+                           mirrorMasters: mirrorMasters.filter { $0.key != id },
+                           modes: modes.filter { $0.key != id })
+    }
+
     static func onlineDisplayIDs() -> [CGDirectDisplayID] {
         var count: CGDisplayCount = 0
         CGGetOnlineDisplayList(0, nil, &count)
@@ -110,6 +126,32 @@ struct DisplayArrangement {
             moved = true
         }
         return moved
+    }
+
+    /// Puts the captured resolutions back after the display set has changed, for as long as
+    /// the app runs. WindowServer can pick other ones for the new set.
+    func reapplyModes() {
+        // Only for the same displays, mirrored the same way: a set changed meanwhile (an
+        // AirPlay display joined) has resolutions of its own that the captured ones would undo.
+        let online = Self.onlineDisplayIDs()
+        guard Self.sameSet(captured: mirrorMasters, online: online, mirrorOf: { CGDisplayMirrorsDisplay($0) }) else {
+            vdLog.debug("reapplyModes: the display set changed since it was captured; leaving resolutions")
+            return
+        }
+        var config: CGDisplayConfigRef?
+        guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else { return }
+        guard restoreModes(in: cfg, excluding: []) else {
+            CGCancelDisplayConfiguration(cfg)
+            return
+        }
+        let err = CGCompleteDisplayConfiguration(cfg, .forAppOnly)
+        vdLog.debug("reapplyModes: CompleteDisplayConfiguration err=\(err.rawValue)")
+    }
+
+    /// Whether `online` are the captured displays, each mirroring what it did then.
+    static func sameSet(captured: [CGDirectDisplayID: CGDirectDisplayID], online: [CGDirectDisplayID],
+                        mirrorOf: (CGDirectDisplayID) -> CGDirectDisplayID) -> Bool {
+        Set(online) == Set(captured.keys) && online.allSatisfy { mirrorOf($0) == captured[$0] }
     }
 
     /// Puts the captured positions back once more, permanently, after the display set has
@@ -221,6 +263,21 @@ extension VideoManager {
         return nil
     }
 
+    /// What `display` offers to pick from, by what drives it, for the menu, the Touch Bar and
+    /// the resolution picker. `includeLarger1x` is passed on to `resolutionOptions`.
+    func resolutionChoices(for display: DisplayInfo, includeLarger1x: Bool = false) -> ResolutionChoices {
+        if display.isSidecar, hasVirtualAnchor(for: display.name) {
+            let options = sidecarResolutionOptions(for: display)
+            return .sidecar(modes: options.modes, current: options.currentIndex)
+        }
+        if displayContext(for: display) == .airPlay {
+            let options = airPlayResolutionOptions(for: display)
+            return .airPlay(native: options.native, virtual: options.virtual, current: options.current)
+        }
+        let options = resolutionOptions(for: display, includeLarger1x: includeLarger1x)
+        return .panel(modes: options.modes, current: options.currentIndex)
+    }
+
     /// Resolution choices for an external or built-in display: one native mode per logical
     /// size (HiDPI preferred), trimmed and ordered by `pickerResolutions`. Each is at the
     /// current refresh rate when the display supports it there, otherwise its highest rate.
@@ -240,9 +297,16 @@ extension VideoManager {
         let native = display.isSidecar
             ? sidecarNativeMode(for: display.cgDisplayID).map { ($0.pixelWidth, $0.pixelHeight) }
             : Self.nativeSize(of: all)
-        let perSize = Self.onePerSize(all, native: native)
-        var modes = Self.pickerResolutions(perSize, native: native, current: current,
-                                           includeLarger1x: includeLarger1x)
+        // The streaming display has no panel to fit: every size it offers, in every shape,
+        // at 1x and at HiDPI, short of the HiDPI ones macOS adds past its largest size
+        // unless another app has picked one.
+        let isCurrent = { (m: DisplayMode) in
+            current.map { m.width == $0.width && m.height == $0.height && m.isHiDPI == $0.isHiDPI } ?? false
+        }
+        var modes = display.isStreaming
+            ? Self.everyResolution(all.filter { StreamingDisplayModes.fits($0) || isCurrent($0) })
+            : Self.pickerResolutions(Self.onePerSize(all, native: native), native: native, current: current,
+                                     includeLarger1x: includeLarger1x)
         if let rate = current?.roundedRefreshRate {
             modes = modes.map { best in
                 all.first {
@@ -252,9 +316,20 @@ extension VideoManager {
             }
         }
         let currentIndex = current.flatMap { cur in
-            modes.firstIndex { $0.width == cur.width && $0.height == cur.height }
+            modes.firstIndex {
+                $0.width == cur.width && $0.height == cur.height
+                    && (!display.isStreaming || $0.isHiDPI == cur.isHiDPI)
+            }
         }
         return (modes, currentIndex)
+    }
+
+    /// One mode per size and scale, largest UI size first, HiDPI before 1x at the same size.
+    static func everyResolution(_ modes: [DisplayMode]) -> [DisplayMode] {
+        var seen = Set<String>()
+        return modes
+            .sorted { ($0.width, $0.height, $0.isHiDPI ? 1 : 0) > ($1.width, $1.height, $1.isHiDPI ? 1 : 0) }
+            .filter { seen.insert("\($0.width)x\($0.height)\($0.isHiDPI ? "@2x" : "")").inserted }
     }
 
     /// The panel's native size: its largest 1x mode (HiDPI modes can be backed by more pixels
@@ -481,7 +556,7 @@ extension VideoManager {
     /// it appears in the system display list and wires up the mirror relationship.
     /// `initialMode`, if given, is applied to the anchor once mirroring is in place.
     func enableVirtualAnchor(for display: DisplayInfo, initialMode: DisplayMode? = nil) {
-        guard display.cgDisplayID != 0, !hasVirtualAnchor(for: display.name) else {
+        guard display.cgDisplayID != 0, !display.isStreaming, !hasVirtualAnchor(for: display.name) else {
             vdLog.debug("enableVirtualAnchor: skipped '\(display.name)' cgID=\(display.cgDisplayID) hasAnchor=\(self.hasVirtualAnchor(for: display.name))")
             return
         }
@@ -1227,5 +1302,37 @@ extension VideoManager {
     private static func matches(_ cgMode: CGDisplayMode, _ mode: DisplayMode) -> Bool {
         cgMode.width == mode.width && cgMode.height == mode.height
             && cgMode.pixelWidth == mode.pixelWidth && cgMode.pixelHeight == mode.pixelHeight
+    }
+}
+
+/// The resolutions a display offers, by what drives it (see `VideoManager.resolutionChoices`).
+enum ResolutionChoices {
+    /// An iPad driven by its anchor: the anchor's sizes, scaled onto the iPad.
+    case sidecar(modes: [DisplayMode], current: Int?)
+    /// An AirPlay display: its native sizes and the anchor's virtual ones, kept apart, with
+    /// the current index in the pool that drives the display.
+    case airPlay(native: [DisplayMode], virtual: [DisplayMode], current: (native: Int?, virtual: Int?))
+    /// A built-in, external or streaming display.
+    case panel(modes: [DisplayMode], current: Int?)
+
+    /// Every size in one list and the index of the one in effect. An AirPlay display's
+    /// native sizes come before its virtual ones; `nativeInLargestAspect` keeps only the
+    /// native sizes in the aspect ratio of the largest, for the Touch Bar's few segments.
+    func flattened(nativeInLargestAspect: Bool = false) -> (modes: [DisplayMode], current: Int?) {
+        switch self {
+        case let .sidecar(modes, current), let .panel(modes, current):
+            return (modes, current)
+        case let .airPlay(native, virtual, current):
+            func gcd(_ a: Int, _ b: Int) -> Int { b == 0 ? a : gcd(b, a % b) }
+            func aspect(_ m: DisplayMode) -> (Int, Int) {
+                let g = gcd(m.width, m.height)
+                return (m.width / g, m.height / g)
+            }
+            let largest = nativeInLargestAspect ? native.first.map(aspect) : nil
+            let kept = native.indices.filter { i in largest.map { aspect(native[i]) == $0 } ?? true }
+            let index = current.native.flatMap { kept.firstIndex(of: $0) }
+                ?? current.virtual.map { kept.count + $0 }
+            return (kept.map { native[$0] } + virtual, index)
+        }
     }
 }

@@ -85,6 +85,9 @@ struct DisplayInfo: Identifiable, Hashable {
     /// True for an iPad connected over Sidecar. Its `name` is the iPad's name, so the entry
     /// matches the device in the Sidecar section and shares its nickname.
     var isSidecar: Bool = false
+    /// True for one of DAM's streaming displays (see VideoManager+StreamingDisplay.swift). It is
+    /// virtual, so it is never given a virtual anchor.
+    var isStreaming: Bool = false
 
     /// What the app shows for this display: its nickname if the user set one, else its name.
     /// `name` stays the identity used to find the display and key its settings.
@@ -182,6 +185,25 @@ final class VideoManager: ObservableObject {
     /// no display at all, and dropped once the iPad has a display of its own to sit with.
     var bootstrapDisplay: AnyObject?
     var bootstrapDisplayID: CGDirectDisplayID = 0
+    /// The streaming displays, in the order they were added.
+    var streamingDisplays: [StreamingDisplay] = []
+    /// Additions and removals of streaming displays asked for, in order.
+    var streamingRequests: [StreamingRequest] = []
+    /// Called when the addition under way has placed its display, or made none.
+    var streamingAddCompletion: ((CGDirectDisplayID?) -> Void)?
+    /// The layout from before the first streaming display was added.
+    var streamingArrangement: DisplayArrangement?
+    /// Whether the user made a streaming display main, which DAM then leaves it.
+    var streamingDisplayIsMainByChoice = false
+    /// Whether a streaming display is being added or removed; the next change waits for it.
+    var streamingChangeInFlight = false
+    /// Whether main is being handed from a streaming display to another display.
+    var streamingMainHandBackInFlight = false
+    /// The layout to keep after a streaming display was added or removed, and until when.
+    /// WindowServer can change resolutions for the new set some seconds later.
+    var streamingSettle: (arrangement: DisplayArrangement, until: Date)?
+    /// Whether that layout is being put back; later changes wait for the one it causes.
+    var streamingReassertInFlight = false
 
     /// Start continuous Bonjour discovery. Call once on launch; runs until the app quits.
     func startDiscovery() {
@@ -195,7 +217,9 @@ final class VideoManager: ObservableObject {
                 self?.mergeDevices()
             }
         }
-        browser.start(queue: .global(qos: .utility))
+        // A serial queue: NWBrowser's Swift handler isn't safe on a concurrent one, and
+        // crashed there when results changed twice at once.
+        browser.start(queue: .main)
         self.browser = browser
         observeDisplayChanges()
         observeSleepAndWake()
@@ -297,7 +321,9 @@ final class VideoManager: ObservableObject {
         reconfigureWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             self?.reassertAnchorLayout()
+            self?.reassertStreamingLayout()
             self?.mergeDevices()
+            self?.keepStreamingDisplayOffMain()
             // WindowServer places a display that arrives beside a virtual anchor on top of
             // it (an AirPlay TV joining an anchored iPad); move it off.
             if let self, !self.virtualAnchorCGIDs.isEmpty, !self.virtualAnchorReassertInFlight {
@@ -633,7 +659,10 @@ final class VideoManager: ObservableObject {
             for (name, arrangement) in self.virtualAnchorArrangements {
                 self.virtualAnchorArrangements[name] = arrangement.makingMain(display.cgDisplayID)
             }
+            self.streamingArrangement = self.streamingArrangement?.makingMain(display.cgDisplayID)
         }
+        // Set before the commit: the change it causes is checked before it reports back.
+        streamingDisplayIsMainByChoice = streamingDisplayIDs.contains(display.cgDisplayID)
         guard CGDisplayIsMain(mainID) == 0 else { rebase(); completion?(.success(())); return }
         let online  = DisplayArrangement.onlineDisplayIDs()
         let bounds  = Dictionary(uniqueKeysWithValues: online.map { ($0, CGDisplayBounds($0)) })
@@ -1084,6 +1113,7 @@ final class VideoManager: ObservableObject {
         var anchorIDs  = Set(virtualAnchorCGIDs.values)
         if bootstrapDisplayID != 0 { anchorIDs.insert(bootstrapDisplayID) }
 
+        let streamingIDs = streamingDisplayIDs
         var physical: [DisplayInfo] = []
         for cgID in onlineIDs {
             guard !airPlayIDs.contains(cgID) else { continue }
@@ -1099,7 +1129,8 @@ final class VideoManager: ObservableObject {
                                         isMirroring: userMirrorMaster(of: cgID) != nil,
                                         isBuiltIn: isBuiltIn,
                                         isMain: CGDisplayIsMain(cgID) != 0,
-                                        isSidecar: sidecarIDs.contains(cgID)))
+                                        isSidecar: sidecarIDs.contains(cgID),
+                                        isStreaming: streamingIDs.contains(cgID)))
         }
         // Built-in first, then external sorted by name.
         let newPhysical = physical.sorted { l, r in

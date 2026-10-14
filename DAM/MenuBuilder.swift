@@ -7,6 +7,7 @@ import AppKit
 func buildStatusMenu(audio: AudioManager,
                      video: VideoManager,
                      sidecar: SidecarManager,
+                     moonlight: MoonlightHost,
                      onRefresh: @escaping () -> Void) -> NSMenu {
     let menu = NSMenu()
 
@@ -110,10 +111,39 @@ func buildStatusMenu(audio: AudioManager,
         }
     }
 
-    // — Connected Displays section — physical displays; a Sidecar iPad is listed above
+    // — Streaming Displays section — DAM's own, for streaming or remote-desktop apps
+    menu.addItem(.separator())
+    menu.addItem(sectionHeader("Streaming Displays"))
+    for display in video.connectedDisplays where display.isStreaming {
+        let item = NSMenuItem(title: display.label, action: nil, keyEquivalent: "")
+        item.state = .on
+        item.image = displayIcon(for: display, video: video)
+        let submenu = buildResolutionSubmenu(display: display, video: video)
+        submenu.addItem(.separator())
+        addDisplayControls(to: submenu, for: display, video: video, canMirror: canMirrorDisplays)
+        let remove = NSMenuItem(title: "Remove",
+                                action: #selector(AppDelegate.removeStreamingDisplay(_:)),
+                                keyEquivalent: "")
+        remove.representedObject = display
+        submenu.addItem(remove)
+        item.submenu = submenu
+        menu.addItem(item)
+    }
+    let create = NSMenuItem(title: "Create Streaming Display",
+                            action: video.canCreateStreamingDisplay
+                                ? #selector(AppDelegate.createStreamingDisplay(_:)) : nil,
+                            keyEquivalent: "")
+    create.toolTip = video.canCreateStreamingDisplay
+        ? "A virtual display for a streaming or remote-desktop app to show, one per stream."
+        : "There can be up to \(VideoManager.maxStreamingDisplays) streaming displays."
+    menu.addItem(create)
+    menu.addItem(moonlightItem(host: moonlight))
+
+    // — Connected Displays section — physical displays; Sidecar iPads and streaming
+    // displays are listed above
     menu.addItem(.separator())
     menu.addItem(sectionHeader("Connected Displays"))
-    let physicalDisplays = video.connectedDisplays.filter { !$0.isSidecar }
+    let physicalDisplays = video.connectedDisplays.filter { !$0.isSidecar && !$0.isStreaming }
     if physicalDisplays.isEmpty {
         menu.addItem(disabledItem("None"))
     } else {
@@ -181,6 +211,9 @@ private func debugMenuItem() -> NSMenuItem {
     submenu.addItem(withTitle: "Play Main Display Picker",
                     action: #selector(AppDelegate.debugPlayMainDisplayPicker(_:)),
                     keyEquivalent: "")
+    submenu.addItem(withTitle: "Play Resolution Picker",
+                    action: #selector(AppDelegate.debugPlayResolutionPicker(_:)),
+                    keyEquivalent: "")
     submenu.addItem(withTitle: "Diagnose Screen Mirroring",
                     action: #selector(AppDelegate.debugDiagnoseScreenMirroring(_:)),
                     keyEquivalent: "")
@@ -205,6 +238,58 @@ private func debugMenuItem() -> NSMenuItem {
     return item
 }
 #endif
+
+/// Hosting for Moonlight, on or off, and the devices paired with it.
+private func moonlightItem(host: MoonlightHost) -> NSMenuItem {
+    let item = NSMenuItem(title: "Moonlight", action: nil, keyEquivalent: "")
+    item.state = host.isRunning ? .on : .off
+    let submenu = NSMenu()
+    let toggle = NSMenuItem(title: "Allow Moonlight to Connect",
+                            action: #selector(AppDelegate.toggleMoonlightHost(_:)),
+                            keyEquivalent: "")
+    toggle.state = host.isRunning ? .on : .off
+    toggle.toolTip = "Lets Moonlight on another device find this Mac and pair with it. " +
+                     "Each streaming display is listed in Moonlight as an app."
+    submenu.addItem(toggle)
+    if let error = host.lastError { submenu.addItem(disabledItem(error)) }
+    if host.isRunning {
+        submenu.addItem(.separator())
+        submenu.addItem(sectionHeader("Browser Stream"))
+        let open = NSMenuItem(title: "Open in Browser", action: #selector(AppDelegate.openWebStream(_:)), keyEquivalent: "")
+        open.toolTip = "Plays a streaming display in this Mac's browser, as any browser or player on the network can at " +
+                       host.watchURL.absoluteString
+        submenu.addItem(open)
+        let copy = NSMenuItem(title: "Copy Address", action: #selector(AppDelegate.copyWebStreamAddress(_:)), keyEquivalent: "")
+        copy.toolTip = "Copies \(host.watchURL.absoluteString). Players like mpv and VLC take the stream itself at " +
+                       "\(host.watchURL.deletingLastPathComponent().absoluteString)stream.mp4."
+        submenu.addItem(copy)
+        let quality = NSMenuItem(title: "Profile", action: nil, keyEquivalent: "")
+        let profiles = NSMenu()
+        for profile in StreamProfile.allCases {
+            let item = NSMenuItem(title: profile.title, action: #selector(AppDelegate.setStreamProfile(_:)), keyEquivalent: "")
+            item.representedObject = profile.rawValue
+            item.state = profile == StreamProfile.preferred ? .on : .off
+            item.toolTip = profile.summary
+            profiles.addItem(item)
+        }
+        quality.submenu = profiles
+        submenu.addItem(quality)
+        let watching = host.webStream.viewerCount
+        if watching > 0 { submenu.addItem(disabledItem(watching == 1 ? "1 watching" : "\(watching) watching")) }
+    }
+    if !host.clients.isEmpty {
+        submenu.addItem(.separator())
+        for client in host.clients {
+            let forget = NSMenuItem(title: "Forget \(client.name)",
+                                    action: #selector(AppDelegate.forgetMoonlightClient(_:)),
+                                    keyEquivalent: "")
+            forget.representedObject = client
+            submenu.addItem(forget)
+        }
+    }
+    item.submenu = submenu
+    return item
+}
 
 private func sectionHeader(_ title: String) -> NSMenuItem {
     let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
@@ -232,53 +317,52 @@ private func buildResolutionSubmenu(display: DisplayInfo, video: VideoManager) -
         return submenu
     }
 
-    if display.isSidecar, video.hasVirtualAnchor(for: display.name) {
+    switch video.resolutionChoices(for: display, includeLarger1x: true) {
+    case let .sidecar(modes, currentIndex):
         // The anchor's sizes, scaled onto the iPad. Sidecar runs at 60 Hz only.
-        let resolutions = video.sidecarResolutionOptions(for: display)
         submenu.addItem(sectionHeader("Resolution"))
-        for (i, mode) in resolutions.modes.enumerated() {
+        for (i, mode) in modes.enumerated() {
             submenu.addItem(modeItem(title: mode.resolutionLabel, mode: mode, display: display,
-                                     isCurrent: i == resolutions.currentIndex))
+                                     isCurrent: i == currentIndex))
         }
-    } else if video.displayContext(for: display) == .airPlay {
+    case let .airPlay(native, virtual, currentIndex):
         // Resolutions in a native and a virtual group, each picked at the current rate where
         // it can be; then the rates at the current resolution, split the same way.
-        let resolutions = video.airPlayResolutionOptions(for: display)
         submenu.addItem(sectionHeader("Resolution"))
-        if resolutions.native.isEmpty {
+        if native.isEmpty {
             submenu.addItem(disabledItem("No modes available"))
         } else {
-            for (i, mode) in resolutions.native.enumerated() {
+            for (i, mode) in native.enumerated() {
                 submenu.addItem(modeItem(title: mode.resolutionLabel, mode: mode, display: display,
-                                         isCurrent: i == resolutions.current.native))
+                                         isCurrent: i == currentIndex.native))
             }
         }
 
         submenu.addItem(sectionHeader("Virtual Resolution"))
-        for (i, mode) in resolutions.virtual.enumerated() {
+        for (i, mode) in virtual.enumerated() {
             submenu.addItem(modeItem(title: mode.resolutionLabel, mode: mode, display: display,
-                                     isCurrent: i == resolutions.current.virtual))
+                                     isCurrent: i == currentIndex.virtual))
         }
 
         addRateSections(to: submenu, rates: video.airPlayRateOptions(for: display),
                         display: display, current: current)
-    } else {
+    case let .panel(modes, currentIndex):
         // External or built-in — Resolution picker + Refresh Rate picker for the current
         // resolution. Native rates use native mode settings; non-native rates activate the
         // virtual anchor.
         submenu.addItem(sectionHeader("Resolution"))
-        let resolutions = video.resolutionOptions(for: display, includeLarger1x: true)
-        if resolutions.modes.isEmpty {
+        if modes.isEmpty {
             submenu.addItem(disabledItem("No modes available"))
         } else {
-            for (i, mode) in resolutions.modes.enumerated() {
+            for (i, mode) in modes.enumerated() {
                 submenu.addItem(modeItem(title: mode.resolutionLabel, mode: mode, display: display,
-                                         isCurrent: i == resolutions.currentIndex))
+                                         isCurrent: i == currentIndex))
             }
         }
 
-        addRateSections(to: submenu, rates: video.refreshRateOptions(for: display)?.modes ?? [],
-                        display: display, current: current)
+        // The streaming display is virtual already; it gets no anchor, so no virtual rates.
+        let rates = (video.refreshRateOptions(for: display)?.modes ?? []).filter { !display.isStreaming || !$0.isVirtual }
+        addRateSections(to: submenu, rates: rates, display: display, current: current)
     }
     return submenu
 }

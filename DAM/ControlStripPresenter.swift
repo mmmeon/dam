@@ -500,39 +500,26 @@ final class ControlStripPresenter: NSObject {
     /// the rates page. AirPlay lists its native sizes, then its virtual ones.
     private func makeResolutionSegItem(id: NSTouchBarItem.Identifier,
                                        display: DisplayInfo) -> NSTouchBarItem {
+        // Same rule as the menu: a display mirroring an anchored iPad runs at the anchor's
+        // size, and setting a mode on it would make the anchor mirror it instead.
+        if let vm = videoManager, let master = vm.anchoredMaster(of: display) {
+            let size = vm.currentModes(for: master).anchor.map { " · \($0.shortLabel)" } ?? ""
+            let item = NSCustomTouchBarItem(identifier: id)
+            item.view = placeholder("Follows \(truncated(master.label, max: 16))\(size)")
+            return item
+        }
         let options  = resolutionChoices(for: display)
-        let window   = Self.window(options.modes, around: options.currentIndex, limit: 5)
-        let selected = options.currentIndex.map { $0 - window.startIndex }
+        let window   = Self.window(options.modes, around: options.current, limit: 5)
+        let selected = options.current.map { $0 - window.startIndex }
         return modeSegmentsItem(id: id, display: display, modes: Array(window),
                                 labels: window.map { $0.shortLabel }, selected: selected,
                                 action: #selector(resolutionPickTapped(_:)))
     }
 
-    /// The sizes on a display's resolution page and the index of the one in effect.
-    private func resolutionChoices(for display: DisplayInfo) -> (modes: [DisplayMode], currentIndex: Int?) {
-        guard let vm = videoManager else { return ([], nil) }
-        if display.isSidecar, vm.hasVirtualAnchor(for: display.name) { return vm.sidecarResolutionOptions(for: display) }
-        guard vm.displayContext(for: display) == .airPlay else { return vm.resolutionOptions(for: display) }
-        let options = vm.airPlayResolutionOptions(for: display)
-        return Self.airPlayResolutionChoices(native: options.native, virtual: options.virtual,
-                                             current: options.current)
-    }
-
-    /// AirPlay sizes for the Touch Bar: the native ones in the aspect ratio of the largest,
-    /// then the virtual ones; the current index points into the combined list.
-    static func airPlayResolutionChoices(native: [DisplayMode], virtual: [DisplayMode],
-                                         current: (native: Int?, virtual: Int?))
-        -> (modes: [DisplayMode], currentIndex: Int?) {
-        func gcd(_ a: Int, _ b: Int) -> Int { b == 0 ? a : gcd(b, a % b) }
-        func aspect(_ m: DisplayMode) -> (Int, Int) {
-            let g = gcd(m.width, m.height)
-            return (m.width / g, m.height / g)
-        }
-        let largest = native.first.map(aspect)
-        let kept = native.indices.filter { i in largest.map { aspect(native[i]) == $0 } ?? true }
-        let currentIndex = current.native.flatMap { kept.firstIndex(of: $0) }
-            ?? current.virtual.map { kept.count + $0 }
-        return (kept.map { native[$0] } + virtual, currentIndex)
+    /// The sizes on a display's resolution page and the index of the one in effect. AirPlay
+    /// lists only its native sizes in the aspect ratio of the largest, then its virtual ones.
+    private func resolutionChoices(for display: DisplayInfo) -> (modes: [DisplayMode], current: Int?) {
+        videoManager?.resolutionChoices(for: display).flattened(nativeInLargestAspect: true) ?? ([], nil)
     }
 
     /// Builds the refresh-rate segments for a display's second page: rates at the current
@@ -795,7 +782,7 @@ final class ControlStripPresenter: NSObject {
         let mode    = ctx.modes[idx]
         let display = ctx.display
         let options = resolutionChoices(for: display)
-        let isCurrent = options.currentIndex.map {
+        let isCurrent = options.current.map {
             let cur = options.modes[$0]
             return cur.width == mode.width && cur.height == mode.height
                 && cur.isHiDPI == mode.isHiDPI && cur.isVirtual == mode.isVirtual
