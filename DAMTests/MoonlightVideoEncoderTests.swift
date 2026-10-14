@@ -63,6 +63,15 @@ final class MoonlightVideoEncoderTests: XCTestCase {
         }
     }
 
+    /// An encoder on this Mac's hardware. These tests are of the hardware path, the one
+    /// streaming takes on any Mac; a virtual machine, as the GitHub runners are, has only
+    /// Apple's software encoder, which takes seconds a frame there.
+    private func makeEncoder(_ collector: Collector) throws -> MoonlightVideoEncoder {
+        let encoder = try MoonlightVideoEncoder(settings: settings, output: collector.add)
+        try XCTSkipUnless(encoder.isHardware, "no hardware video encoder on this Mac")
+        return encoder
+    }
+
     private func encodeOne(_ encoder: MoonlightVideoEncoder, _ collector: Collector, seed: Int) throws {
         let done = expectation(description: "frame \(seed)")
         let expected = time(seed)
@@ -73,7 +82,7 @@ final class MoonlightVideoEncoderTests: XCTestCase {
 
     func testFirstFrameIsAKeyFrameWithItsParameterSets() throws {
         let collector = Collector()
-        let encoder = try MoonlightVideoEncoder(settings: settings, output: collector.add)
+        let encoder = try makeEncoder(collector)
         try encodeOne(encoder, collector, seed: 0)
         let first = try XCTUnwrap(collector.given.first)
         XCTAssertTrue(first.isKeyFrame)
@@ -83,10 +92,10 @@ final class MoonlightVideoEncoderTests: XCTestCase {
 
     func testLaterFramesAreNotKeyFramesUntilAskedFor() throws {
         let collector = Collector()
-        let encoder = try MoonlightVideoEncoder(settings: settings, output: collector.add)
+        let encoder = try makeEncoder(collector)
         for seed in 0..<5 { try encodeOne(encoder, collector, seed: seed) }
         XCTAssertEqual(collector.given.map(\.isKeyFrame), [true, false, false, false, false])
-        XCTAssertFalse(nalTypes(collector.given[1].data).contains(7))
+        XCTAssertFalse(nalTypes(try XCTUnwrap(collector.given.dropFirst().first).data).contains(7))
         XCTAssertTrue(collector.frames.allSatisfy { $0.isKeyFrame == ($0.time == time(0)) }, "repeats are not keyframes either")
 
         encoder.requestKeyFrame()
@@ -98,7 +107,7 @@ final class MoonlightVideoEncoderTests: XCTestCase {
 
     func testAFrameLeftAloneIsBroughtOutWithinAFewFramesTime() throws {
         let collector = Collector()
-        let encoder = try MoonlightVideoEncoder(settings: settings, output: collector.add)
+        let encoder = try makeEncoder(collector)
         let began = DispatchTime.now().uptimeNanoseconds
         try encodeOne(encoder, collector, seed: 0)
         try encodeOne(encoder, collector, seed: 1)
@@ -108,7 +117,7 @@ final class MoonlightVideoEncoderTests: XCTestCase {
 
     func testFramesArrivingFasterThanTheEncoderComeOutInOrder() throws {
         let collector = Collector()
-        let encoder = try MoonlightVideoEncoder(settings: settings, output: collector.add)
+        let encoder = try makeEncoder(collector)
         let frames = try (0..<20).map(frame)
         let last = expectation(description: "last frame")
         collector.onFrame = { if $0.time == self.time(19) { last.fulfill() } }
@@ -125,7 +134,7 @@ final class MoonlightVideoEncoderTests: XCTestCase {
 
     func testReportsHowLongEncodingTakes() throws {
         let collector = Collector()
-        let encoder = try MoonlightVideoEncoder(settings: settings, output: collector.add)
+        let encoder = try makeEncoder(collector)
         for seed in 0..<30 { try encodeOne(encoder, collector, seed: seed) }
         // One frame at a time, each held by the encoder until brought out a frame's time later.
         let times = collector.given.dropFirst().map { Double($0.encoded - $0.submitted) / 1_000_000 }.sorted()
