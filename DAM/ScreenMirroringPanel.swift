@@ -35,12 +35,21 @@ enum ScreenMirroringPanelError: Error, CustomStringConvertible {
         }
     }
 
-    /// What to say when the toggle fails; nothing for a cancel the user asked for.
+    /// What to say when the toggle fails: what went wrong, and the manual route through
+    /// the system's own Screen Mirroring control when the app cannot drive it. Nothing
+    /// for a cancel the user asked for.
     var announcement: String? {
         switch self {
-        case .cancelled:             return nil
-        case .deviceNotFound(let n): return "\(n) is not listed in Screen Mirroring"
-        default:                     return "Could not open Screen Mirroring"
+        case .cancelled:
+            return nil
+        case .busy:
+            return "Screen Mirroring is still changing. Try again in a moment"
+        case .deviceNotFound(let n):
+            return "\(n) is not listed in Screen Mirroring. Check that it is on and nearby"
+        case .controlCenterNotRunning:
+            return "Control Center is not running. Connect from Displays settings instead"
+        case .openerNotFound, .tileNotFound, .pressFailed:
+            return "Could not open Screen Mirroring. Use Screen Mirroring in Control Center instead"
         }
     }
 }
