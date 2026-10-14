@@ -948,7 +948,8 @@ enum WebStreamPage {
         let lag = end - t;
         if (!inside && next !== null) { video.currentTime = Math.max(next, end - buffer); lag = end - video.currentTime; }
         else if (lag > buffer + 0.3) { video.currentTime = Math.max(end - buffer, 0); lag = end - video.currentTime; }
-        video.playbackRate = lag > buffer + 0.08 ? 1.05 : lag < buffer - 0.08 ? 0.95 : 1;
+        // Held near the target: a touch faster past it, faster still well past it, slower short of it.
+        video.playbackRate = lag > buffer + 0.12 ? 1.15 : lag > buffer + 0.025 ? 1.05 : lag < buffer - 0.08 ? 0.95 : 1;
         if (held && lag >= buffer) held = false;
         if (!held && video.paused) video.play().catch(() => {});
         const q = video.getVideoPlaybackQuality ? video.getVideoPlaybackQuality() : null;
