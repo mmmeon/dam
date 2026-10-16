@@ -575,6 +575,9 @@ final class MoonlightStream {
         control.onFrameStatus = { [weak self] status in
             guard let self else { return }
             self.video.stats.frameStatus(status)
+            if status.isLost {
+                msLog.debug("lost frame \(status.frameIndex): \(status.receivedData)+\(status.receivedParity) of \(status.dataPackets) data and \(status.parityPackets) parity packets")
+            }
             self.lock.lock()
             self.bitrate?.frameStatus(status)
             self.lock.unlock()
