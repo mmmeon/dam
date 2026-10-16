@@ -68,7 +68,14 @@ connect to the host.
 3. **Keep enforcing the display mode.** OpenDisplay saw macOS restore an old saved mode for
    a display's serial number seconds after creating it. So it re-checks the mode every
    200 ms until it settles, then every 2 s. DAM sets the start mode once, in
-   `placeStreamingDisplay` (`VideoManager+StreamingDisplay.swift`).
+   `placeStreamingDisplay` (`VideoManager+StreamingDisplay.swift`), and puts the layout,
+   modes included, back for 5 s after.
+
+   *Not needed on macOS 13.7.* On the Intel test Mac, a virtual display with a different
+   mode saved for its serial (1x or HiDPI, either way round) came online in a 1×1 mode,
+   took the mode set for the session, and kept it for the 20 s watched. Enforcing the mode
+   for the display's lifetime would also undo resolutions the user picks, which DAM
+   allows and OpenDisplay doesn't. Worth testing again on a newer macOS.
 4. **Resize in place instead of recreating.** OpenDisplay reserves an 8K maximum size when
    it creates the display, then calls `apply(settings)` to change modes. Removing and
    re-adding a display makes WindowServer move every window, and on DAM's test Mac it takes
