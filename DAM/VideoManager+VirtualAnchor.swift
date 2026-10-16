@@ -94,14 +94,21 @@ struct DisplayArrangement {
         return restoreOrigins(in: cfg, excluding: excluded) || changed
     }
 
-    /// Whether `a` and `b` show the same: the same size, pixels and rate. A display can list
-    /// a mode twice under different IDs (a virtual display after a new mode list does), and
-    /// WindowServer may pick either, so their IDs alone would call the same mode another one
-    /// and a restore would repeat for as long as it ran.
+    /// Whether `a` and `b` show the same: the same size, pixels and rate. Not by their IDs: a
+    /// display can list a mode twice under different IDs, and WindowServer may pick either, and
+    /// a virtual display given a new mode list (or mirrored and back) numbers its modes afresh,
+    /// so an ID can stand for another mode than it did.
     static func sameMode(_ a: CGDisplayMode, _ b: CGDisplayMode) -> Bool {
-        a.ioDisplayModeID == b.ioDisplayModeID
-            || (a.width == b.width && a.height == b.height && a.pixelWidth == b.pixelWidth
-                && a.pixelHeight == b.pixelHeight && Int(a.refreshRate.rounded()) == Int(b.refreshRate.rounded()))
+        a.width == b.width && a.height == b.height && a.pixelWidth == b.pixelWidth
+            && a.pixelHeight == b.pixelHeight && Int(a.refreshRate.rounded()) == Int(b.refreshRate.rounded())
+    }
+
+    /// The mode `id` lists now that shows the same as `mode`. A captured mode can be stale:
+    /// once a display renumbers its modes, setting the captured one does nothing.
+    static func listedMode(like mode: CGDisplayMode, of id: CGDirectDisplayID) -> CGDisplayMode? {
+        let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
+        let modes = CGDisplayCopyAllDisplayModes(id, options) as? [CGDisplayMode] ?? []
+        return modes.first { sameMode($0, mode) }
     }
 
     /// Queues changes on `cfg` returning every still-online display that showed its own
@@ -114,8 +121,12 @@ struct DisplayArrangement {
         for (id, mode) in modes
         where online.contains(id) && !excluded.contains(id) && mirrorMasters[id] == 0
             && !(CGDisplayCopyDisplayMode(id).map { Self.sameMode($0, mode) } ?? false) {
+            guard let listed = Self.listedMode(like: mode, of: id) else {
+                vdLog.debug("restore: display \(id) no longer lists \(mode.width)×\(mode.height)")
+                continue
+            }
             vdLog.debug("restore: display \(id) mode → \(mode.width)×\(mode.height)")
-            CGConfigureDisplayWithDisplayMode(cfg, id, mode, nil)
+            CGConfigureDisplayWithDisplayMode(cfg, id, listed, nil)
             changed = true
         }
         return changed
