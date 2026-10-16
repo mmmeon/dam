@@ -187,15 +187,42 @@ final class MoonlightProtocolTests: XCTestCase {
         XCTAssertEqual(governor.second(), 7840)
     }
 
-    func testTheBitrateGoesNoLowerThanAQuarterOrTwoMegabits() {
+    private func lose(_ count: Int, _ governor: inout MoonlightBitrateGovernor) -> Int? {
+        for _ in 0..<count { governor.keyFrameRequested() }
+        return governor.second()
+    }
+
+    func testHeavyLossHalvesTheBitrateDownToAQuarterOrTwoMegabits() {
         var governor = MoonlightBitrateGovernor(kbps: 16000)
-        for _ in 0..<40 {
-            governor.frameStatus(lost()); governor.frameStatus(lost())
-            _ = governor.second()
-        }
-        XCTAssertEqual(governor.current, 4000)
+        XCTAssertEqual(lose(12, &governor), 8000)
+        XCTAssertNil(lose(12, &governor))
+        XCTAssertNil(lose(12, &governor))
+        XCTAssertEqual(lose(12, &governor), 4000)
+        XCTAssertNil(lose(12, &governor))
+        XCTAssertNil(lose(12, &governor))
+        XCTAssertNil(lose(12, &governor), "no lower than a quarter")
         XCTAssertEqual(MoonlightBitrateGovernor(kbps: 6000).floor, 2000)
         XCTAssertEqual(MoonlightBitrateGovernor(kbps: 1500).floor, 1500, "never above what the client asked for")
+    }
+
+    func testACutThatDoesNotLowerTheLossesIsUndone() {
+        var governor = MoonlightBitrateGovernor(kbps: 10000)
+        // A link losing about a frame a second whatever the bitrate.
+        for _ in 0..<10 { XCTAssertNil(lose(1, &governor)) }
+        XCTAssertEqual(lose(2, &governor), 7000)
+        XCTAssertNil(lose(1, &governor)); XCTAssertNil(lose(1, &governor))
+        for _ in 0..<9 { XCTAssertNil(lose(1, &governor)) }
+        XCTAssertEqual(lose(1, &governor), 10000, "as many losses at 7000 as at 10000: back to 10000")
+        // Then ordinary losses leave it alone for a while; heavy ones still cut it.
+        for _ in 0..<5 { XCTAssertNil(lose(3, &governor)) }
+        XCTAssertEqual(lose(12, &governor), 5000)
+    }
+
+    func testCutsThatDoNotHelpAreUndoneEvenFromTheFloor() {
+        var governor = MoonlightBitrateGovernor(kbps: 8000)
+        var changes: [Int] = []
+        for _ in 0..<30 { if let kbps = lose(2, &governor) { changes.append(kbps) } }
+        XCTAssertEqual(changes, [5600, 3920, 2744, 2000, 8000], "down to the floor, then back once judged")
     }
 
     func testCleanSecondsBringTheBitrateBackUpToTheClients() {
