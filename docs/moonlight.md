@@ -9,7 +9,8 @@ DAM is a Moonlight host on its own, without Sunshine. A Moonlight client on the 
 finds the Mac and pairs with a PIN. It then sees each of DAM's streaming displays as an
 app, plus "New Display". Launching "New Display" creates a virtual display at the
 client's resolution and frame rate. DAM streams it as H.264 video with Reed-Solomon FEC
-and Opus audio. Cancelling from Moonlight removes the display; resuming keeps it.
+and Opus audio. Cancelling from Moonlight removes the display; resuming keeps it,
+changed in place to the size the client asks for now.
 
 The same HTTP port (47989) also serves displays to browsers and media players:
 

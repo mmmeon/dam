@@ -80,6 +80,14 @@ connect to the host.
    it creates the display, then calls `apply(settings)` to change modes. Removing and
    re-adding a display makes WindowServer move every window, and on DAM's test Mac it takes
    about 13 s. This helps if DAM ever changes a stream's size during a session.
+
+   *Done on `fix/opendisplay-findings`, for resumes.* Moonlight sends the size again when
+   it resumes a stream, but DAM kept the display it had made at the old size, so the
+   capture scaled the picture to the new one. A display DAM made for the stream now takes
+   a new mode list with `apply(settings)` and switches to the new size, keeping its ID and
+   windows. On the test Mac, the new list applied in 5 ms and the switch took under a
+   second. If the size is bigger than the display was made for, DAM makes a new one as
+   before. Displays the user made stream at their own size, as before.
 5. **Input injection, for when DAM adds Moonlight input.** OpenDisplay's
    `Mac/InputInjector.swift` notes that synthetic clicks need a real
    `CGEventSource(.hidSystemState)` and a non-zero `clickState`. Without them, menus open

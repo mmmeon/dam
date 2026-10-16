@@ -291,6 +291,60 @@ final class MoonlightHostTests: XCTestCase {
         XCTAssertTrue(made)
     }
 
+    // A launch reuses the display only while it is online, so these hand out the main
+    // display's ID; every display change goes through the closures here, none for real.
+
+    private func launchAndResume(appID: Int, resized: Bool, apps: [MoonlightApp] = [])
+        throws -> (made: [[Int]], resizes: [[Int]], removed: [CGDirectDisplayID]) {
+        let online = CGMainDisplayID()
+        var made: [[Int]] = [], resizes: [[Int]] = [], removed: [CGDirectDisplayID] = []
+        host.requestPIN = { _, answer in answer("1234") }
+        host.apps = apps
+        host.makeDisplay = { width, height, fps, done in
+            made.append([width, height, fps])
+            done(made.count == 1 ? online : 43)
+        }
+        host.resizeDisplay = { id, width, height, fps, done in
+            resizes.append([Int(id), width, height, fps])
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { done(resized) }
+        }
+        host.removeDisplay = { removed.append($0) }
+        startHost()
+        let client = try Client.make()
+        XCTAssertTrue(try pair(client, pin: "1234"))
+        let key = MoonlightCrypto.hex(MoonlightPairing.randomBytes(16))
+        XCTAssertEqual(field("gamesession", in: try get("/launch?appid=\(appID)&mode=1920x1080x60&rikey=\(key)&rikeyid=1",
+                                                        secure: true, identity: client.identity)), "1")
+        XCTAssertEqual(field("resume", in: try get("/resume?appid=\(appID)&mode=2532x1170x60&rikey=\(key)&rikeyid=2",
+                                                   secure: true, identity: client.identity)), "1")
+        return (made, resizes, removed)
+    }
+
+    func testResumingAtAnotherSizeResizesTheDisplayMadeForTheStream() throws {
+        let (made, resizes, removed) = try launchAndResume(appID: MoonlightHost.newDisplayAppID, resized: true)
+        XCTAssertEqual(made, [[1920, 1080, 60]])
+        XCTAssertEqual(resizes, [[Int(CGMainDisplayID()), 2532, 1170, 60]])
+        XCTAssertEqual(removed, [])
+        XCTAssertEqual(host.launch?.displayID, CGMainDisplayID())
+        XCTAssertEqual(host.launch?.ownsDisplay, true)
+    }
+
+    func testMakesAnotherDisplayWhenTheOneMadeCannotBeResized() throws {
+        let (made, _, removed) = try launchAndResume(appID: MoonlightHost.newDisplayAppID, resized: false)
+        XCTAssertEqual(made, [[1920, 1080, 60], [2532, 1170, 60]])
+        XCTAssertEqual(removed, [CGMainDisplayID()])
+        XCTAssertEqual(host.launch?.displayID, 43)
+    }
+
+    func testLeavesTheSizeOfADisplayTheUserMade() throws {
+        let apps = [MoonlightApp(id: 1, title: "DAM Streaming", displayID: CGMainDisplayID())]
+        let (made, resizes, removed) = try launchAndResume(appID: 1, resized: true, apps: apps)
+        XCTAssertEqual(made, [])
+        XCTAssertEqual(resizes, [])
+        XCTAssertEqual(removed, [])
+        XCTAssertEqual(host.launch?.displayID, CGMainDisplayID())
+    }
+
     func testSaysSoWhenNoDisplayCanBeMade() throws {
         host.requestPIN = { _, answer in answer("1234") }
         host.makeDisplay = { _, _, _, done in done(nil) }
