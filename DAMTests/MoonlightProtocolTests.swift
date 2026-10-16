@@ -213,6 +213,25 @@ final class MoonlightProtocolTests: XCTestCase {
         XCTAssertEqual(lostInRuns(2, &governor), 7840)
     }
 
+    func testAfterAFrameLostInARunOtherLossesCutIt() {
+        var governor = MoonlightBitrateGovernor(kbps: 10000)
+        warmUp(&governor)
+        XCTAssertNil(lostInRuns(1, &governor))
+        XCTAssertEqual(lostScattered(2, &governor), 7000)
+    }
+
+    func testAFrameLostInARunCountsForTenSeconds() {
+        var governor = MoonlightBitrateGovernor(kbps: 10000)
+        warmUp(&governor)
+        XCTAssertNil(lostInRuns(1, &governor))
+        // No losses, though too many frames needing parity to raise it.
+        for _ in 0..<10 {
+            for _ in 0..<3 { governor.frameStatus(rebuilt()) }
+            XCTAssertNil(governor.second())
+        }
+        XCTAssertNil(lostScattered(2, &governor), "10 s after the frame lost in a run")
+    }
+
     func testFramesLostAPacketShortOrKeyFrameRequestsAloneDoNotCutIt() {
         var governor = MoonlightBitrateGovernor(kbps: 16000)
         warmUp(&governor)

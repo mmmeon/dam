@@ -279,16 +279,18 @@ struct MoonlightFrameFecStatus: Equatable {
 /// keyframe it asks for (a frame that never came is reported only that way); counted each
 /// second, as the larger of the two, since one lost frame brings both.
 ///
-/// Two or more frames lost in runs of packets in a second (see
-/// `MoonlightFrameFecStatus.isLostInARun`) take the bitrate down by 30%, and ten or more
-/// losses of any kind (a link carrying far less than the stream) by half; then nothing
+/// Two or more losses in a second take the bitrate down by 30% on a link that lost a frame
+/// in a run of packets in the last ten seconds (see `MoonlightFrameFecStatus.isLostInARun`),
+/// one given more than it carries; ten or more losses (a link carrying far less than the
+/// stream) by half, on any link; then nothing
 /// changes for two seconds while the encoder and the frames already sent catch up. Five seconds without a loss, and with
 /// few frames needing parity, bring it up by 15%, to at most the client's bitrate.
 ///
 /// Losing packets at random, a link loses as much at a lower bitrate, and each frame then
 /// has fewer packets of parity to rebuild it from: a cut only makes it worse. Such losses
-/// leave a frame only a packet or so short, and do not cut it; should a cut come anyway,
-/// it is tried, along with any cuts that follow it, and judged on the ten seconds after them: if
+/// leave a frame only a packet or so short, so they alone do not cut it. (A link that has
+/// just begun to be given too much does so too, which is why one frame lost in a run is
+/// enough to count the others for ten seconds.) Should a cut come anyway, it is tried, along with any cuts that follow it, and judged on the ten seconds after them: if
 /// those did not lose at most half as much as the ten seconds before, the bitrate goes back
 /// to what it was, and for thirty seconds only losses of ten or more cut it.
 ///
@@ -308,8 +310,9 @@ struct MoonlightBitrateGovernor {
     /// Cuts being tried: the bitrate before them, the losses a second before them, and the
     /// losses each second since the last of them (past its hold).
     private var trial: (kbps: Int, before: Double, after: [Int])?
-    /// Seconds counted; the second from which ordinary losses may cut again.
-    private var seconds = 0, cutsAllowedFrom = 0
+    /// Seconds counted; the second from which ordinary losses may cut again; the last
+    /// second a frame was lost in a run.
+    private var seconds = 0, cutsAllowedFrom = 0, lostInARunAt: Int?
 
     /// Frames rebuilt from parity in a second that still count it as clean.
     static let rebuiltAllowed = 2
@@ -321,6 +324,8 @@ struct MoonlightBitrateGovernor {
     static let restSeconds = 30
     /// The seconds at the start that count for nothing.
     static let warmUpSeconds = 3
+    /// How long a frame lost in a run makes ordinary losses cut the bitrate.
+    static let overflowingSeconds = 10
 
     init(kbps: Int) {
         ceiling = kbps
@@ -345,6 +350,8 @@ struct MoonlightBitrateGovernor {
         lostFrames = 0; lostInRuns = 0; keyFrameRequests = 0; rebuiltFrames = 0
         seconds += 1
         guard seconds > Self.warmUpSeconds else { return nil }
+        if inRuns > 0 { lostInARunAt = seconds }
+        let overflowing = lostInARunAt.map { seconds - $0 < Self.overflowingSeconds } ?? false
         let before = recent
         recent = Array((recent + [losses]).suffix(Self.judgedSeconds))
         if holdSeconds > 0 {
@@ -352,7 +359,7 @@ struct MoonlightBitrateGovernor {
             return nil
         }
         let severe = losses >= Self.severeLosses
-        if current > floor, severe || (inRuns >= 2 && seconds >= cutsAllowedFrom) {
+        if current > floor, severe || (losses >= 2 && overflowing && seconds >= cutsAllowedFrom) {
             if trial == nil {
                 let window = before + [losses]
                 trial = (current, Double(window.reduce(0, +)) / Double(window.count), [])
