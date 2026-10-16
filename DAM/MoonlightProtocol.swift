@@ -264,6 +264,12 @@ struct MoonlightFrameFecStatus: Equatable {
 
     /// Whether the block was lost: fewer of its packets came than its data needs.
     var isLost: Bool { receivedData + receivedParity < dataPackets }
+    /// How many packets fewer came than its data needs.
+    var shortBy: Int { max(0, dataPackets - receivedData - receivedParity) }
+    /// Whether it was lost in a run of packets, as a link given more than it carries drops
+    /// them: packets lost at random leave a lost block one to three short (5% of them lost,
+    /// through dummynet); a queue overflowing, mostly four or more.
+    var isLostInARun: Bool { shortBy >= 4 }
 }
 
 /// Sets a Moonlight stream's bitrate from how much of it the client loses, lower while it
@@ -273,14 +279,16 @@ struct MoonlightFrameFecStatus: Equatable {
 /// keyframe it asks for (a frame that never came is reported only that way); counted each
 /// second, as the larger of the two, since one lost frame brings both.
 ///
-/// Two or more losses in a second take the bitrate down by 30%, and ten or more (a link
-/// carrying far less than the stream) by half; then nothing changes for two seconds while
-/// the encoder and the frames already sent catch up. Five seconds without a loss, and with
+/// Two or more frames lost in runs of packets in a second (see
+/// `MoonlightFrameFecStatus.isLostInARun`) take the bitrate down by 30%, and ten or more
+/// losses of any kind (a link carrying far less than the stream) by half; then nothing
+/// changes for two seconds while the encoder and the frames already sent catch up. Five seconds without a loss, and with
 /// few frames needing parity, bring it up by 15%, to at most the client's bitrate.
 ///
 /// Losing packets at random, a link loses as much at a lower bitrate, and each frame then
-/// has fewer packets of parity to rebuild it from: a cut only makes it worse. So a cut is
-/// tried, along with any cuts that follow it, and judged on the ten seconds after them: if
+/// has fewer packets of parity to rebuild it from: a cut only makes it worse. Such losses
+/// leave a frame only a packet or so short, and do not cut it; should a cut come anyway,
+/// it is tried, along with any cuts that follow it, and judged on the ten seconds after them: if
 /// those did not lose at most half as much as the ten seconds before, the bitrate goes back
 /// to what it was, and for thirty seconds only losses of ten or more cut it.
 ///
@@ -293,7 +301,7 @@ struct MoonlightBitrateGovernor {
     /// the client asked for less.
     let floor: Int
     private(set) var current: Int
-    private var lostFrames = 0, keyFrameRequests = 0, rebuiltFrames = 0
+    private var lostFrames = 0, lostInRuns = 0, keyFrameRequests = 0, rebuiltFrames = 0
     private var cleanSeconds = 0, holdSeconds = 0
     /// Losses in each of the last `judgedSeconds` seconds, oldest first.
     private var recent: [Int] = []
@@ -322,6 +330,7 @@ struct MoonlightBitrateGovernor {
 
     mutating func frameStatus(_ status: MoonlightFrameFecStatus) {
         if status.isLost { lostFrames += 1 } else { rebuiltFrames += 1 }
+        if status.isLostInARun { lostInRuns += 1 }
     }
 
     mutating func keyFrameRequested() {
@@ -331,8 +340,9 @@ struct MoonlightBitrateGovernor {
     /// Called once a second; the new bitrate in kbps when it changes.
     mutating func second() -> Int? {
         let losses = max(lostFrames, keyFrameRequests)
+        let inRuns = lostInRuns
         let rebuilt = rebuiltFrames
-        lostFrames = 0; keyFrameRequests = 0; rebuiltFrames = 0
+        lostFrames = 0; lostInRuns = 0; keyFrameRequests = 0; rebuiltFrames = 0
         seconds += 1
         guard seconds > Self.warmUpSeconds else { return nil }
         let before = recent
@@ -342,7 +352,7 @@ struct MoonlightBitrateGovernor {
             return nil
         }
         let severe = losses >= Self.severeLosses
-        if losses >= 2, current > floor, severe || seconds >= cutsAllowedFrom {
+        if current > floor, severe || (inRuns >= 2 && seconds >= cutsAllowedFrom) {
             if trial == nil {
                 let window = before + [losses]
                 trial = (current, Double(window.reduce(0, +)) / Double(window.count), [])
