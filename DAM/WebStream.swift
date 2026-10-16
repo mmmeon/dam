@@ -112,10 +112,8 @@ struct WebStreamRequest: Equatable {
     /// Whether the stream carries sound. Without it, players show each frame as it lands;
     /// with it, they wait for the sound of the same moment, which comes a little later.
     var audio = true
-    /// Whether the encoder uses low-latency rate control, a frame sooner. Only for players
-    /// that decode with VideoToolbox, as browsers on a Mac do; mpv, ffplay and VLC decode
-    /// with FFmpeg, which shows a broken picture (see MoonlightVideoEncoder). Not with the
-    /// Viewing profile, whose frames come out of order.
+    /// Whether the encoder uses low-latency rate control, a frame sooner (see
+    /// MoonlightVideoEncoder). Not with the Viewing profile, whose frames come out of order.
     var lowLatency = false
 
     static func == (a: WebStreamRequest, b: WebStreamRequest) -> Bool {
@@ -539,7 +537,8 @@ final class WebStreamSession {
         // are the presentation times, give or take its rounding.
         let decodeTime = reorders && decode.isValid ? decode : frame.time
         if anchor == nil { anchor = CMTimeMinimum(decodeTime, frame.time) }
-        guard let anchor, let sample = MoonlightVideoEncoder.avcc(frame.sample) else { return }
+        guard let anchor else { return }
+        let sample = frame.avcc
         if frame.isKeyFrame, let (sets, _) = MoonlightVideoEncoder.parameterSets(frame.sample) {
             let sps = sets.filter { $0.first.map { $0 & 0x1F == 7 } ?? false }
             let pps = sets.filter { $0.first.map { $0 & 0x1F == 8 } ?? false }
