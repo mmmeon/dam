@@ -151,25 +151,21 @@ cmd_run() {
     check_ready
     $moonlight list $host 2>/dev/null | grep -qx "$app" || die "Moonlight is not paired with DAM; run: streamtest pair"
     [[ -z $media || -f $media ]] || die "no media file at $media"
+    # A second IINA's window will not go onto the streaming display (-10006), and it played
+    # on after the run, one more video each time.
+    [[ -n $media ]] && pgrep -xq IINA && die "quit IINA first, to play --media in it"
     build_tools
     local latency=$cache/latency
     mkdir -p $out
     say "logs in $out"
 
-    local watch_pid log_pid codes_pid= iina_was_running=0 iina_title= part=0
-    pgrep -xq IINA && iina_was_running=1
+    local watch_pid log_pid codes_pid= iina_title= part=0
     $displays watch > $out/displays.log 2>&1 & watch_pid=$!
     /usr/bin/log stream --level debug --predicate 'subsystem == "mmmeon.dam"' --style compact > $out/dam.log 2>&1 & log_pid=$!
 
     cleanup() {
         [[ -n $codes_pid ]] && kill $codes_pid 2>/dev/null
-        if [[ -n $iina_title ]]; then
-            if (( iina_was_running )); then
-                osascript -e "tell application \"System Events\" to tell process \"IINA\" to click (first button whose subrole is \"AXCloseButton\") of (first window whose name starts with \"$iina_title\")" >/dev/null 2>&1
-            else
-                osascript -e 'tell application "IINA" to quit' >/dev/null 2>&1
-            fi
-        fi
+        [[ -n $iina_title ]] && osascript -e 'tell application "IINA" to quit' >/dev/null 2>&1
         $moonlight quit $host >/dev/null 2>&1
         pause 6
         pkill -x Moonlight 2>/dev/null
