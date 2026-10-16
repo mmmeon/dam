@@ -189,6 +189,28 @@ final class MoonlightHostTests: XCTestCase {
         XCTAssertEqual(status(xml), "401")
     }
 
+    func testLowLatencyIsSetPerDeviceAndKept() throws {
+        host.requestPIN = { _, answer in answer("1234") }
+        startHost()
+        let client = try Client.make()
+        XCTAssertTrue(try pair(client, pin: "1234"))
+        XCTAssertFalse(try XCTUnwrap(host.clients.first).lowLatency)
+        host.setLowLatency(true, for: try XCTUnwrap(host.clients.first))
+        XCTAssertTrue(try XCTUnwrap(host.clients.first).lowLatency)
+        let saved = try Data(contentsOf: directory.appendingPathComponent("paired-clients.json"))
+        XCTAssertEqual(try JSONDecoder().decode([MoonlightClient].self, from: saved).map(\.lowLatency), [true])
+    }
+
+    func testDevicesPairedBeforeLowLatencyCameHaveItOff() throws {
+        let saved = try JSONEncoder().encode([MoonlightClient(name: "10.0.0.2", certificate: Data([1]), paired: Date())])
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: saved) as? [[String: Any]])
+        object[0].removeValue(forKey: "lowLatency")
+        let old = try JSONSerialization.data(withJSONObject: object)
+        let clients = try JSONDecoder().decode([MoonlightClient].self, from: old)
+        XCTAssertEqual(clients.map(\.name), ["10.0.0.2"])
+        XCTAssertEqual(clients.map(\.lowLatency), [false])
+    }
+
     func testForgottenDeviceMustPairAgain() throws {
         host.requestPIN = { _, answer in answer("1234") }
         startHost()

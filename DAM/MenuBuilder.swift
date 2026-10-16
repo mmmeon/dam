@@ -286,11 +286,25 @@ private func moonlightItem(host: MoonlightHost) -> NSMenuItem {
     if !host.clients.isEmpty {
         submenu.addItem(.separator())
         for client in host.clients {
+            let device = NSMenuItem(title: client.name, action: nil, keyEquivalent: "")
+            let options = NSMenu()
+            let lowLatency = NSMenuItem(title: "Low-Latency Encoding",
+                                        action: #selector(AppDelegate.toggleMoonlightLowLatency(_:)),
+                                        keyEquivalent: "")
+            lowLatency.state = client.lowLatency ? .on : .off
+            lowLatency.toolTip = "Sends each frame the moment it is encoded, about a frame sooner. " +
+                                 "For Moonlight on an iPhone, iPad or Mac only: Moonlight on Linux or Windows " +
+                                 "shows a broken picture with it. Takes effect from the next stream."
+            lowLatency.representedObject = client
+            options.addItem(lowLatency)
+            options.addItem(.separator())
             let forget = NSMenuItem(title: "Forget \(client.name)",
                                     action: #selector(AppDelegate.forgetMoonlightClient(_:)),
                                     keyEquivalent: "")
             forget.representedObject = client
-            submenu.addItem(forget)
+            options.addItem(forget)
+            device.submenu = options
+            submenu.addItem(device)
         }
     }
     item.submenu = submenu

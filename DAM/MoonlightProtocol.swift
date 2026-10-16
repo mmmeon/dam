@@ -30,6 +30,9 @@ struct MoonlightStreamConfig: Equatable {
     var audioEncrypted = false
     /// Whether stereo may take a high bitrate; set from the ANNOUNCE request's Host.
     var highQualityAudio = false
+    /// Whether the encoder uses low-latency rate control; set from the device's setting,
+    /// not from ANNOUNCE.
+    var lowLatency = false
 
     /// The settings in an ANNOUNCE body, nil when one it needs is missing.
     static func parse(sdp: String) -> MoonlightStreamConfig? {

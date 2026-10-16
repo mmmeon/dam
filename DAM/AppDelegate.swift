@@ -588,6 +588,14 @@ extension AppDelegate: NSMenuDelegate {
         rebuild()
     }
 
+    /// Turns low-latency encoding on or off for the Moonlight device in the item's
+    /// `representedObject`.
+    @objc func toggleMoonlightLowLatency(_ sender: NSMenuItem) {
+        guard let client = sender.representedObject as? MoonlightClient else { return }
+        moonlightHost.setLowLatency(!client.lowLatency, for: client)
+        rebuild()
+    }
+
     /// Asks for the PIN Moonlight shows while pairing. The answer is nil when the user
     /// declines, or when the device gave up meanwhile.
     private func promptForMoonlightPIN(address: String, answer: @escaping (String?) -> Void) {
