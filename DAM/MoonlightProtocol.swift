@@ -271,10 +271,18 @@ struct MoonlightFrameFecStatus: Equatable {
 /// more than its link carries: then nearly every frame is lost and asked for again as a
 /// keyframe, larger still. A loss is a frame Moonlight reports it could not rebuild, or a
 /// keyframe it asks for (a frame that never came is reported only that way); counted each
-/// second, as the larger of the two, since one lost frame brings both. Two or more in a
-/// second take the bitrate down by 30%, then nothing changes for two seconds while the
-/// encoder and the frames already sent catch up. Five seconds without one, and with few
-/// frames needing parity, bring it up by 15%, to at most the client's bitrate.
+/// second, as the larger of the two, since one lost frame brings both.
+///
+/// Two or more losses in a second take the bitrate down by 30%, and ten or more (a link
+/// carrying far less than the stream) by half; then nothing changes for two seconds while
+/// the encoder and the frames already sent catch up. Five seconds without a loss, and with
+/// few frames needing parity, bring it up by 15%, to at most the client's bitrate.
+///
+/// Losing packets at random, a link loses as much at a lower bitrate, and each frame then
+/// has fewer packets of parity to rebuild it from: a cut only makes it worse. So a cut is
+/// tried, along with any cuts that follow it, and judged on the ten seconds after them: if
+/// those did not lose at most half as much as the ten seconds before, the bitrate goes back
+/// to what it was, and for thirty seconds only losses of ten or more cut it.
 struct MoonlightBitrateGovernor {
     /// The client's bitrate, the most this sets.
     let ceiling: Int
@@ -284,9 +292,22 @@ struct MoonlightBitrateGovernor {
     private(set) var current: Int
     private var lostFrames = 0, keyFrameRequests = 0, rebuiltFrames = 0
     private var cleanSeconds = 0, holdSeconds = 0
+    /// Losses in each of the last `judgedSeconds` seconds, oldest first.
+    private var recent: [Int] = []
+    /// Cuts being tried: the bitrate before them, the losses a second before them, and the
+    /// losses each second since the last of them (past its hold).
+    private var trial: (kbps: Int, before: Double, after: [Int])?
+    /// Seconds counted; the second from which ordinary losses may cut again.
+    private var seconds = 0, cutsAllowedFrom = 0
 
     /// Frames rebuilt from parity in a second that still count it as clean.
     static let rebuiltAllowed = 2
+    /// Losses in a second that halve the bitrate, and cut it even after a cut did not help.
+    static let severeLosses = 10
+    /// How long a cut is judged on, and the losses before it it is judged against.
+    static let judgedSeconds = 10
+    /// How long ordinary losses leave the bitrate alone after a cut did not help.
+    static let restSeconds = 30
 
     init(kbps: Int) {
         ceiling = kbps
@@ -307,19 +328,45 @@ struct MoonlightBitrateGovernor {
         let losses = max(lostFrames, keyFrameRequests)
         let rebuilt = rebuiltFrames
         lostFrames = 0; keyFrameRequests = 0; rebuiltFrames = 0
+        seconds += 1
+        let before = recent
+        recent = Array((recent + [losses]).suffix(Self.judgedSeconds))
         if holdSeconds > 0 {
             holdSeconds -= 1
             return nil
         }
-        if losses >= 2 {
+        let severe = losses >= Self.severeLosses
+        if losses >= 2, current > floor, severe || seconds >= cutsAllowedFrom {
+            if trial == nil {
+                let window = before + [losses]
+                trial = (current, Double(window.reduce(0, +)) / Double(window.count), [])
+            }
+            trial?.after = []
             cleanSeconds = 0
-            guard current > floor else { return nil }
-            current = max(floor, current * 7 / 10)
+            current = max(floor, severe ? current / 2 : current * 7 / 10)
             holdSeconds = 2
             return current
         }
+        if var tried = trial {
+            tried.after.append(losses)
+            trial = tried
+            if tried.after.count >= Self.judgedSeconds {
+                trial = nil
+                let after = Double(tried.after.reduce(0, +)) / Double(tried.after.count)
+                if after > tried.before / 2 {
+                    // Lost as much at the lower bitrate: not the bitrate's doing.
+                    cutsAllowedFrom = seconds + Self.restSeconds
+                    cleanSeconds = 0
+                    guard tried.kbps != current else { return nil }
+                    current = tried.kbps
+                    return current
+                }
+            }
+        }
         cleanSeconds = losses == 0 && rebuilt <= Self.rebuiltAllowed ? cleanSeconds + 1 : 0
         guard cleanSeconds >= 5, current < ceiling else { return nil }
+        // Clean at the lower bitrate: the cuts helped.
+        trial = nil
         cleanSeconds = 0
         current = min(ceiling, current * 115 / 100)
         return current

@@ -89,10 +89,14 @@ flowchart LR
   per 0.25 s.
 - **Bitrate:** set from the client's losses, which it reports for each frame it could not
   rebuild from parity (Sunshine's 0x5502) and by asking for keyframes. Two or more lost
-  frames in a second cut it by 30%, then it holds for 2 s. Five seconds without a loss,
-  and with no more than two frames rebuilt from parity a second, raise it by 15%. It
-  stays between the client's bitrate and a quarter of it (no less than 2 Mbit/s). The
-  default `MoonlightAdaptiveBitrate` set to false keeps the client's bitrate throughout.
+  frames in a second cut it by 30%, ten or more by half, then it holds for 2 s. Five
+  seconds without a loss, and with no more than two frames rebuilt from parity a second,
+  raise it by 15%. It stays between the client's bitrate and a quarter of it (no less than
+  2 Mbit/s). Cuts are judged on the 10 s after them: unless losses fell by half against
+  the 10 s before, it goes back to the bitrate before them, and only ten or more losses a
+  second cut it for the next 30 s. That is for random loss, which a lower bitrate does not
+  lessen and fewer parity packets per frame make worse. The default
+  `MoonlightAdaptiveBitrate` set to false keeps the client's bitrate throughout.
 
 ### Audio
 
