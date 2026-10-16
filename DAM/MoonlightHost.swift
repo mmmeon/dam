@@ -86,6 +86,10 @@ final class MoonlightHost {
     var makeDisplay: ((_ width: Int, _ height: Int, _ fps: Int, _ done: @escaping (CGDirectDisplayID?) -> Void) -> Void)?
     /// Removes a streaming display made for a stream.
     var removeDisplay: ((CGDirectDisplayID) -> Void)?
+    /// Changes a streaming display made for a stream to the size and rate given, in place, and
+    /// calls back with whether it could.
+    var resizeDisplay: ((_ id: CGDirectDisplayID, _ width: Int, _ height: Int, _ fps: Int,
+                         _ done: @escaping (Bool) -> Void) -> Void)?
 
     /// Asks the user for the PIN Moonlight shows on the device at `address`. The answer is
     /// nil when they decline. Called on the main queue.
@@ -405,7 +409,8 @@ final class MoonlightHost {
     ///
     /// A streaming display the user made streams as it is. New Display, or a display that is
     /// gone (Moonlight keeps listing apps from before), gets a display made at the stream's
-    /// size, which /cancel removes; a resume keeps streaming the display it had.
+    /// size, which /cancel removes; a resume keeps streaming the display it had, changed in
+    /// place to the size asked for now, which Moonlight's settings may have changed.
     private func launchApp(_ request: Request, resume: Bool, certificate: Data?, on connection: NWConnection) {
         guard let key = request.query["rikey"].flatMap(MoonlightCrypto.data(hex:)), key.count == 16 else {
             return reply(Self.xml(status: 400, message: "Missing key"), to: connection)
@@ -426,30 +431,43 @@ final class MoonlightHost {
             self.reply(Self.xml(["sessionUrl0": "rtsp://\(address):\(self.rtspPort.rawValue)",
                                  resume ? "resume" : "gamesession": "1"]), to: connection)
         }
-        let listed = appID == Self.newDisplayAppID ? nil : apps.first(where: { $0.id == appID })?.displayID
-        if let current = launch, current.appID == appID || current.displayID == listed,
-           DisplayArrangement.onlineDisplayIDs().contains(current.displayID) {
-            mlLog.debug("\(resume ? "resume" : "launch", privacy: .public) on display \(current.displayID)")
-            return answer(MoonlightLaunch(appID: appID, displayID: current.displayID, key: key, keyID: keyID,
-                                          ownsDisplay: current.ownsDisplay))
-        }
-        endLaunch()
-        if appID != Self.newDisplayAppID, let app = apps.first(where: { $0.id == appID }) {
-            mlLog.debug("launch \(app.title, privacy: .public)")
-            return answer(MoonlightLaunch(appID: appID, displayID: app.displayID, key: key, keyID: keyID))
-        }
         let mode = (request.query["mode"] ?? "").split(separator: "x").compactMap { Int($0) }
-        guard mode.count == 3, mode[0] > 0, mode[1] > 0, let makeDisplay else {
-            return reply(Self.xml(status: 400, message: "Missing the stream's size"), to: connection)
-        }
-        mlLog.debug("launch: making a \(mode[0])×\(mode[1])@\(mode[2]) display")
-        makeDisplay(mode[0], mode[1], max(mode[2], 30)) { [weak self] id in
+        let size = mode.count == 3 && mode[0] > 0 && mode[1] > 0 ? (mode[0], mode[1], max(mode[2], 30)) : nil
+        let makeNew = { [weak self] in
             guard let self else { return }
-            guard let id else {
-                return self.reply(Self.xml(status: 503, message: "\(AppIdentity.name) could not make a display."),
-                                  to: connection)
+            self.endLaunch()
+            if appID != Self.newDisplayAppID, let app = self.apps.first(where: { $0.id == appID }) {
+                mlLog.debug("launch \(app.title, privacy: .public)")
+                return answer(MoonlightLaunch(appID: appID, displayID: app.displayID, key: key, keyID: keyID))
             }
-            answer(MoonlightLaunch(appID: appID, displayID: id, key: key, keyID: keyID, ownsDisplay: true))
+            guard let (width, height, fps) = size, let makeDisplay = self.makeDisplay else {
+                return self.reply(Self.xml(status: 400, message: "Missing the stream's size"), to: connection)
+            }
+            mlLog.debug("launch: making a \(width)×\(height)@\(fps) display")
+            makeDisplay(width, height, fps) { [weak self] id in
+                guard let self else { return }
+                guard let id else {
+                    return self.reply(Self.xml(status: 503, message: "\(AppIdentity.name) could not make a display."),
+                                      to: connection)
+                }
+                answer(MoonlightLaunch(appID: appID, displayID: id, key: key, keyID: keyID, ownsDisplay: true))
+            }
+        }
+        let listed = appID == Self.newDisplayAppID ? nil : apps.first(where: { $0.id == appID })?.displayID
+        guard let current = launch, current.appID == appID || current.displayID == listed,
+              DisplayArrangement.onlineDisplayIDs().contains(current.displayID) else { return makeNew() }
+        mlLog.debug("\(resume ? "resume" : "launch", privacy: .public) on display \(current.displayID)")
+        let reuse = {
+            answer(MoonlightLaunch(appID: appID, displayID: current.displayID, key: key, keyID: keyID,
+                                   ownsDisplay: current.ownsDisplay))
+        }
+        guard current.ownsDisplay, let (width, height, fps) = size, let resizeDisplay else { return reuse() }
+        // Not captured while it changes size.
+        endStream()
+        resizeDisplay(current.displayID, width, height, fps) { resized in
+            if resized { return reuse() }
+            mlLog.debug("could not resize display \(current.displayID); making another")
+            makeNew()
         }
     }
 

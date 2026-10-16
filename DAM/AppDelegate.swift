@@ -59,6 +59,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 mode: StreamingDisplayModes.forStream(width: width, height: height, fps: fps), completion: done)
         }
         moonlightHost.removeDisplay = { [weak self] id in self?.videoManager.removeStreamingDisplay(id: id) }
+        moonlightHost.resizeDisplay = { [weak self] id, width, height, fps, done in
+            guard let self else { return done(false) }
+            self.videoManager.resizeStreamingDisplay(
+                id: id, to: StreamingDisplayModes.forStream(width: width, height: height, fps: fps), completion: done)
+        }
         if MoonlightHost.isEnabled { moonlightHost.start() }
         AudioOutputPicker.shared.configure(audioManager: audioManager)
         MirrorPicker.shared.configure(videoManager: videoManager)
