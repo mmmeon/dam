@@ -1,5 +1,6 @@
 import XCTest
 import CoreGraphics
+import CoreMedia
 @testable import DAM
 
 /// Captures a streaming display, never one the user looks at; skipped when there is none,
@@ -101,5 +102,35 @@ final class MoonlightScreenCaptureTests: XCTestCase {
         let (_, asked, restarts) = start(answers: [NSError(domain: "test", code: 1)])
         XCTAssertEqual(restarts, 0)
         XCTAssertEqual(asked, 1)
+    }
+
+    // MARK: frame rate
+
+    func testLoosensTheFrameLimitOnlyWhenTheDisplayIsNoFasterThanTheStream() {
+        let interval = MoonlightScreenCapture.minimumFrameInterval
+        XCTAssertEqual(interval(60, 60), CMTime(value: 1, timescale: 120))
+        XCTAssertEqual(interval(60, 59.94), CMTime(value: 1, timescale: 120))
+        XCTAssertEqual(interval(60, 50), CMTime(value: 1, timescale: 120))
+        XCTAssertEqual(interval(30, 60), CMTime(value: 1, timescale: 30))
+        XCTAssertEqual(interval(60, 120), CMTime(value: 1, timescale: 60))
+        XCTAssertEqual(interval(60, 0), CMTime(value: 1, timescale: 60))
+    }
+
+    func testPacerPassesFramesAtTheStreamRate() {
+        var pacer = FramePacer(fps: 60)
+        let times = (0..<10).map { CMTime(value: Int64($0) * 1000, timescale: 60_000) }
+        XCTAssertEqual(times.filter { pacer.allows($0) }.count, 10)
+    }
+
+    func testPacerLeavesOutFramesFromAFasterDisplay() {
+        var pacer = FramePacer(fps: 60)
+        let times = (0..<12).map { CMTime(value: Int64($0) * 1000, timescale: 120_000) }
+        XCTAssertEqual(times.filter { pacer.allows($0) }.count, 6)
+    }
+
+    func testPacerStartsAgainWhenTimeGoesBack() {
+        var pacer = FramePacer(fps: 60)
+        XCTAssertTrue(pacer.allows(CMTime(value: 10, timescale: 1)))
+        XCTAssertTrue(pacer.allows(CMTime(value: 1, timescale: 1)))
     }
 }

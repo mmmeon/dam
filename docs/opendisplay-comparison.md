@@ -44,6 +44,13 @@ connect to the host.
    exactly 1/fps. OpenDisplay found that exactly 1/60 makes ScreenCaptureKit skip frames
    that arrive slightly early, and measured about 51 fps instead of 60. It asks for 1/120
    on a 60 Hz display instead.
+
+   *Done on `fix/opendisplay-findings`.* On the Intel test Mac (macOS 13.7), a 60 fps
+   capture of a 60 Hz virtual display skipped 11–12 frames per 5 s with the exact limit and
+   none with the loose one. A loose limit lets extra frames through when the stream is slower
+   than the display (39 fps for a 30 fps stream at 0.8/30), so DAM loosens it only when the
+   display's refresh rate is at most the stream's, and `FramePacer` drops frames that come
+   sooner than 0.75 frame times in case the display's rate rises during a stream.
 2. **Low-latency rate control instead of the nudge.** OpenDisplay creates its encoder with
    `kVTVideoEncoderSpecification_EnableLowLatencyRateControl`. VideoToolbox then outputs
    each frame immediately rather than holding it until the next one arrives. If the encoder
