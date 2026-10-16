@@ -95,7 +95,8 @@ flowchart LR
   2 Mbit/s). Cuts are judged on the 10 s after them: unless losses fell by half against
   the 10 s before, it goes back to the bitrate before them, and only ten or more losses a
   second cut it for the next 30 s. That is for random loss, which a lower bitrate does not
-  lessen and fewer parity packets per frame make worse. The default
+  lessen and fewer parity packets per frame make worse. The first 3 s of a stream, when
+  Moonlight asks for a keyframe and loses frames as it starts, count for nothing. The default
   `MoonlightAdaptiveBitrate` set to false keeps the client's bitrate throughout.
 
 ### Audio

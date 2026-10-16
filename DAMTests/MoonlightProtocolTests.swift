@@ -172,6 +172,7 @@ final class MoonlightProtocolTests: XCTestCase {
 
     func testLossesBringTheBitrateDownThenItWaits() {
         var governor = MoonlightBitrateGovernor(kbps: 16000)
+        warmUp(&governor)
         // One lost frame brings a report and a keyframe request: one loss, not two.
         governor.frameStatus(lost())
         governor.keyFrameRequested()
@@ -187,13 +188,27 @@ final class MoonlightProtocolTests: XCTestCase {
         XCTAssertEqual(governor.second(), 7840)
     }
 
+    private func warmUp(_ governor: inout MoonlightBitrateGovernor) {
+        for _ in 0..<MoonlightBitrateGovernor.warmUpSeconds { XCTAssertNil(lose(12, &governor)) }
+    }
+
     private func lose(_ count: Int, _ governor: inout MoonlightBitrateGovernor) -> Int? {
         for _ in 0..<count { governor.keyFrameRequested() }
         return governor.second()
     }
 
+    func testTheFirstSecondsCountForNothing() {
+        var governor = MoonlightBitrateGovernor(kbps: 16000)
+        warmUp(&governor)
+        XCTAssertEqual(governor.current, 16000, "losses while Moonlight starts")
+        // Clean from here: a later cut is judged against these seconds alone.
+        for _ in 0..<10 { XCTAssertNil(lose(0, &governor)) }
+        XCTAssertEqual(lose(2, &governor), 11200)
+    }
+
     func testHeavyLossHalvesTheBitrateDownToAQuarterOrTwoMegabits() {
         var governor = MoonlightBitrateGovernor(kbps: 16000)
+        warmUp(&governor)
         XCTAssertEqual(lose(12, &governor), 8000)
         XCTAssertNil(lose(12, &governor))
         XCTAssertNil(lose(12, &governor))
@@ -207,6 +222,7 @@ final class MoonlightProtocolTests: XCTestCase {
 
     func testACutThatDoesNotLowerTheLossesIsUndone() {
         var governor = MoonlightBitrateGovernor(kbps: 10000)
+        warmUp(&governor)
         // A link losing about a frame a second whatever the bitrate.
         for _ in 0..<10 { XCTAssertNil(lose(1, &governor)) }
         XCTAssertEqual(lose(2, &governor), 7000)
@@ -220,6 +236,7 @@ final class MoonlightProtocolTests: XCTestCase {
 
     func testCutsThatDoNotHelpAreUndoneEvenFromTheFloor() {
         var governor = MoonlightBitrateGovernor(kbps: 8000)
+        warmUp(&governor)
         var changes: [Int] = []
         for _ in 0..<30 { if let kbps = lose(2, &governor) { changes.append(kbps) } }
         XCTAssertEqual(changes, [5600, 3920, 2744, 2000, 8000], "down to the floor, then back once judged")
@@ -227,6 +244,7 @@ final class MoonlightProtocolTests: XCTestCase {
 
     func testCleanSecondsBringTheBitrateBackUpToTheClients() {
         var governor = MoonlightBitrateGovernor(kbps: 10000)
+        warmUp(&governor)
         governor.keyFrameRequested(); governor.keyFrameRequested()
         XCTAssertEqual(governor.second(), 7000)
         var changes: [Int] = []
@@ -236,6 +254,7 @@ final class MoonlightProtocolTests: XCTestCase {
 
     func testFramesNeedingMuchParityHoldTheBitrateUp() {
         var governor = MoonlightBitrateGovernor(kbps: 10000)
+        warmUp(&governor)
         governor.keyFrameRequested(); governor.keyFrameRequested()
         XCTAssertEqual(governor.second(), 7000)
         for _ in 0..<20 {
