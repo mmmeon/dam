@@ -283,6 +283,9 @@ struct MoonlightFrameFecStatus: Equatable {
 /// tried, along with any cuts that follow it, and judged on the ten seconds after them: if
 /// those did not lose at most half as much as the ten seconds before, the bitrate goes back
 /// to what it was, and for thirty seconds only losses of ten or more cut it.
+///
+/// The first seconds count for nothing: Moonlight asks for a keyframe as it starts, and
+/// loses frames while it settles, which would make every cut look like it helped.
 struct MoonlightBitrateGovernor {
     /// The client's bitrate, the most this sets.
     let ceiling: Int
@@ -308,6 +311,8 @@ struct MoonlightBitrateGovernor {
     static let judgedSeconds = 10
     /// How long ordinary losses leave the bitrate alone after a cut did not help.
     static let restSeconds = 30
+    /// The seconds at the start that count for nothing.
+    static let warmUpSeconds = 3
 
     init(kbps: Int) {
         ceiling = kbps
@@ -329,6 +334,7 @@ struct MoonlightBitrateGovernor {
         let rebuilt = rebuiltFrames
         lostFrames = 0; keyFrameRequests = 0; rebuiltFrames = 0
         seconds += 1
+        guard seconds > Self.warmUpSeconds else { return nil }
         let before = recent
         recent = Array((recent + [losses]).suffix(Self.judgedSeconds))
         if holdSeconds > 0 {
