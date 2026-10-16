@@ -94,6 +94,16 @@ struct DisplayArrangement {
         return restoreOrigins(in: cfg, excluding: excluded) || changed
     }
 
+    /// Whether `a` and `b` show the same: the same size, pixels and rate. A display can list
+    /// a mode twice under different IDs (a virtual display after a new mode list does), and
+    /// WindowServer may pick either, so their IDs alone would call the same mode another one
+    /// and a restore would repeat for as long as it ran.
+    static func sameMode(_ a: CGDisplayMode, _ b: CGDisplayMode) -> Bool {
+        a.ioDisplayModeID == b.ioDisplayModeID
+            || (a.width == b.width && a.height == b.height && a.pixelWidth == b.pixelWidth
+                && a.pixelHeight == b.pixelHeight && Int(a.refreshRate.rounded()) == Int(b.refreshRate.rounded()))
+    }
+
     /// Queues changes on `cfg` returning every still-online display that showed its own
     /// desktop — other than those in `excluded` — to its captured resolution. Returns whether
     /// any display had another one.
@@ -103,7 +113,7 @@ struct DisplayArrangement {
         var changed = false
         for (id, mode) in modes
         where online.contains(id) && !excluded.contains(id) && mirrorMasters[id] == 0
-            && CGDisplayCopyDisplayMode(id)?.ioDisplayModeID != mode.ioDisplayModeID {
+            && !(CGDisplayCopyDisplayMode(id).map { Self.sameMode($0, mode) } ?? false) {
             vdLog.debug("restore: display \(id) mode → \(mode.width)×\(mode.height)")
             CGConfigureDisplayWithDisplayMode(cfg, id, mode, nil)
             changed = true

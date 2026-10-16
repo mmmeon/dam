@@ -328,9 +328,12 @@ extension VideoManager {
         streamingSettle.flatMap { $0.until > Date() ? $0.arrangement : nil }
     }
 
-    /// Puts back the layout kept after a streaming display was added or removed, until it expires,
-    /// in one commit at a time. Commits only what differs, so its own commits end the cycle.
-    /// Permanently: they are the layout the set had, which WindowServer's saved one undid.
+    /// Puts back the layout kept after a streaming display was added, removed or resized, until
+    /// it expires, in one commit at a time: which displays mirror which, positions, and, for the
+    /// same set, resolutions. Commits only what differs, so its own commits end the cycle.
+    /// Permanently: they are the layout the set had, which WindowServer's saved one undid. A
+    /// resize makes WindowServer apply the layout it saved for the set, which can mirror the
+    /// other displays onto the streaming one, a second or so after DAM's own commit.
     func reassertStreamingLayout() {
         guard !streamingReassertInFlight, let settle = streamingSettle else { return }
         guard settle.until > Date() else { streamingSettle = nil; return }
@@ -342,7 +345,7 @@ extension VideoManager {
                                                  online: DisplayArrangement.onlineDisplayIDs(),
                                                  mirrorOf: { CGDisplayMirrorsDisplay($0) })
         let resized = sameSet && arrangement.restoreModes(in: cfg, excluding: [])
-        guard arrangement.restoreOrigins(in: cfg, excluding: []) || resized else {
+        guard arrangement.restore(in: cfg, excluding: []) || resized else {
             CGCancelDisplayConfiguration(cfg)
             return
         }
@@ -370,8 +373,8 @@ extension VideoManager {
             return completion(false)
         }
         if streamingDisplays[i].start == mode,
-           let wanted = Self.displayMode(mode, of: id)?.ioDisplayModeID,
-           wanted == CGDisplayCopyDisplayMode(id)?.ioDisplayModeID {
+           let wanted = Self.displayMode(mode, of: id), let current = CGDisplayCopyDisplayMode(id),
+           DisplayArrangement.sameMode(wanted, current) {
             return completion(true)
         }
         let index = streamingDisplays[i].index
@@ -413,7 +416,8 @@ extension VideoManager {
             finishStreamingChange()
             return completion(false)
         }
-        // WindowServer may move or resize the others for the new size.
+        // WindowServer may mirror, move or resize the others for the new size.
+        CGConfigureDisplayMirrorOfDisplay(cfg, id, CGDirectDisplayID(0))
         before.restore(in: cfg, excluding: [id])
         before.restoreModes(in: cfg, excluding: [id])
         CGConfigureDisplayWithDisplayMode(cfg, id, target, nil)
