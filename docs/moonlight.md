@@ -88,8 +88,10 @@ flowchart LR
 - **Still screen:** the last picture is resent every 0.5 s. Keyframes are limited to one
   per 0.25 s.
 - **Bitrate:** set from the client's losses, which it reports for each frame it could not
-  rebuild from parity (Sunshine's 0x5502) and by asking for keyframes. Two or more lost
-  frames in a second cut it by 30%, ten or more by half, then it holds for 2 s. Five
+  rebuild from parity (Sunshine's 0x5502) and by asking for keyframes. Two or more frames
+  in a second that came four or more packets short (lost in a run, as an overflowing link
+  drops them; random loss leaves them one to three short) cut it by 30%, ten or more
+  losses of any kind by half, then it holds for 2 s. Five
   seconds without a loss, and with no more than two frames rebuilt from parity a second,
   raise it by 15%. It stays between the client's bitrate and a quarter of it (no less than
   2 Mbit/s). Cuts are judged on the 10 s after them: unless losses fell by half against
