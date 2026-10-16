@@ -22,6 +22,25 @@ struct MoonlightClient: Codable, Equatable {
     let name: String
     let certificate: Data
     let paired: Date
+    /// Whether its streams use low-latency rate control, which only Moonlight that decodes
+    /// with VideoToolbox (on an iPhone, iPad or Mac) plays cleanly; see MoonlightVideoEncoder.
+    var lowLatency = false
+
+    init(name: String, certificate: Data, paired: Date, lowLatency: Bool = false) {
+        self.name = name
+        self.certificate = certificate
+        self.paired = paired
+        self.lowLatency = lowLatency
+    }
+
+    // Devices paired before the setting came have none saved.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        certificate = try container.decode(Data.self, forKey: .certificate)
+        paired = try container.decode(Date.self, forKey: .paired)
+        lowLatency = try container.decodeIfPresent(Bool.self, forKey: .lowLatency) ?? false
+    }
 }
 
 /// An app Moonlight lists.
@@ -67,6 +86,10 @@ final class MoonlightHost {
     var makeDisplay: ((_ width: Int, _ height: Int, _ fps: Int, _ done: @escaping (CGDirectDisplayID?) -> Void) -> Void)?
     /// Removes a streaming display made for a stream.
     var removeDisplay: ((CGDirectDisplayID) -> Void)?
+    /// Changes a streaming display made for a stream to the size and rate given, in place, and
+    /// calls back with whether it could.
+    var resizeDisplay: ((_ id: CGDirectDisplayID, _ width: Int, _ height: Int, _ fps: Int,
+                         _ done: @escaping (Bool) -> Void) -> Void)?
 
     /// Asks the user for the PIN Moonlight shows on the device at `address`. The answer is
     /// nil when they decline. Called on the main queue.
@@ -219,6 +242,14 @@ final class MoonlightHost {
         onChange?()
     }
 
+    /// Sets whether `client`'s streams use low-latency rate control, from its next stream on.
+    func setLowLatency(_ lowLatency: Bool, for client: MoonlightClient) {
+        guard let index = clients.firstIndex(where: { $0.certificate == client.certificate }) else { return }
+        clients[index].lowLatency = lowLatency
+        saveClients()
+        onChange?()
+    }
+
     private static var hostName: String {
         Host.current().localizedName ?? ProcessInfo.processInfo.hostName
     }
@@ -333,7 +364,7 @@ final class MoonlightHost {
         case "/applist" where secure:
             reply(appList(), to: connection)
         case "/launch" where secure, "/resume" where secure:
-            launchApp(request, resume: request.path == "/resume", on: connection)
+            launchApp(request, resume: request.path == "/resume", certificate: certificate, on: connection)
         case "/cancel" where secure:
             // Free before answering: Moonlight asks for serverinfo next and expects it so.
             endLaunch()
@@ -378,8 +409,9 @@ final class MoonlightHost {
     ///
     /// A streaming display the user made streams as it is. New Display, or a display that is
     /// gone (Moonlight keeps listing apps from before), gets a display made at the stream's
-    /// size, which /cancel removes; a resume keeps streaming the display it had.
-    private func launchApp(_ request: Request, resume: Bool, on connection: NWConnection) {
+    /// size, which /cancel removes; a resume keeps streaming the display it had, changed in
+    /// place to the size asked for now, which Moonlight's settings may have changed.
+    private func launchApp(_ request: Request, resume: Bool, certificate: Data?, on connection: NWConnection) {
         guard let key = request.query["rikey"].flatMap(MoonlightCrypto.data(hex:)), key.count == 16 else {
             return reply(Self.xml(status: 400, message: "Missing key"), to: connection)
         }
@@ -387,8 +419,11 @@ final class MoonlightHost {
         let keyID = UInt32(bitPattern: request.query["rikeyid"].flatMap { Int32($0) } ?? 0)
         let appID = request.query["appid"].flatMap(Int.init) ?? launch?.appID ?? Self.newDisplayAppID
         let address = Self.address(connection.currentPath?.localEndpoint)
+        let lowLatency = clients.first { $0.certificate == certificate }?.lowLatency ?? false
         let answer = { [weak self] (launch: MoonlightLaunch) in
             guard let self else { return }
+            var launch = launch
+            launch.lowLatency = lowLatency
             self.endStream()
             self.launch = launch
             self.lastStreamEnd = nil
@@ -396,30 +431,43 @@ final class MoonlightHost {
             self.reply(Self.xml(["sessionUrl0": "rtsp://\(address):\(self.rtspPort.rawValue)",
                                  resume ? "resume" : "gamesession": "1"]), to: connection)
         }
-        let listed = appID == Self.newDisplayAppID ? nil : apps.first(where: { $0.id == appID })?.displayID
-        if let current = launch, current.appID == appID || current.displayID == listed,
-           DisplayArrangement.onlineDisplayIDs().contains(current.displayID) {
-            mlLog.debug("\(resume ? "resume" : "launch", privacy: .public) on display \(current.displayID)")
-            return answer(MoonlightLaunch(appID: appID, displayID: current.displayID, key: key, keyID: keyID,
-                                          ownsDisplay: current.ownsDisplay))
-        }
-        endLaunch()
-        if appID != Self.newDisplayAppID, let app = apps.first(where: { $0.id == appID }) {
-            mlLog.debug("launch \(app.title, privacy: .public)")
-            return answer(MoonlightLaunch(appID: appID, displayID: app.displayID, key: key, keyID: keyID))
-        }
         let mode = (request.query["mode"] ?? "").split(separator: "x").compactMap { Int($0) }
-        guard mode.count == 3, mode[0] > 0, mode[1] > 0, let makeDisplay else {
-            return reply(Self.xml(status: 400, message: "Missing the stream's size"), to: connection)
-        }
-        mlLog.debug("launch: making a \(mode[0])×\(mode[1])@\(mode[2]) display")
-        makeDisplay(mode[0], mode[1], max(mode[2], 30)) { [weak self] id in
+        let size = mode.count == 3 && mode[0] > 0 && mode[1] > 0 ? (mode[0], mode[1], max(mode[2], 30)) : nil
+        let makeNew = { [weak self] in
             guard let self else { return }
-            guard let id else {
-                return self.reply(Self.xml(status: 503, message: "\(AppIdentity.name) could not make a display."),
-                                  to: connection)
+            self.endLaunch()
+            if appID != Self.newDisplayAppID, let app = self.apps.first(where: { $0.id == appID }) {
+                mlLog.debug("launch \(app.title, privacy: .public)")
+                return answer(MoonlightLaunch(appID: appID, displayID: app.displayID, key: key, keyID: keyID))
             }
-            answer(MoonlightLaunch(appID: appID, displayID: id, key: key, keyID: keyID, ownsDisplay: true))
+            guard let (width, height, fps) = size, let makeDisplay = self.makeDisplay else {
+                return self.reply(Self.xml(status: 400, message: "Missing the stream's size"), to: connection)
+            }
+            mlLog.debug("launch: making a \(width)×\(height)@\(fps) display")
+            makeDisplay(width, height, fps) { [weak self] id in
+                guard let self else { return }
+                guard let id else {
+                    return self.reply(Self.xml(status: 503, message: "\(AppIdentity.name) could not make a display."),
+                                      to: connection)
+                }
+                answer(MoonlightLaunch(appID: appID, displayID: id, key: key, keyID: keyID, ownsDisplay: true))
+            }
+        }
+        let listed = appID == Self.newDisplayAppID ? nil : apps.first(where: { $0.id == appID })?.displayID
+        guard let current = launch, current.appID == appID || current.displayID == listed,
+              DisplayArrangement.onlineDisplayIDs().contains(current.displayID) else { return makeNew() }
+        mlLog.debug("\(resume ? "resume" : "launch", privacy: .public) on display \(current.displayID)")
+        let reuse = {
+            answer(MoonlightLaunch(appID: appID, displayID: current.displayID, key: key, keyID: keyID,
+                                   ownsDisplay: current.ownsDisplay))
+        }
+        guard current.ownsDisplay, let (width, height, fps) = size, let resizeDisplay else { return reuse() }
+        // Not captured while it changes size.
+        endStream()
+        resizeDisplay(current.displayID, width, height, fps) { resized in
+            if resized { return reuse() }
+            mlLog.debug("could not resize display \(current.displayID); making another")
+            makeNew()
         }
     }
 
@@ -433,6 +481,8 @@ final class MoonlightHost {
     /// Starts the stream ANNOUNCE asked for; returns why it could not, or nil.
     private func startStream(_ launch: MoonlightLaunch, _ config: MoonlightStreamConfig) -> String? {
         endStream()
+        var config = config
+        config.lowLatency = launch.lowLatency
         do {
             let stream = try MoonlightStream(config: config, displayID: launch.displayID, key: launch.key,
                                              keyID: launch.keyID, pingPayload: launch.pingPayload,

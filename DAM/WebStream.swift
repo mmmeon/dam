@@ -64,8 +64,10 @@ enum StreamProfile: String, CaseIterable {
         }
     }
 
-    func encoderSettings(width: Int, height: Int, fps: Int, bitrateKbps: Int) -> MoonlightVideoEncoder.Settings {
+    func encoderSettings(width: Int, height: Int, fps: Int, bitrateKbps: Int,
+                         lowLatency: Bool = false) -> MoonlightVideoEncoder.Settings {
         var settings = MoonlightVideoEncoder.Settings(width: width, height: height, fps: fps, bitrateKbps: bitrateKbps)
+        settings.lowLatency = lowLatency
         // The stream fills its grid itself, with repeats where the screen is still.
         settings.steady = true
         switch self {
@@ -110,10 +112,16 @@ struct WebStreamRequest: Equatable {
     /// Whether the stream carries sound. Without it, players show each frame as it lands;
     /// with it, they wait for the sound of the same moment, which comes a little later.
     var audio = true
+    /// Whether the encoder uses low-latency rate control, a frame sooner. Only for players
+    /// that decode with VideoToolbox, as browsers on a Mac do; mpv, ffplay and VLC decode
+    /// with FFmpeg, which shows a broken picture (see MoonlightVideoEncoder). Not with the
+    /// Viewing profile, whose frames come out of order.
+    var lowLatency = false
 
     static func == (a: WebStreamRequest, b: WebStreamRequest) -> Bool {
         a.app == b.app && a.profile == b.profile && a.bitrateKbps == b.bitrateKbps && a.fps == b.fps
             && a.width == b.width && a.height == b.height && a.newDisplay == b.newDisplay && a.audio == b.audio
+            && a.lowLatency == b.lowLatency
     }
 
     /// The most pixels a stream takes from a display: a HiDPI display is scaled down to fit.
@@ -135,6 +143,9 @@ struct WebStreamRequest: Equatable {
             request.newDisplay = (mode[0], mode[1], min(mode[2], 120))
         }
         if let audio = query["audio"]?.lowercased(), ["0", "false", "no", "off"].contains(audio) { request.audio = false }
+        if let lowLatency = query["lowlatency"]?.lowercased(), ["1", "true", "yes", "on"].contains(lowLatency) {
+            request.lowLatency = profile != .viewing
+        }
         return request
     }
 }
@@ -237,7 +248,8 @@ final class WebStreamServer {
             return send(status: "503 Service Unavailable", body: Data("The display is not on\n".utf8), to: connection)
         }
         let key = WebStreamSession.Key(displayID: displayID, profile: request.profile, bitrateKbps: request.bitrateKbps,
-                                       fps: size.fps, width: size.width, height: size.height)
+                                       fps: size.fps, width: size.width, height: size.height,
+                                       lowLatency: request.lowLatency)
         let session: WebStreamSession
         if let running = sessions[key] {
             session = running
@@ -306,6 +318,7 @@ final class WebStreamSession {
         let fps: Int
         let width: Int
         let height: Int
+        let lowLatency: Bool
     }
 
     let key: Key
@@ -367,7 +380,7 @@ final class WebStreamSession {
         self.key = key
         grid = FrameGrid(fps: key.fps)
         let settings = key.profile.encoderSettings(width: key.width, height: key.height, fps: key.fps,
-                                                   bitrateKbps: key.bitrateKbps)
+                                                   bitrateKbps: key.bitrateKbps, lowLatency: key.lowLatency)
         reorders = settings.reordering
         encoder = try MoonlightVideoEncoder(settings: settings) { [weak self] frame in
             self?.queue.async { self?.took(frame) }
@@ -884,7 +897,7 @@ enum WebStreamPage {
       const video = $('v'), params = new URLSearchParams(location.search);
       let info = { apps: [], profile: 'interactive', bitrates: {}, buffers: {} };
       let profile = params.get('profile'), bitrate = params.get('bitrate'), app = params.get('app');
-      let buffer = params.get('buffer');
+      let buffer = params.get('buffer'), lowlatency = params.get('lowlatency');
       let abort = null, source = null, sb = null, queue = [], bytes = 0, held = true, stalls = 0;
 
       const MS = window.ManagedMediaSource || window.MediaSource;
@@ -897,6 +910,7 @@ enum WebStreamPage {
         q.set('profile', profile);
         q.set('bitrate', Math.round(bitrate * 1000));
         if (video.muted) q.set('audio', '0');
+        if (lowlatency) q.set('lowlatency', lowlatency);
         return '/stream.mp4?' + q;
       }
 
@@ -907,7 +921,7 @@ enum WebStreamPage {
         video.disableRemotePlayback = true;
         video.src = URL.createObjectURL(source);
         source.addEventListener('sourceopen', open, { once: true });
-        history.replaceState(null, '', '?' + new URLSearchParams({ ...(app ? { app } : {}), profile, bitrate: Math.round(bitrate * 1000), buffer: Math.round(buffer * 1000) }));
+        history.replaceState(null, '', '?' + new URLSearchParams({ ...(app ? { app } : {}), profile, bitrate: Math.round(bitrate * 1000), buffer: Math.round(buffer * 1000), ...(lowlatency ? { lowlatency } : {}) }));
         // Making a display for the stream can take a while.
         $('msg').hidden = false; $('msg').textContent = 'Connecting…';
       }

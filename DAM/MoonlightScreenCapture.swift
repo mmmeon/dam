@@ -128,7 +128,8 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         let configuration = SCStreamConfiguration()
         configuration.width = self.width
         configuration.height = self.height
-        configuration.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(self.fps))
+        configuration.minimumFrameInterval = Self.minimumFrameInterval(
+            fps: self.fps, refreshRate: CGDisplayCopyDisplayMode(self.displayID)?.refreshRate ?? 0)
         configuration.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
         // The stream holds up to three frames at once (the last picture, the encoder's slot
         // and the one being encoded); with only that many, ScreenCaptureKit has nothing to
@@ -177,11 +178,43 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
               let raw = attachments.first?[.status] as? Int,
               SCFrameStatus(rawValue: raw) == .complete,
               let buffer = CMSampleBufferGetImageBuffer(sample) else { return }
-        frame(buffer, CMSampleBufferGetPresentationTimeStamp(sample))
+        let time = CMSampleBufferGetPresentationTimeStamp(sample)
+        guard pacer.allows(time) else { return }
+        frame(buffer, time)
     }
+
+    /// The shortest time ScreenCaptureKit is asked to leave between frames. Asked for exactly
+    /// a frame time, it can skip frames that come a little early, which OpenDisplay measured
+    /// as about 51 of 60 fps. Half a frame time avoids that, but only while the display can't
+    /// show more frames than the stream wants; asked for 30 of a 60 Hz display, a loose limit
+    /// lets 39 or more through. An unknown rate (0) keeps the exact limit.
+    static func minimumFrameInterval(fps: Int, refreshRate: Double) -> CMTime {
+        let loose = refreshRate > 0 && Int(refreshRate.rounded()) <= fps
+        return CMTime(value: 1, timescale: CMTimeScale(loose ? 2 * fps : fps))
+    }
+
+    private lazy var pacer = FramePacer(fps: fps)
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
         scLog.error("stopped: \(error.localizedDescription, privacy: .public)")
         if !isStopped { onStop?(error) }
+    }
+}
+
+/// Leaves out frames that come much sooner than the stream's rate allows. The display's rate
+/// can rise after capture starts, with a mode chosen in System Settings, and a loose
+/// `minimumFrameInterval` would then pass every refresh on to the encoder. On the capture
+/// queue.
+struct FramePacer {
+    private let shortest: Double
+    private var last: Double?
+
+    init(fps: Int) { shortest = 0.75 / Double(fps) }
+
+    mutating func allows(_ time: CMTime) -> Bool {
+        let seconds = CMTimeGetSeconds(time)
+        if let last, seconds - last < shortest, seconds >= last { return false }
+        last = seconds
+        return true
     }
 }
