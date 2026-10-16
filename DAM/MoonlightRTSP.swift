@@ -28,6 +28,8 @@ struct MoonlightLaunch {
     let sessionID: String
     /// Whether the display was made for this launch, and goes with it.
     let ownsDisplay: Bool
+    /// Whether the device that launched it wants low-latency rate control.
+    var lowLatency = false
 
     init(appID: Int, displayID: CGDirectDisplayID, key: Data, keyID: UInt32 = 0, ownsDisplay: Bool = false) {
         self.appID = appID

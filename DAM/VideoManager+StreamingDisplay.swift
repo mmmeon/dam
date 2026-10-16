@@ -77,8 +77,8 @@ extension VideoManager {
         let display: AnyObject
         /// Which of the streaming displays it is, from 0; it picks the name and serial number.
         let index: Int
-        /// The mode it comes up in.
-        let start: StreamingDisplayModes.Mode
+        /// The mode it comes up in, or was last resized to.
+        var start: StreamingDisplayModes.Mode
         /// Its display ID once online, else 0.
         var id: CGDirectDisplayID = 0
     }
@@ -147,21 +147,32 @@ extension VideoManager {
         setMainDisplay(display) { [weak self] _ in self?.streamingMainHandBackInFlight = false }
     }
 
-    /// An addition or removal of a streaming display, waiting its turn. An addition says
-    /// when its display is placed, with its ID, or that none could be made, with nil.
+    /// An addition, removal or resize of a streaming display, waiting its turn. An addition
+    /// says when its display is placed, with its ID, or that none could be made, with nil; a
+    /// resize whether it was done.
     enum StreamingRequest {
         case add(StreamingDisplayModes.Mode, completion: ((CGDirectDisplayID?) -> Void)?)
         case remove(index: Int)
+        case resize(id: CGDirectDisplayID, StreamingDisplayModes.Mode, completion: (Bool) -> Void)
 
         var isAddition: Bool {
             if case .add = self { return true }
             return false
         }
+
+        /// How many displays it adds: 1, -1, or 0 for a resize.
+        var countChange: Int {
+            switch self {
+            case .add: return 1
+            case .remove: return -1
+            case .resize: return 0
+            }
+        }
     }
 
     /// How many streaming displays there will be once the requests waiting are done.
     var plannedStreamingDisplayCount: Int {
-        streamingRequests.reduce(streamingDisplays.count) { $0 + ($1.isAddition ? 1 : -1) }
+        streamingRequests.reduce(streamingDisplays.count) { $0 + $1.countChange }
     }
 
     var canCreateStreamingDisplay: Bool { plannedStreamingDisplayCount < Self.maxStreamingDisplays }
@@ -190,6 +201,16 @@ extension VideoManager {
         processStreamingRequests()
     }
 
+    /// Asks for streaming display `id` to change to `mode` where it is, as a display made for
+    /// a stream does when the stream comes back at another size. It keeps its ID and windows,
+    /// and takes well under a second where a new display takes several. `completion` gets
+    /// false when it can't be done, as when `mode` is bigger than the display was made for.
+    func resizeStreamingDisplay(id: CGDirectDisplayID, to mode: StreamingDisplayModes.Mode,
+                                completion: @escaping (Bool) -> Void) {
+        streamingRequests.append(.resize(id: id, mode, completion: completion))
+        processStreamingRequests()
+    }
+
     /// Starts the next request, unless a change is under way; that one calls this again
     /// when it is done.
     private func processStreamingRequests() {
@@ -197,6 +218,8 @@ extension VideoManager {
             switch streamingRequests.removeFirst() {
             case .add(let mode, let completion):    addStreamingDisplay(mode, completion: completion)
             case .remove(let index):                removeStreamingDisplay(index: index)
+            case .resize(let id, let mode, let completion):
+                resizeStreamingDisplay(id: id, mode: mode, completion: completion)
             }
         }
     }
@@ -337,6 +360,90 @@ extension VideoManager {
         }
     }
 
+    /// Gives streaming display `id` a mode list starting with `mode`, then switches to it once
+    /// WindowServer lists it, putting the others back as they were.
+    private func resizeStreamingDisplay(id: CGDirectDisplayID, mode: StreamingDisplayModes.Mode,
+                                        completion: @escaping (Bool) -> Void) {
+        guard id != 0, let i = streamingDisplays.firstIndex(where: { $0.id == id }),
+              let vd = streamingDisplays[i].display as? CGVirtualDisplay,
+              mode.pixelWidth <= Int(vd.maxPixelsWide), mode.pixelHeight <= Int(vd.maxPixelsHigh) else {
+            return completion(false)
+        }
+        if streamingDisplays[i].start == mode,
+           let wanted = Self.displayMode(mode, of: id)?.ioDisplayModeID,
+           wanted == CGDisplayCopyDisplayMode(id)?.ioDisplayModeID {
+            return completion(true)
+        }
+        let index = streamingDisplays[i].index
+        sdLog.debug("resize \(index) to \(mode.width)×\(mode.height)@\(mode.refreshRate)\(mode.hiDPI ? " HiDPI" : "")")
+        let settings = CGVirtualDisplaySettings()
+        settings.hiDPI = 1
+        settings.modes = StreamingDisplayModes.advertised(startingIn: mode).map {
+            CGVirtualDisplayMode(width: UInt($0.width), height: UInt($0.height),
+                                 refreshRate: Double($0.refreshRate))
+        }
+        guard vd.apply(settings) else {
+            sdLog.error("resize: applySettings failed")
+            return completion(false)
+        }
+        streamingDisplays[i].start = mode
+        streamingChangeInFlight = true
+        let before = activeStreamingSettle ?? DisplayArrangement.current()
+        switchStreamingDisplay(id, to: mode, before: before, attempt: 0, completion: completion)
+    }
+
+    /// Switches `id` to `mode` once WindowServer lists it, which takes a moment after a new
+    /// mode list; gives up after two seconds.
+    private func switchStreamingDisplay(_ id: CGDirectDisplayID, to mode: StreamingDisplayModes.Mode,
+                                        before: DisplayArrangement, attempt: Int,
+                                        completion: @escaping (Bool) -> Void) {
+        guard let target = Self.displayMode(mode, of: id) else {
+            guard attempt < 20, DisplayArrangement.onlineDisplayIDs().contains(id) else {
+                sdLog.error("resize: \(mode.width)×\(mode.height) never listed")
+                finishStreamingChange()
+                return completion(false)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                self?.switchStreamingDisplay(id, to: mode, before: before, attempt: attempt + 1, completion: completion)
+            }
+            return
+        }
+        var config: CGDisplayConfigRef?
+        guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else {
+            finishStreamingChange()
+            return completion(false)
+        }
+        // WindowServer may move or resize the others for the new size.
+        before.restore(in: cfg, excluding: [id])
+        before.restoreModes(in: cfg, excluding: [id])
+        CGConfigureDisplayWithDisplayMode(cfg, id, target, nil)
+        let origin = before.origins[id] ?? CGDisplayBounds(id).origin
+        let resized = before.excluding(id).adding(id, origin: origin, mode: target)
+        // For the session, as placing one is.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let err = CGCompleteDisplayConfiguration(cfg, .forSession)
+            sdLog.debug("resize: CompleteDisplayConfiguration err=\(err.rawValue)")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                guard let self else { return completion(false) }
+                self.streamingSettle = (resized, Date().addingTimeInterval(5))
+                self.reassertStreamingLayout()
+                self.mergeDevices()
+                completion(err == .success)
+                self.finishStreamingChange()
+            }
+        }
+    }
+
+    /// The mode of `id` that is `mode`: its size, rate and scale.
+    static func displayMode(_ mode: StreamingDisplayModes.Mode, of id: CGDirectDisplayID) -> CGDisplayMode? {
+        let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
+        let modes = CGDisplayCopyAllDisplayModes(id, options) as? [CGDisplayMode] ?? []
+        return modes.first {
+            $0.width == mode.width && $0.height == mode.height && $0.pixelWidth == mode.pixelWidth
+                && Int($0.refreshRate.rounded()) == mode.refreshRate
+        }
+    }
+
     /// Forgets streaming display `index` after WindowServer ended it.
     private func streamingDisplayEnded(index: Int) {
         guard let i = streamingDisplays.firstIndex(where: { $0.index == index }) else { return }
@@ -402,17 +509,12 @@ extension VideoManager {
         before.restore(in: cfg, excluding: [id])
         // It can also change their resolutions.
         before.restoreModes(in: cfg, excluding: [id])
-        let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
-        let modes = CGDisplayCopyAllDisplayModes(id, options) as? [CGDisplayMode] ?? []
         let start = streamingDisplays.first { $0.id == id }?.start ?? StreamingDisplayModes.start
-        let startMode = modes.first {
-            $0.width == start.width && $0.height == start.height && $0.pixelWidth == start.pixelWidth
-                && Int($0.refreshRate.rounded()) == start.refreshRate
-        }
+        let startMode = Self.displayMode(start, of: id)
         if let mode = startMode {
             CGConfigureDisplayWithDisplayMode(cfg, id, mode, nil)
         } else {
-            sdLog.error("place: no \(start.width)×\(start.height) mode among \(modes.count)")
+            sdLog.error("place: no \(start.width)×\(start.height) mode")
         }
         let others = before.origins.compactMap { otherID, origin -> CGRect? in
             guard otherID != id, before.mirrorMasters[otherID] == 0 else { return nil }

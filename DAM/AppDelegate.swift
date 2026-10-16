@@ -59,6 +59,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 mode: StreamingDisplayModes.forStream(width: width, height: height, fps: fps), completion: done)
         }
         moonlightHost.removeDisplay = { [weak self] id in self?.videoManager.removeStreamingDisplay(id: id) }
+        moonlightHost.resizeDisplay = { [weak self] id, width, height, fps, done in
+            guard let self else { return done(false) }
+            self.videoManager.resizeStreamingDisplay(
+                id: id, to: StreamingDisplayModes.forStream(width: width, height: height, fps: fps), completion: done)
+        }
         if MoonlightHost.isEnabled { moonlightHost.start() }
         AudioOutputPicker.shared.configure(audioManager: audioManager)
         MirrorPicker.shared.configure(videoManager: videoManager)
@@ -585,6 +590,14 @@ extension AppDelegate: NSMenuDelegate {
         guard let client = sender.representedObject as? MoonlightClient else { return }
         moonlightHost.forget(client)
         SpeechSynthesizer.shared.announce("Forgot \(client.name)")
+        rebuild()
+    }
+
+    /// Turns low-latency encoding on or off for the Moonlight device in the item's
+    /// `representedObject`.
+    @objc func toggleMoonlightLowLatency(_ sender: NSMenuItem) {
+        guard let client = sender.representedObject as? MoonlightClient else { return }
+        moonlightHost.setLowLatency(!client.lowLatency, for: client)
         rebuild()
     }
 

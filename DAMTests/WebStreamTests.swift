@@ -33,6 +33,16 @@ final class WebStreamTests: XCTestCase {
         XCTAssertTrue(WebStreamRequest.parse(["audio": "1"], preferred: .interactive).audio)
     }
 
+    func testLowLatencyOnlyWhenAskedForAndNotForViewing() {
+        XCTAssertFalse(WebStreamRequest.parse([:], preferred: .interactive).lowLatency)
+        XCTAssertTrue(WebStreamRequest.parse(["lowlatency": "1"], preferred: .interactive).lowLatency)
+        XCTAssertTrue(WebStreamRequest.parse(["lowlatency": "on", "profile": "balanced"], preferred: .interactive).lowLatency)
+        XCTAssertFalse(WebStreamRequest.parse(["lowlatency": "0"], preferred: .interactive).lowLatency)
+        XCTAssertFalse(WebStreamRequest.parse(["lowlatency": "1", "profile": "viewing"], preferred: .interactive).lowLatency)
+        XCTAssertNotEqual(WebStreamRequest.parse(["lowlatency": "1"], preferred: .interactive),
+                          WebStreamRequest.parse([:], preferred: .interactive))
+    }
+
     func testRequestKeepsNonsenseWithinBounds() {
         let request = WebStreamRequest.parse(["profile": "fast", "bitrate": "1", "fps": "1000", "width": "1281",
                                               "height": "721", "mode": "9000x9000x60"], preferred: .interactive)
