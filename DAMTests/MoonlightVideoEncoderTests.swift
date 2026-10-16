@@ -160,13 +160,16 @@ final class MoonlightVideoEncoderTests: XCTestCase {
     }
 
     func testLowLatencyIsLeftOffUnlessAskedFor() throws {
-        XCTAssertFalse(try makeEncoder(Collector()).isLowLatency)
+        // Made first: on a Mac without a hardware encoder it skips, which inside the assert would fail.
+        let encoder = try makeEncoder(Collector())
+        XCTAssertFalse(encoder.isLowLatency)
     }
 
     func testLowLatencyIsLeftOffWithReordering() throws {
         var settings = settings
         settings.lowLatency = true
         settings.reordering = true
-        XCTAssertFalse(try makeEncoder(Collector(), settings: settings).isLowLatency)
+        let encoder = try makeEncoder(Collector(), settings: settings)
+        XCTAssertFalse(encoder.isLowLatency)
     }
 }
