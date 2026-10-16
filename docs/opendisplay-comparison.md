@@ -55,9 +55,16 @@ connect to the host.
    `kVTVideoEncoderSpecification_EnableLowLatencyRateControl`. VideoToolbox then outputs
    each frame immediately rather than holding it until the next one arrives. If the encoder
    doesn't support it (AMD-only Macs), OpenDisplay retries without it. DAM works around the
-   held frame by resubmitting it 1.25 frame times later. Whether the Intel encoder accepts
-   the setting is untested. If it does, the nudge goes away and web streams no longer need
-   their workaround.
+   held frame by resubmitting it 1.25 frame times later.
+
+   *An option on `fix/opendisplay-findings`.* DAM used this setting for every stream until
+   18cf928 (2026-10-13). On the Intel test Mac the encoder accepts it but predicts from
+   long-term reference frames while its SPS allows only one. FFmpeg, which Moonlight
+   decodes with on Linux and Windows, rejects those frames until the next keyframe.
+   OpenDisplay doesn't hit this because its receiver decodes with VideoToolbox. So it is
+   now off by default, and can be turned on for players that decode with VideoToolbox:
+   per paired device in the Moonlight menu, or with `lowlatency=1` for a browser stream.
+   If the encoder refuses it, DAM falls back to the plain encoder, as OpenDisplay does.
 3. **Keep enforcing the display mode.** OpenDisplay saw macOS restore an old saved mode for
    a display's serial number seconds after creating it. So it re-checks the mode every
    200 ms until it settles, then every 2 s. DAM sets the start mode once, in

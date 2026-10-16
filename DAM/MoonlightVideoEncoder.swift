@@ -10,14 +10,15 @@
 //  The plain real-time encoder (an Intel Mac's, at least) hands a frame back only once
 //  the next one is in, so while the screen moves each frame comes out a frame's time late,
 //  and when it stops the last frame is nudged out by giving the encoder the same picture
-//  again. Apple's low-latency rate control would hand each frame back on its own, but on
-//  this encoder it predicts from long-term reference frames while its SPS allows one;
-//  FFmpeg, which Moonlight decodes with on Linux and Windows, then discards a reference
-//  every frame and the picture breaks up until the next keyframe, and Moonlight rewrites
-//  any SPS it gets to one reference frame, so neither the SPS nor the encoder's
-//  properties (ReferenceBufferCount, EnableLTR: ignored) can mend it. Asking the encoder to
-//  complete a frame would also bring it out at once, but starts the next afresh as a
-//  keyframe.
+//  again. Apple's low-latency rate control hands each frame back on its own, but on this
+//  encoder it predicts from long-term reference frames while its SPS allows one; FFmpeg,
+//  which Moonlight decodes with on Linux and Windows, then discards a reference every
+//  frame and the picture breaks up until the next keyframe, and Moonlight rewrites any SPS
+//  it gets to one reference frame, so neither the SPS nor the encoder's properties
+//  (ReferenceBufferCount, EnableLTR: ignored) can mend it. So it is used only when the
+//  settings ask for it (`lowLatency`), for players that decode with VideoToolbox: Moonlight
+//  on an iPhone, iPad or Mac, and browsers on a Mac. Asking the encoder to complete a frame
+//  would also bring it out at once, but starts the next afresh as a keyframe.
 //
 
 import CoreMedia
@@ -54,6 +55,11 @@ final class MoonlightVideoEncoder {
         /// and none is nudged out (see `nudgeDelay`), the stream bringing its own repeats.
         /// Off for Moonlight, whose frames come as the screen changes.
         var steady = false
+        /// Whether to ask for Apple's low-latency rate control, which hands each frame back
+        /// as soon as it is encoded, without a nudge. Only for players that decode with
+        /// VideoToolbox (see the top of the file); ignored with `reordering`, which it does
+        /// not allow.
+        var lowLatency = false
     }
 
     /// One encoded frame as an H.264 Annex B access unit; a keyframe starts with its SPS and PPS.
@@ -74,6 +80,8 @@ final class MoonlightVideoEncoder {
     let settings: Settings
     /// Whether the encoder runs on the GPU's media engine rather than the CPU.
     let isHardware: Bool
+    /// Whether the encoder took low-latency rate control; not every Mac's does.
+    let isLowLatency: Bool
 
     private let session: VTCompressionSession
     private let output: (Frame) -> Void
@@ -112,15 +120,28 @@ final class MoonlightVideoEncoder {
         } else {
             self.output = output
         }
-        let specification: [CFString: Any] = [kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder: true]
-        var made: VTCompressionSession?
-        let status = VTCompressionSessionCreate(allocator: nil, width: Int32(settings.width),
+        // Low-latency rate control when asked for and the encoder takes it, else the plain
+        // real-time one.
+        var made: (VTCompressionSession, Bool)?
+        var status = noErr
+        for lowLatency in settings.lowLatency && !settings.reordering ? [true, false] : [false] {
+            var specification: [CFString: Any] = [kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder: true]
+            if lowLatency { specification[kVTVideoEncoderSpecification_EnableLowLatencyRateControl] = true }
+            var session: VTCompressionSession?
+            status = VTCompressionSessionCreate(allocator: nil, width: Int32(settings.width),
                                                 height: Int32(settings.height), codecType: kCMVideoCodecType_H264,
                                                 encoderSpecification: specification as CFDictionary,
                                                 imageBufferAttributes: nil, compressedDataAllocator: nil,
-                                                outputCallback: nil, refcon: nil, compressionSessionOut: &made)
-        guard status == noErr, let session = made else { throw MoonlightVideoError.session(status) }
+                                                outputCallback: nil, refcon: nil, compressionSessionOut: &session)
+            if status == noErr, let session {
+                made = (session, lowLatency)
+                break
+            }
+            if lowLatency { veLog.debug("encoder without low-latency rate control: \(status)") }
+        }
+        guard let (session, lowLatency) = made else { throw MoonlightVideoError.session(status) }
         self.session = session
+        isLowLatency = lowLatency
         var hardware: CFBoolean?
         VTSessionCopyProperty(session, key: kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder,
                               allocator: nil, valueOut: &hardware)
@@ -155,7 +176,7 @@ final class MoonlightVideoEncoder {
             if status != noErr { veLog.debug("encoder property \(key as String, privacy: .public): \(status)") }
         }
         VTCompressionSessionPrepareToEncodeFrames(session)
-        veLog.debug("encoder \(settings.width)×\(settings.height)@\(settings.fps) \(settings.bitrateKbps) kbps, hardware \(self.isHardware)")
+        veLog.debug("encoder \(settings.width)×\(settings.height)@\(settings.fps) \(settings.bitrateKbps) kbps, hardware \(self.isHardware), low-latency \(self.isLowLatency)")
     }
 
     deinit {

@@ -66,8 +66,8 @@ final class MoonlightVideoEncoderTests: XCTestCase {
     /// An encoder on this Mac's hardware. These tests are of the hardware path, the one
     /// streaming takes on any Mac; a virtual machine, as the GitHub runners are, has only
     /// Apple's software encoder, which takes seconds a frame there.
-    private func makeEncoder(_ collector: Collector) throws -> MoonlightVideoEncoder {
-        let encoder = try MoonlightVideoEncoder(settings: settings, output: collector.add)
+    private func makeEncoder(_ collector: Collector, settings: MoonlightVideoEncoder.Settings? = nil) throws -> MoonlightVideoEncoder {
+        let encoder = try MoonlightVideoEncoder(settings: settings ?? self.settings, output: collector.add)
         try XCTSkipUnless(encoder.isHardware, "no hardware video encoder on this Mac")
         return encoder
     }
@@ -142,5 +142,31 @@ final class MoonlightVideoEncoderTests: XCTestCase {
         NSLog("%@", "encoder: hardware \(encoder.isHardware), " +
               "median \(String(format: "%.2f", median)) ms, worst \(String(format: "%.2f", times.last ?? 0)) ms at 720p")
         XCTAssertLessThan(median, 2 * 1000 / 60, "slower than two frames at 60 Hz")
+    }
+
+    // MARK: Low-latency rate control
+
+    func testLowLatencyHandsAFrameBackWithoutANudge() throws {
+        var lowLatency = settings
+        lowLatency.lowLatency = true
+        let collector = Collector()
+        let encoder = try makeEncoder(collector, settings: lowLatency)
+        try XCTSkipUnless(encoder.isLowLatency, "this Mac's encoder has no low-latency rate control")
+        try encodeOne(encoder, collector, seed: 0)
+        // Long enough for a nudge to have come, had one been needed.
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        collector.lock.lock(); defer { collector.lock.unlock() }
+        XCTAssertEqual(collector.frames.map(\.time), [time(0)])
+    }
+
+    func testLowLatencyIsLeftOffUnlessAskedFor() throws {
+        XCTAssertFalse(try makeEncoder(Collector()).isLowLatency)
+    }
+
+    func testLowLatencyIsLeftOffWithReordering() throws {
+        var settings = settings
+        settings.lowLatency = true
+        settings.reordering = true
+        XCTAssertFalse(try makeEncoder(Collector(), settings: settings).isLowLatency)
     }
 }

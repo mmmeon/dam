@@ -22,6 +22,25 @@ struct MoonlightClient: Codable, Equatable {
     let name: String
     let certificate: Data
     let paired: Date
+    /// Whether its streams use low-latency rate control, which only Moonlight that decodes
+    /// with VideoToolbox (on an iPhone, iPad or Mac) plays cleanly; see MoonlightVideoEncoder.
+    var lowLatency = false
+
+    init(name: String, certificate: Data, paired: Date, lowLatency: Bool = false) {
+        self.name = name
+        self.certificate = certificate
+        self.paired = paired
+        self.lowLatency = lowLatency
+    }
+
+    // Devices paired before the setting came have none saved.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        certificate = try container.decode(Data.self, forKey: .certificate)
+        paired = try container.decode(Date.self, forKey: .paired)
+        lowLatency = try container.decodeIfPresent(Bool.self, forKey: .lowLatency) ?? false
+    }
 }
 
 /// An app Moonlight lists.
@@ -219,6 +238,14 @@ final class MoonlightHost {
         onChange?()
     }
 
+    /// Sets whether `client`'s streams use low-latency rate control, from its next stream on.
+    func setLowLatency(_ lowLatency: Bool, for client: MoonlightClient) {
+        guard let index = clients.firstIndex(where: { $0.certificate == client.certificate }) else { return }
+        clients[index].lowLatency = lowLatency
+        saveClients()
+        onChange?()
+    }
+
     private static var hostName: String {
         Host.current().localizedName ?? ProcessInfo.processInfo.hostName
     }
@@ -333,7 +360,7 @@ final class MoonlightHost {
         case "/applist" where secure:
             reply(appList(), to: connection)
         case "/launch" where secure, "/resume" where secure:
-            launchApp(request, resume: request.path == "/resume", on: connection)
+            launchApp(request, resume: request.path == "/resume", certificate: certificate, on: connection)
         case "/cancel" where secure:
             // Free before answering: Moonlight asks for serverinfo next and expects it so.
             endLaunch()
@@ -379,7 +406,7 @@ final class MoonlightHost {
     /// A streaming display the user made streams as it is. New Display, or a display that is
     /// gone (Moonlight keeps listing apps from before), gets a display made at the stream's
     /// size, which /cancel removes; a resume keeps streaming the display it had.
-    private func launchApp(_ request: Request, resume: Bool, on connection: NWConnection) {
+    private func launchApp(_ request: Request, resume: Bool, certificate: Data?, on connection: NWConnection) {
         guard let key = request.query["rikey"].flatMap(MoonlightCrypto.data(hex:)), key.count == 16 else {
             return reply(Self.xml(status: 400, message: "Missing key"), to: connection)
         }
@@ -387,8 +414,11 @@ final class MoonlightHost {
         let keyID = UInt32(bitPattern: request.query["rikeyid"].flatMap { Int32($0) } ?? 0)
         let appID = request.query["appid"].flatMap(Int.init) ?? launch?.appID ?? Self.newDisplayAppID
         let address = Self.address(connection.currentPath?.localEndpoint)
+        let lowLatency = clients.first { $0.certificate == certificate }?.lowLatency ?? false
         let answer = { [weak self] (launch: MoonlightLaunch) in
             guard let self else { return }
+            var launch = launch
+            launch.lowLatency = lowLatency
             self.endStream()
             self.launch = launch
             self.lastStreamEnd = nil
@@ -433,6 +463,8 @@ final class MoonlightHost {
     /// Starts the stream ANNOUNCE asked for; returns why it could not, or nil.
     private func startStream(_ launch: MoonlightLaunch, _ config: MoonlightStreamConfig) -> String? {
         endStream()
+        var config = config
+        config.lowLatency = launch.lowLatency
         do {
             let stream = try MoonlightStream(config: config, displayID: launch.displayID, key: launch.key,
                                              keyID: launch.keyID, pingPayload: launch.pingPayload,
