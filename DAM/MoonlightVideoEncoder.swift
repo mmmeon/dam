@@ -153,21 +153,13 @@ final class MoonlightVideoEncoder {
             kVTCompressionPropertyKey_AllowFrameReordering: settings.reordering,
             kVTCompressionPropertyKey_ProfileLevel: kVTProfileLevel_H264_High_AutoLevel,
             kVTCompressionPropertyKey_H264EntropyMode: kVTH264EntropyMode_CABAC,
-            kVTCompressionPropertyKey_AverageBitRate: settings.bitrateKbps * 1000,
-            // Keeps a keyframe from being many times a frame's share of the bitrate: for
-            // Moonlight no more than one and a half times the rate over any quarter second,
-            // so it fits within the packets Moonlight takes with parity and goes out in a
-            // few frames' time.
-            kVTCompressionPropertyKey_DataRateLimits: [
-                NSNumber(value: Int(Double(settings.bitrateKbps * 1000 / 8) * settings.rateLimitMultiple
-                                    * settings.rateLimitWindow)),
-                NSNumber(value: settings.rateLimitWindow)],
             kVTCompressionPropertyKey_ExpectedFrameRate: settings.fps,
             // Keyframes only when asked for (Moonlight asks after losing packets), an hour
             // apart otherwise, unless the settings want them regularly.
             kVTCompressionPropertyKey_MaxKeyFrameInterval: settings.fps * keyFrameSeconds,
             kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration: keyFrameSeconds,
         ]
+        properties.merge(Self.rateProperties(settings.bitrateKbps, settings)) { $1 }
         // Without reordering, no frame is held back for one that follows.
         if !settings.reordering { properties[kVTCompressionPropertyKey_MaxFrameDelayCount] = 0 }
         if settings.prioritizeSpeed { properties[kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality] = true }
@@ -181,6 +173,27 @@ final class MoonlightVideoEncoder {
 
     deinit {
         VTCompressionSessionInvalidate(session)
+    }
+
+    /// The average bitrate, and the limit that keeps a keyframe from being many times a
+    /// frame's share of it: for Moonlight no more than one and a half times the rate over any
+    /// quarter second, so it fits within the packets Moonlight takes with parity and goes out
+    /// in a few frames' time.
+    private static func rateProperties(_ kbps: Int, _ settings: Settings) -> [CFString: Any] {
+        [kVTCompressionPropertyKey_AverageBitRate: kbps * 1000,
+         kVTCompressionPropertyKey_DataRateLimits: [
+            NSNumber(value: Int(Double(kbps * 1000 / 8) * settings.rateLimitMultiple * settings.rateLimitWindow)),
+            NSNumber(value: settings.rateLimitWindow)]]
+    }
+
+    /// Changes the bitrate from the next frame encoded.
+    func setBitrate(kbps: Int) {
+        queue.async { [self] in
+            for (key, value) in Self.rateProperties(kbps, settings) {
+                let status = VTSessionSetProperty(session, key: key, value: value as CFTypeRef)
+                if status != noErr { veLog.debug("encoder property \(key as String, privacy: .public): \(status)") }
+            }
+        }
     }
 
     /// Makes the next frame encoded a keyframe.

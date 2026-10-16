@@ -87,6 +87,12 @@ flowchart LR
   (nanors-compatible), or more if the client asks for it.
 - **Still screen:** the last picture is resent every 0.5 s. Keyframes are limited to one
   per 0.25 s.
+- **Bitrate:** set from the client's losses, which it reports for each frame it could not
+  rebuild from parity (Sunshine's 0x5502) and by asking for keyframes. Two or more lost
+  frames in a second cut it by 30%, then it holds for 2 s. Five seconds without a loss,
+  and with no more than two frames rebuilt from parity a second, raise it by 15%. It
+  stays between the client's bitrate and a quarter of it (no less than 2 Mbit/s). The
+  default `MoonlightAdaptiveBitrate` set to false keeps the client's bitrate throughout.
 
 ### Audio
 

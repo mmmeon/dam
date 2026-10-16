@@ -103,7 +103,7 @@ final class MoonlightUDPSocket {
 final class MoonlightStreamStats {
     private let lock = NSLock()
     private var frames = 0, keyFrames = 0, videoPackets = 0, videoBytes = 0, videoRefused = 0
-    private var audioPackets = 0, audioRefused = 0, keyFrameRequests = 0
+    private var audioPackets = 0, audioRefused = 0, keyFrameRequests = 0, rebuilt = 0, lost = 0
 
     func video(packets: Int, bytes: Int, refused: Int, keyFrame: Bool) {
         lock.lock(); defer { lock.unlock() }
@@ -120,15 +120,20 @@ final class MoonlightStreamStats {
         keyFrameRequests += 1
     }
 
+    func frameStatus(_ status: MoonlightFrameFecStatus) {
+        lock.lock(); defer { lock.unlock() }
+        if status.isLost { lost += 1 } else { rebuilt += 1 }
+    }
+
     /// The counts since the last call, as a line for the log.
     func take(seconds: Double) -> String {
         lock.lock(); defer { lock.unlock() }
         let line = String(format: "%.1f fps (%d keyframes), %.1f Mbit/s, %d keyframe requests; " +
-                          "packets refused: video %d of %d, audio %d of %d",
+                          "blocks rebuilt from parity %d, lost %d; packets refused: video %d of %d, audio %d of %d",
                           Double(frames) / seconds, keyFrames, Double(videoBytes) * 8 / seconds / 1e6, keyFrameRequests,
-                          videoRefused, videoPackets, audioRefused, audioPackets)
+                          rebuilt, lost, videoRefused, videoPackets, audioRefused, audioPackets)
         frames = 0; keyFrames = 0; videoPackets = 0; videoBytes = 0; videoRefused = 0
-        audioPackets = 0; audioRefused = 0; keyFrameRequests = 0
+        audioPackets = 0; audioRefused = 0; keyFrameRequests = 0; rebuilt = 0; lost = 0
         return line
     }
 }
@@ -422,6 +427,8 @@ final class MoonlightControlServer {
 
     /// Called on the control thread when Moonlight asks for a keyframe.
     var onKeyFrameRequest: (() -> Void)?
+    /// Called on the control thread when Moonlight reports a frame that needed parity.
+    var onFrameStatus: ((MoonlightFrameFecStatus) -> Void)?
     /// Called on the control thread when Moonlight connects, and when it leaves.
     var onConnect: (() -> Void)?
     var onDisconnect: (() -> Void)?
@@ -485,6 +492,9 @@ final class MoonlightControlServer {
             guard event.peer == peer, let message = MoonlightControlCrypto.open(data, key: key) else { return }
             if message.type == Self.requestKeyFrame || message.type == Self.invalidateReferenceFrames {
                 onKeyFrameRequest?()
+            } else if message.type == MoonlightFrameFecStatus.messageType,
+                      let status = MoonlightFrameFecStatus(payload: message.payload) {
+                onFrameStatus?(status)
             }
         case ENET_EVENT_TYPE_DISCONNECT:
             guard event.peer == peer else { return }
@@ -530,6 +540,10 @@ final class MoonlightStream {
     private var repeater: DispatchSourceTimer?
     private var ended = false
     private var keyFrames = MoonlightKeyFrameThrottle()
+    /// The bitrate, set from the client's losses; nil when the default
+    /// MoonlightAdaptiveBitrate is off, for the client's bitrate throughout.
+    private var bitrate: MoonlightBitrateGovernor?
+    private var bitrateTimer: DispatchSourceTimer?
 
     /// Called once on the main queue when the stream ends on its own, with why.
     var onEnd: ((String) -> Void)?
@@ -551,9 +565,21 @@ final class MoonlightStream {
 
     func start() {
         control.onKeyFrameRequest = { [weak self] in
-            self?.video.stats.keyFrameRequested()
-            self?.sendKeyFrame()
+            guard let self else { return }
+            self.video.stats.keyFrameRequested()
+            self.lock.lock()
+            self.bitrate?.keyFrameRequested()
+            self.lock.unlock()
+            self.sendKeyFrame()
         }
+        control.onFrameStatus = { [weak self] status in
+            guard let self else { return }
+            self.video.stats.frameStatus(status)
+            self.lock.lock()
+            self.bitrate?.frameStatus(status)
+            self.lock.unlock()
+        }
+        startAdaptingBitrate()
         // What went out and what went wrong, every 5 seconds.
         let stats = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
         stats.schedule(deadline: .now() + 5, repeating: 5)
@@ -595,6 +621,30 @@ final class MoonlightStream {
         activity = nil
         statsTimer?.cancel()
         statsTimer = nil
+        bitrateTimer?.cancel()
+        bitrateTimer = nil
+    }
+
+    /// Each second, sets the encoder's bitrate from the client's losses (see
+    /// MoonlightBitrateGovernor).
+    private func startAdaptingBitrate() {
+        guard UserDefaults.standard.object(forKey: "MoonlightAdaptiveBitrate") as? Bool ?? true else { return }
+        bitrate = MoonlightBitrateGovernor(kbps: config.bitrateKbps)
+        let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        timer.schedule(deadline: .now() + 1, repeating: 1)
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            let was = self.bitrate?.current
+            let kbps = self.bitrate?.second()
+            let encoder = self.encoder
+            self.lock.unlock()
+            guard let kbps, let was else { return }
+            msLog.debug("bitrate \(was) → \(kbps) kbps")
+            encoder?.setBitrate(kbps: kbps)
+        }
+        bitrateTimer = timer
+        timer.resume()
     }
 
     private func end(_ reason: String) {

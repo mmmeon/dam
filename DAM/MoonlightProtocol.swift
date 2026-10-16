@@ -231,6 +231,101 @@ struct MoonlightKeyFrameThrottle {
     }
 }
 
+/// What Moonlight says of a frame's FEC block that needed parity: sent, as a Sunshine
+/// extension (control message 0x5502), for each it rebuilt from parity and each it could
+/// not. 21 bytes, big-endian.
+struct MoonlightFrameFecStatus: Equatable {
+    static let messageType: UInt16 = 0x5502
+
+    let frameIndex: UInt32
+    let dataPackets: Int
+    let parityPackets: Int
+    let receivedData: Int
+    let receivedParity: Int
+
+    init(frameIndex: UInt32, dataPackets: Int, parityPackets: Int, receivedData: Int, receivedParity: Int) {
+        self.frameIndex = frameIndex
+        self.dataPackets = dataPackets
+        self.parityPackets = parityPackets
+        self.receivedData = receivedData
+        self.receivedParity = receivedParity
+    }
+
+    init?(payload: Data) {
+        let bytes = [UInt8](payload)
+        guard bytes.count >= 21 else { return nil }
+        func u16(_ at: Int) -> Int { Int(bytes[at]) << 8 | Int(bytes[at + 1]) }
+        frameIndex = UInt32(bytes[0]) << 24 | UInt32(bytes[1]) << 16 | UInt32(bytes[2]) << 8 | UInt32(bytes[3])
+        dataPackets = u16(10)
+        parityPackets = u16(12)
+        receivedData = u16(14)
+        receivedParity = u16(16)
+    }
+
+    /// Whether the block was lost: fewer of its packets came than its data needs.
+    var isLost: Bool { receivedData + receivedParity < dataPackets }
+}
+
+/// Sets a Moonlight stream's bitrate from how much of it the client loses, lower while it
+/// loses frames and back up while it does not, as the bitrate the client asked for is often
+/// more than its link carries: then nearly every frame is lost and asked for again as a
+/// keyframe, larger still. A loss is a frame Moonlight reports it could not rebuild, or a
+/// keyframe it asks for (a frame that never came is reported only that way); counted each
+/// second, as the larger of the two, since one lost frame brings both. Two or more in a
+/// second take the bitrate down by 30%, then nothing changes for two seconds while the
+/// encoder and the frames already sent catch up. Five seconds without one, and with few
+/// frames needing parity, bring it up by 15%, to at most the client's bitrate.
+struct MoonlightBitrateGovernor {
+    /// The client's bitrate, the most this sets.
+    let ceiling: Int
+    /// The least this sets: a quarter of the client's, and no less than 2 Mbit/s unless
+    /// the client asked for less.
+    let floor: Int
+    private(set) var current: Int
+    private var lostFrames = 0, keyFrameRequests = 0, rebuiltFrames = 0
+    private var cleanSeconds = 0, holdSeconds = 0
+
+    /// Frames rebuilt from parity in a second that still count it as clean.
+    static let rebuiltAllowed = 2
+
+    init(kbps: Int) {
+        ceiling = kbps
+        floor = min(kbps, max(kbps / 4, 2000))
+        current = kbps
+    }
+
+    mutating func frameStatus(_ status: MoonlightFrameFecStatus) {
+        if status.isLost { lostFrames += 1 } else { rebuiltFrames += 1 }
+    }
+
+    mutating func keyFrameRequested() {
+        keyFrameRequests += 1
+    }
+
+    /// Called once a second; the new bitrate in kbps when it changes.
+    mutating func second() -> Int? {
+        let losses = max(lostFrames, keyFrameRequests)
+        let rebuilt = rebuiltFrames
+        lostFrames = 0; keyFrameRequests = 0; rebuiltFrames = 0
+        if holdSeconds > 0 {
+            holdSeconds -= 1
+            return nil
+        }
+        if losses >= 2 {
+            cleanSeconds = 0
+            guard current > floor else { return nil }
+            current = max(floor, current * 7 / 10)
+            holdSeconds = 2
+            return current
+        }
+        cleanSeconds = losses == 0 && rebuilt <= Self.rebuiltAllowed ? cleanSeconds + 1 : 0
+        guard cleanSeconds >= 5, current < ceiling else { return nil }
+        cleanSeconds = 0
+        current = min(ceiling, current * 115 / 100)
+        return current
+    }
+}
+
 /// Puts Opus packets in Moonlight's audio packets: a 12-byte RTP header (payload type 97,
 /// sequence, a timestamp in milliseconds), then the Opus packet, encrypted with AES-128-CBC
 /// when asked. After every fourth packet come two parity packets (type 127) for the four,
