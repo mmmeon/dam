@@ -166,7 +166,10 @@ cmd_run() {
     cleanup() {
         [[ -n $codes_pid ]] && kill $codes_pid 2>/dev/null
         [[ -n $iina_title ]] && osascript -e 'tell application "IINA" to quit' >/dev/null 2>&1
-        $moonlight quit $host >/dev/null 2>&1
+        # Moonlight's quit can hang after DAM has answered it; the pkill below ends it.
+        $moonlight quit $host >/dev/null 2>&1 &
+        local quit_pid=$!
+        for i in {1..30}; do kill -0 $quit_pid 2>/dev/null || break; pause 0.5; done
         pause 6
         pkill -x Moonlight 2>/dev/null
         pause 2
