@@ -94,6 +94,19 @@ flowchart LR
   most 0.3 s) after a keyframe went out. Moonlight asks again for every frame it loses
   while it waits, so on a lossy link answering each request kept the stream in a run of
   keyframes.
+- **Bitrate:** set from the client's losses, which it reports for each frame it could not
+  rebuild from parity (Sunshine's 0x5502) and by asking for keyframes. Two or more losses
+  in a second cut it by 30% if a frame came four or more packets short in the last 10 s
+  (lost in a run, as an overflowing link drops them; random loss leaves them one to three
+  short); ten or more losses of any kind halve it, then it holds for 2 s. Five
+  seconds without a loss, and with no more than two frames rebuilt from parity a second,
+  raise it by 15%. It stays between the client's bitrate and a quarter of it (no less than
+  2 Mbit/s). Cuts are judged on the 10 s after them: unless losses fell by half against
+  the 10 s before, it goes back to the bitrate before them, and only ten or more losses a
+  second cut it for the next 30 s. That is for random loss, which a lower bitrate does not
+  lessen and fewer parity packets per frame make worse. The first 3 s of a stream, when
+  Moonlight asks for a keyframe and loses frames as it starts, count for nothing. The default
+  `MoonlightAdaptiveBitrate` set to false keeps the client's bitrate throughout.
 
 ### Audio
 
