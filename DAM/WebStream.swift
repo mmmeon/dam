@@ -436,6 +436,7 @@ final class WebStreamSession {
             let at = DispatchTime.now().uptimeNanoseconds
             self.queue.async { self.encode(buffer, captured: time, at: at) }
         }
+        capture.showsCursor = MoonlightStream.showsPointer
         capture.audioQueue = queue
         capture.audio = { [weak self] sample in self?.took(audio: sample) }
         capture.onStop = { [weak self] error in self?.end("capture stopped: \(error.localizedDescription)") }

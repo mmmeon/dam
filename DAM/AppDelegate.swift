@@ -195,6 +195,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = menu
         controlStrip.rebuild()
         iconAnimator.show(count: connectionCount)
+        settingsWindow?.moonlightDidChange()
     }
 
     /// Connections running through the app, shown by the menu bar icon's outflow: AirPlay
@@ -490,7 +491,8 @@ extension AppDelegate: NSMenuDelegate {
             currentRotation: HotkeyPreference.currentRotation,
             audioManager: audioManager,
             videoManager: videoManager,
-            sidecarManager: sidecarManager
+            sidecarManager: sidecarManager,
+            moonlightHost: moonlightHost
         )
         wc.onSave = { [weak self] pref in
             HotkeyPreference.current = pref
@@ -535,8 +537,16 @@ extension AppDelegate: NSMenuDelegate {
             }
         }
         wc.onRebuild = { [weak self] in self?.rebuild() }
+        wc.onToggleMoonlight = { [weak self] in self?.toggleMoonlightHost(nil) }
+        wc.onForgetMoonlightClient = { [weak self] in self?.forget($0) }
         settingsWindow = wc
         wc.show()
+    }
+
+    /// Opens Settings on the Moonlight tab.
+    @objc func openMoonlightSettings(_ sender: Any?) {
+        openSettings(nil)
+        settingsWindow?.showMoonlight()
     }
 
     /// Opens the Arrange Displays window, one for the app's lifetime.
@@ -562,7 +572,7 @@ extension AppDelegate: NSMenuDelegate {
     }
 
     /// Turns hosting for Moonlight on or off.
-    @objc func toggleMoonlightHost(_ sender: NSMenuItem) {
+    @objc func toggleMoonlightHost(_ sender: Any?) {
         if moonlightHost.isRunning {
             MoonlightHost.isEnabled = false
             moonlightHost.stop()
@@ -592,26 +602,10 @@ extension AppDelegate: NSMenuDelegate {
         SpeechSynthesizer.shared.announce(Spoken.copied(address))
     }
 
-    /// Makes the profile in the item's `representedObject` the one streams get by default.
-    @objc func setStreamProfile(_ sender: NSMenuItem) {
-        guard let raw = sender.representedObject as? String, let profile = StreamProfile(rawValue: raw) else { return }
-        StreamProfile.preferred = profile
-        rebuild()
-    }
-
-    /// Unpairs the Moonlight device in the item's `representedObject`.
-    @objc func forgetMoonlightClient(_ sender: NSMenuItem) {
-        guard let client = sender.representedObject as? MoonlightClient else { return }
+    /// Unpairs a Moonlight device.
+    private func forget(_ client: MoonlightClient) {
         moonlightHost.forget(client)
         SpeechSynthesizer.shared.announce(Spoken.forgot(client.name))
-        rebuild()
-    }
-
-    /// Turns low-latency encoding on or off for the Moonlight device in the item's
-    /// `representedObject`.
-    @objc func toggleMoonlightLowLatency(_ sender: NSMenuItem) {
-        guard let client = sender.representedObject as? MoonlightClient else { return }
-        moonlightHost.setLowLatency(!client.lowLatency, for: client)
         rebuild()
     }
 

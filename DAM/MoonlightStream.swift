@@ -534,6 +534,21 @@ final class MoonlightStream {
     static let controlPort: UInt16 = 47999
     static let audioPort: UInt16 = 48000
 
+    private static let adaptsBitrateKey = "\(AppIdentity.shortID).moonlight.adaptiveBitrate"
+    private static let showsPointerKey = "\(AppIdentity.shortID).moonlight.showsPointer"
+
+    /// Whether streams lower their bitrate when the client loses packets, and raise it back.
+    static var adaptsBitrate: Bool {
+        get { UserDefaults.dam.object(forKey: adaptsBitrateKey) as? Bool ?? true }
+        set { UserDefaults.dam.set(newValue, forKey: adaptsBitrateKey) }
+    }
+
+    /// Whether streams, Moonlight's and the browser's, show the pointer; from the next stream.
+    static var showsPointer: Bool {
+        get { UserDefaults.dam.object(forKey: showsPointerKey) as? Bool ?? true }
+        set { UserDefaults.dam.set(newValue, forKey: showsPointerKey) }
+    }
+
     let config: MoonlightStreamConfig
     let displayID: CGDirectDisplayID
     private let video: MoonlightVideoSender
@@ -546,8 +561,8 @@ final class MoonlightStream {
     private var repeater: DispatchSourceTimer?
     private var ended = false
     private var keyFrames = MoonlightKeyFrameRequests()
-    /// The bitrate, set from the client's losses; nil when the default
-    /// MoonlightAdaptiveBitrate is off, for the client's bitrate throughout.
+    /// The bitrate, set from the client's losses; nil when `adaptsBitrate` is off, for the
+    /// client's bitrate throughout.
     private var bitrate: MoonlightBitrateGovernor?
     private var bitrateTimer: DispatchSourceTimer?
 
@@ -644,7 +659,7 @@ final class MoonlightStream {
     /// Each second, sets the encoder's bitrate from the client's losses (see
     /// MoonlightBitrateGovernor).
     private func startAdaptingBitrate() {
-        guard UserDefaults.standard.object(forKey: "MoonlightAdaptiveBitrate") as? Bool ?? true else { return }
+        guard Self.adaptsBitrate else { return }
         bitrate = MoonlightBitrateGovernor(kbps: config.bitrateKbps)
         let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
         timer.schedule(deadline: .now() + 1, repeating: 1)
@@ -693,6 +708,7 @@ final class MoonlightStream {
                 guard !self.video.isBehind else { return }
                 encoder.encode(buffer, at: time)
             }
+            capture.showsCursor = Self.showsPointer
             // What the Mac plays, as it plays it; where it plays is left alone.
             let audio = self.audio
             capture.audioQueue = audio.queue

@@ -16,6 +16,7 @@ final class SettingsWindowController: NSWindowController {
     private let audioManager: AudioManager
     private let videoManager: VideoManager
     private let sidecarManager: SidecarManager
+    private let moonlightHost: MoonlightHost
 
     var onSave: ((HotkeyPreference) -> Void)?
     var onSaveAirPlayConnect: ((HotkeyPreference) -> Void)?
@@ -26,12 +27,21 @@ final class SettingsWindowController: NSWindowController {
     var onSaveRotation: ((HotkeyPreference) -> Void)?
     /// Called whenever a visibility checkbox is toggled so the menu/Touch Bar rebuild.
     var onRebuild: (() -> Void)?
+    /// Turns Moonlight hosting on or off, as the menu does.
+    var onToggleMoonlight: (() -> Void)?
+    /// Unpairs a Moonlight device, as the menu did.
+    var onForgetMoonlightClient: ((MoonlightClient) -> Void)?
 
     // Tab content views — built once, reused on every tab switch.
     private lazy var hotkeyContent:  NSView = buildHotkeysTab()
     private lazy var generalContent: NSView = buildGeneralTab()
     private lazy var devicesContent: NSView = buildDevicesTab()
     private lazy var virtualContent: NSView = buildVirtualTab()
+    /// Rebuilt when hosting starts or stops or the paired devices change.
+    private lazy var moonlightContent: NSView = buildMoonlightTab()
+    /// What the Moonlight tab was built from, to tell when it is out of date.
+    private var moonlightShown = MoonlightState(host: nil)
+    private var selectedTab = TabID.general
 
     // MARK: - Toolbar identifiers
 
@@ -40,7 +50,8 @@ final class SettingsWindowController: NSWindowController {
         static let general = NSToolbarItem.Identifier("\(AppIdentity.shortID).settings.general")
         static let devices = NSToolbarItem.Identifier("\(AppIdentity.shortID).settings.devices")
         static let virtual = NSToolbarItem.Identifier("\(AppIdentity.shortID).settings.virtual")
-        static let all: [NSToolbarItem.Identifier] = [general, hotkeys, devices, virtual]
+        static let moonlight = NSToolbarItem.Identifier("\(AppIdentity.shortID).settings.moonlight")
+        static let all: [NSToolbarItem.Identifier] = [general, hotkeys, devices, virtual, moonlight]
     }
 
     // MARK: - Init
@@ -54,7 +65,8 @@ final class SettingsWindowController: NSWindowController {
          currentRotation: HotkeyPreference,
          audioManager: AudioManager,
          videoManager: VideoManager,
-         sidecarManager: SidecarManager) {
+         sidecarManager: SidecarManager,
+         moonlightHost: MoonlightHost) {
         recorder              = KeyRecorderView(preference: current)
         recorderAirPlay       = KeyRecorderView(preference: currentAirPlayConnect)
         recorderMirrorToggle  = KeyRecorderView(preference: currentMirrorToggle)
@@ -65,6 +77,7 @@ final class SettingsWindowController: NSWindowController {
         self.audioManager     = audioManager
         self.videoManager     = videoManager
         self.sidecarManager   = sidecarManager
+        self.moonlightHost    = moonlightHost
 
         let win = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 420, height: 280),
@@ -110,16 +123,19 @@ final class SettingsWindowController: NSWindowController {
             content = devicesContent; title = "Devices"
         case TabID.virtual:
             content = virtualContent; title = "Virtual Display"
+        case TabID.moonlight:
+            content = moonlightContent; title = "Moonlight"
         default:
             content = hotkeyContent;  title = "Hotkeys"
         }
+        selectedTab                             = id
         window?.contentView                     = content
         window?.toolbar?.selectedItemIdentifier = id
         window?.title                           = title
     }
 
-    /// Wide enough for the toolbar's four items.
-    private static let minContentWidth: CGFloat = 340
+    /// Wide enough for the toolbar's five items.
+    private static let minContentWidth: CGFloat = 420
 
     /// The least height the window can be made, below which a tab scrolls.
     private static let minContentHeight: CGFloat = 200
@@ -129,7 +145,7 @@ final class SettingsWindowController: NSWindowController {
     /// window stays resizable down to what the widest tab needs.
     private func fitWindow() {
         guard let win = window else { return }
-        let stacks = [generalContent, hotkeyContent, devicesContent, virtualContent]
+        let stacks = [generalContent, hotkeyContent, devicesContent, virtualContent, moonlightContent]
             .compactMap { ($0 as? NSScrollView)?.documentView }
         stacks.forEach { $0.layoutSubtreeIfNeeded() }
         var height = stacks.map(\.fittingSize.height).max() ?? 0
@@ -355,6 +371,100 @@ final class SettingsWindowController: NSWindowController {
             ("On AirPlay Connect:", [airPlayDefault]),
             ("On Sidecar Connect:", [sidecarBacking, sidecarAutoConnect]),
         ], leftAligned: true)
+    }
+
+    /// Hosting, how streams are made, and the devices paired.
+    private func buildMoonlightTab() -> NSView {
+        let host = moonlightHost
+        moonlightShown = MoonlightState(host: host)
+        var hosting: [NSView] = []
+        // Hosting may fail to start, leaving nothing changed for the tab to be rebuilt by.
+        weak var allowButton: NSButton?
+        let allow = checkbox(title: "Allow Moonlight to connect", isOn: host.isRunning,
+                             help: "Lets Moonlight on another device find this Mac and pair with it. " +
+                                   "Each streaming display is listed in Moonlight as an app.",
+                             action: { [weak self, weak host] _ in
+                                 self?.onToggleMoonlight?()
+                                 allowButton?.state = host?.isRunning == true ? .on : .off
+                             })
+        allowButton = allow as? NSButton
+        hosting.append(allow)
+        if let error = host.lastError { hosting.append(placeholderLabel(error)) }
+        hosting.append(checkbox(title: "Allow new devices to pair",
+                                isOn: MoonlightHost.allowsPairing,
+                                help: "Unchecked, a device that isn't paired yet is turned away without " +
+                                      "asking for a PIN; paired devices still connect.",
+                                action: { MoonlightHost.allowsPairing = $0 }))
+        hosting.append(checkbox(title: "Show this Mac to Moonlight on the network",
+                                isOn: MoonlightHost.isAdvertised,
+                                help: "Unchecked, Moonlight doesn't list this Mac by itself; add it in " +
+                                      "Moonlight by its address. Streams carry on either way.",
+                                action: { [weak host] in
+                                    MoonlightHost.isAdvertised = $0
+                                    host?.updateAdvertising()
+                                }))
+
+        let streams = [
+            checkbox(title: "Adapt the bitrate to the network",
+                     isOn: MoonlightStream.adaptsBitrate,
+                     help: "Lowers the bitrate when Moonlight loses packets, and raises it back to " +
+                           "Moonlight's own when they stop. Unchecked, streams keep Moonlight's " +
+                           "bitrate throughout. Takes effect from the next stream.",
+                     action: { MoonlightStream.adaptsBitrate = $0 }),
+            checkbox(title: "Show the pointer",
+                     isOn: MoonlightStream.showsPointer,
+                     help: "Draws the Mac's pointer into Moonlight and browser streams. Takes " +
+                           "effect from the next stream.",
+                     action: { MoonlightStream.showsPointer = $0 }),
+        ]
+
+        let profile = ClosurePopup(onSelect: { [weak self] raw in
+            guard let profile = raw.flatMap(StreamProfile.init(rawValue:)) else { return }
+            StreamProfile.preferred = profile
+            self?.onRebuild?()
+        })
+        profile.font = .systemFont(ofSize: NSFont.systemFontSize)
+        for option in StreamProfile.allCases {
+            let item = NSMenuItem(title: option.title, action: nil, keyEquivalent: "")
+            item.representedObject = option.rawValue
+            item.toolTip = option.summary
+            profile.menu?.addItem(item)
+            if option == StreamProfile.preferred { profile.select(item) }
+        }
+        profile.toolTip = "The profile a browser or player gets unless its address asks for " +
+                          "another. Hover over each for what it trades."
+
+        let devices: [NSView] = host.clients.map { client in
+            let lowLatency = checkbox(title: "Low-latency encoding", isOn: client.lowLatency,
+                                      help: "Sends each frame the moment it is encoded, about a frame " +
+                                            "sooner. Takes effect from the next stream.",
+                                      action: { [weak host] in host?.setLowLatency($0, for: client) })
+            let forget = ClosureButton(title: "Forget") { [weak self] _ in self?.onForgetMoonlightClient?(client) }
+            forget.bezelStyle  = .rounded
+            forget.controlSize = .small
+            forget.font        = .systemFont(ofSize: NSFont.smallSystemFontSize)
+            forget.toolTip     = "Unpairs \(client.name): it has to pair again to connect."
+            let name = rowLabel(client.name)
+            name.toolTip = "Paired \(client.paired.formatted(date: .abbreviated, time: .shortened))"
+            let row = NSStackView(views: [name, lowLatency, forget])
+            row.orientation = .horizontal
+            row.spacing = 8
+            return row
+        }
+
+        return formTab([
+            ("Hosting:", hosting),
+            ("Streams:", streams),
+            ("Browser Profile:", [profile]),
+            ("Paired Devices:", devices.isEmpty ? [placeholderLabel("None yet")] : devices),
+        ], leftAligned: true)
+    }
+
+    /// Rebuilds the Moonlight tab if what it shows of the host has changed.
+    func moonlightDidChange() {
+        guard MoonlightState(host: moonlightHost) != moonlightShown else { return }
+        moonlightContent = buildMoonlightTab()
+        if selectedTab == TabID.moonlight { window?.contentView = moonlightContent }
     }
 
     // MARK: - Actions
@@ -679,6 +789,12 @@ final class SettingsWindowController: NSWindowController {
 
     // MARK: - Present
 
+    /// Shows the window on the Moonlight tab.
+    func showMoonlight() {
+        selectTab(TabID.moonlight)
+        show()
+    }
+
     func show() {
         showWindow(nil)
         window?.center()
@@ -726,10 +842,30 @@ extension SettingsWindowController: NSToolbarDelegate {
             item.label = "Virtual Display"
             item.image = NSImage(systemSymbolName: "rectangle.dashed",
                                  accessibilityDescription: "Virtual Display")
+        case TabID.moonlight:
+            item.label = "Moonlight"
+            item.image = NSImage(systemSymbolName: "moon.stars",
+                                 accessibilityDescription: "Moonlight")
         default:
             return nil
         }
         return item
+    }
+}
+
+// MARK: - MoonlightState
+
+/// What the Moonlight tab shows of the host and does not change itself.
+private struct MoonlightState: Equatable {
+    var isRunning = false
+    var lastError: String?
+    var clients: [Data] = []
+
+    init(host: MoonlightHost?) {
+        guard let host else { return }
+        isRunning = host.isRunning
+        lastError = host.lastError
+        clients = host.clients.map(\.certificate)
     }
 }
 
