@@ -48,6 +48,12 @@ struct HotkeyPreference: Codable, Equatable {
         modifiers: UInt32(controlKey | optionKey | cmdKey)
     )
 
+    /// Default shortcut for turning the display under the pointer (⌃⌥⌘T).
+    static let defaultRotation = HotkeyPreference(
+        keyCode:   UInt32(kVK_ANSI_T),
+        modifiers: UInt32(controlKey | optionKey | cmdKey)
+    )
+
     // MARK: - Persistence
 
     private static let defaultsKey               = "\(AppIdentity.bundleID).hotkey"
@@ -56,6 +62,7 @@ struct HotkeyPreference: Codable, Equatable {
     private static let audioCycleDefaultsKey      = "\(AppIdentity.bundleID).hotkeyAudioCycle"
     private static let mainDisplayDefaultsKey     = "\(AppIdentity.bundleID).hotkeyMainDisplay"
     private static let resolutionDefaultsKey      = "\(AppIdentity.bundleID).hotkeyResolution"
+    private static let rotationDefaultsKey        = "\(AppIdentity.bundleID).hotkeyRotation"
 
     static var current: HotkeyPreference {
         get { load(defaultsKey, fallback: .default) }
@@ -85,6 +92,11 @@ struct HotkeyPreference: Codable, Equatable {
     static var currentResolution: HotkeyPreference {
         get { load(resolutionDefaultsKey, fallback: .defaultResolution) }
         set { store(newValue, resolutionDefaultsKey) }
+    }
+
+    static var currentRotation: HotkeyPreference {
+        get { load(rotationDefaultsKey, fallback: .defaultRotation) }
+        set { store(newValue, rotationDefaultsKey) }
     }
 
     private static func load(_ key: String, fallback: HotkeyPreference) -> HotkeyPreference {

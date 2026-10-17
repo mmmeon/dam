@@ -383,7 +383,33 @@ private func buildResolutionSubmenu(display: DisplayInfo, video: VideoManager) -
         let rates = (video.refreshRateOptions(for: display)?.modes ?? []).filter { !display.isStreaming || !$0.isVirtual }
         addRateSections(to: submenu, rates: rates, display: display, current: current)
     }
+    if let item = rotationItem(for: display, video: video) {
+        submenu.addItem(.separator())
+        submenu.addItem(item)
+    }
     return submenu
+}
+
+/// "Rotation" with a submenu of the four ways up, the current one checked; nil when the
+/// display can't be turned.
+private func rotationItem(for display: DisplayInfo, video: VideoManager) -> NSMenuItem? {
+    guard let current = video.rotation(of: display) else { return nil }
+    let item = NSMenuItem(title: "Rotation", action: nil, keyEquivalent: "")
+    item.image = menuIcon("rotate.right")
+    if display.isStreaming {
+        item.toolTip = "Turns the display on its side or upside down. Streams of it keep their shape, "
+                     + "with the picture turned, for a device held the other way."
+    }
+    let submenu = NSMenu()
+    for rotation in DisplayRotation.allCases {
+        let choice = NSMenuItem(title: rotation.label, action: #selector(AppDelegate.selectRotation(_:)),
+                                keyEquivalent: "")
+        choice.representedObject = RotationSelection(rotation: rotation, display: display)
+        choice.state = rotation == current ? .on : .off
+        submenu.addItem(choice)
+    }
+    item.submenu = submenu
+    return item
 }
 
 /// "Refresh Rate" with the native rates, then "Virtual Refresh Rate" with the virtual ones

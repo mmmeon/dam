@@ -169,6 +169,10 @@ final class MoonlightHost {
                 makeDisplay(width, height, fps, done)
             }
             webStream.removeDisplay = { [weak self] id in self?.removeDisplay?(id) }
+            webStream.resizeDisplay = { [weak self] id, width, height, fps, done in
+                guard let self, let resizeDisplay = self.resizeDisplay else { return done(false) }
+                resizeDisplay(id, width, height, fps, done)
+            }
             webStream.onChange = { [weak self] in self?.onChange?() }
             rtsp.launch = { [weak self] in self?.launch }
             rtsp.announce = { [weak self] launch, config in

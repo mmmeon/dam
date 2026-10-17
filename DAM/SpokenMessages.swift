@@ -99,6 +99,26 @@ enum Spoken {
 
     static let sidecarUnavailable = String(localized: "Sidecar is not available", comment: "Sidecar error")
 
+    // MARK: - Rotation
+
+    /// The name of a rotation, as the menu lists it and the rotation picker speaks it.
+    static func rotation(_ rotation: DisplayRotation) -> String {
+        switch rotation {
+        case .standard:      return String(localized: "Standard", comment: "A display's normal rotation, as System Settings names it")
+        case .quarter:       return String(localized: "90°", comment: "A display turned a quarter turn clockwise")
+        case .half:          return String(localized: "180°", comment: "A display turned upside down")
+        case .threeQuarters: return String(localized: "270°", comment: "A display turned three quarters clockwise")
+        }
+    }
+
+    static func cannotRotate(_ label: String) -> String {
+        String(localized: "\(label) cannot be rotated", comment: "Rotation hotkey on a display macOS can't turn")
+    }
+
+    static func couldNotRotate(_ label: String) -> String {
+        String(localized: "Could not rotate \(label)", comment: "Turning a display failed")
+    }
+
     // MARK: - Streaming display and Moonlight
 
     static let creatingStreamingDisplay = String(localized: "Creating a streaming display", comment: "Menu action")

@@ -109,6 +109,9 @@ struct WebStreamRequest: Equatable {
     var height: Int?
     /// The size and rate of a display made for the stream when none is listed.
     var newDisplay = (width: 1920, height: 1080, fps: 60)
+    /// Whether the viewer's screen stands taller than wide, when the page says: a display
+    /// made for the stream is made, or turned, to stand the same way.
+    var portrait: Bool?
     /// Whether the stream carries sound. Without it, players show each frame as it lands;
     /// with it, they wait for the sound of the same moment, which comes a little later.
     var audio = true
@@ -119,7 +122,7 @@ struct WebStreamRequest: Equatable {
     static func == (a: WebStreamRequest, b: WebStreamRequest) -> Bool {
         a.app == b.app && a.profile == b.profile && a.bitrateKbps == b.bitrateKbps && a.fps == b.fps
             && a.width == b.width && a.height == b.height && a.newDisplay == b.newDisplay && a.audio == b.audio
-            && a.lowLatency == b.lowLatency
+            && a.lowLatency == b.lowLatency && a.portrait == b.portrait
     }
 
     /// The most pixels a stream takes from a display: a HiDPI display is scaled down to fit.
@@ -140,6 +143,14 @@ struct WebStreamRequest: Equatable {
         if mode.count == 3, mode[0] >= 640, mode[1] >= 360, mode[0] * mode[1] <= maxPixels, mode[2] >= 30 {
             request.newDisplay = (mode[0], mode[1], min(mode[2], 120))
         }
+        switch query["orientation"]?.lowercased() {
+        case "portrait":  request.portrait = true
+        case "landscape": request.portrait = false
+        default:          break
+        }
+        if let portrait = request.portrait, portrait != (request.newDisplay.height > request.newDisplay.width) {
+            request.newDisplay = (request.newDisplay.height, request.newDisplay.width, request.newDisplay.fps)
+        }
         if let audio = query["audio"]?.lowercased(), ["0", "false", "no", "off"].contains(audio) { request.audio = false }
         if let lowLatency = query["lowlatency"]?.lowercased(), ["1", "true", "yes", "on"].contains(lowLatency) {
             request.lowLatency = profile != .viewing
@@ -158,6 +169,8 @@ final class WebStreamServer {
     /// Makes and removes a display for streams when none is listed; as MoonlightHost's.
     var makeDisplay: ((_ width: Int, _ height: Int, _ fps: Int, _ done: @escaping (CGDirectDisplayID?) -> Void) -> Void)?
     var removeDisplay: ((CGDirectDisplayID) -> Void)?
+    var resizeDisplay: ((_ id: CGDirectDisplayID, _ width: Int, _ height: Int, _ fps: Int,
+                         _ done: @escaping (Bool) -> Void) -> Void)?
     var preferredProfile: () -> StreamProfile = { .preferred }
     /// The number watching changed; on the main queue.
     var onChange: (() -> Void)?
@@ -242,6 +255,16 @@ final class WebStreamServer {
             }
             return
         }
+        // A display made for the stream follows the viewer's screen when it is turned; the
+        // page asks again when it is.
+        if displayID == ownedDisplay, let resizeDisplay, let wanted = Self.turnedSize(of: displayID, for: request) {
+            wsLog.debug("turning display \(displayID) to \(wanted.width)×\(wanted.height) for the viewer")
+            return resizeDisplay(displayID, wanted.width, wanted.height, wanted.fps) { [weak self] _ in
+                var request = request
+                request.portrait = nil
+                self?.serve(request, on: connection)
+            }
+        }
         guard let size = Self.pictureSize(of: displayID, request: request) else {
             return send(status: "503 Service Unavailable", body: Data("The display is not on\n".utf8), to: connection)
         }
@@ -267,12 +290,27 @@ final class WebStreamServer {
         session.add(viewer)
     }
 
+    /// The size and rate to make `displayID` for a request whose screen stands the other way
+    /// from the stream the display gives now, or nil when they stand the same way.
+    static func turnedSize(of displayID: CGDirectDisplayID, for request: WebStreamRequest,
+                           rotation: DisplayRotation? = nil) -> (width: Int, height: Int, fps: Int)? {
+        guard let portrait = request.portrait, let mode = CGDisplayCopyDisplayMode(displayID) else { return nil }
+        let rotation = rotation ?? StreamRotations.shared.rotation(of: displayID)
+        let (width, height) = rotation.inverse.size(width: mode.pixelWidth, height: mode.pixelHeight)
+        guard width != height, portrait != (height > width) else { return nil }
+        let rate = Int(mode.refreshRate.rounded())
+        return (height, width, rate > 0 ? rate : request.newDisplay.fps)
+    }
+
     /// The stream's size and rate for `displayID`: what the request asks, else the display's
-    /// pixels, scaled to fit `maxPixels`, at its refresh rate; nil if it is off.
-    static func pictureSize(of displayID: CGDirectDisplayID, request: WebStreamRequest) -> (width: Int, height: Int, fps: Int)? {
+    /// pixels, scaled to fit `maxPixels`, at its refresh rate; nil if it is off. A display DAM
+    /// turned on its side gives a stream the way up it had before, as its captures turn their
+    /// frames back.
+    static func pictureSize(of displayID: CGDirectDisplayID, request: WebStreamRequest,
+                            rotation: DisplayRotation? = nil) -> (width: Int, height: Int, fps: Int)? {
         guard let mode = CGDisplayCopyDisplayMode(displayID) else { return nil }
-        var width = mode.pixelWidth
-        var height = mode.pixelHeight
+        let rotation = rotation ?? StreamRotations.shared.rotation(of: displayID)
+        var (width, height) = rotation.inverse.size(width: mode.pixelWidth, height: mode.pixelHeight)
         guard width > 0, height > 0 else { return nil }
         let rate = Int(mode.refreshRate.rounded())
         let fps = request.fps ?? (rate > 0 ? rate : 60)
@@ -910,8 +948,12 @@ enum WebStreamPage {
         q.set('bitrate', Math.round(bitrate * 1000));
         if (video.muted) q.set('audio', '0');
         if (lowlatency) q.set('lowlatency', lowlatency);
+        q.set('orientation', portrait.matches ? 'portrait' : 'landscape');
         return '/stream.mp4?' + q;
       }
+      // A display made for the stream stands the way this screen does; ask again when it turns.
+      const portrait = matchMedia('(orientation: portrait)');
+      portrait.addEventListener('change', () => { if (source) start(); });
 
       function start() {
         stop();

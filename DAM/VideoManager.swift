@@ -1264,3 +1264,17 @@ final class VideoManager: ObservableObject {
         return nil
     }
 }
+
+extension VideoManager {
+    /// The display whose screen holds the pointer, for the hotkey pickers. A screen an anchor
+    /// drives stands for the display behind it.
+    func displayUnderPointer() -> DisplayInfo? {
+        let point = NSEvent.mouseLocation
+        guard let screen = NSScreen.screens.first(where: { NSMouseInRect(point, $0.frame, false) }),
+              let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
+        else { return nil }
+        let screenID = CGDirectDisplayID(number.uint32Value)
+        let cgID = anchorTarget(of: screenID) ?? screenID
+        return (allConnectedDisplays + allAirPlayDevices).first { $0.cgDisplayID == cgID }
+    }
+}

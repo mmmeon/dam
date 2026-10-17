@@ -44,7 +44,7 @@ final class ResolutionPicker {
         picker.close()
         guard let vm = videoManager else { return }
         vm.refresh()
-        guard let display = displayUnderPointer(vm) else { return }
+        guard let display = vm.displayUnderPointer() else { return }
         if let master = vm.anchoredMaster(of: display) {
             SpeechSynthesizer.shared.announce(Spoken.follows(display.label, master.label))
             return
@@ -59,18 +59,6 @@ final class ResolutionPicker {
             guard i != current else { return }
             self?.select?(modes[i], display)
         }
-    }
-
-    /// The display whose screen holds the pointer. A screen an anchor drives stands for the
-    /// display behind it.
-    private func displayUnderPointer(_ vm: VideoManager) -> DisplayInfo? {
-        let point = NSEvent.mouseLocation
-        guard let screen = NSScreen.screens.first(where: { NSMouseInRect(point, $0.frame, false) }),
-              let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
-        else { return nil }
-        let screenID = CGDirectDisplayID(number.uint32Value)
-        let cgID = vm.anchorTarget(of: screenID) ?? screenID
-        return (vm.allConnectedDisplays + vm.allAirPlayDevices).first { $0.cgDisplayID == cgID }
     }
 
 #if DEBUG

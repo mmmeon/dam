@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var audioCycleHotkey: GlobalHotkey!
     private var mainDisplayHotkey: GlobalHotkey!
     private var resolutionHotkey: GlobalHotkey!
+    private var rotationHotkey: GlobalHotkey!
     private var settingsWindow: SettingsWindowController?
     private var aboutWindow: NSWindow?
     private var arrangeWindow: ArrangeDisplaysWindowController?
@@ -75,6 +76,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.applyResolution(mode, cgDisplayID: display.cgDisplayID)
             }
         }
+        RotationPicker.shared.configure(videoManager: videoManager) { [weak self] rotation, display in
+            self?.applyRotation(rotation, for: display)
+        }
         hotkey = GlobalHotkey(preference: HotkeyPreference.current) { [weak self] in
             self?.openSwitcher()
         }
@@ -92,6 +96,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         resolutionHotkey = GlobalHotkey(preference: HotkeyPreference.currentResolution) {
             ResolutionPicker.shared.advance()
+        }
+        rotationHotkey = GlobalHotkey(preference: HotkeyPreference.currentRotation) {
+            RotationPicker.shared.advance()
         }
 
         redirectSwiftUISettingsWindow()
@@ -480,6 +487,7 @@ extension AppDelegate: NSMenuDelegate {
             currentAudioCycle: HotkeyPreference.currentAudioCycle,
             currentMainDisplay: HotkeyPreference.currentMainDisplay,
             currentResolution: HotkeyPreference.currentResolution,
+            currentRotation: HotkeyPreference.currentRotation,
             audioManager: audioManager,
             videoManager: videoManager,
             sidecarManager: sidecarManager
@@ -518,6 +526,12 @@ extension AppDelegate: NSMenuDelegate {
             HotkeyPreference.currentResolution = pref
             self?.resolutionHotkey = GlobalHotkey(preference: pref) {
                 ResolutionPicker.shared.advance()
+            }
+        }
+        wc.onSaveRotation = { [weak self] pref in
+            HotkeyPreference.currentRotation = pref
+            self?.rotationHotkey = GlobalHotkey(preference: pref) {
+                RotationPicker.shared.advance()
             }
         }
         wc.onRebuild = { [weak self] in self?.rebuild() }
@@ -704,6 +718,19 @@ extension AppDelegate: NSMenuDelegate {
     @objc func selectResolution(_ sender: NSMenuItem) {
         guard let sel = sender.representedObject as? ResolutionSelection else { return }
         applyResolution(sel.mode, cgDisplayID: sel.cgDisplayID)
+    }
+
+    @objc func selectRotation(_ sender: NSMenuItem) {
+        guard let sel = sender.representedObject as? RotationSelection else { return }
+        applyRotation(sel.rotation, for: sel.display)
+    }
+
+    /// Turns a display, picked in the menu or the rotation picker.
+    private func applyRotation(_ rotation: DisplayRotation, for display: DisplayInfo) {
+        videoManager.setRotation(rotation, for: display) { [weak self] done in
+            if !done { SpeechSynthesizer.shared.announce(Spoken.couldNotRotate(display.label)) }
+            self?.rebuild()
+        }
     }
 
     @objc func selectVirtualResolution(_ sender: NSMenuItem) {
