@@ -37,6 +37,8 @@
 		BB0006002F8D60780090E796 /* SettingsWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0005002F8D60780090E796 /* SettingsWindowController.swift */; };
 		BB0008002F8D60780090E796 /* VisibilityPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0007002F8D60780090E796 /* VisibilityPreferences.swift */; };
 		BB000A002F8D60780090E796 /* SpeechSynthesizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0009002F8D60780090E796 /* SpeechSynthesizer.swift */; };
+		A0A1D0000000000000001002 /* SpokenMessages.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0A1D0000000000000001001 /* SpokenMessages.swift */; };
+		A0A1D0000000000000001004 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = A0A1D0000000000000001003 /* Localizable.strings */; };
 		BB520C012F8D60780090E796 /* DisplayRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB520B012F8D60780090E796 /* DisplayRegistry.swift */; };
 		CC000C002F8D60780090E796 /* AirPlayQuickConnect.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B002F8D60780090E796 /* AirPlayQuickConnect.swift */; };
 		CC000C012F8D60780090E796 /* HUD.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B012F8D60780090E796 /* HUD.swift */; };
@@ -137,6 +139,8 @@
 		BB0005002F8D60780090E796 /* SettingsWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsWindowController.swift; sourceTree = "<group>"; };
 		BB0007002F8D60780090E796 /* VisibilityPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisibilityPreferences.swift; sourceTree = "<group>"; };
 		BB0009002F8D60780090E796 /* SpeechSynthesizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechSynthesizer.swift; sourceTree = "<group>"; };
+		A0A1D0000000000000001001 /* SpokenMessages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpokenMessages.swift; sourceTree = "<group>"; };
+		A0A1D0000000000000001005 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/Localizable.strings; sourceTree = "<group>"; };
 		BB520B012F8D60780090E796 /* DisplayRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayRegistry.swift; sourceTree = "<group>"; };
 		CC000B002F8D60780090E796 /* AirPlayQuickConnect.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AirPlayQuickConnect.swift; sourceTree = "<group>"; };
 		CC000B012F8D60780090E796 /* HUD.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HUD.swift; sourceTree = "<group>"; };
@@ -265,6 +269,8 @@
 				BB0005002F8D60780090E796 /* SettingsWindowController.swift */,
 				BB0007002F8D60780090E796 /* VisibilityPreferences.swift */,
 				BB0009002F8D60780090E796 /* SpeechSynthesizer.swift */,
+				A0A1D0000000000000001001 /* SpokenMessages.swift */,
+				A0A1D0000000000000001003 /* Localizable.strings */,
 				CC000B002F8D60780090E796 /* AirPlayQuickConnect.swift */,
 				CC000B022F8D60780090E796 /* AudioOutputPicker.swift */,
 				CC100B012F8D60780090E796 /* ChoicePicker.swift */,
@@ -431,6 +437,7 @@
 				8BFD3BE32F8D607B0090E796 /* Assets.xcassets in Resources */,
 				A0A1D0000000000000000F02 /* README.txt in Resources */,
 				A0A1D0000000000000000F04 /* ABOUT.txt in Resources */,
+				A0A1D0000000000000001004 /* Localizable.strings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -481,6 +488,7 @@
 				BB0006002F8D60780090E796 /* SettingsWindowController.swift in Sources */,
 				BB0008002F8D60780090E796 /* VisibilityPreferences.swift in Sources */,
 				BB000A002F8D60780090E796 /* SpeechSynthesizer.swift in Sources */,
+				A0A1D0000000000000001002 /* SpokenMessages.swift in Sources */,
 				CC000C002F8D60780090E796 /* AirPlayQuickConnect.swift in Sources */,
 				CC000C022F8D60780090E796 /* AudioOutputPicker.swift in Sources */,
 				CC100C012F8D60780090E796 /* ChoicePicker.swift in Sources */,
@@ -557,6 +565,17 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXVariantGroup section */
+		A0A1D0000000000000001003 /* Localizable.strings */ = {
+			isa = PBXVariantGroup;
+			children = (
+				A0A1D0000000000000001005 /* en */,
+			);
+			name = Localizable.strings;
+			sourceTree = "<group>";
+		};
+/* End PBXVariantGroup section */
 
 /* Begin PBXTargetDependency section */
 		8BFD3BEE2F8D607C0090E796 /* PBXTargetDependency */ = {

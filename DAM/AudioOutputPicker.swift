@@ -42,7 +42,7 @@ final class AudioOutputPicker {
         audioManager.refresh()
         let enabled = audioManager.devices
         guard !enabled.isEmpty else {
-            SpeechSynthesizer.shared.announce("No audio outputs enabled")
+            SpeechSynthesizer.shared.announce(Spoken.noAudioOutputs)
             return
         }
         let current = enabled.firstIndex { $0.id == audioManager.defaultDeviceID } ?? 0

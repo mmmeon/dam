@@ -446,10 +446,10 @@ final class VideoManager: ObservableObject {
 
         var errorDescription: String? {
             switch self {
-            case .notConnected:   return "The display is not connected"
-            case .noOtherDisplay: return "No other display to mirror"
-            case .configuration:  return "The display change failed"
-            case .timedOut:       return "The display change did not finish"
+            case .notConnected:   return Spoken.displayNotConnected
+            case .noOtherDisplay: return Spoken.noOtherDisplayToMirror
+            case .configuration:  return Spoken.displayChangeFailed
+            case .timedOut:       return Spoken.displayChangeDidNotFinish
             }
         }
     }
@@ -833,9 +833,7 @@ final class VideoManager: ObservableObject {
                         gate: ScreenMirroringPanel.Gate? = nil,
                         completion: ((Bool) -> Void)? = nil) {
         guard Self.hasAccessibilityAccess(prompting: true) else {
-            SpeechSynthesizer.shared.announce(
-                "\(AppIdentity.name) needs Accessibility access to connect AirPlay. "
-                + "Allow it in Privacy and Security settings, or use Screen Mirroring in Control Center")
+            SpeechSynthesizer.shared.announce(Spoken.needsAccessibility(appName: AppIdentity.name))
             completion?(false)
             return
         }

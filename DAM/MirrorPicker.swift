@@ -81,12 +81,12 @@ final class MirrorPicker {
         guard let vm = videoManager else { return }
         vm.refresh()
         guard let display = vm.airPlayDevices.first(where: { $0.isConnected && $0.cgDisplayID != 0 }) else {
-            SpeechSynthesizer.shared.announce("No AirPlay display connected")
+            SpeechSynthesizer.shared.announce(Spoken.noAirPlayDisplayConnected)
             return
         }
         let targets = vm.mirrorTargets(for: display)
         guard !targets.isEmpty else {
-            SpeechSynthesizer.shared.announce("No other display to mirror")
+            SpeechSynthesizer.shared.announce(Spoken.noOtherDisplayToMirror)
             return
         }
         let choices = Self.choices(targets: targets)

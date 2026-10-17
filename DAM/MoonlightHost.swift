@@ -201,7 +201,7 @@ final class MoonlightHost {
             mlLog.debug("hosting as \(Self.hostName, privacy: .public)")
         } catch {
             mlLog.error("start: \(String(describing: error), privacy: .public)")
-            stop(error: "Could not start: \(error.localizedDescription)")
+            stop(error: Spoken.moonlightCouldNotStart(error.localizedDescription))
             return
         }
         onChange?()
@@ -270,8 +270,8 @@ final class MoonlightHost {
     }
 
     private static func describe(_ error: NWError) -> String {
-        if case .posix(.EADDRINUSE) = error { return "Another app is using Moonlight's ports" }
-        return "Stopped: \(error.localizedDescription)"
+        if case .posix(.EADDRINUSE) = error { return Spoken.moonlightPortsInUse }
+        return Spoken.moonlightStopped(error.localizedDescription)
     }
 
     // MARK: - Connections

@@ -52,8 +52,8 @@ enum ConnectTarget: Hashable {
 
     /// "Connecting to pad over USB" for an iPad, naming the link it will use.
     var connectingAnnouncement: String {
-        guard case .sidecar(let device) = self, let link = device.link else { return "Connecting to \(label)" }
-        return "Connecting to \(label) over \(link.rawValue)"
+        guard case .sidecar(let device) = self, let link = device.link else { return Spoken.connecting(to: label) }
+        return Spoken.connecting(to: label, over: link.rawValue)
     }
 }
 
@@ -122,7 +122,7 @@ final class AirPlayQuickConnect: NSObject {
         sidecarManager?.refresh()
         let all = ConnectTarget.all(video: vm, sidecar: sidecarManager)
         guard !all.isEmpty else {
-            SpeechSynthesizer.shared.announce("No AirPlay displays or iPads found")
+            SpeechSynthesizer.shared.announce(Spoken.noAirPlayOrIPads)
             return
         }
 
@@ -131,8 +131,8 @@ final class AirPlayQuickConnect: NSObject {
         let displays = all.filter { !$0.isConnected }
         guard !displays.isEmpty else {
             SpeechSynthesizer.shared.announce(all.count == 1
-                ? "Already connected to \(all[0].label)"
-                : "All displays already connected")
+                ? Spoken.alreadyConnected(to: all[0].label)
+                : Spoken.allAlreadyConnected)
             return
         }
 
@@ -153,10 +153,7 @@ final class AirPlayQuickConnect: NSObject {
         showSelectingTouchBar(displays: displays)
 
         if VisibilityPreferences.speechEnabled {
-            let list = displays.enumerated()
-                .map { "\($0.offset + 1). \($0.element.label)" }
-                .joined(separator: ". ")
-            let speech = "Select a display. \(list)"
+            let speech = Spoken.selectDisplay(displays.map(\.label))
             DispatchQueue.main.async {
                 // caption: false — the numbered selection buttons must stay tappable,
                 // and the HUD already lists the displays.

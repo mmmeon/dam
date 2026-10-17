@@ -327,7 +327,7 @@ extension AppDelegate: NSMenuDelegate {
     @objc func debugDiagnoseScreenMirroring(_ sender: Any?) {
         let devices = videoManager.allAirPlayDevices
         let name = (devices.first { !$0.isConnected } ?? devices.first)?.name ?? "No AirPlay display listed"
-        SpeechSynthesizer.shared.announce("Checking Screen Mirroring")
+        SpeechSynthesizer.shared.announce(Spoken.checkingScreenMirroring)
         sidecarManager.refresh()
         ScreenMirroringPanel.diagnose(deviceName: name,
                                       displays: devices.map { ($0.name, $0.isConnected) },
@@ -335,21 +335,21 @@ extension AppDelegate: NSMenuDelegate {
             let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
             let url = FileManager.default.homeDirectoryForCurrentUser
                 .appendingPathComponent("Desktop/\(AppIdentity.name) Screen Mirroring \(stamp).txt")
-            let saved: String
+            let saved: Bool
             do {
                 try report.write(to: url, atomically: true, encoding: .utf8)
                 NSWorkspace.shared.activateFileViewerSelecting([url])
-                saved = "Report saved on the Desktop"
+                saved = true
             } catch {
                 NSLog("\(AppIdentity.name): writing the Screen Mirroring report failed: \(error)")
-                saved = "The report could not be saved"
+                saved = false
             }
-            SpeechSynthesizer.shared.announce((ok ? "Screen Mirroring works. " : "Screen Mirroring failed. ") + saved)
+            SpeechSynthesizer.shared.announce(Spoken.screenMirroringCheck(ok: ok, saved: saved))
         }
     }
 
     @objc func debugPreviewCaptionHUD(_ sender: Any?) {
-        SpeechSynthesizer.shared.announce("Mirroring Living Room TV")
+        SpeechSynthesizer.shared.announce(Spoken.captionPreview)
     }
 
     /// Steps the menu bar icon through connection counts, one change every 2.5 seconds, then
@@ -379,9 +379,9 @@ extension AppDelegate: NSMenuDelegate {
     /// Toggles the display: a connected one is deselected in the Screen Mirroring panel.
     @objc func selectDisplay(_ sender: NSMenuItem) {
         guard let display = sender.representedObject as? DisplayInfo else { return }
-        let verb = display.isConnected ? "Deselected" : "Selected"
         videoManager.connectAirPlay(deviceName: display.name,
-                                    announcing: "\(verb) \(display.label)")
+                                    announcing: display.isConnected ? Spoken.deselected(display.label)
+                                                                    : Spoken.selected(display.label))
     }
 
     /// An About window in two panes: the icon over the bundled ABOUT.txt on the left, the
@@ -534,7 +534,7 @@ extension AppDelegate: NSMenuDelegate {
 
     /// Adds a streaming display, for a streaming or remote-desktop app to capture.
     @objc func createStreamingDisplay(_ sender: NSMenuItem) {
-        SpeechSynthesizer.shared.announce("Creating a streaming display")
+        SpeechSynthesizer.shared.announce(Spoken.creatingStreamingDisplay)
         videoManager.createStreamingDisplay()
         rebuild()
     }
@@ -542,7 +542,7 @@ extension AppDelegate: NSMenuDelegate {
     /// Removes the streaming display in the item's `representedObject`.
     @objc func removeStreamingDisplay(_ sender: NSMenuItem) {
         guard let display = sender.representedObject as? DisplayInfo else { return }
-        SpeechSynthesizer.shared.announce("Removing \(display.label)")
+        SpeechSynthesizer.shared.announce(Spoken.removing(display.label))
         videoManager.removeStreamingDisplay(display)
         rebuild()
     }
@@ -552,14 +552,14 @@ extension AppDelegate: NSMenuDelegate {
         if moonlightHost.isRunning {
             MoonlightHost.isEnabled = false
             moonlightHost.stop()
-            SpeechSynthesizer.shared.announce("Moonlight can no longer connect")
+            SpeechSynthesizer.shared.announce(Spoken.moonlightCanNoLongerConnect)
         } else {
             MoonlightHost.isEnabled = true
             moonlightHost.start()
             // Streaming needs it; asked now rather than when a stream starts.
             MoonlightScreenCapture.requestPermission()
-            SpeechSynthesizer.shared.announce(moonlightHost.isRunning ? "Moonlight can connect"
-                                              : moonlightHost.lastError ?? "Moonlight could not start")
+            SpeechSynthesizer.shared.announce(moonlightHost.isRunning ? Spoken.moonlightCanConnect
+                                              : moonlightHost.lastError ?? Spoken.moonlightCouldNotStart)
         }
         rebuild()
     }
@@ -575,7 +575,7 @@ extension AppDelegate: NSMenuDelegate {
         let address = moonlightHost.watchURL.absoluteString
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(address, forType: .string)
-        SpeechSynthesizer.shared.announce("Copied \(address)")
+        SpeechSynthesizer.shared.announce(Spoken.copied(address))
     }
 
     /// Makes the profile in the item's `representedObject` the one streams get by default.
@@ -589,7 +589,7 @@ extension AppDelegate: NSMenuDelegate {
     @objc func forgetMoonlightClient(_ sender: NSMenuItem) {
         guard let client = sender.representedObject as? MoonlightClient else { return }
         moonlightHost.forget(client)
-        SpeechSynthesizer.shared.announce("Forgot \(client.name)")
+        SpeechSynthesizer.shared.announce(Spoken.forgot(client.name))
         rebuild()
     }
 
@@ -619,7 +619,7 @@ extension AppDelegate: NSMenuDelegate {
             alert.addButton(withTitle: "Pair")
             alert.addButton(withTitle: "Cancel")
             alert.window.initialFirstResponder = field
-            SpeechSynthesizer.shared.announce("Moonlight wants to pair. Type the PIN it shows.")
+            SpeechSynthesizer.shared.announce(Spoken.moonlightWantsToPair)
             NSApp.activate(ignoringOtherApps: true)
             self.moonlightPINAlert = alert
             let response = alert.runModal()
@@ -651,9 +651,8 @@ extension AppDelegate: NSMenuDelegate {
 
     @objc func selectSidecarDevice(_ sender: NSMenuItem) {
         guard let device = sender.representedObject as? SidecarDevice else { return }
-        let over = device.link.map { " over \($0.rawValue)" } ?? ""
         SpeechSynthesizer.shared.announce(device.isConnected
-            ? "Disconnecting \(device.label)" : "Connecting to \(device.label)\(over)")
+            ? Spoken.disconnecting(device.label) : ConnectTarget.sidecar(device).connectingAnnouncement)
         guard !device.isConnected else {
             sidecarManager.toggle(device) { [weak self] error in
                 if let error { SpeechSynthesizer.shared.announce(error.localizedDescription) }
@@ -667,7 +666,7 @@ extension AppDelegate: NSMenuDelegate {
     @objc func disconnectAirPlayDevice(_ sender: NSMenuItem) {
         guard let display = sender.representedObject as? DisplayInfo else { return }
         videoManager.disconnectAirPlay(deviceName: display.name,
-                                       announcing: "Deselected \(display.label)")
+                                       announcing: Spoken.deselected(display.label))
     }
 
     /// A "Mirror on" pick: a checked display leaves the set, an unchecked one joins it, and

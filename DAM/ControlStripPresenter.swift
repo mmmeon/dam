@@ -674,7 +674,7 @@ final class ControlStripPresenter: NSObject {
         guard idx >= 0, idx < displays.count, let vm = videoManager else { return }
         switch displays[idx] {
         case .airPlay(let display):
-            vm.connectAirPlay(deviceName: display.name, announcing: "Selected \(display.label)")
+            vm.connectAirPlay(deviceName: display.name, announcing: Spoken.selected(display.label))
         case .sidecar(let device):
             SpeechSynthesizer.shared.announce(displays[idx].connectingAnnouncement)
             sidecarManager?.connect(device, videoManager: vm)
@@ -699,11 +699,11 @@ final class ControlStripPresenter: NSObject {
     @objc private func disconnectTapped(_ btn: NSButton) {
         guard let display = tappedDisplay(btn) else { return }
         if display.isSidecar {
-            SpeechSynthesizer.shared.announce("Disconnecting \(display.label)")
+            SpeechSynthesizer.shared.announce(Spoken.disconnecting(display.label))
             sidecarManager?.disconnect(display: display)
         } else {
             videoManager?.disconnectAirPlay(deviceName: display.name,
-                                            announcing: "Deselected \(display.label)")
+                                            announcing: Spoken.deselected(display.label))
         }
         // Close the modal — the display is going away.
         if let bar = modalBar { NSTouchBar.dismissSystemModal(bar) }

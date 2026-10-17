@@ -266,8 +266,8 @@ enum SidecarError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .deviceGone(let name): return "\(name) is no longer nearby"
-        case .unavailable:          return "Sidecar is not available"
+        case .deviceGone(let name): return Spoken.noLongerNearby(name)
+        case .unavailable:          return Spoken.sidecarUnavailable
         }
     }
 }

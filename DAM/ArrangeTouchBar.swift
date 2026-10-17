@@ -38,7 +38,7 @@ final class ArrangeTouchBar: NSObject {
 
     /// The preview's sentence: "tv left of LEN T24i-20", "tv above LEN T24i-20".
     static func sentence(moving: String, side: PlacementSide, other: String) -> String {
-        "\(moving) \(side.label.lowercased()) \(other)"
+        Spoken.placed(moving, side, other)
     }
 
     private static let idPrefix = "\(AppIdentity.bundleID).arrange"
@@ -64,7 +64,7 @@ final class ArrangeTouchBar: NSObject {
         videoManager.refresh()
         layout = videoManager.currentLayout()
         guard layout.placements.count >= 2 else {
-            SpeechSynthesizer.shared.announce("No other display")
+            SpeechSynthesizer.shared.announce(Spoken.noOtherDisplay)
             return back()
         }
         show(.pickDisplay)

@@ -43,13 +43,13 @@ enum ScreenMirroringPanelError: Error, CustomStringConvertible {
         case .cancelled:
             return nil
         case .busy:
-            return "Screen Mirroring is still changing. Try again in a moment"
+            return Spoken.screenMirroringBusy
         case .deviceNotFound(let n):
-            return "\(n) is not listed in Screen Mirroring. Check that it is on and nearby"
+            return Spoken.notInScreenMirroring(n)
         case .controlCenterNotRunning:
-            return "Control Center is not running. Connect from Displays settings instead"
+            return Spoken.controlCenterNotRunning
         case .openerNotFound, .tileNotFound, .pressFailed:
-            return "Could not open Screen Mirroring. Use Screen Mirroring in Control Center instead"
+            return Spoken.couldNotOpenScreenMirroring
         }
     }
 }
