@@ -49,7 +49,7 @@ final class MainDisplayPicker {
         vm.refresh()
         let candidates = vm.mainDisplayCandidates()
         guard candidates.count >= 2 else {
-            SpeechSynthesizer.shared.announce("No other display")
+            SpeechSynthesizer.shared.announce(Spoken.noOtherDisplay)
             return
         }
         let (names, current) = Self.choices(from: candidates)

@@ -1,0 +1,142 @@
+/* Spoken messages and captions. The keys are the English text in SpokenMessages.swift. */
+
+/* Spoken when a display or iPad starts connecting */
+"Connecting to %@" = "Connecting to %@";
+
+/* Spoken when an iPad starts connecting; the second value is USB or Wi-Fi */
+"Connecting to %@ over %@" = "Connecting to %@ over %@";
+
+/* Spoken after an AirPlay display is turned on in Screen Mirroring */
+"Selected %@" = "Selected %@";
+
+/* Quick-connect hotkey with nothing to connect to */
+"No AirPlay displays or iPads found" = "No AirPlay displays or iPads found";
+
+/* Quick-connect hotkey when the only display is connected */
+"Already connected to %@" = "Already connected to %@";
+
+/* Quick-connect hotkey when every display is connected */
+"All displays already connected" = "All displays already connected";
+
+/* Quick-connect hotkey; followed by the numbered list */
+"Select a display. %@" = "Select a display. %@";
+
+/* One numbered display in the spoken list */
+"%lld. %@" = "%lld. %@";
+
+/* Connecting AirPlay without Accessibility permission */
+"%@ needs Accessibility access to connect AirPlay. Allow it in Privacy and Security settings, or use Screen Mirroring in Control Center" = "%@ needs Accessibility access to connect AirPlay. Allow it in Privacy and Security settings, or use Screen Mirroring in Control Center";
+
+/* Spoken after an AirPlay display is turned off in Screen Mirroring */
+"Deselected %@" = "Deselected %@";
+
+/* Spoken when an iPad starts disconnecting */
+"Disconnecting %@" = "Disconnecting %@";
+
+/* Screen Mirroring is busy with another change */
+"Screen Mirroring is still changing. Try again in a moment" = "Screen Mirroring is still changing. Try again in a moment";
+
+/* The AirPlay display is missing from Screen Mirroring */
+"%@ is not listed in Screen Mirroring. Check that it is on and nearby" = "%@ is not listed in Screen Mirroring. Check that it is on and nearby";
+
+/* Control Center is not running */
+"Control Center is not running. Connect from Displays settings instead" = "Control Center is not running. Connect from Displays settings instead";
+
+/* The app could not open or press the Screen Mirroring panel */
+"Could not open Screen Mirroring. Use Screen Mirroring in Control Center instead" = "Could not open Screen Mirroring. Use Screen Mirroring in Control Center instead";
+
+/* Display error */
+"The display is not connected" = "The display is not connected";
+
+/* Display error */
+"No other display to mirror" = "No other display to mirror";
+
+/* Display error */
+"The display change failed" = "The display change failed";
+
+/* Display error */
+"The display change did not finish" = "The display change did not finish";
+
+/* Arrange or main display with only one display */
+"No other display" = "No other display";
+
+/* The iPad went away before connecting */
+"%@ is no longer nearby" = "%@ is no longer nearby";
+
+/* Sidecar error */
+"Sidecar is not available" = "Sidecar is not available";
+
+/* Menu action */
+"Creating a streaming display" = "Creating a streaming display";
+
+/* Removing a streaming display */
+"Removing %@" = "Removing %@";
+
+/* Moonlight hosting turned on */
+"Moonlight can connect" = "Moonlight can connect";
+
+/* Moonlight hosting turned off */
+"Moonlight can no longer connect" = "Moonlight can no longer connect";
+
+/* Moonlight hosting failed with no reason */
+"Moonlight could not start" = "Moonlight could not start";
+
+/* Moonlight hosting failed */
+"Another app is using Moonlight's ports" = "Another app is using Moonlight's ports";
+
+/* Moonlight hosting failed to start; the value is the system's reason */
+"Could not start: %@" = "Could not start: %@";
+
+/* Moonlight hosting stopped; the value is the system's reason */
+"Stopped: %@" = "Stopped: %@";
+
+/* Shown with the pairing PIN prompt */
+"Moonlight wants to pair. Type the PIN it shows." = "Moonlight wants to pair. Type the PIN it shows.";
+
+/* The player page address was copied */
+"Copied %@" = "Copied %@";
+
+/* A Moonlight device was unpaired */
+"Forgot %@" = "Forgot %@";
+
+/* Mirror picker with nothing to mirror */
+"No AirPlay display connected" = "No AirPlay display connected";
+
+/* Audio output picker with nothing to pick */
+"No audio outputs enabled" = "No audio outputs enabled";
+
+/* Resolution picker on a display that mirrors another */
+"%@ follows %@" = "%@ follows %@";
+
+/* Resolution picker with one resolution */
+"No other resolution for %@" = "No other resolution for %@";
+
+/* Arrange preview: the first value is the display being moved, the second the display it is placed next to */
+"%@ left of %@" = "%@ left of %@";
+
+/* Arrange preview: the first value is the display being moved, the second the display it is placed next to */
+"%@ right of %@" = "%@ right of %@";
+
+/* Arrange preview: the first value is the display being moved, the second the display it is placed next to */
+"%@ above %@" = "%@ above %@";
+
+/* Arrange preview: the first value is the display being moved, the second the display it is placed next to */
+"%@ below %@" = "%@ below %@";
+
+/* Debug menu */
+"Checking Screen Mirroring" = "Checking Screen Mirroring";
+
+/* Debug menu */
+"Screen Mirroring works. Report saved on the Desktop" = "Screen Mirroring works. Report saved on the Desktop";
+
+/* Debug menu */
+"Screen Mirroring works. The report could not be saved" = "Screen Mirroring works. The report could not be saved";
+
+/* Debug menu */
+"Screen Mirroring failed. Report saved on the Desktop" = "Screen Mirroring failed. Report saved on the Desktop";
+
+/* Debug menu */
+"Screen Mirroring failed. The report could not be saved" = "Screen Mirroring failed. The report could not be saved";
+
+/* Debug menu: sample caption */
+"Mirroring Living Room TV" = "Mirroring Living Room TV";

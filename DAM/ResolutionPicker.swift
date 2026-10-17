@@ -46,12 +46,12 @@ final class ResolutionPicker {
         vm.refresh()
         guard let display = displayUnderPointer(vm) else { return }
         if let master = vm.anchoredMaster(of: display) {
-            SpeechSynthesizer.shared.announce("\(display.label) follows \(master.label)")
+            SpeechSynthesizer.shared.announce(Spoken.follows(display.label, master.label))
             return
         }
         let (modes, current) = vm.resolutionChoices(for: display, includeLarger1x: true).flattened()
         guard modes.count >= 2 else {
-            SpeechSynthesizer.shared.announce("No other resolution for \(display.label)")
+            SpeechSynthesizer.shared.announce(Spoken.noOtherResolution(for: display.label))
             return
         }
         let start = current.map { ChoicePicker.startCursor(current: $0, count: modes.count) } ?? 0
