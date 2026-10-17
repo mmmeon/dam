@@ -191,6 +191,9 @@ final class VideoManager: ObservableObject {
     var streamingDisplays: [StreamingDisplay] = []
     /// Displays shown turned through a stand-in, by the name of the display shown on.
     var rotatedPresentations: [String: RotatedPresentation] = [:]
+    /// The connections of displays whose saved rotation was put back, or is about to be, as
+    /// "name@id": each connection gets one try.
+    var presentationRestores: Set<String> = []
     /// Additions and removals of streaming displays asked for, in order.
     var streamingRequests: [StreamingRequest] = []
     /// Called when the addition under way has placed its display, or made none.

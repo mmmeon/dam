@@ -22,9 +22,11 @@ struct PositionSelection {
 extension VideoManager {
 
     /// The display that positions `display` in the arrangement: itself, or the master of
-    /// the mirror set (or the virtual anchor) it follows. Nil when it is not connected.
+    /// the mirror set (or the virtual anchor) it follows, or the stand-in it is shown turned
+    /// through. Nil when it is not connected.
     func placementID(for display: DisplayInfo) -> CGDirectDisplayID? {
         guard display.cgDisplayID != 0 else { return nil }
+        if let standIn = rotatedPresentations[display.name]?.standInID, standIn != 0 { return standIn }
         let master = CGDisplayMirrorsDisplay(display.cgDisplayID)
         return master != CGDirectDisplayID(0) ? master : display.cgDisplayID
     }
@@ -77,8 +79,10 @@ extension VideoManager {
     /// too, so the change outlives the anchor.
     func arrange(_ layout: DisplayLayout, main: CGDirectDisplayID? = nil,
                  completion: ((Result<Void, MirrorError>) -> Void)? = nil) {
-        let origins = layout.origins(makingMain: main)
+        var origins = layout.origins(makingMain: main)
         guard !origins.isEmpty else { completion?(.failure(.notConnected)); return }
+        // The screens stand-ins cover are no placement of their own; they go past the rest.
+        origins.merge(coveredScreenOrigins(besides: origins)) { placed, _ in placed }
         guard origins.contains(where: { CGDisplayBounds($0.key).origin != $0.value }) else {
             completion?(.success(()))
             return

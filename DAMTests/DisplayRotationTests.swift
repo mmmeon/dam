@@ -169,6 +169,24 @@ final class DisplayRotationTests: XCTestCase {
         XCTAssertEqual(presentation.standInMode.rotated(.quarter), .init(width: 1080, height: 1920, refreshRate: 60))
     }
 
+    func testKeepsTheRotationOfDisplaysShownTurned() {
+        PresentedRotationPreferences.setRotation(.quarter, for: "tv")
+        XCTAssertEqual(PresentedRotationPreferences.rotation(for: "tv"), .quarter)
+        XCTAssertEqual(PresentedRotationPreferences.rotation(for: "Den"), .standard)
+        PresentedRotationPreferences.setRotation(.standard, for: "tv")
+        XCTAssertEqual(PresentedRotationPreferences.rotation(for: "tv"), .standard)
+    }
+
+    func testStandInIsNamedAfterItsDisplay() {
+        XCTAssertEqual(VideoManager.standInDisplayName(for: "tv"), "tv (Rotated)")
+    }
+
+    func testCoveredScreensGoPastTheRest() {
+        let video = VideoManager()
+        let main = CGMainDisplayID()
+        XCTAssertTrue(video.coveredScreenOrigins(besides: [main: .zero]).isEmpty, "nothing is covered")
+    }
+
     // MARK: - Browser streams
 
     func testPortraitViewerAsksForAPortraitDisplay() {

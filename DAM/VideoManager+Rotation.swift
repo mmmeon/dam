@@ -42,17 +42,64 @@ extension VideoManager {
             rotateStreamingDisplay(id: display.cgDisplayID, to: rotation, completion: completion)
         } else if let presentation = rotatedPresentations[display.name] {
             guard rotation != .standard else {
+                PresentedRotationPreferences.setRotation(.standard, for: display.name)
                 endPresentation(for: display.name)
                 return completion(true)
             }
             rotateStreamingDisplay(id: presentation.standInID, to: rotation) { done in
-                if done { presentation.rotation = rotation }
+                if done {
+                    presentation.rotation = rotation
+                    PresentedRotationPreferences.setRotation(rotation, for: display.name)
+                }
                 completion(done)
             }
         } else if !hasVirtualAnchor(for: display.name), SystemRotation.canRotate(display.cgDisplayID) {
             completion(SystemRotation.set(rotation, for: display.cgDisplayID))
         } else {
-            startPresentation(on: display, rotation: rotation, completion: completion)
+            startPresentation(on: display, rotation: rotation) { done in
+                if done { PresentedRotationPreferences.setRotation(rotation, for: display.name) }
+                completion(done)
+            }
+        }
+    }
+
+    /// Where the screens stand-ins cover go when the displays are arranged: past the right
+    /// edge of the rest, top-aligned, one after another, out of the way of the pointer.
+    func coveredScreenOrigins(besides origins: [CGDirectDisplayID: CGPoint]) -> [CGDirectDisplayID: CGPoint] {
+        let covered = rotatedPresentations.values.map(\.screenID).filter { $0 != 0 && origins[$0] == nil }
+        var x = origins.map { $0.value.x + CGDisplayBounds($0.key).width }.max() ?? 0
+        var parked: [CGDirectDisplayID: CGPoint] = [:]
+        for id in covered {
+            parked[id] = CGPoint(x: x, y: 0)
+            x += CGDisplayBounds(id).width
+        }
+        return parked
+    }
+
+    /// Turns a display that came back the way it was last turned through a stand-in, once
+    /// it has settled; once per connection.
+    private func restorePresentations() {
+        // A display that went keeps no try: it often comes back under the same ID.
+        let live = Set((allAirPlayDevices + allConnectedDisplays).filter { $0.isConnected && $0.cgDisplayID != 0 }
+            .map { "\($0.name)@\($0.cgDisplayID)" })
+        presentationRestores.formIntersection(live)
+        for display in allAirPlayDevices + allConnectedDisplays
+        where display.isConnected && display.cgDisplayID != 0 && !display.isStreaming
+            && rotatedPresentations[display.name] == nil {
+            let saved = PresentedRotationPreferences.rotation(for: display.name)
+            let connection = "\(display.name)@\(display.cgDisplayID)"
+            guard saved != .standard, !presentationRestores.contains(connection) else { continue }
+            presentationRestores.insert(connection)
+            rotLog.debug("\(display.name, privacy: .public) was turned \(saved.rawValue); turning it again")
+            // AirPlay and anchors move the displays about for some seconds after connecting.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+                guard let self,
+                      let now = (self.allAirPlayDevices + self.allConnectedDisplays).first(where: {
+                          $0.name == display.name && $0.cgDisplayID == display.cgDisplayID }),
+                      PresentedRotationPreferences.rotation(for: now.name) == saved,
+                      self.rotation(of: now) == .standard else { return }
+                self.setRotation(saved, for: now)
+            }
         }
     }
 
@@ -122,6 +169,7 @@ extension VideoManager {
             || (presentation.standInID != 0 && !online.contains(presentation.standInID)) {
             endPresentation(for: name)
         }
+        restorePresentations()
         for (name, presentation) in rotatedPresentations
         where presentation.standInID != 0 && CGDisplayIsMain(presentation.screenID) != 0 && !presentation.handingMainBack {
             guard let display = (allAirPlayDevices + allConnectedDisplays).first(where: { $0.name == name }) else { continue }

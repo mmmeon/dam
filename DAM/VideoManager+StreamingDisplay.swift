@@ -124,6 +124,9 @@ extension VideoManager {
         index == 0 ? "\(AppIdentity.name) Streaming" : "\(AppIdentity.name) Streaming \(index + 1)"
     }
 
+    /// The name of a stand-in for the display named `name`: "tv (Rotated)".
+    static func standInDisplayName(for name: String) -> String { "\(name) (Rotated)" }
+
     /// The IDs of the streaming displays that are online.
     var streamingDisplayIDs: Set<CGDirectDisplayID> {
         Set(streamingDisplays.map(\.id)).subtracting([0])
@@ -324,7 +327,8 @@ extension VideoManager {
         let descriptor = CGVirtualDisplayDescriptor()
         // Must call setDispatchQueue: (see enableVirtualAnchor).
         descriptor.setDispatchQueue(.main)
-        descriptor.name = Self.streamingDisplayName(index)
+        // Named after the display it stands in for, which System Settings shows it as.
+        descriptor.name = standIn.map { Self.standInDisplayName(for: $0.name) } ?? Self.streamingDisplayName(index)
         descriptor.sizeInMillimeters = CGSize(width: 600, height: 340)
         // As much either way, so it can be turned on its side where it is.
         let side = max(StreamingDisplayModes.maxPixelsSide, mode.pixelWidth, mode.pixelHeight)

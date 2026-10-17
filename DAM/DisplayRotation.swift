@@ -182,6 +182,23 @@ final class StreamRotations {
     }
 }
 
+/// The rotation chosen for each display DAM shows turned through a stand-in, by its name,
+/// put back when it comes back. macOS keeps the rotations it makes itself.
+enum PresentedRotationPreferences {
+    private static let key = "\(AppIdentity.shortID).rotation.presented"
+
+    static func rotation(for name: String) -> DisplayRotation {
+        let stored = UserDefaults.dam.dictionary(forKey: key)?[name] as? Int
+        return stored.flatMap(DisplayRotation.init(rawValue:)) ?? .standard
+    }
+
+    static func setRotation(_ rotation: DisplayRotation, for name: String) {
+        var all = UserDefaults.dam.dictionary(forKey: key) ?? [:]
+        all[name] = rotation == .standard ? nil : rotation.rawValue
+        UserDefaults.dam.set(all, forKey: key)
+    }
+}
+
 /// The rotation chosen for each streaming display, by its name. A streaming display is
 /// made anew for each stream, so its rotation is kept for the next one in its place.
 enum StreamingRotationPreferences {
