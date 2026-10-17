@@ -35,33 +35,51 @@ enum StreamingDisplayModes {
 
         var pixelWidth: Int { hiDPI ? width * 2 : width }
         var pixelHeight: Int { hiDPI ? height * 2 : height }
+
+        /// Taller than wide.
+        var isPortrait: Bool { height > width }
+
+        /// The same mode turned by `rotation`: on its side, its width and height trade places.
+        func rotated(_ rotation: DisplayRotation) -> Mode {
+            var mode = self
+            (mode.width, mode.height) = rotation.size(width: width, height: height)
+            return mode
+        }
     }
 
     /// The mode one comes up in unless asked for another: 1920 × 1080 at 60 Hz, at 1x.
     static let start = Mode(width: 1920, height: 1080, refreshRate: 60)
 
     /// The mode for a stream of `width` × `height` pixels: the same at 1x, or from 2560
-    /// pixels wide, HiDPI at half the size, as a Mac picks for a screen that sharp.
+    /// pixels on the long side, HiDPI at half the size, as a Mac picks for a screen that
+    /// sharp. A portrait stream gets a portrait mode.
     static func forStream(width: Int, height: Int, fps: Int) -> Mode {
-        width >= 2560 && width.isMultiple(of: 2) && height.isMultiple(of: 2)
+        max(width, height) >= 2560 && width.isMultiple(of: 2) && height.isMultiple(of: 2)
             ? Mode(width: width / 2, height: height / 2, refreshRate: fps, hiDPI: true)
             : Mode(width: width, height: height, refreshRate: fps)
     }
 
     static let maxPixelsWide = sizes.map(\.width).max() ?? 0
     static let maxPixelsHigh = sizes.map(\.height).max() ?? 0
+    /// The most pixels a streaming display is made to take on either side, so it can be
+    /// turned on its side where it is.
+    static let maxPixelsSide = max(maxPixelsWide, maxPixelsHigh)
 
-    /// Whether `mode` renders within the largest size listed.
+    /// Whether `mode` renders within the largest size listed, either way up.
     static func fits(_ mode: DisplayMode) -> Bool {
-        mode.pixelWidth <= maxPixelsWide && mode.pixelHeight <= maxPixelsHigh
+        (mode.pixelWidth <= maxPixelsWide && mode.pixelHeight <= maxPixelsHigh)
+            || (mode.pixelWidth <= maxPixelsHigh && mode.pixelHeight <= maxPixelsWide)
     }
 
     /// Every size at every rate, the start mode first so the display comes up in it.
     static var advertised: [(width: Int, height: Int, refreshRate: Int)] { advertised(startingIn: start) }
 
-    /// Every size at every rate and `start` with them, which comes first.
+    /// Every size at every rate and `start` with them, which comes first. The sizes stand the
+    /// way `start` does, so a portrait display lists portrait sizes.
     static func advertised(startingIn start: Mode) -> [(width: Int, height: Int, refreshRate: Int)] {
-        let all = sizes.flatMap { size in refreshRates.map { (size.width, size.height, $0) } }
+        let all = sizes.flatMap { size in
+            refreshRates.map { start.isPortrait ? (size.height, size.width, $0) : (size.width, size.height, $0) }
+        }
         let isStart = { (m: (width: Int, height: Int, refreshRate: Int)) in
             m.width == start.width && m.height == start.height && m.refreshRate == start.refreshRate
         }
@@ -77,8 +95,13 @@ extension VideoManager {
         let display: AnyObject
         /// Which of the streaming displays it is, from 0; it picks the name and serial number.
         let index: Int
-        /// The mode it comes up in, or was last resized to.
+        /// The mode it comes up in, or was last resized to, turned by `rotation`.
         var start: StreamingDisplayModes.Mode
+        /// How far its picture is turned; captures turn their frames back by as much.
+        var rotation: DisplayRotation = .standard
+        /// The name of the display it stands in for, showing it turned (see
+        /// RotatedPresentation.swift); nil for a streaming display of its own.
+        var standsInFor: String?
         /// Its display ID once online, else 0.
         var id: CGDirectDisplayID = 0
     }
@@ -100,6 +123,9 @@ extension VideoManager {
     static func streamingDisplayName(_ index: Int) -> String {
         index == 0 ? "\(AppIdentity.name) Streaming" : "\(AppIdentity.name) Streaming \(index + 1)"
     }
+
+    /// The name of a stand-in for the display named `name`: "tv (Rotated)".
+    static func standInDisplayName(for name: String) -> String { "\(name) (Rotated)" }
 
     /// The IDs of the streaming displays that are online.
     var streamingDisplayIDs: Set<CGDirectDisplayID> {
@@ -124,7 +150,8 @@ extension VideoManager {
     /// become main, as one does when the display that was main is unplugged; WindowServer
     /// leaves it main when that display comes back. Not when the user made it main.
     func keepStreamingDisplayOffMain() {
-        let streamingIDs = streamingDisplayIDs
+        // A stand-in may be main: it is the display it stands in for.
+        let streamingIDs = streamingDisplayIDs.subtracting(standInDisplayIDs)
         guard streamingIDs.contains(where: { CGDisplayIsMain($0) != 0 }),
               !streamingDisplayIsMainByChoice,
               // Placing one puts main back itself; the others' commits would race this one.
@@ -147,13 +174,15 @@ extension VideoManager {
         setMainDisplay(display) { [weak self] _ in self?.streamingMainHandBackInFlight = false }
     }
 
-    /// An addition, removal or resize of a streaming display, waiting its turn. An addition
-    /// says when its display is placed, with its ID, or that none could be made, with nil; a
-    /// resize whether it was done.
+    /// An addition, removal, resize or rotation of a streaming display, waiting its turn. An
+    /// addition says when its display is placed, with its ID, or that none could be made,
+    /// with nil; a resize or rotation whether it was done. The modes asked for are the
+    /// stream's, before the display's rotation.
     enum StreamingRequest {
-        case add(StreamingDisplayModes.Mode, completion: ((CGDirectDisplayID?) -> Void)?)
+        case add(StreamingDisplayModes.Mode, standIn: StandIn? = nil, completion: ((CGDirectDisplayID?) -> Void)?)
         case remove(index: Int)
         case resize(id: CGDirectDisplayID, StreamingDisplayModes.Mode, completion: (Bool) -> Void)
+        case rotate(id: CGDirectDisplayID, DisplayRotation, completion: (Bool) -> Void)
 
         var isAddition: Bool {
             if case .add = self { return true }
@@ -165,9 +194,16 @@ extension VideoManager {
             switch self {
             case .add: return 1
             case .remove: return -1
-            case .resize: return 0
+            case .resize, .rotate: return 0
             }
         }
+    }
+
+    /// A streaming display made to stand in for another display: turned as asked, and not
+    /// kept as the rotation of its place.
+    struct StandIn {
+        let name: String
+        let rotation: DisplayRotation
     }
 
     /// How many streaming displays there will be once the requests waiting are done.
@@ -211,15 +247,54 @@ extension VideoManager {
         processStreamingRequests()
     }
 
+    /// Asks for a streaming display to stand in for the display named `standIn.name`, turned
+    /// by `standIn.rotation`; `completion` gets its ID once placed, or nil.
+    func createStandInDisplay(mode: StreamingDisplayModes.Mode, standIn: StandIn,
+                              completion: @escaping (CGDirectDisplayID?) -> Void) {
+        guard canCreateStreamingDisplay else { return completion(nil) }
+        streamingRequests.append(.add(mode, standIn: standIn, completion: completion))
+        processStreamingRequests()
+    }
+
+    /// The IDs of the online streaming displays that stand in for another display.
+    var standInDisplayIDs: Set<CGDirectDisplayID> {
+        Set(streamingDisplays.filter { $0.standsInFor != nil }.map(\.id)).subtracting([0])
+    }
+
+    /// Asks for streaming display `id` to be turned to `rotation` where it is: on its side,
+    /// it trades its width and height, and streams of it turn their frames back, so they
+    /// keep their shape. Kept for the next display in its place.
+    func rotateStreamingDisplay(id: CGDirectDisplayID, to rotation: DisplayRotation,
+                                completion: @escaping (Bool) -> Void) {
+        streamingRequests.append(.rotate(id: id, rotation, completion: completion))
+        processStreamingRequests()
+    }
+
+    /// The rotation of the streaming display `id`, or nil if it is none.
+    func streamingRotation(of id: CGDirectDisplayID) -> DisplayRotation? {
+        guard id != 0 else { return nil }
+        return streamingDisplays.first { $0.id == id }?.rotation
+    }
+
+    /// Tells the capture threads how far each streaming display is turned.
+    func publishStreamRotations() {
+        StreamRotations.shared.update(Dictionary(
+            streamingDisplays.filter { $0.id != 0 }.map { ($0.id, $0.rotation) }, uniquingKeysWith: { a, _ in a }))
+    }
+
     /// Starts the next request, unless a change is under way; that one calls this again
     /// when it is done.
     private func processStreamingRequests() {
         while !streamingChangeInFlight, !streamingReassertInFlight, !streamingRequests.isEmpty {
             switch streamingRequests.removeFirst() {
-            case .add(let mode, let completion):    addStreamingDisplay(mode, completion: completion)
+            case .add(let mode, let standIn, let completion):
+                addStreamingDisplay(mode, standIn: standIn, completion: completion)
             case .remove(let index):                removeStreamingDisplay(index: index)
             case .resize(let id, let mode, let completion):
-                resizeStreamingDisplay(id: id, mode: mode, completion: completion)
+                let rotation = streamingRotation(of: id) ?? .standard
+                resizeStreamingDisplay(id: id, mode: mode.rotated(rotation), completion: completion)
+            case .rotate(let id, let rotation, let completion):
+                rotateStreamingDisplay(id: id, rotation: rotation, completion: completion)
             }
         }
     }
@@ -228,6 +303,7 @@ extension VideoManager {
     /// display an addition placed, nil when it made none.
     private func finishStreamingChange(placed: CGDirectDisplayID? = nil) {
         streamingChangeInFlight = false
+        publishStreamRotations()
         let completion = streamingAddCompletion
         streamingAddCompletion = nil
         completion?(placed)
@@ -237,22 +313,27 @@ extension VideoManager {
 
     /// Creates a streaming display in `mode` and places it right of the other displays. The
     /// arrangement from before the first is put back when the last is removed.
-    private func addStreamingDisplay(_ mode: StreamingDisplayModes.Mode,
+    private func addStreamingDisplay(_ mode: StreamingDisplayModes.Mode, standIn: StandIn?,
                                      completion: ((CGDirectDisplayID?) -> Void)?) {
         let used = Set(streamingDisplays.map(\.index))
         guard let index = (0..<Self.maxStreamingDisplays).first(where: { !used.contains($0) }) else {
             completion?(nil)
             return
         }
+        let rotation = standIn?.rotation ?? StreamingRotationPreferences.rotation(for: Self.streamingDisplayName(index))
+        let mode = mode.rotated(rotation)
         sdLog.debug("add \(index) at \(mode.width)×\(mode.height)@\(mode.refreshRate)\(mode.hiDPI ? " HiDPI" : "")")
 
         let descriptor = CGVirtualDisplayDescriptor()
         // Must call setDispatchQueue: (see enableVirtualAnchor).
         descriptor.setDispatchQueue(.main)
-        descriptor.name = Self.streamingDisplayName(index)
+        // Named after the display it stands in for, which System Settings shows it as.
+        descriptor.name = standIn.map { Self.standInDisplayName(for: $0.name) } ?? Self.streamingDisplayName(index)
         descriptor.sizeInMillimeters = CGSize(width: 600, height: 340)
-        descriptor.maxPixelsWide = UInt32(max(StreamingDisplayModes.maxPixelsWide, mode.pixelWidth))
-        descriptor.maxPixelsHigh = UInt32(max(StreamingDisplayModes.maxPixelsHigh, mode.pixelHeight))
+        // As much either way, so it can be turned on its side where it is.
+        let side = max(StreamingDisplayModes.maxPixelsSide, mode.pixelWidth, mode.pixelHeight)
+        descriptor.maxPixelsWide = UInt32(side)
+        descriptor.maxPixelsHigh = UInt32(side)
         descriptor.vendorID  = Self.anchorVendorID
         descriptor.productID = Self.streamingProductID
         descriptor.serialNum = Self.streamingSerial(index)
@@ -282,11 +363,12 @@ extension VideoManager {
             if streamingDisplays.isEmpty { streamingArrangement = nil }
             completion?(nil)
             // The additions waiting would fail the same way.
-            for case .add(_, let waiting) in streamingRequests { waiting?(nil) }
+            for case .add(_, _, let waiting) in streamingRequests { waiting?(nil) }
             streamingRequests.removeAll(where: \.isAddition)
             return
         }
-        streamingDisplays.append(StreamingDisplay(display: vd, index: index, start: mode))
+        streamingDisplays.append(StreamingDisplay(display: vd, index: index, start: mode, rotation: rotation,
+                                                  standsInFor: standIn?.name))
         streamingAddCompletion = completion
         streamingChangeInFlight = true
         waitForStreamingDisplay(vd, index: index, before: before, attempt: 0)
@@ -395,6 +477,31 @@ extension VideoManager {
         switchStreamingDisplay(id, to: mode, before: before, attempt: 0, completion: completion)
     }
 
+    /// Turns streaming display `id` to `rotation`: resizes it to its mode turned the new way,
+    /// and saves the rotation for its place.
+    private func rotateStreamingDisplay(id: CGDirectDisplayID, rotation: DisplayRotation,
+                                        completion: @escaping (Bool) -> Void) {
+        guard let i = streamingDisplays.firstIndex(where: { $0.id == id && id != 0 }) else { return completion(false) }
+        let display = streamingDisplays[i]
+        let kept = display.standsInFor == nil
+        if kept { StreamingRotationPreferences.setRotation(rotation, for: Self.streamingDisplayName(display.index)) }
+        guard rotation != display.rotation else { return completion(true) }
+        sdLog.debug("rotate \(display.index) to \(rotation.rawValue)")
+        let mode = display.start.rotated(display.rotation.inverse).rotated(rotation)
+        streamingDisplays[i].rotation = rotation
+        resizeStreamingDisplay(id: id, mode: mode) { [weak self] done in
+            guard let self else { return completion(done) }
+            if !done, let i = self.streamingDisplays.firstIndex(where: { $0.id == id }) {
+                self.streamingDisplays[i].rotation = display.rotation
+                if kept {
+                    StreamingRotationPreferences.setRotation(display.rotation, for: Self.streamingDisplayName(display.index))
+                }
+            }
+            self.publishStreamRotations()
+            completion(done)
+        }
+    }
+
     /// Switches `id` to `mode` once WindowServer lists it, which takes a moment after a new
     /// mode list; gives up after two seconds.
     private func switchStreamingDisplay(_ id: CGDirectDisplayID, to mode: StreamingDisplayModes.Mode,
@@ -457,6 +564,7 @@ extension VideoManager {
             streamingArrangement = nil
             streamingDisplayIsMainByChoice = false
         }
+        publishStreamRotations()
         mergeDevices()
     }
 

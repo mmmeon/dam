@@ -66,6 +66,24 @@
 /* Sidecar error */
 "Sidecar is not available" = "Sidecar is not available";
 
+/* A display's normal rotation, as System Settings names it */
+"Standard" = "Standard";
+
+/* A display turned a quarter turn clockwise */
+"90°" = "90°";
+
+/* A display turned upside down */
+"180°" = "180°";
+
+/* A display turned three quarters clockwise */
+"270°" = "270°";
+
+/* Rotation hotkey on a display macOS can't turn */
+"%@ cannot be rotated" = "%@ cannot be rotated";
+
+/* Turning a display failed */
+"Could not rotate %@" = "Could not rotate %@";
+
 /* Menu action */
 "Creating a streaming display" = "Creating a streaming display";
 

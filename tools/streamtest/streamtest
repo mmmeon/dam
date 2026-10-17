@@ -24,6 +24,8 @@
 #    --decoder D         hardware (VideoToolbox) or software (FFmpeg, as Moonlight on Linux) [hardware]
 #    --seconds N         how long to stream once the display is placed [30]
 #    --resume WxH        after that, resume at this size for another --seconds (DAM resizes in place)
+#    --rotation DEG      turn the streaming display 90, 180 or 270 degrees for the run; it stands
+#                        on its side for 90 and 270, and DAM turns the frames back [0]
 #    --media FILE        also play this in a loop in IINA, filling the streaming display
 #    --sound             play the video's sound (muted otherwise)
 #    --no-latency        skip the 10 s screen recording halfway through each stream
@@ -45,6 +47,11 @@ moonlight=/Applications/Moonlight.app/Contents/MacOS/Moonlight
 iina=/Applications/IINA.app/Contents/MacOS/iina-cli
 host=127.0.0.1
 app="New Display"
+# Where DAM keeps the rotation of the streaming display a stream gets (the first, when no
+# other is up).
+bundle=mmmeon.dam
+rotation_key=dam.rotation.streaming
+streaming_name="DAM Streaming"
 cache=${TMPDIR:-/tmp}/dam-streamtest
 displays=$cache/displays
 
@@ -130,7 +137,7 @@ cmd_install() {
 }
 
 cmd_run() {
-    local resolution=1920x1080 fps=60 bitrate=20000 decoder=hardware seconds=30 resume=
+    local resolution=1920x1080 fps=60 bitrate=20000 decoder=hardware seconds=30 resume= rotation=0
     local media= sound=0 measure=1 out=/tmp/dam-streamtest/$(date +%Y%m%d-%H%M%S)
     while (( $# )); do
         case $1 in
@@ -140,6 +147,7 @@ cmd_run() {
             --decoder) decoder=$2; shift ;;
             --seconds) seconds=$2; shift ;;
             --resume) resume=$2; shift ;;
+            --rotation) rotation=$2; shift ;;
             --media) media=$2; shift ;;
             --no-latency) measure=0 ;;
             --sound) sound=1 ;;
@@ -151,6 +159,7 @@ cmd_run() {
     check_ready
     $moonlight list $host 2>/dev/null | grep -qx "$app" || die "Moonlight is not paired with DAM; run: streamtest pair"
     [[ -z $media || -f $media ]] || die "no media file at $media"
+    [[ $rotation == (0|90|180|270) ]] || die "--rotation takes 0, 90, 180 or 270"
     # A second IINA's window will not go onto the streaming display (-10006), and it played
     # on after the run, one more video each time.
     [[ -n $media ]] && pgrep -xq IINA && die "quit IINA first, to play --media in it"
@@ -174,8 +183,13 @@ cmd_run() {
         pkill -x Moonlight 2>/dev/null
         pause 2
         kill $watch_pid $log_pid 2>/dev/null
+        (( rotation )) && defaults write $bundle $rotation_key -dict-add "$streaming_name" -int 0
     }
     trap 'cleanup; exit 130' INT TERM
+
+    # The streaming display's width in pixels for a stream of WxH: its height when it is turned
+    # on its side.
+    turned_width() { (( rotation == 90 || rotation == 270 )) && print ${1#*x} || print ${1%x*} }
 
     # Whether any display mirrors another now.
     mirrored_now() { $displays list | awk '$11 != 0' | grep -q . }
@@ -183,7 +197,7 @@ cmd_run() {
     # The streaming display, once placed at the size asked for (in pixels; a HiDPI one shows
     # half) and nothing mirrors.
     wait_for_display() {
-        local width=${1%x*} line
+        local width=$(turned_width $1) line
         for i in {1..60}; do
             line=$($displays streaming)
             if [[ -n $line && $(print $line | cut -d' ' -f8) == $width ]] && ! mirrored_now; then
@@ -200,6 +214,8 @@ cmd_run() {
     }
 
     local started=$(date +%s)
+    # DAM reads the display's rotation when it makes it.
+    (( rotation )) && defaults write $bundle $rotation_key -dict-add "$streaming_name" -int $rotation
     stream $resolution
     if ! wait_for_display $resolution; then
         cleanup; die "no streaming display at $resolution within a minute; see $out"
@@ -242,7 +258,7 @@ cmd_run() {
     fi
 
     # Watching that nothing mirrors and the streaming display keeps the stream's size.
-    local expect=${resolution%x*} warned=
+    local expect=$(turned_width $resolution) warned=
     run_for() {
         local until=$(( $(date +%s) + $1 ))
         while (( $(date +%s) < until )); do
@@ -280,7 +296,7 @@ cmd_run() {
     if [[ -n $resume && $mirrored == 0 ]]; then
         pkill -x Moonlight; pause 3
         stream $resume
-        expect=${resume%x*}
+        expect=$(turned_width $resume)
         size=$resume
         say "resuming at $resume"
         if wait_for_display $resume; then

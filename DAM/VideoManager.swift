@@ -189,6 +189,11 @@ final class VideoManager: ObservableObject {
     var bootstrapDisplayID: CGDirectDisplayID = 0
     /// The streaming displays, in the order they were added.
     var streamingDisplays: [StreamingDisplay] = []
+    /// Displays shown turned through a stand-in, by the name of the display shown on.
+    var rotatedPresentations: [String: RotatedPresentation] = [:]
+    /// The connections of displays whose saved rotation was put back, or is about to be, as
+    /// "name@id": each connection gets one try.
+    var presentationRestores: Set<String> = []
     /// Additions and removals of streaming displays asked for, in order.
     var streamingRequests: [StreamingRequest] = []
     /// Called when the addition under way has placed its display, or made none.
@@ -694,19 +699,22 @@ final class VideoManager: ObservableObject {
     /// anchor will restore on release is re-based on the display too, so the change outlives it.
     func setMainDisplay(_ display: DisplayInfo, completion: ((Result<Void, MirrorError>) -> Void)? = nil) {
         guard display.cgDisplayID != 0 else { completion?(.failure(.notConnected)); return }
-        let master = CGDisplayMirrorsDisplay(display.cgDisplayID)
-        let mainID = master != CGDirectDisplayID(0) ? master : display.cgDisplayID
+        // A display shown turned is main through its stand-in, which is what it shows.
+        let ownID = rotatedPresentations[display.name].map(\.standInID).flatMap { $0 != 0 ? $0 : nil }
+            ?? display.cgDisplayID
+        let master = CGDisplayMirrorsDisplay(ownID)
+        let mainID = master != CGDirectDisplayID(0) ? master : ownID
         // An anchor's default layout can have made the display main already; the captured
         // arrangements still need re-basing, or releasing the anchor would undo it.
         let rebase = { [weak self] in
             guard let self else { return }
             for (name, arrangement) in self.virtualAnchorArrangements {
-                self.virtualAnchorArrangements[name] = arrangement.makingMain(display.cgDisplayID)
+                self.virtualAnchorArrangements[name] = arrangement.makingMain(ownID)
             }
-            self.streamingArrangement = self.streamingArrangement?.makingMain(display.cgDisplayID)
+            self.streamingArrangement = self.streamingArrangement?.makingMain(ownID)
         }
         // Set before the commit: the change it causes is checked before it reports back.
-        streamingDisplayIsMainByChoice = streamingDisplayIDs.contains(display.cgDisplayID)
+        streamingDisplayIsMainByChoice = streamingDisplayIDs.contains(ownID)
         guard CGDisplayIsMain(mainID) == 0 else { rebase(); completion?(.success(())); return }
         let online  = DisplayArrangement.onlineDisplayIDs()
         let bounds  = Dictionary(uniqueKeysWithValues: online.map { ($0, CGDisplayBounds($0)) })
@@ -1153,6 +1161,8 @@ final class VideoManager: ObservableObject {
         // and therefore idToName). Absent in clamshell mode, which is correct.
         let airPlayIDs = Set(newAirPlay.map(\.cgDisplayID))
         var anchorIDs  = Set(virtualAnchorCGIDs.values)
+        // Stand-ins show through the display they stand in for, as anchors do.
+        anchorIDs.formUnion(standInDisplayIDs)
         if bootstrapDisplayID != 0 { anchorIDs.insert(bootstrapDisplayID) }
 
         let streamingIDs = streamingDisplayIDs
@@ -1224,6 +1234,7 @@ final class VideoManager: ObservableObject {
         // would otherwise shut off once the other displays go.
         for display in newPhysical where display.isSidecar && display.isConnected { backSidecarDisplay(display) }
         releaseBootstrapDisplayIfDone(displays: newPhysical)
+        keepPresentations()
         applyVisibility()
     }
 
@@ -1262,5 +1273,19 @@ final class VideoManager: ObservableObject {
             }
         }
         return nil
+    }
+}
+
+extension VideoManager {
+    /// The display whose screen holds the pointer, for the hotkey pickers. A screen an anchor
+    /// drives stands for the display behind it.
+    func displayUnderPointer() -> DisplayInfo? {
+        let point = NSEvent.mouseLocation
+        guard let screen = NSScreen.screens.first(where: { NSMouseInRect(point, $0.frame, false) }),
+              let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
+        else { return nil }
+        let screenID = CGDirectDisplayID(number.uint32Value)
+        let cgID = anchorTarget(of: screenID) ?? standInTarget(of: screenID) ?? screenID
+        return (allConnectedDisplays + allAirPlayDevices).first { $0.cgDisplayID == cgID }
     }
 }

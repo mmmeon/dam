@@ -68,11 +68,16 @@
 		CC100C022F8D60780090E796 /* MirrorPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC100B022F8D60780090E796 /* MirrorPicker.swift */; };
 		CC100C032F8D60780090E796 /* MainDisplayPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC100B032F8D60780090E796 /* MainDisplayPicker.swift */; };
 		CC100C042F8D60780090E796 /* ResolutionPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC100B042F8D60780090E796 /* ResolutionPicker.swift */; };
+		EE200C052F8D60790090E796 /* RotatedPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE200B052F8D60790090E796 /* RotatedPresentation.swift */; };
+		EE200C032F8D60790090E796 /* RotationPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE200B032F8D60790090E796 /* RotationPicker.swift */; };
+		EE200C022F8D60790090E796 /* VideoManager+Rotation.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE200B022F8D60790090E796 /* VideoManager+Rotation.swift */; };
+		EE200C012F8D60790090E796 /* DisplayRotation.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE200B012F8D60790090E796 /* DisplayRotation.swift */; };
 		DD000C012F8D60780090E796 /* DisplayLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD000B012F8D60780090E796 /* DisplayLayout.swift */; };
 		DD000C022F8D60780090E796 /* VideoManager+Arrangement.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD000B022F8D60780090E796 /* VideoManager+Arrangement.swift */; };
 		DD000C032F8D60780090E796 /* ArrangeDisplaysWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD000B032F8D60780090E796 /* ArrangeDisplaysWindowController.swift */; };
 		DD000C042F8D60780090E796 /* ArrangeTouchBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD000B042F8D60780090E796 /* ArrangeTouchBar.swift */; };
 		DD100B002F8D607C0090E796 /* DisplayLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A002F8D607C0090E796 /* DisplayLayoutTests.swift */; };
+		EE200D042F8D607C0090E796 /* DisplayRotationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE200A042F8D607C0090E796 /* DisplayRotationTests.swift */; };
 		DD100B012F8D607C0090E796 /* ArrangeTouchBarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A012F8D607C0090E796 /* ArrangeTouchBarTests.swift */; };
 		DD100B0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift */; };
 		DD100B1B2F8D607C0090E7A1 /* StreamingDisplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A1B2F8D607C0090E7A1 /* StreamingDisplayTests.swift */; };
@@ -170,11 +175,16 @@
 		CC100B022F8D60780090E796 /* MirrorPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirrorPicker.swift; sourceTree = "<group>"; };
 		CC100B032F8D60780090E796 /* MainDisplayPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainDisplayPicker.swift; sourceTree = "<group>"; };
 		CC100B042F8D60780090E796 /* ResolutionPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResolutionPicker.swift; sourceTree = "<group>"; };
+		EE200B052F8D60790090E796 /* RotatedPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RotatedPresentation.swift; sourceTree = "<group>"; };
+		EE200B032F8D60790090E796 /* RotationPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "RotationPicker.swift"; sourceTree = "<group>"; };
+		EE200B022F8D60790090E796 /* VideoManager+Rotation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "VideoManager+Rotation.swift"; sourceTree = "<group>"; };
+		EE200B012F8D60790090E796 /* DisplayRotation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DisplayRotation.swift"; sourceTree = "<group>"; };
 		DD000B012F8D60780090E796 /* DisplayLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayLayout.swift; sourceTree = "<group>"; };
 		DD000B022F8D60780090E796 /* VideoManager+Arrangement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "VideoManager+Arrangement.swift"; sourceTree = "<group>"; };
 		DD000B032F8D60780090E796 /* ArrangeDisplaysWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArrangeDisplaysWindowController.swift; sourceTree = "<group>"; };
 		DD000B042F8D60780090E796 /* ArrangeTouchBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArrangeTouchBar.swift; sourceTree = "<group>"; };
 		DD100A002F8D607C0090E796 /* DisplayLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayLayoutTests.swift; sourceTree = "<group>"; };
+		EE200A042F8D607C0090E796 /* DisplayRotationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayRotationTests.swift; sourceTree = "<group>"; };
 		DD100A012F8D607C0090E796 /* ArrangeTouchBarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArrangeTouchBarTests.swift; sourceTree = "<group>"; };
 		DD100A0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayNicknameTests.swift; sourceTree = "<group>"; };
 		DD100A1B2F8D607C0090E7A1 /* StreamingDisplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamingDisplayTests.swift; sourceTree = "<group>"; };
@@ -277,6 +287,10 @@
 				CC100B022F8D60780090E796 /* MirrorPicker.swift */,
 				CC100B032F8D60780090E796 /* MainDisplayPicker.swift */,
 				CC100B042F8D60780090E796 /* ResolutionPicker.swift */,
+				EE200B052F8D60790090E796 /* RotatedPresentation.swift */,
+				EE200B032F8D60790090E796 /* RotationPicker.swift */,
+				EE200B022F8D60790090E796 /* VideoManager+Rotation.swift */,
+				EE200B012F8D60790090E796 /* DisplayRotation.swift */,
 				CC000B302F8D60780090E796 /* ScreenMirroringPanel.swift */,
 				CC000B312F8D60780090E796 /* SidecarManager.swift */,
 				451E728FE68D6B9E5602973C /* enet */,
@@ -331,6 +345,7 @@
 				EE200A022F8D607C0090E796 /* MenuBarIconTests.swift */,
 				AA500A002F8D607C0090E796 /* ControlStripPresenterTests.swift */,
 				DD100A002F8D607C0090E796 /* DisplayLayoutTests.swift */,
+				EE200A042F8D607C0090E796 /* DisplayRotationTests.swift */,
 				DD100A012F8D607C0090E796 /* ArrangeTouchBarTests.swift */,
 				DD100A0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift */,
 				DD100A0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift */,
@@ -495,6 +510,10 @@
 				CC100C022F8D60780090E796 /* MirrorPicker.swift in Sources */,
 				CC100C032F8D60780090E796 /* MainDisplayPicker.swift in Sources */,
 				CC100C042F8D60780090E796 /* ResolutionPicker.swift in Sources */,
+				EE200C052F8D60790090E796 /* RotatedPresentation.swift in Sources */,
+				EE200C032F8D60790090E796 /* RotationPicker.swift in Sources */,
+				EE200C022F8D60790090E796 /* VideoManager+Rotation.swift in Sources */,
+				EE200C012F8D60790090E796 /* DisplayRotation.swift in Sources */,
 				CC000C302F8D60780090E796 /* ScreenMirroringPanel.swift in Sources */,
 				CC000C312F8D60780090E796 /* SidecarManager.swift in Sources */,
 				7FA2D5C972AFA91BF026B64F /* callbacks.c in Sources */,
@@ -545,6 +564,7 @@
 				EE200B022F8D607C0090E796 /* MenuBarIconTests.swift in Sources */,
 				AA500B002F8D607C0090E796 /* ControlStripPresenterTests.swift in Sources */,
 				DD100B002F8D607C0090E796 /* DisplayLayoutTests.swift in Sources */,
+				EE200D042F8D607C0090E796 /* DisplayRotationTests.swift in Sources */,
 				DD100B012F8D607C0090E796 /* ArrangeTouchBarTests.swift in Sources */,
 				DD100B0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift in Sources */,
 				DD100B0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift in Sources */,
