@@ -391,25 +391,32 @@ final class VideoManager: ObservableObject {
 
     /// Matches Bonjour-discovered AirPlay names (sorted) to online display IDs, in order:
     ///  1. An NSScreen name equal to the Bonjour name, or to it with " (AirPlay)" after it as
-    ///     macOS 27 names them — extend mode and software mirroring.
-    ///  2. The ID cached from an earlier match, still online — a hardware mirror slave,
-    ///     which leaves NSScreen.
-    ///  3. A display reporting AirPlay's vendor and model (`airPlayIDs`), paired by sorted
-    ///     order. Unnamed ones go first; a named one is one whose screen name differs from
-    ///     the Bonjour name. A monitor is never taken for one.
+    ///     macOS 27 names them — extend mode and software mirroring. A hardware mirror slave
+    ///     leaves NSScreen, so `systemNames` (MonitorPanel's names) stand in for it there.
+    ///  2. The ID cached from an earlier match, still online and not matched by name to
+    ///     another receiver — a hardware mirror slave MonitorPanel couldn't name.
+    ///  3. A display reporting AirPlay's vendor and model (`airPlayIDs`), when only one name
+    ///     is left: with several, the order says nothing about which is which. Unnamed ones
+    ///     go first; a named one is one whose screen name differs from the Bonjour name.
+    ///     A monitor is never taken for one.
     /// `unmatched` are the AirPlay displays left over: no Bonjour name was found for them,
     /// or none matched.
     static func resolveAirPlay(discovered: [String], screenNames: [CGDirectDisplayID: String],
+                               systemNames: [CGDirectDisplayID: String] = [:],
                                cached: [String: CGDirectDisplayID], online: [CGDirectDisplayID],
                                airPlayIDs: Set<CGDirectDisplayID>, namedIDs: Set<CGDirectDisplayID>)
         -> (resolved: [String: CGDirectDisplayID], unmatched: [CGDirectDisplayID]) {
         let onlineSet = Set(online)
+        let names = systemNames.merging(screenNames) { $1 }
         var resolved: [String: CGDirectDisplayID] = [:]
-        var unresolved: [String] = []
         for name in discovered {
-            if let cgID = screenNames.filter({ airPlayName(fromScreenName: $0.value) == name }).keys.min() {
+            if let cgID = names.filter({ airPlayName(fromScreenName: $0.value) == name }).keys.min() {
                 resolved[name] = cgID
-            } else if let cgID = cached[name], onlineSet.contains(cgID) {
+            }
+        }
+        var unresolved: [String] = []
+        for name in discovered where resolved[name] == nil {
+            if let cgID = cached[name], onlineSet.contains(cgID), !resolved.values.contains(cgID) {
                 resolved[name] = cgID
             } else {
                 unresolved.append(name)
@@ -418,7 +425,7 @@ final class VideoManager: ObservableObject {
         let taken = Set(resolved.values)
         let free = online.filter { airPlayIDs.contains($0) && !taken.contains($0) }
         let candidates = free.filter { !namedIDs.contains($0) } + free.filter { namedIDs.contains($0) }
-        for (name, cgID) in zip(unresolved, candidates) { resolved[name] = cgID }
+        if unresolved.count == 1, let cgID = candidates.first { resolved[unresolved[0]] = cgID }
         let matched = Set(resolved.values)
         return (resolved, free.filter { !matched.contains($0) })
     }
@@ -1115,7 +1122,12 @@ final class VideoManager: ObservableObject {
         //  2. Cached ID from a prior extend-mode observation, still online — handles the
         //     hardware-mirror-slave case where NSScreen drops the display.
         //  3. Unnamed AirPlay displays — online displays with no name, reporting vendor
-        //     "aapl" and product "airp". Match unresolved Bonjour names to these displays.
+        //     "aapl" and product "airp". Match the one unresolved Bonjour name to these.
+        // A hardware mirror slave leaves NSScreen; MonitorPanel still knows its name.
+        let systemNames = Self.monitorPanelNames(of: onlineIDs.filter {
+            idToScreenName[$0] == nil && Self.isAirPlayDisplay($0)
+        })
+        for (cgID, name) in systemNames where idToName[cgID] == nil { idToName[cgID] = name }
         let onlineSet = Set(onlineIDs)
         if let previous = previousOnlineIDs {
             pendingConnectIDs.formUnion(onlineSet.subtracting(previous))
@@ -1125,11 +1137,14 @@ final class VideoManager: ObservableObject {
 
         let resolution = Self.resolveAirPlay(
             discovered: discoveredNames.sorted(), screenNames: idToScreenName,
-            cached: cachedAirPlayCGIDs, online: onlineIDs,
+            systemNames: systemNames, cached: cachedAirPlayCGIDs, online: onlineIDs,
             airPlayIDs: Set(onlineIDs.filter {
                 Self.isAirPlayDisplay($0) || idToScreenName[$0]?.hasSuffix(Self.airPlayScreenNameSuffix) == true
             }),
             namedIDs: Set(idToName.keys))
+        // A display now matched to one name is no longer another's: drop that name's entry.
+        let claimed = Dictionary(resolution.resolved.map { ($1, $0) }) { a, _ in a }
+        cachedAirPlayCGIDs = cachedAirPlayCGIDs.filter { name, cgID in claimed[cgID].map { $0 == name } ?? true }
         cachedAirPlayCGIDs.merge(resolution.resolved) { $1 }
         let resolvedIDs = resolution.resolved
         // An AirPlay screen no Bonjour name matched still gets AirPlay's choices. It keeps the
@@ -1236,6 +1251,26 @@ final class VideoManager: ObservableObject {
         releaseBootstrapDisplayIfDone(displays: newPhysical)
         keepPresentations()
         applyVisibility()
+    }
+
+    private static let monitorPanelLoaded: Bool = {
+        dlopen("/System/Library/PrivateFrameworks/MonitorPanel.framework/MonitorPanel", RTLD_LAZY) != nil
+    }()
+
+    /// The names System Settings shows for `ids`, from MonitorPanel's MPDisplay. They hold
+    /// for a display NSScreen leaves out, such as an AirPlay screen that is a mirror slave.
+    static func monitorPanelNames(of ids: [CGDirectDisplayID]) -> [CGDirectDisplayID: String] {
+        guard !ids.isEmpty, monitorPanelLoaded,
+              let managerClass = NSClassFromString("MPDisplayMgr") as? NSObject.Type else { return [:] }
+        let wanted = Set(ids)
+        var names: [CGDirectDisplayID: String] = [:]
+        for display in managerClass.init().value(forKey: "displays") as? [NSObject] ?? [] {
+            guard let cgID = (display.value(forKey: "displayID") as? NSNumber)?.uint32Value,
+                  wanted.contains(cgID),
+                  let name = display.value(forKey: "displayName") as? String, !name.isEmpty else { continue }
+            names[cgID] = name
+        }
+        return names
     }
 
     /// Gets a display's human-readable name via IOKit without CGDisplayIOServicePort

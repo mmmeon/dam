@@ -38,12 +38,14 @@ final class SidecarDisplayTests: XCTestCase {
     // MARK: - Matching AirPlay names to displays
 
     private func resolve(_ discovered: [String], screenNames: [CGDirectDisplayID: String] = [:],
+                         systemNames: [CGDirectDisplayID: String] = [:],
                          cached: [String: CGDirectDisplayID] = [:], online: [CGDirectDisplayID],
                          airPlay: Set<CGDirectDisplayID>, named: Set<CGDirectDisplayID>? = nil)
         -> (resolved: [String: CGDirectDisplayID], unmatched: [CGDirectDisplayID]) {
-        VideoManager.resolveAirPlay(discovered: discovered, screenNames: screenNames, cached: cached,
+        VideoManager.resolveAirPlay(discovered: discovered, screenNames: screenNames,
+                                    systemNames: systemNames, cached: cached,
                                     online: online, airPlayIDs: airPlay,
-                                    namedIDs: named ?? Set(screenNames.keys))
+                                    namedIDs: named ?? Set(screenNames.keys).union(systemNames.keys))
     }
 
     func testAirPlayNameMatchesItsScreenName() {
@@ -84,6 +86,27 @@ final class SidecarDisplayTests: XCTestCase {
                         online: [7, 8], airPlay: [7, 8])
         XCTAssertEqual(r.resolved, ["Living Room": 7])
         XCTAssertEqual(r.unmatched, [8])
+    }
+
+    func testMirroredAirPlayDisplayMatchesItsSystemName() {
+        // "tv" mirrors, so it is out of NSScreen; "Den" is advertised but not connected.
+        // Sorted order alone would hand tv's display to Den.
+        let r = resolve(["Den", "tv"], screenNames: [1: "HISENSE"], systemNames: [7: "tv"],
+                        online: [1, 7], airPlay: [7])
+        XCTAssertEqual(r.resolved, ["tv": 7])
+        XCTAssertEqual(r.unmatched, [])
+    }
+
+    func testSeveralUnresolvedNamesAreNotPairedByOrder() {
+        let r = resolve(["Den", "tv"], screenNames: [1: "HISENSE"], online: [1, 7], airPlay: [7])
+        XCTAssertEqual(r.resolved, [:])
+        XCTAssertEqual(r.unmatched, [7])
+    }
+
+    func testNameMatchBeatsAnotherNamesStaleCache() {
+        let r = resolve(["Den", "tv"], systemNames: [7: "tv"], cached: ["Den": 7],
+                        online: [7], airPlay: [7])
+        XCTAssertEqual(r.resolved, ["tv": 7])
     }
 
     func testAirPlayDisplayWithNoBonjourNameIsLeftOverAsAirPlay() {
