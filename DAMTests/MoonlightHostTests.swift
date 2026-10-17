@@ -194,21 +194,25 @@ final class MoonlightHostTests: XCTestCase {
         startHost()
         let client = try Client.make()
         XCTAssertTrue(try pair(client, pin: "1234"))
-        XCTAssertFalse(try XCTUnwrap(host.clients.first).lowLatency)
-        host.setLowLatency(true, for: try XCTUnwrap(host.clients.first))
         XCTAssertTrue(try XCTUnwrap(host.clients.first).lowLatency)
+        host.setLowLatency(false, for: try XCTUnwrap(host.clients.first))
+        XCTAssertFalse(try XCTUnwrap(host.clients.first).lowLatency)
         let saved = try Data(contentsOf: directory.appendingPathComponent("paired-clients.json"))
-        XCTAssertEqual(try JSONDecoder().decode([MoonlightClient].self, from: saved).map(\.lowLatency), [true])
+        XCTAssertEqual(try JSONDecoder().decode([MoonlightClient].self, from: saved).map(\.lowLatency), [false])
     }
 
-    func testDevicesPairedBeforeLowLatencyCameHaveItOff() throws {
+    func testDevicesSavedBeforeLowLatencyWasTheDefaultHaveItOn() throws {
         let saved = try JSONEncoder().encode([MoonlightClient(name: "10.0.0.2", certificate: Data([1]), paired: Date())])
         var object = try XCTUnwrap(JSONSerialization.jsonObject(with: saved) as? [[String: Any]])
-        object[0].removeValue(forKey: "lowLatency")
+        object[0].removeValue(forKey: "lowLatencyEncoding")
+        let older = try JSONSerialization.data(withJSONObject: object)
+        object[0]["lowLatency"] = false
         let old = try JSONSerialization.data(withJSONObject: object)
-        let clients = try JSONDecoder().decode([MoonlightClient].self, from: old)
-        XCTAssertEqual(clients.map(\.name), ["10.0.0.2"])
-        XCTAssertEqual(clients.map(\.lowLatency), [false])
+        for data in [older, old] {
+            let clients = try JSONDecoder().decode([MoonlightClient].self, from: data)
+            XCTAssertEqual(clients.map(\.name), ["10.0.0.2"])
+            XCTAssertEqual(clients.map(\.lowLatency), [true])
+        }
     }
 
     func testForgottenDeviceMustPairAgain() throws {
