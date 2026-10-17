@@ -103,7 +103,7 @@ final class MoonlightUDPSocket {
 final class MoonlightStreamStats {
     private let lock = NSLock()
     private var frames = 0, keyFrames = 0, videoPackets = 0, videoBytes = 0, videoRefused = 0
-    private var audioPackets = 0, audioRefused = 0, keyFrameRequests = 0
+    private var audioPackets = 0, audioRefused = 0, keyFrameRequests = 0, coveredRequests = 0, rebuilt = 0, lost = 0
 
     func video(packets: Int, bytes: Int, refused: Int, keyFrame: Bool) {
         lock.lock(); defer { lock.unlock() }
@@ -115,20 +115,26 @@ final class MoonlightStreamStats {
         audioPackets += packets; audioRefused += refused
     }
 
-    func keyFrameRequested() {
+    func keyFrameRequested(covered: Bool = false) {
         lock.lock(); defer { lock.unlock() }
         keyFrameRequests += 1
+        coveredRequests += covered ? 1 : 0
+    }
+
+    func frameStatus(_ status: MoonlightFrameFecStatus) {
+        lock.lock(); defer { lock.unlock() }
+        if status.isLost { lost += 1 } else { rebuilt += 1 }
     }
 
     /// The counts since the last call, as a line for the log.
     func take(seconds: Double) -> String {
         lock.lock(); defer { lock.unlock() }
-        let line = String(format: "%.1f fps (%d keyframes), %.1f Mbit/s, %d keyframe requests; " +
-                          "packets refused: video %d of %d, audio %d of %d",
+        let line = String(format: "%.1f fps (%d keyframes), %.1f Mbit/s, %d keyframe requests (%d covered); " +
+                          "blocks rebuilt from parity %d, lost %d; packets refused: video %d of %d, audio %d of %d",
                           Double(frames) / seconds, keyFrames, Double(videoBytes) * 8 / seconds / 1e6, keyFrameRequests,
-                          videoRefused, videoPackets, audioRefused, audioPackets)
+                          coveredRequests, rebuilt, lost, videoRefused, videoPackets, audioRefused, audioPackets)
         frames = 0; keyFrames = 0; videoPackets = 0; videoBytes = 0; videoRefused = 0
-        audioPackets = 0; audioRefused = 0; keyFrameRequests = 0
+        audioPackets = 0; audioRefused = 0; keyFrameRequests = 0; coveredRequests = 0; rebuilt = 0; lost = 0
         return line
     }
 }
@@ -162,6 +168,8 @@ final class MoonlightVideoSender {
     var onFirstPing: (() -> Void)?
     /// Called on the sending thread when a frame could not be sent, so the next can be a keyframe.
     var onFrameTooLarge: (() -> Void)?
+    /// Called on the sending thread once a keyframe's last packet is out.
+    var onKeyFrameSent: (() -> Void)?
 
     /// Parity for a fifth of each block's data, as Sunshine sends by default.
     static let fecPercentage = 20
@@ -276,6 +284,7 @@ final class MoonlightVideoSender {
             for packet in MoonlightPacketizer.parity(for: block) { send(packet) }
         }
         stats.video(packets: packets, bytes: bytes, refused: refused, keyFrame: frame.isKeyFrame)
+        if frame.isKeyFrame { onKeyFrameSent?() }
     }
 
     static func describe(_ address: sockaddr_in) -> String {
@@ -420,8 +429,11 @@ final class MoonlightControlServer {
     private var peer: UnsafeMutablePointer<ENetPeer>?
     private var sequence: UInt32 = 0
 
-    /// Called on the control thread when Moonlight asks for a keyframe.
-    var onKeyFrameRequest: (() -> Void)?
+    /// Called on the control thread when Moonlight asks for a keyframe, with its round trip
+    /// time as ENet measures it (mean plus twice the variance), in nanoseconds.
+    var onKeyFrameRequest: ((UInt64) -> Void)?
+    /// Called on the control thread when Moonlight reports a frame that needed parity.
+    var onFrameStatus: ((MoonlightFrameFecStatus) -> Void)?
     /// Called on the control thread when Moonlight connects, and when it leaves.
     var onConnect: (() -> Void)?
     var onDisconnect: (() -> Void)?
@@ -484,7 +496,11 @@ final class MoonlightControlServer {
             enet_packet_destroy(event.packet)
             guard event.peer == peer, let message = MoonlightControlCrypto.open(data, key: key) else { return }
             if message.type == Self.requestKeyFrame || message.type == Self.invalidateReferenceFrames {
-                onKeyFrameRequest?()
+                let peer = event.peer.pointee
+                onKeyFrameRequest?(UInt64(peer.roundTripTime + 2 * peer.roundTripTimeVariance) * 1_000_000)
+            } else if message.type == MoonlightFrameFecStatus.messageType,
+                      let status = MoonlightFrameFecStatus(payload: message.payload) {
+                onFrameStatus?(status)
             }
         case ENET_EVENT_TYPE_DISCONNECT:
             guard event.peer == peer else { return }
@@ -529,7 +545,11 @@ final class MoonlightStream {
     private var lastFrame: (buffer: CVPixelBuffer, time: CMTime, at: UInt64)?
     private var repeater: DispatchSourceTimer?
     private var ended = false
-    private var keyFrames = MoonlightKeyFrameThrottle()
+    private var keyFrames = MoonlightKeyFrameRequests()
+    /// The bitrate, set from the client's losses; nil when the default
+    /// MoonlightAdaptiveBitrate is off, for the client's bitrate throughout.
+    private var bitrate: MoonlightBitrateGovernor?
+    private var bitrateTimer: DispatchSourceTimer?
 
     /// Called once on the main queue when the stream ends on its own, with why.
     var onEnd: ((String) -> Void)?
@@ -550,10 +570,32 @@ final class MoonlightStream {
     }
 
     func start() {
-        control.onKeyFrameRequest = { [weak self] in
-            self?.video.stats.keyFrameRequested()
-            self?.sendKeyFrame()
+        control.onKeyFrameRequest = { [weak self] roundTrip in
+            guard let self else { return }
+            // Covered or not, each request is a frame the client lost.
+            self.lock.lock()
+            self.bitrate?.keyFrameRequested()
+            self.lock.unlock()
+            let covered = self.sendKeyFrame(roundTrip: roundTrip) == .covered
+            self.video.stats.keyFrameRequested(covered: covered)
         }
+        video.onKeyFrameSent = { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            self.keyFrames.keyFrameSent(at: DispatchTime.now().uptimeNanoseconds)
+            self.lock.unlock()
+        }
+        control.onFrameStatus = { [weak self] status in
+            guard let self else { return }
+            self.video.stats.frameStatus(status)
+            if status.isLost {
+                msLog.debug("lost frame \(status.frameIndex): \(status.receivedData)+\(status.receivedParity) of \(status.dataPackets) data and \(status.parityPackets) parity packets")
+            }
+            self.lock.lock()
+            self.bitrate?.frameStatus(status)
+            self.lock.unlock()
+        }
+        startAdaptingBitrate()
         // What went out and what went wrong, every 5 seconds.
         let stats = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
         stats.schedule(deadline: .now() + 5, repeating: 5)
@@ -595,6 +637,30 @@ final class MoonlightStream {
         activity = nil
         statsTimer?.cancel()
         statsTimer = nil
+        bitrateTimer?.cancel()
+        bitrateTimer = nil
+    }
+
+    /// Each second, sets the encoder's bitrate from the client's losses (see
+    /// MoonlightBitrateGovernor).
+    private func startAdaptingBitrate() {
+        guard UserDefaults.standard.object(forKey: "MoonlightAdaptiveBitrate") as? Bool ?? true else { return }
+        bitrate = MoonlightBitrateGovernor(kbps: config.bitrateKbps)
+        let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        timer.schedule(deadline: .now() + 1, repeating: 1)
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            let was = self.bitrate?.current
+            let kbps = self.bitrate?.second()
+            let encoder = self.encoder
+            self.lock.unlock()
+            guard let kbps, let was else { return }
+            msLog.debug("bitrate \(was) → \(kbps) kbps")
+            encoder?.setBitrate(kbps: kbps)
+        }
+        bitrateTimer = timer
+        timer.resume()
     }
 
     private func end(_ reason: String) {
@@ -615,7 +681,7 @@ final class MoonlightStream {
                                 bitrateKbps: config.bitrateKbps, lowLatency: config.lowLatency)) { [weak self] frame in
                 self?.video.send(frame)
             }
-            video.onFrameTooLarge = { [weak self] in self?.sendKeyFrame() }
+            video.onFrameTooLarge = { [weak self] in self?.sendKeyFrame(roundTrip: nil) }
             let capture = MoonlightScreenCapture(displayID: displayID, width: config.width, height: config.height,
                                                  fps: config.fps) { [weak self] buffer, time in
                 guard let self else { return }
@@ -663,28 +729,32 @@ final class MoonlightStream {
     }
 
     /// The next frame as a keyframe, made from the last picture at once when the screen is
-    /// still and no new frame would come; no more than one a quarter second (see
-    /// MoonlightKeyFrameThrottle).
-    private func sendKeyFrame() {
+    /// still and no new frame would come; no more than one a quarter second, and none for a
+    /// request a keyframe on its way answers (see MoonlightKeyFrameRequests). `roundTrip` is
+    /// the client's for its requests, nil for the host's own.
+    @discardableResult
+    private func sendKeyFrame(roundTrip: UInt64?) -> MoonlightKeyFrameRequests.Decision {
         lock.lock()
-        switch keyFrames.request(at: DispatchTime.now().uptimeNanoseconds) {
+        let decision = keyFrames.request(at: DispatchTime.now().uptimeNanoseconds, roundTrip: roundTrip)
+        switch decision {
         case .now:
             break
         case .later(let wait):
             lock.unlock()
             DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + .nanoseconds(Int(wait))) {
-                [weak self] in self?.sendKeyFrame()
+                [weak self] in self?.sendKeyFrame(roundTrip: roundTrip)
             }
-            return
-        case .alreadyDue:
+            return decision
+        case .alreadyDue, .covered:
             lock.unlock()
-            return
+            return decision
         }
         let encoder = self.encoder
         let last = lastFrame
         lock.unlock()
         encoder?.requestKeyFrame()
         if let last { encoder?.encode(last.buffer, at: last.time) }
+        return decision
     }
 
     /// Sends the last picture again while the screen is still, at most every half second,

@@ -231,6 +231,229 @@ struct MoonlightKeyFrameThrottle {
     }
 }
 
+/// Moonlight's keyframe requests, less those a keyframe already on its way answers. While
+/// Moonlight waits for a keyframe it asks again for every frame it loses, and those requests
+/// reach the host after the keyframe went out: each answered with another keyframe, a lossy
+/// link stays in a run of keyframes and never recovers. A request is covered while the
+/// keyframe asked for is still to be sent, and when it arrives less than a round trip after
+/// one finished going out, as the client sent it before it had that keyframe. A client that
+/// then lost the keyframe asks again with the next frame it gets, and is answered.
+struct MoonlightKeyFrameRequests {
+    enum Decision: Equatable {
+        case now
+        /// After this many nanoseconds, asking again.
+        case later(UInt64)
+        /// One is already due later.
+        case alreadyDue
+        /// A keyframe on its way answers it.
+        case covered
+    }
+
+    /// How long a keyframe asked for is waited for before another may be: the encoder can
+    /// leave one out, and the screen be still for half a second.
+    static let patience: UInt64 = 1_000_000_000
+    /// The longest round trip a request is held to, so a stale estimate (ENet starts at
+    /// half a second) never holds off a client that lost the keyframe for long.
+    static let longestRoundTrip: UInt64 = 300_000_000
+
+    private var throttle: MoonlightKeyFrameThrottle
+    /// When the keyframe asked for was asked for, until one is sent.
+    private var asked: UInt64?
+    /// When the last keyframe finished going out.
+    private var sent: UInt64?
+
+    init(interval: UInt64 = 250_000_000) {
+        throttle = MoonlightKeyFrameThrottle(interval: interval)
+    }
+
+    /// A request at `now`; `roundTrip` is the client's in nanoseconds, nil for one of the host's
+    /// own (a frame it could not send), which no keyframe already sent answers.
+    mutating func request(at now: UInt64, roundTrip: UInt64?) -> Decision {
+        if let asked, now &- asked < Self.patience { return .covered }
+        if let roundTrip, let sent, now &- sent < min(roundTrip, Self.longestRoundTrip) { return .covered }
+        switch throttle.request(at: now) {
+        case .now:
+            asked = now
+            return .now
+        case .later(let wait):
+            return .later(wait)
+        case .alreadyDue:
+            return .alreadyDue
+        }
+    }
+
+    /// A keyframe finished going out at `now`, asked for or not.
+    mutating func keyFrameSent(at now: UInt64) {
+        asked = nil
+        sent = now
+    }
+}
+
+/// What Moonlight says of a frame's FEC block that needed parity: sent, as a Sunshine
+/// extension (control message 0x5502), for each it rebuilt from parity and each it could
+/// not. 21 bytes, big-endian.
+struct MoonlightFrameFecStatus: Equatable {
+    static let messageType: UInt16 = 0x5502
+
+    let frameIndex: UInt32
+    let dataPackets: Int
+    let parityPackets: Int
+    let receivedData: Int
+    let receivedParity: Int
+
+    init(frameIndex: UInt32, dataPackets: Int, parityPackets: Int, receivedData: Int, receivedParity: Int) {
+        self.frameIndex = frameIndex
+        self.dataPackets = dataPackets
+        self.parityPackets = parityPackets
+        self.receivedData = receivedData
+        self.receivedParity = receivedParity
+    }
+
+    init?(payload: Data) {
+        let bytes = [UInt8](payload)
+        guard bytes.count >= 21 else { return nil }
+        func u16(_ at: Int) -> Int { Int(bytes[at]) << 8 | Int(bytes[at + 1]) }
+        frameIndex = UInt32(bytes[0]) << 24 | UInt32(bytes[1]) << 16 | UInt32(bytes[2]) << 8 | UInt32(bytes[3])
+        dataPackets = u16(10)
+        parityPackets = u16(12)
+        receivedData = u16(14)
+        receivedParity = u16(16)
+    }
+
+    /// Whether the block was lost: fewer of its packets came than its data needs.
+    var isLost: Bool { receivedData + receivedParity < dataPackets }
+    /// How many packets fewer came than its data needs.
+    var shortBy: Int { max(0, dataPackets - receivedData - receivedParity) }
+    /// Whether it was lost in a run of packets, as a link given more than it carries drops
+    /// them: packets lost at random leave a lost block one to three short (5% of them lost,
+    /// through dummynet); a queue overflowing, mostly four or more.
+    var isLostInARun: Bool { shortBy >= 4 }
+}
+
+/// Sets a Moonlight stream's bitrate from how much of it the client loses, lower while it
+/// loses frames and back up while it does not, as the bitrate the client asked for is often
+/// more than its link carries: then nearly every frame is lost and asked for again as a
+/// keyframe, larger still. A loss is a frame Moonlight reports it could not rebuild, or a
+/// keyframe it asks for (a frame that never came is reported only that way); counted each
+/// second, as the larger of the two, since one lost frame brings both.
+///
+/// Two or more losses in a second take the bitrate down by 30% on a link that lost a frame
+/// in a run of packets in the last ten seconds (see `MoonlightFrameFecStatus.isLostInARun`),
+/// one given more than it carries; ten or more losses (a link carrying far less than the
+/// stream) by half, on any link; then nothing
+/// changes for two seconds while the encoder and the frames already sent catch up. Five seconds without a loss, and with
+/// few frames needing parity, bring it up by 15%, to at most the client's bitrate.
+///
+/// Losing packets at random, a link loses as much at a lower bitrate, and each frame then
+/// has fewer packets of parity to rebuild it from: a cut only makes it worse. Such losses
+/// leave a frame only a packet or so short, so they alone do not cut it. (A link that has
+/// just begun to be given too much does so too, which is why one frame lost in a run is
+/// enough to count the others for ten seconds.) Should a cut come anyway, it is tried, along with any cuts that follow it, and judged on the ten seconds after them: if
+/// those did not lose at most half as much as the ten seconds before, the bitrate goes back
+/// to what it was, and for thirty seconds only losses of ten or more cut it.
+///
+/// The first seconds count for nothing: Moonlight asks for a keyframe as it starts, and
+/// loses frames while it settles, which would make every cut look like it helped.
+struct MoonlightBitrateGovernor {
+    /// The client's bitrate, the most this sets.
+    let ceiling: Int
+    /// The least this sets: a quarter of the client's, and no less than 2 Mbit/s unless
+    /// the client asked for less.
+    let floor: Int
+    private(set) var current: Int
+    private var lostFrames = 0, lostInRuns = 0, keyFrameRequests = 0, rebuiltFrames = 0
+    private var cleanSeconds = 0, holdSeconds = 0
+    /// Losses in each of the last `judgedSeconds` seconds, oldest first.
+    private var recent: [Int] = []
+    /// Cuts being tried: the bitrate before them, the losses a second before them, and the
+    /// losses each second since the last of them (past its hold).
+    private var trial: (kbps: Int, before: Double, after: [Int])?
+    /// Seconds counted; the second from which ordinary losses may cut again; the last
+    /// second a frame was lost in a run.
+    private var seconds = 0, cutsAllowedFrom = 0, lostInARunAt: Int?
+
+    /// Frames rebuilt from parity in a second that still count it as clean.
+    static let rebuiltAllowed = 2
+    /// Losses in a second that halve the bitrate, and cut it even after a cut did not help.
+    static let severeLosses = 10
+    /// How long a cut is judged on, and the losses before it it is judged against.
+    static let judgedSeconds = 10
+    /// How long ordinary losses leave the bitrate alone after a cut did not help.
+    static let restSeconds = 30
+    /// The seconds at the start that count for nothing.
+    static let warmUpSeconds = 3
+    /// How long a frame lost in a run makes ordinary losses cut the bitrate.
+    static let overflowingSeconds = 10
+
+    init(kbps: Int) {
+        ceiling = kbps
+        floor = min(kbps, max(kbps / 4, 2000))
+        current = kbps
+    }
+
+    mutating func frameStatus(_ status: MoonlightFrameFecStatus) {
+        if status.isLost { lostFrames += 1 } else { rebuiltFrames += 1 }
+        if status.isLostInARun { lostInRuns += 1 }
+    }
+
+    mutating func keyFrameRequested() {
+        keyFrameRequests += 1
+    }
+
+    /// Called once a second; the new bitrate in kbps when it changes.
+    mutating func second() -> Int? {
+        let losses = max(lostFrames, keyFrameRequests)
+        let inRuns = lostInRuns
+        let rebuilt = rebuiltFrames
+        lostFrames = 0; lostInRuns = 0; keyFrameRequests = 0; rebuiltFrames = 0
+        seconds += 1
+        guard seconds > Self.warmUpSeconds else { return nil }
+        if inRuns > 0 { lostInARunAt = seconds }
+        let overflowing = lostInARunAt.map { seconds - $0 < Self.overflowingSeconds } ?? false
+        let before = recent
+        recent = Array((recent + [losses]).suffix(Self.judgedSeconds))
+        if holdSeconds > 0 {
+            holdSeconds -= 1
+            return nil
+        }
+        let severe = losses >= Self.severeLosses
+        if current > floor, severe || (losses >= 2 && overflowing && seconds >= cutsAllowedFrom) {
+            if trial == nil {
+                let window = before + [losses]
+                trial = (current, Double(window.reduce(0, +)) / Double(window.count), [])
+            }
+            trial?.after = []
+            cleanSeconds = 0
+            current = max(floor, severe ? current / 2 : current * 7 / 10)
+            holdSeconds = 2
+            return current
+        }
+        if var tried = trial {
+            tried.after.append(losses)
+            trial = tried
+            if tried.after.count >= Self.judgedSeconds {
+                trial = nil
+                let after = Double(tried.after.reduce(0, +)) / Double(tried.after.count)
+                if after > tried.before / 2 {
+                    // Lost as much at the lower bitrate: not the bitrate's doing.
+                    cutsAllowedFrom = seconds + Self.restSeconds
+                    cleanSeconds = 0
+                    guard tried.kbps != current else { return nil }
+                    current = tried.kbps
+                    return current
+                }
+            }
+        }
+        cleanSeconds = losses == 0 && rebuilt <= Self.rebuiltAllowed ? cleanSeconds + 1 : 0
+        guard cleanSeconds >= 5, current < ceiling else { return nil }
+        // Clean at the lower bitrate: the cuts helped.
+        trial = nil
+        cleanSeconds = 0
+        current = min(ceiling, current * 115 / 100)
+        return current
+    }
+}
+
 /// Puts Opus packets in Moonlight's audio packets: a 12-byte RTP header (payload type 97,
 /// sequence, a timestamp in milliseconds), then the Opus packet, encrypted with AES-128-CBC
 /// when asked. After every fourth packet come two parity packets (type 127) for the four,

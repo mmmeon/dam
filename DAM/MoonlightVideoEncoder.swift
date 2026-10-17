@@ -11,14 +11,13 @@
 //  the next one is in, so while the screen moves each frame comes out a frame's time late,
 //  and when it stops the last frame is nudged out by giving the encoder the same picture
 //  again. Apple's low-latency rate control hands each frame back on its own, but on this
-//  encoder it predicts from long-term reference frames while its SPS allows one; FFmpeg,
-//  which Moonlight decodes with on Linux and Windows, then discards a reference every
-//  frame and the picture breaks up until the next keyframe, and Moonlight rewrites any SPS
-//  it gets to one reference frame, so neither the SPS nor the encoder's properties
-//  (ReferenceBufferCount, EnableLTR: ignored) can mend it. So it is used only when the
-//  settings ask for it (`lowLatency`), for players that decode with VideoToolbox: Moonlight
-//  on an iPhone, iPad or Mac, and browsers on a Mac. Asking the encoder to complete a frame
-//  would also bring it out at once, but starts the next afresh as a keyframe.
+//  encoder it predicts from long-term reference frames, which a decoder holding one
+//  reference frame cannot follow: FFmpeg, which Moonlight decodes with everywhere, and
+//  Moonlight rewrites any SPS it gets to one reference frame. Neither the SPS nor the
+//  encoder's properties (ReferenceBufferCount, EnableLTR: ignored) mend it, so its slices
+//  are rewritten instead (see H264OneReference). It is used only when the settings ask for
+//  it (`lowLatency`). Asking the encoder to complete a frame would also bring it out at
+//  once, but starts the next afresh as a keyframe.
 //
 
 import CoreMedia
@@ -56,9 +55,8 @@ final class MoonlightVideoEncoder {
         /// Off for Moonlight, whose frames come as the screen changes.
         var steady = false
         /// Whether to ask for Apple's low-latency rate control, which hands each frame back
-        /// as soon as it is encoded, without a nudge. Only for players that decode with
-        /// VideoToolbox (see the top of the file); ignored with `reordering`, which it does
-        /// not allow.
+        /// as soon as it is encoded, without a nudge (see the top of the file); ignored
+        /// with `reordering`, which it does not allow.
         var lowLatency = false
     }
 
@@ -66,8 +64,10 @@ final class MoonlightVideoEncoder {
     struct Frame {
         let data: Data
         let isKeyFrame: Bool
+        /// The frame's NAL units, without its parameter sets, as `data` has them.
+        let units: [Data]
         /// The frame as the encoder handed it back, with its parameter sets in the format
-        /// description and length-prefixed NAL units (see `avcc` and `parameterSets`).
+        /// description (see `parameterSets`); its own NAL units may differ from `units`.
         let sample: CMSampleBuffer
         /// The time it was given with.
         let time: CMTime
@@ -75,6 +75,16 @@ final class MoonlightVideoEncoder {
         let submitted: UInt64
         /// When the encoder handed it back.
         let encoded: UInt64
+
+        /// The access unit with 4-byte lengths before its NAL units, as MP4 wants it.
+        var avcc: Data {
+            var out = Data()
+            for unit in units {
+                out.append(contentsOf: (0..<4).map { UInt8(unit.count >> (24 - 8 * $0) & 0xFF) })
+                out.append(unit)
+            }
+            return out
+        }
     }
 
     let settings: Settings
@@ -85,6 +95,8 @@ final class MoonlightVideoEncoder {
 
     private let session: VTCompressionSession
     private let output: (Frame) -> Void
+    /// Rewrites low-latency frames for decoders holding one reference frame; on the encoder's thread.
+    private let oneReference: H264OneReference?
     private let queue = DispatchQueue(label: "\(AppIdentity.bundleID).moonlight.encoder", qos: .userInteractive)
     private let lock = NSLock()
     /// Whether the encoding thread is taking frames from the slot.
@@ -142,6 +154,7 @@ final class MoonlightVideoEncoder {
         guard let (session, lowLatency) = made else { throw MoonlightVideoError.session(status) }
         self.session = session
         isLowLatency = lowLatency
+        oneReference = lowLatency ? H264OneReference() : nil
         var hardware: CFBoolean?
         VTSessionCopyProperty(session, key: kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder,
                               allocator: nil, valueOut: &hardware)
@@ -153,21 +166,13 @@ final class MoonlightVideoEncoder {
             kVTCompressionPropertyKey_AllowFrameReordering: settings.reordering,
             kVTCompressionPropertyKey_ProfileLevel: kVTProfileLevel_H264_High_AutoLevel,
             kVTCompressionPropertyKey_H264EntropyMode: kVTH264EntropyMode_CABAC,
-            kVTCompressionPropertyKey_AverageBitRate: settings.bitrateKbps * 1000,
-            // Keeps a keyframe from being many times a frame's share of the bitrate: for
-            // Moonlight no more than one and a half times the rate over any quarter second,
-            // so it fits within the packets Moonlight takes with parity and goes out in a
-            // few frames' time.
-            kVTCompressionPropertyKey_DataRateLimits: [
-                NSNumber(value: Int(Double(settings.bitrateKbps * 1000 / 8) * settings.rateLimitMultiple
-                                    * settings.rateLimitWindow)),
-                NSNumber(value: settings.rateLimitWindow)],
             kVTCompressionPropertyKey_ExpectedFrameRate: settings.fps,
             // Keyframes only when asked for (Moonlight asks after losing packets), an hour
             // apart otherwise, unless the settings want them regularly.
             kVTCompressionPropertyKey_MaxKeyFrameInterval: settings.fps * keyFrameSeconds,
             kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration: keyFrameSeconds,
         ]
+        properties.merge(Self.rateProperties(settings.bitrateKbps, settings)) { $1 }
         // Without reordering, no frame is held back for one that follows.
         if !settings.reordering { properties[kVTCompressionPropertyKey_MaxFrameDelayCount] = 0 }
         if settings.prioritizeSpeed { properties[kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality] = true }
@@ -181,6 +186,27 @@ final class MoonlightVideoEncoder {
 
     deinit {
         VTCompressionSessionInvalidate(session)
+    }
+
+    /// The average bitrate, and the limit that keeps a keyframe from being many times a
+    /// frame's share of it: for Moonlight no more than one and a half times the rate over any
+    /// quarter second, so it fits within the packets Moonlight takes with parity and goes out
+    /// in a few frames' time.
+    private static func rateProperties(_ kbps: Int, _ settings: Settings) -> [CFString: Any] {
+        [kVTCompressionPropertyKey_AverageBitRate: kbps * 1000,
+         kVTCompressionPropertyKey_DataRateLimits: [
+            NSNumber(value: Int(Double(kbps * 1000 / 8) * settings.rateLimitMultiple * settings.rateLimitWindow)),
+            NSNumber(value: settings.rateLimitWindow)]]
+    }
+
+    /// Changes the bitrate from the next frame encoded.
+    func setBitrate(kbps: Int) {
+        queue.async { [self] in
+            for (key, value) in Self.rateProperties(kbps, settings) {
+                let status = VTSessionSetProperty(session, key: key, value: value as CFTypeRef)
+                if status != noErr { veLog.debug("encoder property \(key as String, privacy: .public): \(status)") }
+            }
+        }
     }
 
     /// Makes the next frame encoded a keyframe.
@@ -254,13 +280,30 @@ final class MoonlightVideoEncoder {
             self.pending -= 1
             self.lock.unlock()
             guard status == noErr, !flags.contains(.frameDropped), let sample,
-                  let (data, isKeyFrame) = Self.annexB(sample) else {
+                  let (sets, _) = Self.parameterSets(sample), var units = Self.nalUnits(sample) else {
                 veLog.error("encode: \(status)")
                 if keyFrame { self.requestKeyFrame() }
                 return
             }
-            self.output(Frame(data: data, isKeyFrame: isKeyFrame, sample: sample, time: rising, submitted: submitted,
-                              encoded: DispatchTime.now().uptimeNanoseconds))
+            let isKeyFrame = Self.isKeyFrame(sample)
+            if let oneReference = self.oneReference {
+                // Parameter sets go in too, to read the slices by; they come out as they are.
+                let given = isKeyFrame ? sets : []
+                let (rewritten, broken) = oneReference.rewrite(given + units)
+                units = Array(rewritten.dropFirst(given.count))
+                if broken {
+                    veLog.error("a frame predicts from one a single reference cannot hold; asking for a keyframe")
+                    self.requestKeyFrame()
+                }
+            }
+            let startCode = Data([0, 0, 0, 1])
+            var data = Data()
+            for unit in (isKeyFrame ? sets : []) + units {
+                data.append(startCode)
+                data.append(unit)
+            }
+            self.output(Frame(data: data, isKeyFrame: isKeyFrame, units: units, sample: sample, time: rising,
+                              submitted: submitted, encoded: DispatchTime.now().uptimeNanoseconds))
         }
         guard status == noErr else {
             veLog.error("encode frame: \(status)")
@@ -299,8 +342,8 @@ final class MoonlightVideoEncoder {
         return (sets, Int(lengthSize))
     }
 
-    /// The NAL units in `sample`, each after its length, as they are.
-    private static func nalUnits(_ sample: CMSampleBuffer) -> (units: [Data], lengthSize: Int)? {
+    /// The NAL units in `sample`, without their lengths.
+    private static func nalUnits(_ sample: CMSampleBuffer) -> [Data]? {
         guard let block = CMSampleBufferGetDataBuffer(sample),
               let (_, lengthSize) = parameterSets(sample) else { return nil }
         let total = CMBlockBufferGetDataLength(block)
@@ -317,39 +360,6 @@ final class MoonlightVideoEncoder {
             units.append(Data(bytes[offset..<(offset + length)]))
             offset += length
         }
-        return (units, lengthSize)
-    }
-
-    /// The access unit in `sample` with Annex B start codes, its SPS and PPS first when it is
-    /// a keyframe, and whether it is one.
-    static func annexB(_ sample: CMSampleBuffer) -> (Data, Bool)? {
-        guard let (sets, _) = parameterSets(sample), let (units, _) = nalUnits(sample) else { return nil }
-        let isKeyFrame = isKeyFrame(sample)
-        let startCode = Data([0, 0, 0, 1])
-        var out = Data()
-        for unit in (isKeyFrame ? sets : []) + units {
-            out.append(startCode)
-            out.append(unit)
-        }
-        return (out, isKeyFrame)
-    }
-
-    /// The access unit in `sample` with 4-byte lengths before its NAL units, as MP4 wants it.
-    static func avcc(_ sample: CMSampleBuffer) -> Data? {
-        guard let block = CMSampleBufferGetDataBuffer(sample), let (units, lengthSize) = nalUnits(sample) else { return nil }
-        if lengthSize == 4 {
-            let total = CMBlockBufferGetDataLength(block)
-            var bytes = Data(count: total)
-            let copied = bytes.withUnsafeMutableBytes {
-                CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: total, destination: $0.baseAddress!)
-            }
-            return copied == noErr ? bytes : nil
-        }
-        var out = Data()
-        for unit in units {
-            out.append(contentsOf: (0..<4).map { UInt8(unit.count >> (24 - 8 * $0) & 0xFF) })
-            out.append(unit)
-        }
-        return out
+        return units
     }
 }
