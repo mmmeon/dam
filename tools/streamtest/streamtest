@@ -1,0 +1,321 @@
+#!/bin/zsh
+#
+#  streamtest
+#
+#  Streams from DAM to Moonlight on the same Mac and reports what both ends measured, and how
+#  far the picture in Moonlight's window lags the screen it streams. Needs DAM running with
+#  Moonlight hosting on, Moonlight (moonlight-qt) in /Applications, and Xcode's swiftc.
+#
+#  The streaming display shows a time code from tools/latency, redrawn every refresh, so the
+#  stream carries a new picture each frame. The main display shows one too, with Moonlight's
+#  window in its bottom-left corner; a screen recording of the main display then holds both
+#  codes in each frame, and `latency analyze` reads the lag from them (capture, encoding,
+#  sending, decoding and drawing, plus up to a refresh of the main display).
+#
+#    tools/streamtest/streamtest pair                  pair Moonlight with DAM (once)
+#    tools/streamtest/streamtest run [options]         one stream, then a summary
+#    tools/streamtest/streamtest lowlatency on|off     DAM's Low-Latency Encoding for this Mac
+#    tools/streamtest/streamtest install               build DAM (Release), put it in /Applications, open it
+#
+#  run options (defaults in brackets):
+#    --resolution WxH    the stream's size [1920x1080]
+#    --fps N             [60]
+#    --bitrate KBPS      [20000]
+#    --decoder D         hardware (VideoToolbox) or software (FFmpeg, as Moonlight on Linux) [hardware]
+#    --seconds N         how long to stream once the display is placed [30]
+#    --resume WxH        after that, resume at this size for another --seconds (DAM resizes in place)
+#    --media FILE        also play this in a loop in IINA, filling the streaming display
+#    --sound             play the video's sound (muted otherwise)
+#    --no-latency        skip the 10 s screen recording halfway through each stream
+#    --out DIR           where the logs go [/tmp/dam-streamtest/<time>]
+#
+#  Everything a run leaves is in --out: dam.log (DAM's debug log), moonlight.log, displays.log
+#  (every change of the display set, modes, main and mirroring), latency-N.mov and .txt, and
+#  summary.txt. A display
+#  mirroring the streaming one once the launch has settled is reported, and ends the stream so
+#  the Mac's own screen comes back.
+#
+
+set -u
+setopt pipefail
+
+here=${0:A:h}
+repo=${here:h:h}
+moonlight=/Applications/Moonlight.app/Contents/MacOS/Moonlight
+iina=/Applications/IINA.app/Contents/MacOS/iina-cli
+host=127.0.0.1
+app="New Display"
+cache=${TMPDIR:-/tmp}/dam-streamtest
+displays=$cache/displays
+
+die() { print -u2 "streamtest: $*"; exit 1 }
+say() { print "streamtest: $*" }
+pause() { perl -e "select(undef, undef, undef, $1)" }
+
+# The displays helper and tools/latency, built into $cache when their source is newer.
+build_tools() {
+    mkdir -p $cache
+    local source
+    for source in $here/displays.swift $repo/tools/latency/latency.swift; do
+        local binary=$cache/${source:t:r}
+        if [[ ! -x $binary || $source -nt $binary ]]; then
+            DEVELOPER_DIR=${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer} \
+                swiftc -O -suppress-warnings -o $binary $source || die "could not build ${source:t}"
+        fi
+    done
+}
+
+check_ready() {
+    [[ -x $moonlight ]] || die "Moonlight is not in /Applications"
+    curl -s -m 3 -o /dev/null http://$host:47989/serverinfo || die "DAM is not answering on port 47989 (is Moonlight hosting on?)"
+}
+
+# DAM's PIN prompt is an alert with a text field and a Pair button.
+cmd_pair() {
+    check_ready
+    local pin=$(( RANDOM % 9000 + 1000 )) log=$cache/pair.out
+    mkdir -p $cache
+    $moonlight pair $host --pin $pin > $log 2>&1 &
+    local pid=$!
+    for i in {1..40}; do
+        osascript -e 'tell application "System Events" to tell process "DAM" to exists text field 1 of window 1' 2>/dev/null | grep -q true && break
+        pause 0.5
+    done
+    osascript <<EOF || die "could not fill in DAM's PIN prompt"
+tell application "System Events" to tell process "DAM"
+    set value of text field 1 of window 1 to "$pin"
+    click button "Pair" of window 1
+end tell
+EOF
+    wait $pid
+    $moonlight list $host 2>/dev/null | grep -qx "$app" && say "paired with DAM on $host" || die "pairing failed; see $log"
+}
+
+# The Low-Latency Encoding item for this Mac's Moonlight, in DAM's status menu.
+cmd_lowlatency() {
+    local want=${1:-} clients="$HOME/Library/Application Support/DAM/Moonlight/paired-clients.json"
+    [[ $want == on || $want == off ]] || die "usage: streamtest lowlatency on|off"
+    state() { python3 -I -c 'import json,sys; c=[c for c in json.load(open(sys.argv[1])) if c["name"]==sys.argv[2]]; print("on" if c and c[0].get("lowLatency") else "off")' "$clients" $host }
+    [[ $(state) == $want ]] && { say "low-latency encoding is already $want for $host"; return }
+    osascript > /dev/null <<EOF || die "could not reach DAM's menu"
+tell application "System Events" to tell process "DAM"
+    click menu bar item 1 of menu bar 2
+    delay 0.3
+    click menu item "Moonlight" of menu 1 of menu bar item 1 of menu bar 2
+    delay 0.3
+    click menu item "$host" of menu "Moonlight" of menu item "Moonlight" of menu 1 of menu bar item 1 of menu bar 2
+    delay 0.3
+    click menu item "Low-Latency Encoding" of menu "$host" of menu item "$host" of menu "Moonlight" of menu item "Moonlight" of menu 1 of menu bar item 1 of menu bar 2
+end tell
+EOF
+    # DAM saves the setting once it has handled the click.
+    for i in {1..10}; do [[ $(state) == $want ]] && break; pause 0.3; done
+    [[ $(state) == $want ]] || die "DAM's setting is still $(state)"
+    say "low-latency encoding $want for $host (from its next stream)"
+}
+
+# As DAM is run day to day: a Release build signed as Xcode signs it, over /Applications/DAM.app.
+cmd_install() {
+    local built=$(DEVELOPER_DIR=${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer} \
+        xcodebuild -project $repo/DAM.xcodeproj -scheme DAM -configuration Release -showBuildSettings 2>/dev/null \
+        | awk '$1 == "BUILT_PRODUCTS_DIR" { print $3 }')/DAM.app
+    DEVELOPER_DIR=${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer} \
+        xcodebuild build -project $repo/DAM.xcodeproj -scheme DAM -configuration Release -quiet || die "build failed"
+    osascript -e 'tell application "DAM" to quit' 2>/dev/null
+    for i in {1..10}; do pgrep -xq DAM || break; pause 1; done
+    pgrep -xq DAM && die "DAM did not quit"
+    ditto $built /Applications/DAM.app && open /Applications/DAM.app || die "could not install DAM"
+    for i in {1..15}; do curl -s -m 2 -o /dev/null http://$host:47989/serverinfo && { say "DAM installed and answering"; return }; pause 1; done
+    say "DAM installed; it is not answering on port 47989 (is Moonlight hosting on?)"
+}
+
+cmd_run() {
+    local resolution=1920x1080 fps=60 bitrate=20000 decoder=hardware seconds=30 resume=
+    local media= sound=0 measure=1 out=/tmp/dam-streamtest/$(date +%Y%m%d-%H%M%S)
+    while (( $# )); do
+        case $1 in
+            --resolution) resolution=$2; shift ;;
+            --fps) fps=$2; shift ;;
+            --bitrate) bitrate=$2; shift ;;
+            --decoder) decoder=$2; shift ;;
+            --seconds) seconds=$2; shift ;;
+            --resume) resume=$2; shift ;;
+            --media) media=$2; shift ;;
+            --no-latency) measure=0 ;;
+            --sound) sound=1 ;;
+            --out) out=$2; shift ;;
+            *) die "unknown option $1" ;;
+        esac
+        shift
+    done
+    check_ready
+    $moonlight list $host 2>/dev/null | grep -qx "$app" || die "Moonlight is not paired with DAM; run: streamtest pair"
+    [[ -z $media || -f $media ]] || die "no media file at $media"
+    # A second IINA's window will not go onto the streaming display (-10006), and it played
+    # on after the run, one more video each time.
+    [[ -n $media ]] && pgrep -xq IINA && die "quit IINA first, to play --media in it"
+    build_tools
+    local latency=$cache/latency
+    mkdir -p $out
+    say "logs in $out"
+
+    local watch_pid log_pid codes_pid= iina_title= part=0
+    $displays watch > $out/displays.log 2>&1 & watch_pid=$!
+    /usr/bin/log stream --level debug --predicate 'subsystem == "mmmeon.dam"' --style compact > $out/dam.log 2>&1 & log_pid=$!
+
+    cleanup() {
+        [[ -n $codes_pid ]] && kill $codes_pid 2>/dev/null
+        [[ -n $iina_title ]] && osascript -e 'tell application "IINA" to quit' >/dev/null 2>&1
+        $moonlight quit $host >/dev/null 2>&1
+        pause 6
+        pkill -x Moonlight 2>/dev/null
+        pause 2
+        kill $watch_pid $log_pid 2>/dev/null
+    }
+    trap 'cleanup; exit 130' INT TERM
+
+    # Whether any display mirrors another now.
+    mirrored_now() { $displays list | awk '$11 != 0' | grep -q . }
+
+    # The streaming display, once placed at the size asked for (in pixels; a HiDPI one shows
+    # half) and nothing mirrors.
+    wait_for_display() {
+        local width=${1%x*} line
+        for i in {1..60}; do
+            line=$($displays streaming)
+            if [[ -n $line && $(print $line | cut -d' ' -f8) == $width ]] && ! mirrored_now; then
+                pause 3
+                return 0
+            fi
+            pause 1
+        done
+        return 1
+    }
+    stream() {
+        $moonlight stream $host "$app" --resolution $1 --fps $fps --bitrate $bitrate --video-decoder $decoder \
+            --display-mode windowed --no-quit-after --no-vsync >> $out/moonlight.out 2>&1 &
+    }
+
+    local started=$(date +%s)
+    stream $resolution
+    if ! wait_for_display $resolution; then
+        cleanup; die "no streaming display at $resolution within a minute; see $out"
+    fi
+    say "streaming $resolution@$fps at $bitrate kbps, $decoder decoding"
+
+    # Codes on the streaming display and the main one. Again after a resume: the streaming
+    # display's code sits in a corner of the size it had.
+    show_codes() {
+        [[ -n $codes_pid ]] && kill $codes_pid 2>/dev/null
+        local streaming=$($displays streaming | cut -d' ' -f1) main=$($displays list | awk '$10 == 1 { print $1 }')
+        $latency show $streaming $main --seconds 100000 > $out/codes.out 2>&1 & codes_pid=$!
+    }
+    # Moonlight's window in the main display's bottom-left corner, clear of its code in the
+    # top-right. Just before measuring: Moonlight sizes its window itself once video comes.
+    place_moonlight() {
+        local main=($($displays list | awk '$10 == 1'))
+        local sw=${1%x*} sh=${1#*x}
+        local ww=$(( main[6] * 55 / 100 )); local wh=$(( ww * sh / sw ))
+        osascript -e 'tell application "System Events" to tell process "Moonlight"' \
+            -e "set position of window 1 to {$main[4], $(( main[5] + main[7] - wh ))}" \
+            -e "set size of window 1 to {$ww, $wh}" -e 'end tell' >/dev/null 2>&1 \
+            || say "could not move Moonlight's window"
+    }
+    show_codes $resolution
+    local size=$resolution
+
+    if [[ -n $media ]]; then
+        local d=($($displays streaming))
+        iina_title=${media:t}
+        $iina $media --mpv-loop-file=inf --mpv-volume=$(( sound ? 100 : 0 )) --separate-windows --no-stdin > $out/iina.out 2>&1 &!
+        for i in {1..20}; do
+            osascript -e "tell application \"System Events\" to tell process \"IINA\" to exists (first window whose name starts with \"$iina_title\")" 2>/dev/null | grep -q true && break
+            pause 0.5
+        done
+        osascript -e 'tell application "System Events" to tell process "IINA"' \
+            -e "set w to first window whose name starts with \"$iina_title\"" \
+            -e "set position of w to {$d[4], $d[5]}" -e "set size of w to {$d[6], $d[7]}" -e 'end tell' >/dev/null 2>&1 \
+            && say "playing ${media:t} on the streaming display" || say "could not move IINA's window onto the streaming display"
+    fi
+
+    # Watching that nothing mirrors and the streaming display keeps the stream's size.
+    local expect=${resolution%x*} warned=
+    run_for() {
+        local until=$(( $(date +%s) + $1 ))
+        while (( $(date +%s) < until )); do
+            if mirrored_now; then
+                say "a display started mirroring the streaming display; ending the stream"
+                return 1
+            fi
+            local px=$($displays streaming | cut -d' ' -f8)
+            if [[ $px != $expect && $warned != $px ]]; then
+                say "the streaming display is $px pixels wide, not the stream's $expect"
+                warned=$px
+            fi
+            pause 1
+        done
+    }
+    # Half the time, 10 s of the main display recorded and read, then the rest.
+    measure_part() {
+        (( part++ ))
+        local first=$(( $1 / 2 ))
+        run_for $first || return 1
+        if (( measure )); then
+            place_moonlight $size
+            pause 1
+            local main=$($displays list | awk '$10 == 1 { print $1 }') streaming=$($displays streaming | cut -d' ' -f1)
+            screencapture -x -v -V 10 $out/latency-$part.mov >/dev/null 2>&1
+            $latency analyze $out/latency-$part.mov --reference $main > $out/latency-$part.txt 2>&1 &
+            run_for $(( $1 - first - 10 > 0 ? $1 - first - 10 : 0 )) || return 1
+        else
+            run_for $(( $1 - first )) || return 1
+        fi
+    }
+    measure_part $seconds
+    local mirrored=$?
+
+    if [[ -n $resume && $mirrored == 0 ]]; then
+        pkill -x Moonlight; pause 3
+        stream $resume
+        expect=${resume%x*}
+        size=$resume
+        say "resuming at $resume"
+        if wait_for_display $resume; then
+            show_codes $resume
+            measure_part $seconds; mirrored=$?
+        else
+            say "the display did not reach $resume"
+        fi
+    fi
+
+    cleanup
+    trap - INT TERM
+    wait
+    # Each stream's log, the last one's stats in the summary.
+    grep -o '/tmp/Moonlight-[0-9]*\.log' $out/moonlight.out | while read -r log; do cat $log; done > $out/moonlight.log
+    summarize $out $started | tee $out/summary.txt
+}
+
+summarize() {
+    local out=$1
+    print "== DAM (every 5 s)"
+    grep -E "stats: " $out/dam.log | sed -E 's/.*stats: //' | awk '
+        { fps += $1; keys += substr($3, 2); mbit += $5; req += $7; n++ ; print "  " $0 }
+        END { if (n) printf "  average %.1f fps, %.1f Mbit/s; %d keyframes, %d keyframe requests in %d s\n", fps / n, mbit / n, keys, req, n * 5 }'
+    grep -E "encoder [0-9]|resize|place:|remove|error|failed" $out/dam.log | cut -c12-23,50-200 | sed 's/^/  /'
+    print "== Moonlight (last session)"
+    awk '/^Global video stats/ { block = ""; keep = 1 } keep { block = block "  " $0 "\n" } /Average rendering time/ { keep = 0 } END { printf "%s", block }' $out/moonlight.log 2>/dev/null
+    print "== Delay of the picture in Moonlight's window behind the main display"
+    for f in $out/latency-*.txt(N); do print "  part ${${f:t:r}#latency-}:"; grep -E "lags|no frame|frames," $f | sed 's/^ */    /'; done
+    print "== Displays"
+    sed 's/^/  /' $out/displays.log | cut -c1-200
+}
+
+case ${1:-} in
+    pair) shift; cmd_pair "$@" ;;
+    run) shift; cmd_run "$@" ;;
+    lowlatency) shift; cmd_lowlatency "$@" ;;
+    install) shift; cmd_install "$@" ;;
+    summary) shift; summarize "$@" ;;
+    *) sed -n '3,30p' $0 | sed -E 's/^# ?//'; exit 2 ;;
+esac
