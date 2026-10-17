@@ -205,7 +205,7 @@ final class SettingsWindowController: NSWindowController {
                 recorderRotation, reset: #selector(resetRotationToDefault),
                 help: "Turns the display under the pointer, where macOS allows it, or a " +
                       "streaming display, whose streams keep their shape.")]),
-        ], leadingShare: 1.0 / 3, centered: true)
+        ], centered: true)
     }
 
     private func buildGeneralTab() -> NSView {
@@ -536,10 +536,9 @@ final class SettingsWindowController: NSWindowController {
     /// A scrolling tab holding one form. Each group is a label and the controls listed
     /// under it, one per row; the label sits on the group's first row.
     /// Rows line up on their text's baseline, or, `centered`, on their middle, for controls
-    /// with no text of their own to line up (the hotkey recorders). With `leadingShare`, the
-    /// form takes that share of the room beside it on its left, the rest on its right.
+    /// with no text of their own to line up (the hotkey recorders).
     private func formTab(_ groups: [(label: String, controls: [NSView])], leftAligned: Bool = false,
-                         leadingShare: CGFloat? = nil, centered: Bool = false) -> NSView {
+                         centered: Bool = false) -> NSView {
         let grid = NSGridView()
         grid.rowSpacing    = 6
         grid.columnSpacing = 8
@@ -570,25 +569,11 @@ final class SettingsWindowController: NSWindowController {
         let scrollView = makeScrollView()
         let stack = SettingsStack()
         stack.orientation = .vertical
-        stack.alignment   = leftAligned || leadingShare != nil ? .leading : .centerX
+        stack.alignment   = leftAligned ? .leading : .centerX
         stack.edgeInsets  = Self.formInsets
         stack.translatesAutoresizingMaskIntoConstraints = false
         scrollView.documentView = stack
-        if let share = leadingShare {
-            // Room before and after the form, in the share asked for, across the stack's width.
-            let before = NSView(), after = NSView()
-            let row = NSStackView(views: [before, grid, after])
-            row.orientation = .horizontal
-            row.spacing     = 0
-            stack.addArrangedSubview(row)
-            NSLayoutConstraint.activate([
-                before.widthAnchor.constraint(equalTo: after.widthAnchor, multiplier: share / (1 - share)),
-                row.widthAnchor.constraint(equalTo: stack.widthAnchor,
-                                           constant: -(Self.formInsets.left + Self.formInsets.right)),
-            ])
-        } else {
-            stack.addArrangedSubview(grid)
-        }
+        stack.addArrangedSubview(grid)
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor),
             stack.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor),
