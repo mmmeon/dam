@@ -245,7 +245,7 @@ private func debugMenuItem() -> NSMenuItem {
 }
 #endif
 
-/// Hosting for Moonlight, on or off, and the devices paired with it.
+/// Hosting for Moonlight, on or off, and the browser stream; the rest is in Settings.
 private func moonlightItem(host: MoonlightHost) -> NSMenuItem {
     let item = NSMenuItem(title: "Moonlight", action: nil, keyEquivalent: "")
     item.state = host.isRunning ? .on : .off
@@ -269,43 +269,15 @@ private func moonlightItem(host: MoonlightHost) -> NSMenuItem {
         copy.toolTip = "Copies \(host.watchURL.absoluteString). Players like mpv and VLC take the stream itself at " +
                        "\(host.watchURL.deletingLastPathComponent().absoluteString)stream.mp4."
         submenu.addItem(copy)
-        let quality = NSMenuItem(title: "Profile", action: nil, keyEquivalent: "")
-        let profiles = NSMenu()
-        for profile in StreamProfile.allCases {
-            let item = NSMenuItem(title: profile.title, action: #selector(AppDelegate.setStreamProfile(_:)), keyEquivalent: "")
-            item.representedObject = profile.rawValue
-            item.state = profile == StreamProfile.preferred ? .on : .off
-            item.toolTip = profile.summary
-            profiles.addItem(item)
-        }
-        quality.submenu = profiles
-        submenu.addItem(quality)
         let watching = host.webStream.viewerCount
         if watching > 0 { submenu.addItem(disabledItem(watching == 1 ? "1 watching" : "\(watching) watching")) }
     }
-    if !host.clients.isEmpty {
-        submenu.addItem(.separator())
-        for client in host.clients {
-            let device = NSMenuItem(title: client.name, action: nil, keyEquivalent: "")
-            let options = NSMenu()
-            let lowLatency = NSMenuItem(title: "Low-Latency Encoding",
-                                        action: #selector(AppDelegate.toggleMoonlightLowLatency(_:)),
-                                        keyEquivalent: "")
-            lowLatency.state = client.lowLatency ? .on : .off
-            lowLatency.toolTip = "Sends each frame the moment it is encoded, about a frame sooner. " +
-                                 "Takes effect from the next stream."
-            lowLatency.representedObject = client
-            options.addItem(lowLatency)
-            options.addItem(.separator())
-            let forget = NSMenuItem(title: "Forget \(client.name)",
-                                    action: #selector(AppDelegate.forgetMoonlightClient(_:)),
-                                    keyEquivalent: "")
-            forget.representedObject = client
-            options.addItem(forget)
-            device.submenu = options
-            submenu.addItem(device)
-        }
-    }
+    submenu.addItem(.separator())
+    let settings = NSMenuItem(title: "Moonlight Settings…",
+                              action: #selector(AppDelegate.openMoonlightSettings(_:)),
+                              keyEquivalent: "")
+    settings.toolTip = "Pairing, the paired devices, and how streams are made."
+    submenu.addItem(settings)
     item.submenu = submenu
     return item
 }

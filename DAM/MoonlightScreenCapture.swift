@@ -62,6 +62,8 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     /// capture sound too.
     var audio: ((CMSampleBuffer) -> Void)?
     var audioQueue = DispatchQueue(label: "\(AppIdentity.bundleID).moonlight.capture.audio", qos: .userInteractive)
+    /// Whether frames show the pointer; set before `start`.
+    var showsCursor = true
     /// Called when capture stops on its own, as when the display goes away.
     var onStop: ((Error) -> Void)?
 
@@ -169,7 +171,7 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         // and the one being encoded); with only that many, ScreenCaptureKit has nothing to
         // draw into and skips frames.
         configuration.queueDepth = 6
-        configuration.showsCursor = true
+        configuration.showsCursor = showsCursor
         if audio != nil {
             configuration.capturesAudio = true
             configuration.sampleRate = MoonlightAudioEncoder.sampleRate

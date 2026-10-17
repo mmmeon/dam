@@ -183,6 +183,17 @@ final class MoonlightHostTests: XCTestCase {
         XCTAssertTrue(host.clients.isEmpty)
     }
 
+    func testTurnsAwayNewDevicesWithoutAskingWhenPairingIsOff() throws {
+        MoonlightHost.allowsPairing = false
+        defer { MoonlightHost.allowsPairing = true }
+        var asked = false
+        host.requestPIN = { _, answer in asked = true; answer("4821") }
+        startHost()
+        XCTAssertFalse(try pair(try Client.make(), pin: "4821"))
+        XCTAssertFalse(asked)
+        XCTAssertTrue(host.clients.isEmpty)
+    }
+
     func testTurnsAwayUnpairedDevicesOverHTTPS() throws {
         startHost()
         let xml = try get("/serverinfo", secure: true, identity: try Client.make().identity)

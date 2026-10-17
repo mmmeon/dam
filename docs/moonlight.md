@@ -18,8 +18,8 @@ The same HTTP port (47989) also serves displays to browsers and media players:
 - `/stream.mp4` is an endless fragmented MP4 that mpv, ffplay and VLC play as is.
 - `/apps.json` lists the displays.
 
-Three profiles (Interactive, Balanced, Viewing) set the defaults from the Moonlight
-menu. Each client can override profile, bitrate, frame rate and size in the query
+Three profiles (Interactive, Balanced, Viewing) set the defaults from Settings ›
+Moonlight. Each client can override profile, bitrate, frame rate and size in the query
 string, and turn on low-latency encoding with `lowlatency=1`.
 
 ## How it works
@@ -81,7 +81,7 @@ flowchart LR
   can't follow with the one reference frame Moonlight allows. The long-term frame is always
   the one just before, so DAM rewrites those slice headers into plain ones that decode to
   the same pictures (`H264OneReference.swift`). It is on for every paired device unless
-  turned off in the Moonlight menu; on the test Mac it cut the median delay from 84 to
+  turned off per device in Settings › Moonlight; on the test Mac it cut the median delay from 84 to
   56 ms. A browser stream asks for it with `lowlatency=1`, and the Viewing profile
   ignores it.
 - **Sending:** a separate thread paces packets at 6× the bitrate, between 60 and
@@ -106,8 +106,8 @@ flowchart LR
   the 10 s before, it goes back to the bitrate before them, and only ten or more losses a
   second cut it for the next 30 s. That is for random loss, which a lower bitrate does not
   lessen and fewer parity packets per frame make worse. The first 3 s of a stream, when
-  Moonlight asks for a keyframe and loses frames as it starts, count for nothing. The default
-  `MoonlightAdaptiveBitrate` set to false keeps the client's bitrate throughout.
+  Moonlight asks for a keyframe and loses frames as it starts, count for nothing. Turning off
+  "Adapt the bitrate to the network" in Settings › Moonlight keeps the client's bitrate throughout.
 
 ### Audio
 

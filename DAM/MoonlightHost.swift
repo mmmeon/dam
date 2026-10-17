@@ -68,11 +68,25 @@ final class MoonlightHost {
 
     private static let enabledKey = "\(AppIdentity.shortID).moonlight.enabled"
     private static let uniqueIDKey = "\(AppIdentity.shortID).moonlight.uniqueID"
+    private static let allowsPairingKey = "\(AppIdentity.shortID).moonlight.allowsPairing"
+    private static let isAdvertisedKey = "\(AppIdentity.shortID).moonlight.advertised"
 
     /// Whether the user turned hosting on; it starts with the app then.
     static var isEnabled: Bool {
         get { UserDefaults.dam.bool(forKey: enabledKey) }
         set { UserDefaults.dam.set(newValue, forKey: enabledKey) }
+    }
+
+    /// Whether a device not yet paired may ask to pair; when not, only paired devices connect.
+    static var allowsPairing: Bool {
+        get { UserDefaults.dam.object(forKey: allowsPairingKey) as? Bool ?? true }
+        set { UserDefaults.dam.set(newValue, forKey: allowsPairingKey) }
+    }
+
+    /// Whether Moonlight finds the host by itself over Bonjour; when not, it is added by address.
+    static var isAdvertised: Bool {
+        get { UserDefaults.dam.object(forKey: isAdvertisedKey) as? Bool ?? true }
+        set { UserDefaults.dam.set(newValue, forKey: isAdvertisedKey) }
     }
 
     private(set) var isRunning = false
@@ -126,6 +140,8 @@ final class MoonlightHost {
 
     private var identity: (key: SecKey, certificate: Data, secIdentity: SecIdentity)?
     private var listeners: [NWListener] = []
+    /// The listener Bonjour advertises, while running.
+    private var httpListener: NWListener?
     private var readyListeners: Set<ObjectIdentifier> = []
     /// Listeners of a stop still closing; the ports are theirs until they have.
     private var closingListeners = 0
@@ -159,7 +175,8 @@ final class MoonlightHost {
             // Each frame goes out the moment it is ready, not held for an acknowledgement.
             (http.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options)?.noDelay = true
             let httpListener = try NWListener(using: http, on: httpPort)
-            if advertises { httpListener.service = NWListener.Service(name: Self.hostName, type: Self.serviceType) }
+            httpListener.service = service
+            self.httpListener = httpListener
             let httpsListener = try NWListener(using: tlsParameters(identity: identity.secIdentity), on: httpsPort)
             let rtspListener = try NWListener(using: http, on: rtspPort)
             listeners = [httpListener, httpsListener, rtspListener]
@@ -228,6 +245,7 @@ final class MoonlightHost {
             listener.cancel()
         }
         listeners = []
+        httpListener = nil
         readyListeners = []
         webStream.stopAll()
         connections.values.forEach { $0.cancel() }
@@ -242,6 +260,16 @@ final class MoonlightHost {
         isRunning = false
         lastError = error
         onChange?()
+    }
+
+    /// What Bonjour advertises: the host, unless it is not to be.
+    private var service: NWListener.Service? {
+        advertises && Self.isAdvertised ? NWListener.Service(name: Self.hostName, type: Self.serviceType) : nil
+    }
+
+    /// Advertises the host, or stops, as `isAdvertised` now says; streams carry on.
+    func updateAdvertising() {
+        httpListener?.service = service
     }
 
     /// Unpairs `client`: it has to pair again to connect.
@@ -525,6 +553,11 @@ final class MoonlightHost {
         guard let identity else { throw MoonlightPairing.Failure.outOfOrder }
         guard waitingForPIN == nil else {
             return reply(Self.xml(status: 409, message: "Already pairing", fields: ["paired": "0"]), to: connection)
+        }
+        guard Self.allowsPairing else {
+            mlLog.debug("pairing refused: new devices may not pair")
+            return reply(Self.xml(status: 403, message: "\(AppIdentity.name) is not accepting new devices",
+                                  fields: ["paired": "0"]), to: connection)
         }
         guard let salt = query["salt"].flatMap({ MoonlightCrypto.data(hex: String($0.prefix(32))) }),
               let pem = query["clientcert"].flatMap(MoonlightCrypto.data(hex:)) else {
