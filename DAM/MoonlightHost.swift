@@ -22,8 +22,7 @@ struct MoonlightClient: Codable, Equatable {
     let name: String
     let certificate: Data
     let paired: Date
-    /// Whether its streams use low-latency rate control, which only Moonlight that decodes
-    /// with VideoToolbox (on an iPhone, iPad or Mac) plays cleanly; see MoonlightVideoEncoder.
+    /// Whether its streams use low-latency rate control; see MoonlightVideoEncoder.
     var lowLatency = false
 
     init(name: String, certificate: Data, paired: Date, lowLatency: Bool = false) {

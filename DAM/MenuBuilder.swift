@@ -293,8 +293,7 @@ private func moonlightItem(host: MoonlightHost) -> NSMenuItem {
                                         keyEquivalent: "")
             lowLatency.state = client.lowLatency ? .on : .off
             lowLatency.toolTip = "Sends each frame the moment it is encoded, about a frame sooner. " +
-                                 "For Moonlight on an iPhone, iPad or Mac only: Moonlight on Linux or Windows " +
-                                 "shows a broken picture with it. Takes effect from the next stream."
+                                 "Takes effect from the next stream."
             lowLatency.representedObject = client
             options.addItem(lowLatency)
             options.addItem(.separator())
