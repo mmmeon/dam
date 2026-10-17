@@ -88,8 +88,12 @@ flowchart LR
   skips a frame before encoding it.
 - **FEC:** each frame is split into up to four blocks, each with 20% Reed-Solomon parity
   (nanors-compatible), or more if the client asks for it.
-- **Still screen:** the last picture is resent every 0.5 s. Keyframes are limited to one
-  per 0.25 s.
+- **Still screen:** the last picture is resent every 0.5 s.
+- **Keyframe requests:** at most one keyframe per 0.25 s. A request is skipped while the
+  keyframe asked for is still to be sent, or when it arrives less than a round trip (at
+  most 0.3 s) after a keyframe went out. Moonlight asks again for every frame it loses
+  while it waits, so on a lossy link answering each request kept the stream in a run of
+  keyframes.
 
 ### Audio
 
