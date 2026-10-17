@@ -434,7 +434,7 @@ final class SettingsWindowController: NSWindowController {
         profile.toolTip = "The profile a browser or player gets unless its address asks for " +
                           "another. Hover over each for what it trades."
 
-        let devices: [NSView] = host.clients.map { client in
+        let devices: [[NSView]] = host.clients.map { client in
             let lowLatency = checkbox(title: "Low-latency encoding", isOn: client.lowLatency,
                                       help: "Sends each frame the moment it is encoded, about a frame " +
                                             "sooner. Takes effect from the next stream.",
@@ -446,17 +446,20 @@ final class SettingsWindowController: NSWindowController {
             forget.toolTip     = "Unpairs \(client.name): it has to pair again to connect."
             let name = rowLabel(client.name)
             name.toolTip = "Paired \(client.paired.formatted(date: .abbreviated, time: .shortened))"
-            let row = NSStackView(views: [name, lowLatency, forget])
-            row.orientation = .horizontal
-            row.spacing = 8
-            return row
+            return [name, lowLatency, forget]
         }
+        // A grid, so each device's controls line up whatever the length of its name.
+        let deviceGrid = BaselineRowGridView(views: devices)
+        deviceGrid.rowSpacing    = 6
+        deviceGrid.columnSpacing = 8
+        deviceGrid.rowAlignment  = .firstBaseline
 
         return formTab([
             ("Hosting:", hosting),
             ("Streams:", streams),
-            ("Browser Profile:", [profile]),
-            ("Paired Devices:", devices.isEmpty ? [placeholderLabel("None yet")] : devices),
+            // In a row of its own, so it keeps its width rather than take the column's.
+            ("Browser Profile:", [NSStackView(views: [profile])]),
+            ("Paired Devices:", [devices.isEmpty ? placeholderLabel("None yet") : deviceGrid]),
         ], leftAligned: true)
     }
 
