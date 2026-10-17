@@ -205,7 +205,7 @@ final class SettingsWindowController: NSWindowController {
                 recorderRotation, reset: #selector(resetRotationToDefault),
                 help: "Turns the display under the pointer, where macOS allows it, or a " +
                       "streaming display, whose streams keep their shape.")]),
-        ], leftAligned: true)
+        ], leftAligned: true, centered: true)
     }
 
     private func buildGeneralTab() -> NSView {
@@ -322,6 +322,10 @@ final class SettingsWindowController: NSWindowController {
                          self?.onRebuild?()
                      }))
         }
+        // The nickname fields line up, across the groups too: each name takes the longest's width.
+        let names = (sidecar + airPlay + displays).compactMap { ($0 as? NSStackView)?.arrangedSubviews.first }
+        let nameWidth = names.map(\.fittingSize.width).max() ?? 0
+        for name in names { name.widthAnchor.constraint(equalToConstant: nameWidth).isActive = true }
         return formTab([
             ("Audio Output:",       audio.isEmpty    ? [placeholderLabel("No output devices found")] : audio),
             ("AirPlay Displays:",   airPlay.isEmpty  ? [placeholderLabel("None discovered yet")] : airPlay),
@@ -457,8 +461,7 @@ final class SettingsWindowController: NSWindowController {
         return formTab([
             ("Hosting:", hosting),
             ("Streams:", streams),
-            // In a row of its own, so it keeps its width rather than take the column's.
-            ("Browser Profile:", [NSStackView(views: [profile])]),
+            ("Browser Profile:", [profile]),
             ("Paired Devices:", [devices.isEmpty ? placeholderLabel("None yet") : deviceGrid]),
         ], leftAligned: true)
     }
@@ -532,16 +535,23 @@ final class SettingsWindowController: NSWindowController {
 
     /// A scrolling tab holding one form. Each group is a label and the controls listed
     /// under it, one per row; the label sits on the group's first row.
-    private func formTab(_ groups: [(label: String, controls: [NSView])], leftAligned: Bool = false) -> NSView {
+    /// Rows line up on their text's baseline, or, `centered`, on their middle, for controls
+    /// with no text of their own to line up (the hotkey recorders).
+    private func formTab(_ groups: [(label: String, controls: [NSView])], leftAligned: Bool = false,
+                         centered: Bool = false) -> NSView {
         let grid = NSGridView()
         grid.rowSpacing    = 6
         grid.columnSpacing = 8
-        grid.rowAlignment  = .firstBaseline
+        grid.rowAlignment  = centered ? .none : .firstBaseline
         for (g, group) in groups.enumerated() {
             for (i, control) in group.controls.enumerated() {
                 let label = i == 0 ? formLabel(group.label) : NSGridCell.emptyContentView
-                let row = grid.addRow(with: [label, control])
+                // The grid stretches a cell's view to the column's width; wrapped, a pop-up or
+                // a grid keeps its own. The rest look the same stretched.
+                let keepsWidth = control is NSPopUpButton || control is NSGridView
+                let row = grid.addRow(with: [label, keepsWidth ? NaturalWidthView(control) : control])
                 row.cell(at: 1).xPlacement = .leading
+                if centered { row.yPlacement = .center }
                 if i == 0 && g > 0 { row.topPadding = 10 }
             }
         }
@@ -550,6 +560,11 @@ final class SettingsWindowController: NSWindowController {
         // Keep the grid at its natural width; stretched, its trailing-placed label column
         // would push the whole form to the right.
         grid.setContentHuggingPriority(.required, for: .horizontal)
+        // The grid has no width of its own to hug; this keeps it to its rows' widths, over
+        // the stack's pull to widen it (low) and under the grid's own fitting of its cells.
+        let narrowest = grid.widthAnchor.constraint(equalToConstant: 0)
+        narrowest.priority = NSLayoutConstraint.Priority(500)
+        narrowest.isActive = true
 
         let scrollView = makeScrollView()
         let stack = SettingsStack()
@@ -854,6 +869,37 @@ extension SettingsWindowController: NSToolbarDelegate {
         }
         return item
     }
+}
+
+// MARK: - NaturalWidthView
+
+/// Holds a view at its own width, at the leading edge, however wide it is made itself, and
+/// reports the view's baselines as its own so a row still lines up on them.
+private final class NaturalWidthView: NSView {
+    private let content: NSView
+
+    init(_ content: NSView) {
+        self.content = content
+        super.init(frame: .zero)
+        content.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(content)
+        NSLayoutConstraint.activate([
+            content.leadingAnchor.constraint(equalTo: leadingAnchor),
+            content.topAnchor.constraint(equalTo: topAnchor),
+            content.bottomAnchor.constraint(equalTo: bottomAnchor),
+            content.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
+        ])
+        // As narrow as the view, so the form keeps to its natural width; weaker than any
+        // view's hugging, so a stretched holder never stretches the view.
+        let hug = widthAnchor.constraint(equalTo: content.widthAnchor)
+        hug.priority = NSLayoutConstraint.Priority(NSLayoutConstraint.Priority.defaultLow.rawValue - 1)
+        hug.isActive = true
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    override var firstBaselineOffsetFromTop: CGFloat { content.firstBaselineOffsetFromTop }
+    override var lastBaselineOffsetFromBottom: CGFloat { content.lastBaselineOffsetFromBottom }
 }
 
 // MARK: - MoonlightState
