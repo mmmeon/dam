@@ -149,4 +149,204 @@ final class MoonlightProtocolTests: XCTestCase {
         XCTAssertEqual(throttle.request(at: 300), .now)
         XCTAssertEqual(throttle.request(at: 1000), .now)
     }
+
+    private let ms: UInt64 = 1_000_000
+
+    func testRequestsWhileTheKeyFrameIsOnItsWayAreCovered() {
+        var requests = MoonlightKeyFrameRequests()
+        XCTAssertEqual(requests.request(at: 0, roundTrip: 40 * ms), .now)
+        XCTAssertEqual(requests.request(at: 20 * ms, roundTrip: 40 * ms), .covered, "not yet sent")
+        requests.keyFrameSent(at: 30 * ms)
+        XCTAssertEqual(requests.request(at: 60 * ms, roundTrip: 40 * ms), .covered,
+                       "sent before the client could have had it")
+        // One sent after the client had the keyframe means it lost something since.
+        XCTAssertEqual(requests.request(at: 300 * ms, roundTrip: 40 * ms), .now)
+    }
+
+    func testAClientThatLostTheKeyFrameIsAnsweredAfterARoundTrip() {
+        var requests = MoonlightKeyFrameRequests()
+        XCTAssertEqual(requests.request(at: 0, roundTrip: 40 * ms), .now)
+        requests.keyFrameSent(at: 10 * ms)
+        XCTAssertEqual(requests.request(at: 70 * ms, roundTrip: 40 * ms), .later(180 * ms),
+                       "past the round trip; within the quarter second, so answered at its end")
+        XCTAssertEqual(requests.request(at: 250 * ms, roundTrip: 40 * ms), .now)
+    }
+
+    func testTheHostsOwnRequestsAreNotCoveredByAKeyFrameAlreadySent() {
+        var requests = MoonlightKeyFrameRequests()
+        XCTAssertEqual(requests.request(at: 0, roundTrip: 40 * ms), .now)
+        requests.keyFrameSent(at: 10 * ms)
+        XCTAssertEqual(requests.request(at: 20 * ms, roundTrip: nil), .later(230 * ms))
+    }
+
+    func testAKeyFrameNeverSentIsAskedForAgainAfterASecond() {
+        var requests = MoonlightKeyFrameRequests()
+        XCTAssertEqual(requests.request(at: 0, roundTrip: 40 * ms), .now)
+        XCTAssertEqual(requests.request(at: 900 * ms, roundTrip: 40 * ms), .covered)
+        XCTAssertEqual(requests.request(at: 1000 * ms, roundTrip: 40 * ms), .now)
+    }
+
+    func testALongRoundTripCoversNoMoreThanItsLimit() {
+        var requests = MoonlightKeyFrameRequests()
+        XCTAssertEqual(requests.request(at: 0, roundTrip: 500 * ms), .now)
+        requests.keyFrameSent(at: 0)
+        XCTAssertEqual(requests.request(at: 299 * ms, roundTrip: 500 * ms), .covered)
+        XCTAssertEqual(requests.request(at: 300 * ms, roundTrip: 500 * ms), .now)
+    }
+
+    // MARK: - Bitrate
+
+    func testFrameFecStatusReadsMoonlightsBigEndianReport() throws {
+        // frame 0x01020304; highest 9, contiguous 3, missing 2; 10 data, 3 parity; 7 and 2 received; 20%, block 0 of 1
+        let payload = Data([1, 2, 3, 4, 0, 9, 0, 3, 0, 2, 0, 10, 0, 3, 0, 7, 0, 2, 20, 0, 1])
+        let status = try XCTUnwrap(MoonlightFrameFecStatus(payload: payload))
+        XCTAssertEqual(status, MoonlightFrameFecStatus(frameIndex: 0x0102_0304, dataPackets: 10, parityPackets: 3,
+                                                       receivedData: 7, receivedParity: 2))
+        XCTAssertTrue(status.isLost, "9 packets came of the 10 the data needs")
+        XCTAssertNil(MoonlightFrameFecStatus(payload: payload.prefix(20)))
+    }
+
+    private func rebuilt() -> MoonlightFrameFecStatus {
+        MoonlightFrameFecStatus(frameIndex: 0, dataPackets: 10, parityPackets: 2, receivedData: 9, receivedParity: 2)
+    }
+
+    /// A second in which `count` frames came five packets short, as a queue overflowing leaves them.
+    private func lostInRuns(_ count: Int, _ governor: inout MoonlightBitrateGovernor) -> Int? {
+        for _ in 0..<count {
+            governor.frameStatus(MoonlightFrameFecStatus(frameIndex: 0, dataPackets: 10, parityPackets: 2,
+                                                         receivedData: 3, receivedParity: 2))
+        }
+        return governor.second()
+    }
+
+    /// A second in which `count` frames came a packet short, as random loss leaves them.
+    private func lostScattered(_ count: Int, _ governor: inout MoonlightBitrateGovernor) -> Int? {
+        for _ in 0..<count {
+            governor.frameStatus(MoonlightFrameFecStatus(frameIndex: 0, dataPackets: 10, parityPackets: 2,
+                                                         receivedData: 8, receivedParity: 1))
+        }
+        return governor.second()
+    }
+
+    /// A second in which the client asked for `count` keyframes.
+    private func lose(_ count: Int, _ governor: inout MoonlightBitrateGovernor) -> Int? {
+        for _ in 0..<count { governor.keyFrameRequested() }
+        return governor.second()
+    }
+
+    private func warmUp(_ governor: inout MoonlightBitrateGovernor) {
+        for _ in 0..<MoonlightBitrateGovernor.warmUpSeconds { XCTAssertNil(lose(12, &governor)) }
+    }
+
+    func testAFrameLostInARunIsFourOrMorePacketsShort() {
+        func status(_ received: Int) -> MoonlightFrameFecStatus {
+            MoonlightFrameFecStatus(frameIndex: 0, dataPackets: 20, parityPackets: 4, receivedData: received, receivedParity: 0)
+        }
+        XCTAssertFalse(status(20).isLost)
+        XCTAssertEqual(status(17).shortBy, 3)
+        XCTAssertFalse(status(17).isLostInARun)
+        XCTAssertTrue(status(16).isLostInARun)
+    }
+
+    func testFramesLostInRunsBringTheBitrateDownThenItWaits() {
+        var governor = MoonlightBitrateGovernor(kbps: 16000)
+        warmUp(&governor)
+        XCTAssertNil(lostInRuns(1, &governor), "one is not enough")
+        XCTAssertEqual(lostInRuns(2, &governor), 11200)
+        for _ in 0..<2 { XCTAssertNil(lostInRuns(2, &governor), "waits while what was sent at the old rate arrives") }
+        XCTAssertEqual(lostInRuns(2, &governor), 7840)
+    }
+
+    func testAfterAFrameLostInARunOtherLossesCutIt() {
+        var governor = MoonlightBitrateGovernor(kbps: 10000)
+        warmUp(&governor)
+        XCTAssertNil(lostInRuns(1, &governor))
+        XCTAssertEqual(lostScattered(2, &governor), 7000)
+    }
+
+    func testAFrameLostInARunCountsForTenSeconds() {
+        var governor = MoonlightBitrateGovernor(kbps: 10000)
+        warmUp(&governor)
+        XCTAssertNil(lostInRuns(1, &governor))
+        // No losses, though too many frames needing parity to raise it.
+        for _ in 0..<10 {
+            for _ in 0..<3 { governor.frameStatus(rebuilt()) }
+            XCTAssertNil(governor.second())
+        }
+        XCTAssertNil(lostScattered(2, &governor), "10 s after the frame lost in a run")
+    }
+
+    func testFramesLostAPacketShortOrKeyFrameRequestsAloneDoNotCutIt() {
+        var governor = MoonlightBitrateGovernor(kbps: 16000)
+        warmUp(&governor)
+        for _ in 0..<20 {
+            XCTAssertNil(lostScattered(5, &governor))
+            XCTAssertNil(lose(5, &governor))
+        }
+        XCTAssertEqual(governor.current, 16000)
+    }
+
+    func testTheFirstSecondsCountForNothing() {
+        var governor = MoonlightBitrateGovernor(kbps: 16000)
+        warmUp(&governor)
+        XCTAssertEqual(governor.current, 16000, "losses while Moonlight starts")
+        // Clean from here: a later cut is judged against these seconds alone.
+        for _ in 0..<10 { XCTAssertNil(lose(0, &governor)) }
+        XCTAssertEqual(lostInRuns(2, &governor), 11200)
+    }
+
+    func testHeavyLossHalvesTheBitrateDownToAQuarterOrTwoMegabits() {
+        var governor = MoonlightBitrateGovernor(kbps: 16000)
+        warmUp(&governor)
+        XCTAssertEqual(lose(12, &governor), 8000, "ten or more of any kind")
+        XCTAssertNil(lose(12, &governor))
+        XCTAssertNil(lose(12, &governor))
+        XCTAssertEqual(lostScattered(12, &governor), 4000)
+        XCTAssertNil(lose(12, &governor))
+        XCTAssertNil(lose(12, &governor))
+        XCTAssertNil(lose(12, &governor), "no lower than a quarter")
+        XCTAssertEqual(MoonlightBitrateGovernor(kbps: 6000).floor, 2000)
+        XCTAssertEqual(MoonlightBitrateGovernor(kbps: 1500).floor, 1500, "never above what the client asked for")
+    }
+
+    func testACutThatDoesNotLowerTheLossesIsUndone() {
+        var governor = MoonlightBitrateGovernor(kbps: 10000)
+        warmUp(&governor)
+        // A link losing about a frame a second whatever the bitrate.
+        for _ in 0..<10 { XCTAssertNil(lostScattered(1, &governor)) }
+        XCTAssertEqual(lostInRuns(2, &governor), 7000)
+        XCTAssertNil(lostScattered(1, &governor)); XCTAssertNil(lostScattered(1, &governor))
+        for _ in 0..<9 { XCTAssertNil(lostScattered(1, &governor)) }
+        XCTAssertEqual(lostScattered(1, &governor), 10000, "as many losses at 7000 as at 10000: back to 10000")
+        // Then frames lost in runs leave it alone for a while; heavy loss still cuts it.
+        for _ in 0..<5 { XCTAssertNil(lostInRuns(3, &governor)) }
+        XCTAssertEqual(lose(12, &governor), 5000)
+    }
+
+    func testCutsThatDoNotHelpAreUndoneEvenFromTheFloor() {
+        var governor = MoonlightBitrateGovernor(kbps: 8000)
+        warmUp(&governor)
+        var changes: [Int] = []
+        for _ in 0..<30 { if let kbps = lostInRuns(2, &governor) { changes.append(kbps) } }
+        XCTAssertEqual(changes, [5600, 3920, 2744, 2000, 8000], "down to the floor, then back once judged")
+    }
+
+    func testCleanSecondsBringTheBitrateBackUpToTheClients() {
+        var governor = MoonlightBitrateGovernor(kbps: 10000)
+        warmUp(&governor)
+        XCTAssertEqual(lostInRuns(2, &governor), 7000)
+        var changes: [Int] = []
+        for _ in 0..<40 { if let kbps = governor.second() { changes.append(kbps) } }
+        XCTAssertEqual(changes, [8050, 9257, 10000], "after the hold, every 5 clean seconds; at most the client's")
+    }
+
+    func testFramesNeedingMuchParityHoldTheBitrateUp() {
+        var governor = MoonlightBitrateGovernor(kbps: 10000)
+        warmUp(&governor)
+        XCTAssertEqual(lostInRuns(2, &governor), 7000)
+        for _ in 0..<20 {
+            for _ in 0..<3 { governor.frameStatus(rebuilt()) }
+            XCTAssertNil(governor.second())
+        }
+    }
 }
