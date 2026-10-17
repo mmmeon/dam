@@ -95,7 +95,7 @@ EOF
 cmd_lowlatency() {
     local want=${1:-} clients="$HOME/Library/Application Support/DAM/Moonlight/paired-clients.json"
     [[ $want == on || $want == off ]] || die "usage: streamtest lowlatency on|off"
-    state() { python3 -I -c 'import json,sys; c=[c for c in json.load(open(sys.argv[1])) if c["name"]==sys.argv[2]]; print("on" if c and c[0].get("lowLatency") else "off")' "$clients" $host }
+    state() { python3 -I -c 'import json,sys; c=[c for c in json.load(open(sys.argv[1])) if c["name"]==sys.argv[2]]; print("on" if c and c[0].get("lowLatencyEncoding", True) else "off")' "$clients" $host }
     [[ $(state) == $want ]] && { say "low-latency encoding is already $want for $host"; return }
     osascript > /dev/null <<EOF || die "could not reach DAM's menu"
 tell application "System Events" to tell process "DAM"
@@ -166,7 +166,10 @@ cmd_run() {
     cleanup() {
         [[ -n $codes_pid ]] && kill $codes_pid 2>/dev/null
         [[ -n $iina_title ]] && osascript -e 'tell application "IINA" to quit' >/dev/null 2>&1
-        $moonlight quit $host >/dev/null 2>&1
+        # Moonlight's quit can hang after DAM has answered it; the pkill below ends it.
+        $moonlight quit $host >/dev/null 2>&1 &
+        local quit_pid=$!
+        for i in {1..30}; do kill -0 $quit_pid 2>/dev/null || break; pause 0.5; done
         pause 6
         pkill -x Moonlight 2>/dev/null
         pause 2

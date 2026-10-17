@@ -64,7 +64,8 @@ connect to the host.
    OpenDisplay doesn't hit this because its receiver decodes with VideoToolbox. So it is
    now off by default, and can be turned on per paired device in the Moonlight menu, or
    with `lowlatency=1` for a browser stream. Since 2026-10-16 DAM rewrites the long-term
-   slices into plain ones (`H264OneReference.swift`), so FFmpeg plays the stream too.
+   slices into plain ones (`H264OneReference.swift`), so FFmpeg plays the stream too,
+   and since 2026-10-17 it is on by default for Moonlight devices.
    If the encoder refuses it, DAM falls back to the plain encoder, as OpenDisplay does.
 3. **Keep enforcing the display mode.** OpenDisplay saw macOS restore an old saved mode for
    a display's serial number seconds after creating it. So it re-checks the mode every

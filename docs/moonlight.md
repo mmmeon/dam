@@ -75,13 +75,14 @@ flowchart LR
   reordering, keyframes only on request).
 - **Nudge:** the encoder holds each frame until the next one arrives. So if no new frame
   follows within 1.25 frame times, DAM resubmits the last picture to flush it.
-- **Low-latency encoding (optional):** Apple's low-latency rate control returns each frame
+- **Low-latency encoding (default for Moonlight):** Apple's low-latency rate control returns each frame
   as soon as it is encoded, so no nudge is needed. On the Intel test Mac it marks frames
   long-term and predicts from them, which FFmpeg (Moonlight everywhere, mpv, ffplay, VLC)
   can't follow with the one reference frame Moonlight allows. The long-term frame is always
   the one just before, so DAM rewrites those slice headers into plain ones that decode to
-  the same pictures (`H264OneReference.swift`). Turn it on per paired device in the
-  Moonlight menu, or with `lowlatency=1` for a browser stream. The Viewing profile
+  the same pictures (`H264OneReference.swift`). It is on for every paired device unless
+  turned off in the Moonlight menu; on the test Mac it cut the median delay from 84 to
+  56 ms. A browser stream asks for it with `lowlatency=1`, and the Viewing profile
   ignores it.
 - **Sending:** a separate thread paces packets at 6× the bitrate, between 60 and
   400 Mbit/s. Encoded frames are never dropped. When the sender falls behind, capture

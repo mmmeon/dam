@@ -23,22 +23,28 @@ struct MoonlightClient: Codable, Equatable {
     let certificate: Data
     let paired: Date
     /// Whether its streams use low-latency rate control; see MoonlightVideoEncoder.
-    var lowLatency = false
+    var lowLatency = true
 
-    init(name: String, certificate: Data, paired: Date, lowLatency: Bool = false) {
+    init(name: String, certificate: Data, paired: Date, lowLatency: Bool = true) {
         self.name = name
         self.certificate = certificate
         self.paired = paired
         self.lowLatency = lowLatency
     }
 
-    // Devices paired before the setting came have none saved.
+    // Saved under a key of its own since low-latency became the default, so that devices
+    // saved with the old default (off) get it too; devices saved before either have none.
+    private enum CodingKeys: String, CodingKey {
+        case name, certificate, paired
+        case lowLatency = "lowLatencyEncoding"
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         name = try container.decode(String.self, forKey: .name)
         certificate = try container.decode(Data.self, forKey: .certificate)
         paired = try container.decode(Date.self, forKey: .paired)
-        lowLatency = try container.decodeIfPresent(Bool.self, forKey: .lowLatency) ?? false
+        lowLatency = try container.decodeIfPresent(Bool.self, forKey: .lowLatency) ?? true
     }
 }
 
@@ -418,7 +424,7 @@ final class MoonlightHost {
         let keyID = UInt32(bitPattern: request.query["rikeyid"].flatMap { Int32($0) } ?? 0)
         let appID = request.query["appid"].flatMap(Int.init) ?? launch?.appID ?? Self.newDisplayAppID
         let address = Self.address(connection.currentPath?.localEndpoint)
-        let lowLatency = clients.first { $0.certificate == certificate }?.lowLatency ?? false
+        let lowLatency = clients.first { $0.certificate == certificate }?.lowLatency ?? true
         let answer = { [weak self] (launch: MoonlightLaunch) in
             guard let self else { return }
             var launch = launch
