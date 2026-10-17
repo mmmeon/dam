@@ -61,6 +61,7 @@
 		292B82ED857C094FE67B1321 /* MoonlightProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86EAA97394CE979125862EBE /* MoonlightProtocol.swift */; };
 		73D3008B61C3C434EB9B5FAA /* MoonlightScreenCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38905ABA7904998AD23A9CDC /* MoonlightScreenCapture.swift */; };
 		B3179E05ECB1DAEEC490D1D6 /* MoonlightVideoEncoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = F90877A6A2E4EDCC6C0ECDBD /* MoonlightVideoEncoder.swift */; };
+		2C9CE688FB1E9FA0E028656C /* H264OneReference.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1159B5C56E5AEA19A1BF950 /* H264OneReference.swift */; };
 		CC100C012F8D60780090E796 /* ChoicePicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC100B012F8D60780090E796 /* ChoicePicker.swift */; };
 		CC100C022F8D60780090E796 /* MirrorPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC100B022F8D60780090E796 /* MirrorPicker.swift */; };
 		CC100C032F8D60780090E796 /* MainDisplayPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC100B032F8D60780090E796 /* MainDisplayPicker.swift */; };
@@ -82,6 +83,7 @@
 		358CF5FF29CD6C1A162D1005 /* MoonlightProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9CBD2E4642EC3C66CD4EA92 /* MoonlightProtocolTests.swift */; };
 		DAB2123AFCAFA563C55F10EA /* MoonlightScreenCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 257CBE83156D2C54B408C340 /* MoonlightScreenCaptureTests.swift */; };
 		580A6E0D6DE5B7F5E0FC5B7E /* MoonlightVideoEncoderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E478FDA4DCA68FE2F15F7231 /* MoonlightVideoEncoderTests.swift */; };
+		2127EBAB29D0AC27EB2E9065 /* H264OneReferenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA4BC78E149D0277EAA6B7E7 /* H264OneReferenceTests.swift */; };
 		DD100B0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift */; };
 		EE200B012F8D60780090E796 /* MenuBarIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE200A012F8D60780090E796 /* MenuBarIcon.swift */; };
 		EE200B022F8D607C0090E796 /* MenuBarIconTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE200A022F8D607C0090E796 /* MenuBarIconTests.swift */; };
@@ -159,6 +161,7 @@
 		86EAA97394CE979125862EBE /* MoonlightProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightProtocol.swift; sourceTree = "<group>"; };
 		38905ABA7904998AD23A9CDC /* MoonlightScreenCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightScreenCapture.swift; sourceTree = "<group>"; };
 		F90877A6A2E4EDCC6C0ECDBD /* MoonlightVideoEncoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightVideoEncoder.swift; sourceTree = "<group>"; };
+		A1159B5C56E5AEA19A1BF950 /* H264OneReference.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = H264OneReference.swift; sourceTree = "<group>"; };
 		CC100B012F8D60780090E796 /* ChoicePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChoicePicker.swift; sourceTree = "<group>"; };
 		CC100B022F8D60780090E796 /* MirrorPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirrorPicker.swift; sourceTree = "<group>"; };
 		CC100B032F8D60780090E796 /* MainDisplayPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainDisplayPicker.swift; sourceTree = "<group>"; };
@@ -180,6 +183,7 @@
 		F9CBD2E4642EC3C66CD4EA92 /* MoonlightProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightProtocolTests.swift; sourceTree = "<group>"; };
 		257CBE83156D2C54B408C340 /* MoonlightScreenCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightScreenCaptureTests.swift; sourceTree = "<group>"; };
 		E478FDA4DCA68FE2F15F7231 /* MoonlightVideoEncoderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightVideoEncoderTests.swift; sourceTree = "<group>"; };
+		FA4BC78E149D0277EAA6B7E7 /* H264OneReferenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = H264OneReferenceTests.swift; sourceTree = "<group>"; };
 		DD100A0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarDisplayTests.swift; sourceTree = "<group>"; };
 		EE200A012F8D60780090E796 /* MenuBarIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarIcon.swift; sourceTree = "<group>"; };
 		EE200A022F8D607C0090E796 /* MenuBarIconTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarIconTests.swift; sourceTree = "<group>"; };
@@ -280,6 +284,7 @@
 				86EAA97394CE979125862EBE /* MoonlightProtocol.swift */,
 				38905ABA7904998AD23A9CDC /* MoonlightScreenCapture.swift */,
 				F90877A6A2E4EDCC6C0ECDBD /* MoonlightVideoEncoder.swift */,
+				A1159B5C56E5AEA19A1BF950 /* H264OneReference.swift */,
 				A327655CF2C53297256286B4 /* WebStream.swift */,
 				EE0CD9E5791F871CE7094055 /* MP4Fragmenter.swift */,
 				CC000B012F8D60780090E796 /* HUD.swift */,
@@ -333,6 +338,7 @@
 				F9CBD2E4642EC3C66CD4EA92 /* MoonlightProtocolTests.swift */,
 				257CBE83156D2C54B408C340 /* MoonlightScreenCaptureTests.swift */,
 				E478FDA4DCA68FE2F15F7231 /* MoonlightVideoEncoderTests.swift */,
+				FA4BC78E149D0277EAA6B7E7 /* H264OneReferenceTests.swift */,
 				2056DD5F10F1AC3A231B9ACB /* WebStreamTests.swift */,
 				3BA07475618CF8DB04DE3FB9 /* MP4FragmenterTests.swift */,
 			);
@@ -501,6 +507,7 @@
 				292B82ED857C094FE67B1321 /* MoonlightProtocol.swift in Sources */,
 				73D3008B61C3C434EB9B5FAA /* MoonlightScreenCapture.swift in Sources */,
 				B3179E05ECB1DAEEC490D1D6 /* MoonlightVideoEncoder.swift in Sources */,
+				2C9CE688FB1E9FA0E028656C /* H264OneReference.swift in Sources */,
 				E6043C4BC52D9BAB1E864C77 /* WebStream.swift in Sources */,
 				66F9582C81ED74C1C1531F5A /* MP4Fragmenter.swift in Sources */,
 				CC000C012F8D60780090E796 /* HUD.swift in Sources */,
@@ -543,6 +550,7 @@
 				358CF5FF29CD6C1A162D1005 /* MoonlightProtocolTests.swift in Sources */,
 				DAB2123AFCAFA563C55F10EA /* MoonlightScreenCaptureTests.swift in Sources */,
 				580A6E0D6DE5B7F5E0FC5B7E /* MoonlightVideoEncoderTests.swift in Sources */,
+				2127EBAB29D0AC27EB2E9065 /* H264OneReferenceTests.swift in Sources */,
 				F6E46A746FC7A24D2BD7EE7D /* WebStreamTests.swift in Sources */,
 				3AFBEAD2E1BBF03AFA1A8BEC /* MP4FragmenterTests.swift in Sources */,
 			);

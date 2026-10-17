@@ -231,6 +231,64 @@ struct MoonlightKeyFrameThrottle {
     }
 }
 
+/// Moonlight's keyframe requests, less those a keyframe already on its way answers. While
+/// Moonlight waits for a keyframe it asks again for every frame it loses, and those requests
+/// reach the host after the keyframe went out: each answered with another keyframe, a lossy
+/// link stays in a run of keyframes and never recovers. A request is covered while the
+/// keyframe asked for is still to be sent, and when it arrives less than a round trip after
+/// one finished going out, as the client sent it before it had that keyframe. A client that
+/// then lost the keyframe asks again with the next frame it gets, and is answered.
+struct MoonlightKeyFrameRequests {
+    enum Decision: Equatable {
+        case now
+        /// After this many nanoseconds, asking again.
+        case later(UInt64)
+        /// One is already due later.
+        case alreadyDue
+        /// A keyframe on its way answers it.
+        case covered
+    }
+
+    /// How long a keyframe asked for is waited for before another may be: the encoder can
+    /// leave one out, and the screen be still for half a second.
+    static let patience: UInt64 = 1_000_000_000
+    /// The longest round trip a request is held to, so a stale estimate (ENet starts at
+    /// half a second) never holds off a client that lost the keyframe for long.
+    static let longestRoundTrip: UInt64 = 300_000_000
+
+    private var throttle: MoonlightKeyFrameThrottle
+    /// When the keyframe asked for was asked for, until one is sent.
+    private var asked: UInt64?
+    /// When the last keyframe finished going out.
+    private var sent: UInt64?
+
+    init(interval: UInt64 = 250_000_000) {
+        throttle = MoonlightKeyFrameThrottle(interval: interval)
+    }
+
+    /// A request at `now`; `roundTrip` is the client's in nanoseconds, nil for one of the host's
+    /// own (a frame it could not send), which no keyframe already sent answers.
+    mutating func request(at now: UInt64, roundTrip: UInt64?) -> Decision {
+        if let asked, now &- asked < Self.patience { return .covered }
+        if let roundTrip, let sent, now &- sent < min(roundTrip, Self.longestRoundTrip) { return .covered }
+        switch throttle.request(at: now) {
+        case .now:
+            asked = now
+            return .now
+        case .later(let wait):
+            return .later(wait)
+        case .alreadyDue:
+            return .alreadyDue
+        }
+    }
+
+    /// A keyframe finished going out at `now`, asked for or not.
+    mutating func keyFrameSent(at now: UInt64) {
+        asked = nil
+        sent = now
+    }
+}
+
 /// What Moonlight says of a frame's FEC block that needed parity: sent, as a Sunshine
 /// extension (control message 0x5502), for each it rebuilt from parity and each it could
 /// not. 21 bytes, big-endian.

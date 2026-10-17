@@ -62,8 +62,9 @@ connect to the host.
    long-term reference frames while its SPS allows only one. FFmpeg, which Moonlight
    decodes with on Linux and Windows, rejects those frames until the next keyframe.
    OpenDisplay doesn't hit this because its receiver decodes with VideoToolbox. So it is
-   now off by default, and can be turned on for players that decode with VideoToolbox:
-   per paired device in the Moonlight menu, or with `lowlatency=1` for a browser stream.
+   now off by default, and can be turned on per paired device in the Moonlight menu, or
+   with `lowlatency=1` for a browser stream. Since 2026-10-16 DAM rewrites the long-term
+   slices into plain ones (`H264OneReference.swift`), so FFmpeg plays the stream too.
    If the encoder refuses it, DAM falls back to the plain encoder, as OpenDisplay does.
 3. **Keep enforcing the display mode.** OpenDisplay saw macOS restore an old saved mode for
    a display's serial number seconds after creating it. So it re-checks the mode every

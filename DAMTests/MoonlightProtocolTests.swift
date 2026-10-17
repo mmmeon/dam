@@ -150,6 +150,50 @@ final class MoonlightProtocolTests: XCTestCase {
         XCTAssertEqual(throttle.request(at: 1000), .now)
     }
 
+    private let ms: UInt64 = 1_000_000
+
+    func testRequestsWhileTheKeyFrameIsOnItsWayAreCovered() {
+        var requests = MoonlightKeyFrameRequests()
+        XCTAssertEqual(requests.request(at: 0, roundTrip: 40 * ms), .now)
+        XCTAssertEqual(requests.request(at: 20 * ms, roundTrip: 40 * ms), .covered, "not yet sent")
+        requests.keyFrameSent(at: 30 * ms)
+        XCTAssertEqual(requests.request(at: 60 * ms, roundTrip: 40 * ms), .covered,
+                       "sent before the client could have had it")
+        // One sent after the client had the keyframe means it lost something since.
+        XCTAssertEqual(requests.request(at: 300 * ms, roundTrip: 40 * ms), .now)
+    }
+
+    func testAClientThatLostTheKeyFrameIsAnsweredAfterARoundTrip() {
+        var requests = MoonlightKeyFrameRequests()
+        XCTAssertEqual(requests.request(at: 0, roundTrip: 40 * ms), .now)
+        requests.keyFrameSent(at: 10 * ms)
+        XCTAssertEqual(requests.request(at: 70 * ms, roundTrip: 40 * ms), .later(180 * ms),
+                       "past the round trip; within the quarter second, so answered at its end")
+        XCTAssertEqual(requests.request(at: 250 * ms, roundTrip: 40 * ms), .now)
+    }
+
+    func testTheHostsOwnRequestsAreNotCoveredByAKeyFrameAlreadySent() {
+        var requests = MoonlightKeyFrameRequests()
+        XCTAssertEqual(requests.request(at: 0, roundTrip: 40 * ms), .now)
+        requests.keyFrameSent(at: 10 * ms)
+        XCTAssertEqual(requests.request(at: 20 * ms, roundTrip: nil), .later(230 * ms))
+    }
+
+    func testAKeyFrameNeverSentIsAskedForAgainAfterASecond() {
+        var requests = MoonlightKeyFrameRequests()
+        XCTAssertEqual(requests.request(at: 0, roundTrip: 40 * ms), .now)
+        XCTAssertEqual(requests.request(at: 900 * ms, roundTrip: 40 * ms), .covered)
+        XCTAssertEqual(requests.request(at: 1000 * ms, roundTrip: 40 * ms), .now)
+    }
+
+    func testALongRoundTripCoversNoMoreThanItsLimit() {
+        var requests = MoonlightKeyFrameRequests()
+        XCTAssertEqual(requests.request(at: 0, roundTrip: 500 * ms), .now)
+        requests.keyFrameSent(at: 0)
+        XCTAssertEqual(requests.request(at: 299 * ms, roundTrip: 500 * ms), .covered)
+        XCTAssertEqual(requests.request(at: 300 * ms, roundTrip: 500 * ms), .now)
+    }
+
     // MARK: - Bitrate
 
     func testFrameFecStatusReadsMoonlightsBigEndianReport() throws {
