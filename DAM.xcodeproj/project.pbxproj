@@ -68,6 +68,7 @@
 		CC100C022F8D60780090E796 /* MirrorPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC100B022F8D60780090E796 /* MirrorPicker.swift */; };
 		CC100C032F8D60780090E796 /* MainDisplayPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC100B032F8D60780090E796 /* MainDisplayPicker.swift */; };
 		CC100C042F8D60780090E796 /* ResolutionPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC100B042F8D60780090E796 /* ResolutionPicker.swift */; };
+		EE200C052F8D60790090E796 /* RotatedPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE200B052F8D60790090E796 /* RotatedPresentation.swift */; };
 		EE200C032F8D60790090E796 /* RotationPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE200B032F8D60790090E796 /* RotationPicker.swift */; };
 		EE200C022F8D60790090E796 /* VideoManager+Rotation.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE200B022F8D60790090E796 /* VideoManager+Rotation.swift */; };
 		EE200C012F8D60790090E796 /* DisplayRotation.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE200B012F8D60790090E796 /* DisplayRotation.swift */; };
@@ -174,6 +175,7 @@
 		CC100B022F8D60780090E796 /* MirrorPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirrorPicker.swift; sourceTree = "<group>"; };
 		CC100B032F8D60780090E796 /* MainDisplayPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainDisplayPicker.swift; sourceTree = "<group>"; };
 		CC100B042F8D60780090E796 /* ResolutionPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResolutionPicker.swift; sourceTree = "<group>"; };
+		EE200B052F8D60790090E796 /* RotatedPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RotatedPresentation.swift; sourceTree = "<group>"; };
 		EE200B032F8D60790090E796 /* RotationPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "RotationPicker.swift"; sourceTree = "<group>"; };
 		EE200B022F8D60790090E796 /* VideoManager+Rotation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "VideoManager+Rotation.swift"; sourceTree = "<group>"; };
 		EE200B012F8D60790090E796 /* DisplayRotation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DisplayRotation.swift"; sourceTree = "<group>"; };
@@ -285,6 +287,7 @@
 				CC100B022F8D60780090E796 /* MirrorPicker.swift */,
 				CC100B032F8D60780090E796 /* MainDisplayPicker.swift */,
 				CC100B042F8D60780090E796 /* ResolutionPicker.swift */,
+				EE200B052F8D60790090E796 /* RotatedPresentation.swift */,
 				EE200B032F8D60790090E796 /* RotationPicker.swift */,
 				EE200B022F8D60790090E796 /* VideoManager+Rotation.swift */,
 				EE200B012F8D60790090E796 /* DisplayRotation.swift */,
@@ -507,6 +510,7 @@
 				CC100C022F8D60780090E796 /* MirrorPicker.swift in Sources */,
 				CC100C032F8D60780090E796 /* MainDisplayPicker.swift in Sources */,
 				CC100C042F8D60780090E796 /* ResolutionPicker.swift in Sources */,
+				EE200C052F8D60790090E796 /* RotatedPresentation.swift in Sources */,
 				EE200C032F8D60790090E796 /* RotationPicker.swift in Sources */,
 				EE200C022F8D60790090E796 /* VideoManager+Rotation.swift in Sources */,
 				EE200C012F8D60790090E796 /* DisplayRotation.swift in Sources */,

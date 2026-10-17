@@ -29,6 +29,7 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     private let width: Int
     private let height: Int
     private let fps: Int
+    private let pixelFormat: OSType
     private let frame: (CVPixelBuffer, CMTime) -> Void
     private let queue = DispatchQueue(label: "\(AppIdentity.bundleID).moonlight.capture", qos: .userInteractive)
     private var stream: SCStream?
@@ -64,13 +65,16 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     /// Called when capture stops on its own, as when the display goes away.
     var onStop: ((Error) -> Void)?
 
-    /// `frame` is called on the capture thread with each frame whose picture changed.
+    /// `frame` is called on the capture thread with each frame whose picture changed, in
+    /// `pixelFormat`: the encoder's 4:2:0 unless asked for another, such as BGRA to show.
     init(displayID: CGDirectDisplayID, width: Int, height: Int, fps: Int,
+         pixelFormat: OSType = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
          frame: @escaping (CVPixelBuffer, CMTime) -> Void) {
         self.displayID = displayID
         self.width = width
         self.height = height
         self.fps = fps
+        self.pixelFormat = pixelFormat
         self.frame = frame
     }
 
@@ -160,7 +164,7 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         (configuration.width, configuration.height) = rotation.inverse.size(width: width, height: height)
         configuration.minimumFrameInterval = Self.minimumFrameInterval(
             fps: fps, refreshRate: CGDisplayCopyDisplayMode(displayID)?.refreshRate ?? 0)
-        configuration.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+        configuration.pixelFormat = pixelFormat
         // The stream holds up to three frames at once (the last picture, the encoder's slot
         // and the one being encoded); with only that many, ScreenCaptureKit has nothing to
         // draw into and skips frames.
@@ -203,7 +207,8 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     /// On `queue`.
     private func setRotation(_ rotation: DisplayRotation) {
         self.rotation = rotation
-        rotator = rotation == .standard ? nil : FrameRotator(rotation: rotation, width: width, height: height)
+        rotator = rotation == .standard ? nil : FrameRotator(rotation: rotation, width: width, height: height,
+                                                                    pixelFormat: pixelFormat)
         if rotation != .standard, rotator == nil { scLog.error("could not turn frames by \(rotation.rawValue)") }
     }
 
@@ -257,7 +262,8 @@ final class FrameRotator {
     private var pool: CVPixelBufferPool?
 
     /// Frames come in on their side for a quarter turn and leave `width` × `height`.
-    init?(rotation: DisplayRotation, width: Int, height: Int) {
+    init?(rotation: DisplayRotation, width: Int, height: Int,
+          pixelFormat: OSType = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange) {
         var session: VTPixelRotationSession?
         guard VTPixelRotationSessionCreate(nil, &session) == noErr,
               let session else { return nil }
@@ -271,7 +277,7 @@ final class FrameRotator {
         VTSessionSetProperty(session, key: kVTPixelRotationPropertyKey_Rotation, value: angle)
         self.session = session
         let attributes: [CFString: Any] = [
-            kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+            kCVPixelBufferPixelFormatTypeKey: pixelFormat,
             kCVPixelBufferWidthKey: width,
             kCVPixelBufferHeightKey: height,
             kCVPixelBufferIOSurfacePropertiesKey: [:] as [CFString: Any]

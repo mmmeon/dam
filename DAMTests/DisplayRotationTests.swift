@@ -153,6 +153,22 @@ final class DisplayRotationTests: XCTestCase {
         XCTAssertLessThan(luma[30 * stride + 62], 50, "bottom right is dark")
     }
 
+    // MARK: - Shown through a stand-in
+
+    func testPointerLeavesTheCoveredScreenByItsNearestEdge() {
+        let covered = CGRect(x: 1080, y: 0, width: 1920, height: 1080)
+        XCTAssertEqual(PointerFence.nearestOutside(CGPoint(x: 1085, y: 500), of: covered), CGPoint(x: 1079, y: 500))
+        XCTAssertEqual(PointerFence.nearestOutside(CGPoint(x: 2990, y: 500), of: covered), CGPoint(x: 3001, y: 500))
+        XCTAssertEqual(PointerFence.nearestOutside(CGPoint(x: 2000, y: 1070), of: covered), CGPoint(x: 2000, y: 1081))
+    }
+
+    func testStandInComesUpAtTheScreensSize() {
+        let presentation = RotatedPresentation(name: "tv", screenID: 1, rotation: .quarter, width: 1920, height: 1080, fps: 60)
+        XCTAssertEqual(presentation.standInMode, .init(width: 1920, height: 1080, refreshRate: 60))
+        // The stand-in turns it on its side when it is made.
+        XCTAssertEqual(presentation.standInMode.rotated(.quarter), .init(width: 1080, height: 1920, refreshRate: 60))
+    }
+
     // MARK: - Browser streams
 
     func testPortraitViewerAsksForAPortraitDisplay() {

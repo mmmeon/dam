@@ -185,7 +185,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func rebuild() {
-        moonlightHost.apps = videoManager.streamingDisplays.compactMap { streaming in
+        moonlightHost.apps = videoManager.streamingDisplays.filter { $0.standsInFor == nil }.compactMap { streaming in
             videoManager.connectedDisplays.first { $0.cgDisplayID == streaming.id }
                 .map { MoonlightApp(id: streaming.index + 1, title: $0.label, displayID: streaming.id) }
         }
