@@ -95,7 +95,7 @@ EOF
 cmd_lowlatency() {
     local want=${1:-} clients="$HOME/Library/Application Support/DAM/Moonlight/paired-clients.json"
     [[ $want == on || $want == off ]] || die "usage: streamtest lowlatency on|off"
-    state() { python3 -I -c 'import json,sys; c=[c for c in json.load(open(sys.argv[1])) if c["name"]==sys.argv[2]]; print("on" if c and c[0].get("lowLatency") else "off")' "$clients" $host }
+    state() { python3 -I -c 'import json,sys; c=[c for c in json.load(open(sys.argv[1])) if c["name"]==sys.argv[2]]; print("on" if c and c[0].get("lowLatencyEncoding", True) else "off")' "$clients" $host }
     [[ $(state) == $want ]] && { say "low-latency encoding is already $want for $host"; return }
     osascript > /dev/null <<EOF || die "could not reach DAM's menu"
 tell application "System Events" to tell process "DAM"
