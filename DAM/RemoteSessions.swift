@@ -48,6 +48,9 @@ struct SessionProfile: Codable, Equatable {
     }
 
     var enabled = true
+    /// Whether DAM watches for the app's sessions itself (see SessionDetectors.swift), for
+    /// an app that can't start them through the command line.
+    var watch = false
     var display: DisplayChoice = .create
     /// The size to make the display, in pixels; nil for the client's when the app says it,
     /// else 1920 × 1080.
@@ -65,6 +68,7 @@ struct SessionProfile: Codable, Equatable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        watch = try c.decodeIfPresent(Bool.self, forKey: .watch) ?? false
         display = try c.decodeIfPresent(DisplayChoice.self, forKey: .display) ?? .create
         width = try c.decodeIfPresent(Int.self, forKey: .width)
         height = try c.decodeIfPresent(Int.self, forKey: .height)

@@ -127,6 +127,15 @@ enum Spoken {
         String(localized: "Removing \(label)", comment: "Removing a streaming display")
     }
 
+    /// `name` is the app's, e.g. "RustDesk".
+    static func remoteSessionStarted(_ name: String) -> String {
+        String(localized: "\(name) session started", comment: "Another app's remote session started; the value is the app")
+    }
+
+    static func remoteSessionEnded(_ name: String) -> String {
+        String(localized: "\(name) session ended", comment: "Another app's remote session ended; the value is the app")
+    }
+
     static let moonlightCanConnect = String(localized: "Moonlight can connect", comment: "Moonlight hosting turned on")
     static let moonlightCanNoLongerConnect = String(localized: "Moonlight can no longer connect", comment: "Moonlight hosting turned off")
     static let moonlightCouldNotStart = String(localized: "Moonlight could not start", comment: "Moonlight hosting failed with no reason")

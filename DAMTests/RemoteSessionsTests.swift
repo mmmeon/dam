@@ -370,4 +370,138 @@ final class RemoteSessionsTests: XCTestCase {
     func testNotRunningGivesNoAnswer() {
         XCTAssertNil(ControlCLI.send(ControlRequest(command: "status"), to: "/tmp/dam-nobody-\(UUID().uuidString.prefix(8)).sock"))
     }
+
+    // MARK: - Detectors
+
+    func testRustDeskLines() {
+        // As RustDesk 1.5.0 writes them on this Mac.
+        XCTAssertEqual(SessionLogLines.rustDesk("[2026-10-16 13:42:11.570016 -04:00] DEBUG [src/server/connection.rs:1498] #365 Connection opened from 10.10.1.123:40381."),
+                       .opened(key: "365", client: "10.10.1.123"))
+        XCTAssertEqual(SessionLogLines.rustDesk("[2026-10-16 13:45:39.337551 -04:00] INFO [src/server/connection.rs:5249] #365 Connection closed: Peer close"),
+                       .closed(key: "365"))
+        XCTAssertNil(SessionLogLines.rustDesk("[2026-10-16 13:45:39.337681 -04:00] INFO [src/server/connection.rs:1237] #365 connection loop exited"))
+        XCTAssertNil(SessionLogLines.rustDesk("[2026-10-16 13:42:12.553353 -04:00] INFO [src/common.rs:2213] Connection secured"))
+    }
+
+    func testParsecLines() {
+        XCTAssertEqual(SessionLogLines.parsec("[I 2026-10-18 12:00:00] friend#1234 connected."),
+                       .opened(key: "friend#1234", client: "friend"))
+        XCTAssertEqual(SessionLogLines.parsec("[I 2026-10-18 12:30:00] friend#1234 disconnected."),
+                       .closed(key: "friend#1234"))
+        XCTAssertNil(SessionLogLines.parsec("1 guest connected"))
+    }
+
+    func testLogDetectorPairsOpensAndCloses() {
+        let detector = LogSessionDetector(app: "rustdesk", url: URL(fileURLWithPath: "/nonexistent"),
+                                          parse: SessionLogLines.rustDesk)
+        var events: [SessionEvent] = []
+        detector.onEvent = { events.append($0) }
+        // Opened before DAM looked.
+        detector.handle("#1 Connection closed: Peer close")
+        detector.handle("#2 Connection opened from 10.0.0.2:1.")
+        detector.handle("#2 Connection opened from 10.0.0.2:1.")
+        detector.handle("#2 Connection closed: Peer close")
+        XCTAssertEqual(events, [.opened(key: "2", client: "10.0.0.2"), .closed(key: "2")])
+        detector.handle("#3 Connection opened from 10.0.0.3:1.")
+        detector.stop()
+        XCTAssertEqual(events.last, .closed(key: "3"))
+    }
+
+    func testProcessDetectorWaitsBeforeEnding() {
+        var running = true
+        let detector = ProcessSessionDetector(app: "screensharing", processName: "screensharingd", grace: 5,
+                                              isRunning: { _ in running })
+        var events: [SessionEvent] = []
+        detector.onEvent = { events.append($0) }
+        let t0 = Date()
+        detector.check(now: t0)
+        XCTAssertEqual(events, [.opened(key: "screensharingd", client: nil)])
+        running = false
+        detector.check(now: t0.addingTimeInterval(2))
+        detector.check(now: t0.addingTimeInterval(4))
+        XCTAssertEqual(events.count, 1)
+        // Back for the next connection before the grace ran out: still one session.
+        running = true
+        detector.check(now: t0.addingTimeInterval(6))
+        running = false
+        detector.check(now: t0.addingTimeInterval(8))
+        detector.check(now: t0.addingTimeInterval(13))
+        XCTAssertEqual(events, [.opened(key: "screensharingd", client: nil), .closed(key: "screensharingd")])
+    }
+
+    func testLogFollowerReadsNewLinesAcrossARotation() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("app.log")
+        try "old line\n".write(to: url, atomically: false, encoding: .utf8)
+        var lines: [String] = []
+        let follower = LogFollower(url: url) { lines.append($0) }
+        follower.start()
+        defer { follower.stop() }
+        let append = { (text: String) in
+            let handle = try FileHandle(forWritingTo: url)
+            try handle.seekToEnd()
+            try handle.write(contentsOf: Data(text.utf8))
+            try handle.close()
+        }
+        try append("first\nhalf")
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertEqual(lines, ["first"])
+        try append(" done\n")
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertEqual(lines, ["first", "half done"])
+        // Moved aside and a new one started, as RustDesk does on launch.
+        try FileManager.default.moveItem(at: url, to: dir.appendingPathComponent("app-1.log"))
+        try "second\n".write(to: url, atomically: false, encoding: .utf8)
+        RunLoop.main.run(until: Date().addingTimeInterval(2.5))
+        XCTAssertEqual(lines, ["first", "half done", "second"])
+    }
+
+    func testWatcherStartsAndEndsSessionsAsTheDetectorSays() {
+        final class FakeDetector: SessionDetector {
+            let app: String
+            var onEvent: ((SessionEvent) -> Void)?
+            var running = false
+            init(app: String) { self.app = app }
+            func start() { running = true }
+            func stop() { running = false }
+        }
+        let fake = FakeSessionDisplays()
+        var profile = SessionProfile()
+        profile.watch = true
+        let c = coordinator(fake, profiles: ["rustdesk": profile])
+        var made: [String: FakeDetector] = [:]
+        let watcher = SessionWatcher(coordinator: c) { app in
+            let d = FakeDetector(app: app)
+            made[app] = d
+            return d
+        }
+        var said: [String] = []
+        watcher.announce = { said.append($0) }
+        watcher.update()
+        XCTAssertEqual(Set(made.keys), ["rustdesk"])
+        XCTAssertEqual(made["rustdesk"]?.running, true)
+
+        let detector = made["rustdesk"]!
+        detector.onEvent?(.opened(key: "1", client: "10.0.0.2"))
+        detector.onEvent?(.opened(key: "2", client: "10.0.0.3"))
+        XCTAssertEqual(fake.made.count, 1)
+        XCTAssertEqual(fake.made.first?.identity.name, "RustDesk (10.0.0.2)")
+        detector.onEvent?(.closed(key: "1"))
+        XCTAssertTrue(fake.removed.isEmpty)
+        detector.onEvent?(.closed(key: "2"))
+        XCTAssertEqual(fake.removed, [100])
+        XCTAssertEqual(said.count, 2)
+
+        profile.watch = false
+        c.setProfile(profile, for: "rustdesk")
+        watcher.update()
+        XCTAssertEqual(detector.running, false)
+        XCTAssertTrue(watcher.detectors.isEmpty)
+    }
+
+    func testFindsRunningProcesses() {
+        XCTAssertTrue(RunningProcesses.names().contains("launchd"))
+    }
 }

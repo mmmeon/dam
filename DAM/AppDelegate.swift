@@ -31,6 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var sessionCoordinator: RemoteSessionCoordinator?
     private var controlHandler: ControlHandler?
     private var controlServer: ControlServer?
+    private var sessionWatcher: SessionWatcher?
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         // dam:// URLs; as an Apple event, so SwiftUI doesn't look for a window to open them in.
@@ -41,7 +42,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         // The displays go with the app; the sound output would stay switched.
+        sessionWatcher?.announce = nil
         sessionCoordinator?.endAll()
+        sessionWatcher?.stop()
         controlServer?.stop()
     }
 
@@ -82,7 +85,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.videoManager.resizeStreamingDisplay(
                 id: id, to: StreamingDisplayModes.forStream(width: width, height: height, fps: fps), completion: done)
         }
-        if MoonlightHost.isEnabled { moonlightHost.start() }
+        if MoonlightHost.isEnabled && !MoonlightHost.usesExternalSunshine { moonlightHost.start() }
         startRemoteSessions()
         AudioOutputPicker.shared.configure(audioManager: audioManager)
         MirrorPicker.shared.configure(videoManager: videoManager)
@@ -210,6 +213,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         sessionCoordinator = coordinator
         controlHandler = handler
+        let watcher = SessionWatcher(coordinator: coordinator)
+        watcher.announce = { SpeechSynthesizer.shared.announce($0) }
+        watcher.update()
+        sessionWatcher = watcher
+    }
+
+    /// Ends the remote session of the app in the item's `representedObject`.
+    @objc func endRemoteSession(_ sender: NSMenuItem) {
+        guard let app = sender.representedObject as? String else { return }
+        if case .success = sessionCoordinator?.end(app: app, all: true) {
+            SpeechSynthesizer.shared.announce(Spoken.remoteSessionEnded(RemoteSessionApp.name(of: app)))
+        }
+    }
+
+    /// Opens Settings on the Remote Sessions tab.
+    @objc func openSessionSettings(_ sender: Any?) {
+        openSettings(nil)
+        settingsWindow?.showSessions()
+    }
+
+    /// Hands Moonlight streams to an external Sunshine, turning DAM's host off so Sunshine
+    /// can have its ports, or back to DAM's host.
+    private func useExternalSunshine(_ external: Bool) {
+        guard external != MoonlightHost.usesExternalSunshine else { return }
+        MoonlightHost.usesExternalSunshine = external
+        if external {
+            if moonlightHost.isRunning { moonlightHost.stop() }
+        } else if MoonlightHost.isEnabled {
+            moonlightHost.start()
+        }
+        settingsWindow?.rebuildMoonlightTab()
+        rebuild()
     }
 
     @objc private func handleGetURL(_ event: NSAppleEventDescriptor, withReplyEvent reply: NSAppleEventDescriptor) {
@@ -257,6 +292,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             video: videoManager,
             sidecar: sidecarManager,
             moonlight: moonlightHost,
+            sessions: sessionCoordinator?.sessions.values.sorted { $0.started < $1.started } ?? [],
             onRefresh: { [weak self] in self?.refreshAll(nil) }
         )
         menu.removeAllItems()
@@ -537,7 +573,8 @@ extension AppDelegate: NSMenuDelegate {
             audioManager: audioManager,
             videoManager: videoManager,
             sidecarManager: sidecarManager,
-            moonlightHost: moonlightHost
+            moonlightHost: moonlightHost,
+            sessionCoordinator: sessionCoordinator
         )
         wc.onSave = { [weak self] pref in
             HotkeyPreference.current = pref
@@ -584,6 +621,8 @@ extension AppDelegate: NSMenuDelegate {
         wc.onRebuild = { [weak self] in self?.rebuild() }
         wc.onToggleMoonlight = { [weak self] in self?.toggleMoonlightHost(nil) }
         wc.onForgetMoonlightClient = { [weak self] in self?.forget($0) }
+        wc.onUseExternalSunshine = { [weak self] in self?.useExternalSunshine($0) }
+        wc.onSessionProfilesChanged = { [weak self] in self?.sessionWatcher?.update() }
         settingsWindow = wc
         wc.show()
     }
@@ -624,6 +663,11 @@ extension AppDelegate: NSMenuDelegate {
             SpeechSynthesizer.shared.announce(Spoken.moonlightCanNoLongerConnect)
         } else {
             MoonlightHost.isEnabled = true
+            // Turned on here, DAM hosts again in Sunshine's place.
+            if MoonlightHost.usesExternalSunshine {
+                MoonlightHost.usesExternalSunshine = false
+                settingsWindow?.rebuildMoonlightTab()
+            }
             moonlightHost.start()
             // Streaming needs it; asked now rather than when a stream starts.
             MoonlightScreenCapture.requestPermission()
