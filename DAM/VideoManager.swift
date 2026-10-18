@@ -663,6 +663,8 @@ final class VideoManager: ObservableObject {
                 let masterID = keptAnchor ?? id
                 self.anchorSetSlaves.subtract([id] + slaveIDs)
                 if keptAnchor != nil { self.anchorSetSlaves.formUnion(slaveIDs) }
+                // Or the layout kept after a streaming display came would undo it.
+                self.streamingSettle = self.streamingSettle.map { ($0.arrangement.mirroring(slaveIDs, on: masterID), $0.until) }
                 self.commitDisplayChange({ cfg in
                     for slave in slaveIDs { CGConfigureDisplayMirrorOfDisplay(cfg, slave, masterID) }
                 }, completion: finish)
@@ -680,6 +682,7 @@ final class VideoManager: ObservableObject {
         guard !toExtend.isEmpty else { completion?(.success(())); return }
         mirrorLog.debug("extend: freeing \(toExtend)")
         anchorSetSlaves.subtract(toExtend)
+        streamingSettle = streamingSettle.map { ($0.arrangement.mirroring(Array(toExtend), on: 0), $0.until) }
         commitDisplayChange({ cfg in
             for id in toExtend { CGConfigureDisplayMirrorOfDisplay(cfg, id, CGDirectDisplayID(0)) }
         }) { completion?($0) }
@@ -722,6 +725,8 @@ final class VideoManager: ObservableObject {
         }
         // Set before the commit: the change it causes is checked before it reports back.
         streamingDisplayIsMainByChoice = streamingDisplayIDs.contains(ownID)
+        // Or the layout kept after a streaming display came would undo it.
+        streamingSettle = streamingSettle.map { ($0.arrangement.makingMain(ownID), $0.until) }
         guard CGDisplayIsMain(mainID) == 0 else { rebase(); completion?(.success(())); return }
         let online  = DisplayArrangement.onlineDisplayIDs()
         let bounds  = Dictionary(uniqueKeysWithValues: online.map { ($0, CGDisplayBounds($0)) })

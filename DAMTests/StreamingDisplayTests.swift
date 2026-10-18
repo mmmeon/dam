@@ -120,6 +120,14 @@ final class StreamingDisplayTests: XCTestCase {
         XCTAssertEqual(without.mirrorMasters, [1: 0])
     }
 
+    func testArrangementKeepsAMirrorSetOrMainMadeMeanwhile() {
+        let arrangement = DisplayArrangement(origins: [1: .zero, 2: CGPoint(x: 1440, y: 0)],
+                                             mirrorMasters: [1: 0, 2: 0])
+        XCTAssertEqual(arrangement.mirroring([1], on: 2).mirrorMasters, [1: 2, 2: 0])
+        XCTAssertEqual(arrangement.mirroring([1], on: 2).mirroring([1], on: 0).mirrorMasters, [1: 0, 2: 0])
+        XCTAssertEqual(arrangement.makingMain(2).origins, [1: CGPoint(x: -1440, y: 0), 2: .zero])
+    }
+
     // MARK: - Main display
 
     func testHandsMainBackToTheDisplayThatHadIt() {

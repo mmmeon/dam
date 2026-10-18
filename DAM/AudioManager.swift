@@ -110,6 +110,24 @@ final class AudioManager: ObservableObject {
         setDefaultDeviceID(device.id)
     }
 
+    /// Makes the device with `uid` the default output; false when it isn't connected or
+    /// macOS didn't take it, as for a device that can't be the default.
+    @discardableResult
+    func setDefaultDevice(uid: String) -> Bool {
+        guard let id = Self.deviceID(forUID: uid) else { return false }
+        setDefaultDeviceID(id)
+        let current = fetchDefaultOutputDeviceID()
+        guard current == id else {
+            defaultDeviceID = current
+            lastDefaultID = current
+            return false
+        }
+        return true
+    }
+
+    /// The UID of the default output, or nil when there is none.
+    var defaultDeviceUID: String? { Self.uid(of: fetchDefaultOutputDeviceID()) }
+
     private func setDefaultDeviceID(_ id: AudioDeviceID) {
         var propAddr = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDefaultOutputDevice,

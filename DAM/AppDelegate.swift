@@ -27,6 +27,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var aboutWindow: NSWindow?
     private var arrangeWindow: ArrangeDisplaysWindowController?
     private var cancellables = Set<AnyCancellable>()
+    /// Remote sessions of other apps, and the socket and URLs that start and end them.
+    private var sessionCoordinator: RemoteSessionCoordinator?
+    private var controlHandler: ControlHandler?
+    private var controlServer: ControlServer?
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // dam:// URLs; as an Apple event, so SwiftUI doesn't look for a window to open them in.
+        NSAppleEventManager.shared().setEventHandler(
+            self, andSelector: #selector(handleGetURL(_:withReplyEvent:)),
+            forEventClass: AEEventClass(kInternetEventClass), andEventID: AEEventID(kAEGetURL))
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        // The displays go with the app; the sound output would stay switched.
+        sessionCoordinator?.endAll()
+        controlServer?.stop()
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Skip all initialisation when the process is a unit-test host.
@@ -66,6 +83,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 id: id, to: StreamingDisplayModes.forStream(width: width, height: height, fps: fps), completion: done)
         }
         if MoonlightHost.isEnabled { moonlightHost.start() }
+        startRemoteSessions()
         AudioOutputPicker.shared.configure(audioManager: audioManager)
         MirrorPicker.shared.configure(videoManager: videoManager)
         MainDisplayPicker.shared.configure(videoManager: videoManager)
@@ -177,6 +195,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - Setup
+
+    private func startRemoteSessions() {
+        let displays = LiveSessionDisplays(video: videoManager, audio: audioManager)
+        let coordinator = RemoteSessionCoordinator(displays: displays)
+        coordinator.onChange = { [weak self] in self?.rebuild() }
+        let handler = ControlHandler(coordinator: coordinator, video: videoManager, sessionDisplays: displays)
+        let server = ControlServer { request, reply in handler.handle(request, reply: reply) }
+        do {
+            try server.start()
+            controlServer = server
+        } catch {
+            NSLog("\(AppIdentity.name): not listening for commands: \(error)")
+        }
+        sessionCoordinator = coordinator
+        controlHandler = handler
+    }
+
+    @objc private func handleGetURL(_ event: NSAppleEventDescriptor, withReplyEvent reply: NSAppleEventDescriptor) {
+        guard let text = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue,
+              let url = URL(string: text), let request = ControlHandler.request(from: url) else { return }
+        // Before launch has finished, once it has.
+        DispatchQueue.main.async { [weak self] in
+            self?.controlHandler?.handle(request) { response in
+                if !response.ok { NSLog("\(AppIdentity.name): \(url.absoluteString): \(response.message ?? "failed")") }
+            }
+        }
+    }
 
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
