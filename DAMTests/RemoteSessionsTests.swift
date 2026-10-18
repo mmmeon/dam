@@ -36,6 +36,11 @@ private final class FakeSessionDisplays: SessionDisplays {
         completion(placeSucceeds)
     }
 
+    /// The displays kept lit while blacked out, or nil when not.
+    var blackoutKeeping: Set<CGDirectDisplayID>?
+
+    func blackOut(keeping: Set<CGDirectDisplayID>?) { blackoutKeeping = keeping }
+
     func setOutput(uid: String) -> Bool {
         guard connectedOutputs.contains(uid) else { return false }
         outputUID = uid
@@ -592,5 +597,34 @@ final class RemoteSessionsTests: XCTestCase {
         // TeamViewer_Desktop is longer than the 16 characters kept.
         XCTAssertFalse(RunningProcesses.isRunning("TeamViewer_Desktop_not_running_here"))
         XCTAssertTrue(RunningProcesses.isRunning("launchd"))
+    }
+
+    // MARK: - Blackout
+
+    func testBlackoutKeepsTheSessionsDisplayLitUntilItEnds() {
+        let fake = FakeSessionDisplays()
+        var profile = SessionProfile()
+        profile.blackout = true
+        let c = coordinator(fake, profiles: ["rustdesk": profile])
+        _ = start(c, SessionRequest(app: "rustdesk"))
+        XCTAssertEqual(fake.blackoutKeeping, [100])
+        XCTAssertTrue(c.isBlackedOut)
+        c.end(app: "rustdesk")
+        XCTAssertNil(fake.blackoutKeeping)
+    }
+
+    func testLiftingTheBlackoutKeepsTheSession() {
+        let fake = FakeSessionDisplays()
+        let c = coordinator(fake)
+        _ = start(c, SessionRequest(app: "sunshine", blackout: true))
+        c.liftBlackout()
+        XCTAssertNil(fake.blackoutKeeping)
+        XCTAssertFalse(c.isBlackedOut)
+        XCTAssertNotNil(c.sessions["sunshine"])
+    }
+
+    func testBlackoutOption() throws {
+        XCTAssertEqual(try ControlCLI.request(from: ["session", "start", "--app", "x", "--blackout", "yes"], environment: [:]).blackout, true)
+        XCTAssertThrowsError(try ControlCLI.request(from: ["session", "start", "--app", "x", "--blackout", "maybe"], environment: [:]))
     }
 }

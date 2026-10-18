@@ -31,6 +31,8 @@ struct ControlRequest: Codable, Equatable {
     var placement: String?
     /// A sound output's UID or name.
     var audio: String?
+    /// Whether to black out the Mac's own screens.
+    var blackout: Bool?
     /// For "session.end": every start of the session, not just one.
     var all: Bool?
 }
@@ -256,7 +258,7 @@ enum ControlCLI {
       DAM session start --app APP [--client NAME] [--client-id ID]
                         [--width W --height H] [--fps F]
                         [--display create|adopt|none] [--placement extend|main|mirror]
-                        [--audio OUTPUT]
+                        [--audio OUTPUT] [--blackout yes|no]
       DAM session end --app APP [--all]
       DAM display list
       DAM status
@@ -289,7 +291,8 @@ enum ControlCLI {
                 words.append(word)
             }
         }
-        let known: Set<String> = ["app", "client", "client-id", "width", "height", "fps", "display", "placement", "audio"]
+        let known: Set<String> = ["app", "client", "client-id", "width", "height", "fps", "display", "placement", "audio",
+                                  "blackout"]
         if let unknown = options.keys.first(where: { !known.contains($0) }) {
             throw ParseError.usage("Unknown option --\(unknown).")
         }
@@ -308,6 +311,11 @@ enum ControlCLI {
             if let placement = options["placement"], SessionProfile.Placement(rawValue: placement) == nil {
                 throw ParseError.usage("--placement is extend, main or mirror.")
             }
+            var blackout: Bool?
+            if let text = options["blackout"] {
+                guard ["yes", "no"].contains(text) else { throw ParseError.usage("--blackout is yes or no.") }
+                blackout = text == "yes"
+            }
             let client = options["client"] ?? environment["SUNSHINE_CLIENT_NAME"].flatMap { $0.isEmpty ? nil : $0 }
             let clientID = options["client-id"]
                 ?? [environment["APOLLO_CLIENT_UUID"], environment["SUNSHINE_CLIENT_CERT_UUID"]]
@@ -317,7 +325,7 @@ enum ControlCLI {
                                   height: try int("height", env: "SUNSHINE_CLIENT_HEIGHT"),
                                   fps: try int("fps", env: "SUNSHINE_CLIENT_FPS"),
                                   display: options["display"], placement: options["placement"],
-                                  audio: options["audio"])
+                                  audio: options["audio"], blackout: blackout)
         case ("session", "end"):
             guard let app = options["app"] else { throw ParseError.usage("session end needs --app.") }
             return ControlRequest(command: "session.end", app: app, all: flags.contains("all") ? true : nil)
@@ -433,7 +441,7 @@ final class ControlHandler {
                                          width: request.width, height: request.height, fps: request.fps,
                                          display: request.display.flatMap(SessionProfile.DisplayChoice.init(rawValue:)),
                                          placement: request.placement.flatMap(SessionProfile.Placement.init(rawValue:)),
-                                         audioOutputUID: audioUID)
+                                         audioOutputUID: audioUID, blackout: request.blackout)
             coordinator.begin(session) { result in
                 switch result {
                 case .success(let start):
@@ -485,6 +493,7 @@ final class ControlHandler {
                               width: query["width"].flatMap(Int.init), height: query["height"].flatMap(Int.init),
                               fps: query["fps"].flatMap(Int.init), display: query["display"],
                               placement: query["placement"], audio: query["audio"],
+                              blackout: query["blackout"].map { $0 == "1" || $0 == "yes" || $0 == "true" },
                               all: query["all"].map { $0 == "1" || $0 == "true" })
     }
 }

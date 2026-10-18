@@ -45,6 +45,7 @@
 		CC000C022F8D60780090E796 /* AudioOutputPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B022F8D60780090E796 /* AudioOutputPicker.swift */; };
 		CC000C302F8D60780090E796 /* ScreenMirroringPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B302F8D60780090E796 /* ScreenMirroringPanel.swift */; };
 		CC000C312F8D60780090E796 /* SidecarManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B312F8D60780090E796 /* SidecarManager.swift */; };
+		AB300C052F8D60790090E796 /* LocalBlackout.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB300B052F8D60790090E796 /* LocalBlackout.swift */; };
 		AB300C042F8D60790090E796 /* SessionDetectors.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB300B042F8D60790090E796 /* SessionDetectors.swift */; };
 		AB300C022F8D60790090E796 /* ControlSocket.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB300B022F8D60790090E796 /* ControlSocket.swift */; };
 		AB300C012F8D60790090E796 /* RemoteSessions.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB300B012F8D60790090E796 /* RemoteSessions.swift */; };
@@ -156,6 +157,7 @@
 		CC000B022F8D60780090E796 /* AudioOutputPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioOutputPicker.swift; sourceTree = "<group>"; };
 		CC000B302F8D60780090E796 /* ScreenMirroringPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenMirroringPanel.swift; sourceTree = "<group>"; };
 		CC000B312F8D60780090E796 /* SidecarManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarManager.swift; sourceTree = "<group>"; };
+		AB300B052F8D60790090E796 /* LocalBlackout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalBlackout.swift; sourceTree = "<group>"; };
 		AB300B042F8D60790090E796 /* SessionDetectors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionDetectors.swift; sourceTree = "<group>"; };
 		AB300B022F8D60790090E796 /* ControlSocket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlSocket.swift; sourceTree = "<group>"; };
 		AB300B012F8D60790090E796 /* RemoteSessions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteSessions.swift; sourceTree = "<group>"; };
@@ -301,6 +303,7 @@
 				EE200B012F8D60790090E796 /* DisplayRotation.swift */,
 				CC000B302F8D60780090E796 /* ScreenMirroringPanel.swift */,
 				CC000B312F8D60780090E796 /* SidecarManager.swift */,
+				AB300B052F8D60790090E796 /* LocalBlackout.swift */,
 				AB300B042F8D60790090E796 /* SessionDetectors.swift */,
 				AB300B022F8D60790090E796 /* ControlSocket.swift */,
 				AB300B012F8D60790090E796 /* RemoteSessions.swift */,
@@ -528,6 +531,7 @@
 				EE200C012F8D60790090E796 /* DisplayRotation.swift in Sources */,
 				CC000C302F8D60780090E796 /* ScreenMirroringPanel.swift in Sources */,
 				CC000C312F8D60780090E796 /* SidecarManager.swift in Sources */,
+				AB300C052F8D60790090E796 /* LocalBlackout.swift in Sources */,
 				AB300C042F8D60790090E796 /* SessionDetectors.swift in Sources */,
 				AB300C022F8D60790090E796 /* ControlSocket.swift in Sources */,
 				AB300C012F8D60790090E796 /* RemoteSessions.swift in Sources */,

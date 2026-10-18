@@ -9,6 +9,7 @@ func buildStatusMenu(audio: AudioManager,
                      sidecar: SidecarManager,
                      moonlight: MoonlightHost,
                      sessions: [RemoteSessionCoordinator.Session] = [],
+                     blackedOut: Bool = false,
                      onRefresh: @escaping () -> Void) -> NSMenu {
     let menu = NSMenu()
 
@@ -146,6 +147,12 @@ func buildStatusMenu(audio: AudioManager,
     menu.addItem(create)
     menu.addItem(moonlightItem(host: moonlight))
     for session in sessions { menu.addItem(remoteSessionItem(session)) }
+    if blackedOut {
+        let light = NSMenuItem(title: "Light This Mac's Screens", action: #selector(AppDelegate.liftBlackout(_:)),
+                               keyEquivalent: "")
+        light.toolTip = "Ends the blackout for this session; the next session blacks them out again."
+        menu.addItem(light)
+    }
 
     // — Connected Displays section — physical displays; Sidecar iPads and streaming
     // displays are listed above

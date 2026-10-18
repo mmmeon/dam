@@ -229,6 +229,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Lights the Mac's screens blacked out for a session.
+    @objc func liftBlackout(_ sender: Any?) {
+        sessionCoordinator?.liftBlackout()
+    }
+
     /// Opens Settings on the Remote Sessions tab.
     @objc func openSessionSettings(_ sender: Any?) {
         openSettings(nil)
@@ -295,6 +300,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             sidecar: sidecarManager,
             moonlight: moonlightHost,
             sessions: sessionCoordinator?.sessions.values.sorted { $0.started < $1.started } ?? [],
+            blackedOut: sessionCoordinator?.isBlackedOut ?? false,
             onRefresh: { [weak self] in self?.refreshAll(nil) }
         )
         menu.removeAllItems()

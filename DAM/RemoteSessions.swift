@@ -67,6 +67,8 @@ struct SessionProfile: Codable, Equatable {
     var audioOutputUID: String?
     /// Part of the name of the display the app makes, for `.adopt`: "Parsec", "Jump".
     var adoptName: String?
+    /// Whether the Mac's own screens go black while the session is on (LocalBlackout.swift).
+    var blackout = false
 
     init() {}
 
@@ -82,6 +84,7 @@ struct SessionProfile: Codable, Equatable {
         placement = try c.decodeIfPresent(Placement.self, forKey: .placement) ?? .extend
         audioOutputUID = try c.decodeIfPresent(String.self, forKey: .audioOutputUID)
         adoptName = try c.decodeIfPresent(String.self, forKey: .adoptName)
+        blackout = try c.decodeIfPresent(Bool.self, forKey: .blackout) ?? false
     }
 
     /// The mode to make the display in, for a client that asked for `width` × `height` at
@@ -141,6 +144,7 @@ struct SessionRequest: Equatable {
     var display: SessionProfile.DisplayChoice?
     var placement: SessionProfile.Placement?
     var audioOutputUID: String?
+    var blackout: Bool?
     /// The display the app made, when it is already known, for `.adopt`.
     var adoptedDisplayID: CGDirectDisplayID?
 
@@ -150,6 +154,7 @@ struct SessionRequest: Equatable {
         if let display { profile.display = display }
         if let placement { profile.placement = placement }
         if let audioOutputUID { profile.audioOutputUID = audioOutputUID }
+        if let blackout { profile.blackout = blackout }
         return profile
     }
 
@@ -198,6 +203,8 @@ protocol SessionDisplays: AnyObject {
     var outputUID: String? { get }
     /// Makes the output with `uid` the default; false when it isn't connected.
     func setOutput(uid: String) -> Bool
+    /// Blacks out the Mac's screens but `keeping`, or, with nil, lights them again.
+    func blackOut(keeping: Set<CGDirectDisplayID>?)
 }
 
 /// Starts and ends sessions, and puts back what they changed.
@@ -214,6 +221,8 @@ final class RemoteSessionCoordinator {
         var madeDisplay = false
         /// Whether it has its own sound output, switched to or already on.
         var ownsOutput = false
+        /// Whether it blacks out the Mac's screens.
+        var blacksOut = false
         /// Whether it is still being set up.
         var starting = true
         var started = Date()
@@ -339,9 +348,14 @@ final class RemoteSessionCoordinator {
         }
     }
 
-    /// Switches the output for `app`'s session if its profile names one, then reports.
+    /// Switches the output for `app`'s session if its profile names one, blacks out the
+    /// screens if it asks to, then reports.
     private func switchOutput(_ app: String, profile: SessionProfile, start: SessionStart) {
         var start = start
+        if profile.blackout {
+            sessions[app]?.blacksOut = true
+            updateBlackout()
+        }
         if let uid = profile.audioOutputUID {
             let previous = displays.outputUID
             if uid == previous {
@@ -392,12 +406,29 @@ final class RemoteSessionCoordinator {
         sessions[app] = nil
         // Removing the display puts the other displays back as they were before it came.
         if let id = session.displayID, session.madeDisplay { displays.removeDisplay(id) }
+        if session.blacksOut { updateBlackout() }
         if session.ownsOutput, !sessions.values.contains(where: \.ownsOutput), let uid = outputToRestore {
             if !displays.setOutput(uid: uid) { rsLog.error("\(app): the output from before isn't connected") }
             outputToRestore = nil
         }
         onChange?()
         return .success(())
+    }
+
+    /// Whether the Mac's screens are blacked out for a session.
+    var isBlackedOut: Bool { sessions.values.contains(where: \.blacksOut) }
+
+    /// Blacks out the screens but the sessions' own while a session that asks to is on.
+    private func updateBlackout() {
+        let wanting = sessions.values.filter(\.blacksOut)
+        displays.blackOut(keeping: wanting.isEmpty ? nil : Set(sessions.values.compactMap(\.displayID)))
+    }
+
+    /// Lights the screens again, for whoever is at the Mac, until the next session.
+    func liftBlackout() {
+        for app in sessions.keys { sessions[app]?.blacksOut = false }
+        updateBlackout()
+        onChange?()
     }
 
     /// Ends every session, as when DAM quits.
@@ -451,6 +482,16 @@ final class LiveSessionDisplays: SessionDisplays {
     var outputUID: String? { audio.defaultDeviceUID }
 
     func setOutput(uid: String) -> Bool { audio.setDefaultDevice(uid: uid) }
+
+    /// The Mac's own screens: every display but DAM's virtual ones.
+    private lazy var blackout = LocalBlackout { [weak video] id in
+        guard let video else { return false }
+        return !video.streamingDisplayIDs.contains(id) && CGDisplayVendorNumber(id) != VideoManager.anchorVendorID
+    }
+
+    func blackOut(keeping: Set<CGDirectDisplayID>?) {
+        if let keeping { blackout.start(keeping: keeping) } else { blackout.stop() }
+    }
 
     /// The UID of the output named or with UID `nameOrUID`, matching names without regard to case.
     func outputUID(matching nameOrUID: String) -> String? {

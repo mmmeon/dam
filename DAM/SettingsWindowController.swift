@@ -622,6 +622,13 @@ final class SettingsWindowController: NSWindowController {
             profile.audioOutputUID = raw
             save(profile)
         })
+        let ownPrivacy = ["rustdesk": "RustDesk's privacy mode", "parsec": "Parsec's privacy mode"][app]
+        controls.append(checkbox(title: "Black out this Mac's screens", isOn: profile.blackout,
+                                 help: "Turns this Mac's own screens black while the session is on, so whoever is " +
+                                       "at the Mac doesn't see it; the session's display and the stream stay as " +
+                                       "they are. The menu lights them again." +
+                                       (ownPrivacy.map { " Leave it off if \($0) is on: the two would fight." } ?? ""),
+                                 action: { profile.blackout = $0; save(profile) }))
         return controls
     }
 
