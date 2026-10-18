@@ -24,6 +24,13 @@ private final class FakeSessionDisplays: SessionDisplays {
 
     func removeDisplay(_ id: CGDirectDisplayID) { removed.append(id) }
 
+    /// Displays other apps made, by name.
+    var others: [String: CGDirectDisplayID] = [:]
+
+    func findDisplay(named name: String) -> CGDirectDisplayID? {
+        others.first { $0.key.localizedCaseInsensitiveContains(name) }?.value
+    }
+
     func place(_ id: CGDirectDisplayID, _ placement: SessionProfile.Placement, completion: @escaping (Bool) -> Void) {
         placed.append((id, placement))
         completion(placeSucceeds)
@@ -503,5 +510,87 @@ final class RemoteSessionsTests: XCTestCase {
 
     func testFindsRunningProcesses() {
         XCTAssertTrue(RunningProcesses.names().contains("launchd"))
+    }
+
+    // MARK: - Adopting
+
+    func testAdoptPlacesTheAppsDisplayAndLeavesIt() {
+        let fake = FakeSessionDisplays()
+        fake.others = ["Parsec Virtual Display": 7]
+        var profile = SessionProfile()
+        profile.display = .adopt
+        profile.placement = .main
+        let c = coordinator(fake, profiles: ["parsec": profile])
+        XCTAssertEqual(try start(c, SessionRequest(app: "parsec"))?.get(), SessionStart(displayID: 7))
+        XCTAssertTrue(fake.made.isEmpty)
+        XCTAssertEqual(fake.placed.map(\.0), [7])
+        c.end(app: "parsec")
+        XCTAssertTrue(fake.removed.isEmpty)
+    }
+
+    func testAdoptWaitsForTheDisplayToCome() {
+        let fake = FakeSessionDisplays()
+        var profile = SessionProfile()
+        profile.display = .adopt
+        profile.adoptName = "jump"
+        let c = coordinator(fake, profiles: ["jumpdesktop": profile])
+        c.adoptInterval = 0.05
+        var result: Result<SessionStart, SessionError>?
+        c.begin(SessionRequest(app: "jumpdesktop")) { result = $0 }
+        XCTAssertNil(result)
+        fake.others = ["Jump Desktop Display": 9]
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        XCTAssertEqual(try result?.get().displayID, 9)
+    }
+
+    func testAdoptCarriesOnWithoutTheDisplay() {
+        let fake = FakeSessionDisplays()
+        var profile = SessionProfile()
+        profile.display = .adopt
+        profile.audioOutputUID = "blackhole"
+        let c = coordinator(fake, profiles: ["splashtop": profile])
+        c.adoptInterval = 0.001
+        var result: Result<SessionStart, SessionError>?
+        c.begin(SessionRequest(app: "splashtop")) { result = $0 }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertNil(try result?.get().displayID)
+        XCTAssertEqual(try result?.get().warnings.count, 1)
+        XCTAssertEqual(fake.outputUID, "blackhole")
+    }
+
+    func testAnotherAppsDisplayIsAdoptedByDefault() {
+        let c = coordinator(FakeSessionDisplays())
+        XCTAssertEqual(c.profile(for: "display").display, .adopt)
+        XCTAssertEqual(c.profile(for: "rustdesk").display, .create)
+    }
+
+    func testDisplayDetectorFollowsTheNamedDisplay() {
+        var online: [(id: CGDirectDisplayID, name: String)] = [(1, "lenovo")]
+        let detector = DisplaySessionDetector(app: "display", name: { "jump" }, displays: { online })
+        var events: [SessionEvent] = []
+        detector.onEvent = { events.append($0) }
+        detector.check()
+        XCTAssertTrue(events.isEmpty)
+        online.append((5, "Jump Desktop"))
+        detector.check()
+        detector.check()
+        XCTAssertEqual(events, [.opened(key: "5", client: nil)])
+        online.removeLast()
+        detector.check()
+        XCTAssertEqual(events.last, .closed(key: "5"))
+    }
+
+    func testChromeRemoteDesktopLines() {
+        XCTAssertEqual(SessionLogLines.chromeRemoteDesktop("Oct 18 12:00:00 host remoting_me2me_host[1]: Client connected: me@example.com/chromoting_ftl_1234"),
+                       .opened(key: "me@example.com/chromoting_ftl_1234", client: "me@example.com"))
+        XCTAssertEqual(SessionLogLines.chromeRemoteDesktop("Client disconnected: me@example.com/chromoting_ftl_1234"),
+                       .closed(key: "me@example.com/chromoting_ftl_1234"))
+        XCTAssertNil(SessionLogLines.chromeRemoteDesktop("Channel IP for client: me@example.com/x ip='1.2.3.4'"))
+    }
+
+    func testProcessNamesAreMatchedAsTheSystemCutsThem() {
+        // TeamViewer_Desktop is longer than the 16 characters kept.
+        XCTAssertFalse(RunningProcesses.isRunning("TeamViewer_Desktop_not_running_here"))
+        XCTAssertTrue(RunningProcesses.isRunning("launchd"))
     }
 }

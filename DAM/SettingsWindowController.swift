@@ -521,7 +521,7 @@ final class SettingsWindowController: NSWindowController {
     /// What DAM does while each app's session is on.
     private func buildSessionsTab() -> NSView {
         guard let coordinator = sessionCoordinator else { return formTab([]) }
-        let apps = ["sunshine", "rustdesk", "parsec", "screensharing"]
+        let apps = ["sunshine", "rustdesk", "parsec", "screensharing", "chromeremotedesktop", "teamviewer", "display"]
         var groups: [(label: String, controls: [NSView])] = apps.map { app in
             (label: "\(RemoteSessionApp.name(of: app)):", controls: sessionControls(for: app, coordinator: coordinator))
         }
@@ -543,7 +543,19 @@ final class SettingsWindowController: NSWindowController {
         }
         var controls: [NSView] = []
         let name = RemoteSessionApp.name(of: app)
-        if SessionDetectors.watchable.contains(app) {
+        if app == "display" {
+            controls.append(checkbox(title: "Watch for a display another app makes", isOn: profile.watch,
+                                     help: "For apps that make a display of their own for each session, such as " +
+                                           "Jump Desktop, Splashtop, OpenDisplay or Duet: a session lasts while " +
+                                           "a display with this name is online.",
+                                     action: { profile.watch = $0; save(profile) }))
+            let field = ClosureTextField(text: profile.adoptName ?? "", placeholder: "Part of its name, e.g. Jump") {
+                profile.adoptName = $0.isEmpty ? nil : $0
+                save(profile)
+            }
+            field.widthAnchor.constraint(equalToConstant: 200).isActive = true
+            controls.append(field)
+        } else if SessionDetectors.watchable.contains(app) {
             let installed = SessionDetectors.isInstalled(app)
             controls.append(checkbox(title: "Watch for \(name) sessions" + (installed ? "" : " (not installed)"),
                                      isOn: profile.watch,
@@ -559,14 +571,19 @@ final class SettingsWindowController: NSWindowController {
 
         weak var sizeRef: NSPopUpButton?
         weak var placementRef: NSPopUpButton?
-        let display = popup([("Make a display", SessionProfile.DisplayChoice.create.rawValue),
-                             ("Leave the displays", SessionProfile.DisplayChoice.none.rawValue)],
-                            selected: profile.display.rawValue) { raw in
+        let displayOptions = app == "display"
+            ? [("Its display", SessionProfile.DisplayChoice.adopt.rawValue)]
+            : [("Make a display", SessionProfile.DisplayChoice.create.rawValue),
+               ("Use \(name)'s display", SessionProfile.DisplayChoice.adopt.rawValue),
+               ("Leave the displays", SessionProfile.DisplayChoice.none.rawValue)]
+        let display = popup(displayOptions, selected: profile.display.rawValue) { raw in
             profile.display = raw.flatMap(SessionProfile.DisplayChoice.init(rawValue:)) ?? .create
             sizeRef?.isEnabled = profile.display == .create
-            placementRef?.isEnabled = profile.display == .create
+            placementRef?.isEnabled = profile.display != .none
             save(profile)
         }
+        display.toolTip = "Make a display for the session, use the one \(name) makes itself (found by its " +
+                          "name), or leave the displays as they are."
         let sizes = [("Client's size", nil as String?)] + StreamingDisplayModes.sizes.map {
             ("\($0.width) × \($0.height)", "\($0.width)x\($0.height)" as String?)
         }
@@ -588,7 +605,7 @@ final class SettingsWindowController: NSWindowController {
         sizeRef = size
         placementRef = placement
         size.isEnabled = profile.display == .create
-        placement.isEnabled = profile.display == .create
+        placement.isEnabled = profile.display != .none
         let row = BaselineRowGridView(views: [[display, size, placement]])
         row.columnSpacing = 8
         row.rowAlignment  = .firstBaseline
@@ -1145,6 +1162,28 @@ private final class ClosurePopup: NSPopUpButton {
 
     @objc private func selectionChanged() {
         handler(selectedItem?.representedObject as? String)
+    }
+}
+
+// MARK: - ClosureTextField
+
+/// A text field that hands its text to a closure when editing ends.
+private final class ClosureTextField: NSTextField, NSTextFieldDelegate {
+    private let handler: (String) -> Void
+
+    init(text: String, placeholder: String, onEnd: @escaping (String) -> Void) {
+        handler = onEnd
+        super.init(frame: .zero)
+        stringValue = text
+        placeholderString = placeholder
+        font = .systemFont(ofSize: NSFont.systemFontSize)
+        delegate = self
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        handler(stringValue.trimmingCharacters(in: .whitespaces))
     }
 }
 

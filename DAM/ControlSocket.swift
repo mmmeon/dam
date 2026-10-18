@@ -25,7 +25,7 @@ struct ControlRequest: Codable, Equatable {
     var width: Int?
     var height: Int?
     var fps: Int?
-    /// "create" or "none".
+    /// "create", "adopt" or "none".
     var display: String?
     /// "extend", "main" or "mirror".
     var placement: String?
@@ -255,7 +255,7 @@ enum ControlCLI {
     Usage:
       DAM session start --app APP [--client NAME] [--client-id ID]
                         [--width W --height H] [--fps F]
-                        [--display create|none] [--placement extend|main|mirror]
+                        [--display create|adopt|none] [--placement extend|main|mirror]
                         [--audio OUTPUT]
       DAM session end --app APP [--all]
       DAM display list
@@ -303,7 +303,7 @@ enum ControlCLI {
         case ("session", "start"):
             guard let app = options["app"] else { throw ParseError.usage("session start needs --app.") }
             if let display = options["display"], SessionProfile.DisplayChoice(rawValue: display) == nil {
-                throw ParseError.usage("--display is create or none.")
+                throw ParseError.usage("--display is create, adopt or none.")
             }
             if let placement = options["placement"], SessionProfile.Placement(rawValue: placement) == nil {
                 throw ParseError.usage("--placement is extend, main or mirror.")

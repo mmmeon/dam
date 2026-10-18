@@ -213,6 +213,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         sessionCoordinator = coordinator
         controlHandler = handler
+        SessionDetectors.displayNames = { displays.displayNames }
+        SessionDetectors.adoptName = { [weak coordinator] in coordinator?.profile(for: "display").adoptName }
         let watcher = SessionWatcher(coordinator: coordinator)
         watcher.announce = { SpeechSynthesizer.shared.announce($0) }
         watcher.update()

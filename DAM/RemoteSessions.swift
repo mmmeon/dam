@@ -23,7 +23,8 @@ enum RemoteSessionApp {
         ("parsec", "Parsec"),
         ("screensharing", "Screen Sharing"),
         ("chromeremotedesktop", "Chrome Remote Desktop"),
-        ("teamviewer", "TeamViewer")
+        ("teamviewer", "TeamViewer"),
+        ("display", "Another App's Display")
     ]
 
     static func name(of id: String) -> String { known.first { $0.id == id }?.name ?? id }
@@ -36,6 +37,9 @@ struct SessionProfile: Codable, Equatable {
         case none
         /// Makes a streaming display for the session and removes it after.
         case create
+        /// Places the display the app makes itself, found by `adoptName`, and leaves it to
+        /// the app to remove.
+        case adopt
     }
 
     enum Placement: String, Codable {
@@ -61,6 +65,8 @@ struct SessionProfile: Codable, Equatable {
     var placement: Placement = .extend
     /// The sound output for the session, by UID; nil leaves the output alone.
     var audioOutputUID: String?
+    /// Part of the name of the display the app makes, for `.adopt`: "Parsec", "Jump".
+    var adoptName: String?
 
     init() {}
 
@@ -75,6 +81,7 @@ struct SessionProfile: Codable, Equatable {
         refreshRate = try c.decodeIfPresent(Int.self, forKey: .refreshRate)
         placement = try c.decodeIfPresent(Placement.self, forKey: .placement) ?? .extend
         audioOutputUID = try c.decodeIfPresent(String.self, forKey: .audioOutputUID)
+        adoptName = try c.decodeIfPresent(String.self, forKey: .adoptName)
     }
 
     /// The mode to make the display in, for a client that asked for `width` × `height` at
@@ -134,6 +141,8 @@ struct SessionRequest: Equatable {
     var display: SessionProfile.DisplayChoice?
     var placement: SessionProfile.Placement?
     var audioOutputUID: String?
+    /// The display the app made, when it is already known, for `.adopt`.
+    var adoptedDisplayID: CGDirectDisplayID?
 
     /// The app's profile with this request's changes.
     func applied(to profile: SessionProfile) -> SessionProfile {
@@ -182,6 +191,8 @@ protocol SessionDisplays: AnyObject {
     func makeDisplay(_ mode: StreamingDisplayModes.Mode, identity: VideoManager.StreamingIdentity,
                      completion: @escaping (CGDirectDisplayID?) -> Void)
     func removeDisplay(_ id: CGDirectDisplayID)
+    /// The display online whose name contains `name`, ignoring case, other than DAM's own.
+    func findDisplay(named name: String) -> CGDirectDisplayID?
     /// Places display `id` as `placement` says; `completion` gets whether it was done.
     func place(_ id: CGDirectDisplayID, _ placement: SessionProfile.Placement, completion: @escaping (Bool) -> Void)
     var outputUID: String? { get }
@@ -197,8 +208,10 @@ final class RemoteSessionCoordinator {
         var client: String?
         /// How many times it was started and not yet ended.
         var count = 1
-        /// The display made for it, once it is placed.
+        /// The display made for it, or the app's own it was given, once it is placed.
         var displayID: CGDirectDisplayID?
+        /// Whether DAM made the display, and removes it at the end.
+        var madeDisplay = false
         /// Whether it has its own sound output, switched to or already on.
         var ownsOutput = false
         /// Whether it is still being set up.
@@ -237,7 +250,13 @@ final class RemoteSessionCoordinator {
         }
     }
 
-    func profile(for app: String) -> SessionProfile { profiles[app] ?? SessionProfile() }
+    func profile(for app: String) -> SessionProfile {
+        if let profile = profiles[app] { return profile }
+        var profile = SessionProfile()
+        // Another app's display is there to be placed, not made.
+        if app == "display" { profile.display = .adopt }
+        return profile
+    }
 
     func setProfile(_ profile: SessionProfile, for app: String) {
         profiles[app] = profile
@@ -266,23 +285,57 @@ final class RemoteSessionCoordinator {
         waiting[app] = [completion]
         onChange?()
 
-        guard profile.display == .create else { return switchOutput(app, profile: profile, start: SessionStart()) }
-        let mode = profile.mode(clientWidth: request.width, clientHeight: request.height, clientFPS: request.fps)
-        displays.makeDisplay(mode, identity: request.identity) { [weak self] id in
-            guard let self else { return }
-            guard let id else {
-                rsLog.error("\(app): no display")
-                return self.finish(app, .failure(.noDisplay))
+        switch profile.display {
+        case .none:
+            switchOutput(app, profile: profile, start: SessionStart())
+        case .create:
+            let mode = profile.mode(clientWidth: request.width, clientHeight: request.height, clientFPS: request.fps)
+            displays.makeDisplay(mode, identity: request.identity) { [weak self] id in
+                guard let self else { return }
+                guard let id else {
+                    rsLog.error("\(app): no display")
+                    return self.finish(app, .failure(.noDisplay))
+                }
+                self.sessions[app]?.madeDisplay = true
+                self.place(app, id, profile: profile, start: SessionStart(displayID: id))
             }
-            self.sessions[app]?.displayID = id
-            guard profile.placement != .extend else {
-                return self.switchOutput(app, profile: profile, start: SessionStart(displayID: id))
+        case .adopt:
+            let name = profile.adoptName ?? RemoteSessionApp.name(of: app)
+            waitForDisplay(named: name, known: request.adoptedDisplayID, attempts: Self.adoptAttempts) { [weak self] id in
+                guard let self else { return }
+                guard let id else {
+                    var start = SessionStart()
+                    start.warnings.append("No display called \(name) came.")
+                    return self.switchOutput(app, profile: profile, start: start)
+                }
+                self.place(app, id, profile: profile, start: SessionStart(displayID: id))
             }
-            self.displays.place(id, profile.placement) { placed in
-                var start = SessionStart(displayID: id)
-                if !placed { start.warnings.append("The display couldn't be made \(profile.placement.rawValue).") }
-                self.switchOutput(app, profile: profile, start: start)
-            }
+        }
+    }
+
+    /// How many times to look for the display an app makes, `adoptInterval` apart.
+    static let adoptAttempts = 30
+    /// How long to wait between looks; shorter in tests.
+    var adoptInterval: TimeInterval = 0.5
+
+    /// Finds the display named `name`, or `known`, waiting for it to come; nil if it doesn't.
+    private func waitForDisplay(named name: String, known: CGDirectDisplayID?, attempts: Int,
+                                completion: @escaping (CGDirectDisplayID?) -> Void) {
+        if let id = known ?? displays.findDisplay(named: name) { return completion(id) }
+        guard attempts > 1 else { return completion(nil) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + adoptInterval) { [weak self] in
+            self?.waitForDisplay(named: name, known: nil, attempts: attempts - 1, completion: completion)
+        }
+    }
+
+    /// Places `app`'s display `id` as its profile says, then switches the output.
+    private func place(_ app: String, _ id: CGDirectDisplayID, profile: SessionProfile, start: SessionStart) {
+        sessions[app]?.displayID = id
+        guard profile.placement != .extend else { return switchOutput(app, profile: profile, start: start) }
+        displays.place(id, profile.placement) { [weak self] placed in
+            var start = start
+            if !placed { start.warnings.append("The display couldn't be made \(profile.placement.rawValue).") }
+            self?.switchOutput(app, profile: profile, start: start)
         }
     }
 
@@ -338,7 +391,7 @@ final class RemoteSessionCoordinator {
         rsLog.debug("\(app): ended")
         sessions[app] = nil
         // Removing the display puts the other displays back as they were before it came.
-        if let id = session.displayID { displays.removeDisplay(id) }
+        if let id = session.displayID, session.madeDisplay { displays.removeDisplay(id) }
         if session.ownsOutput, !sessions.values.contains(where: \.ownsOutput), let uid = outputToRestore {
             if !displays.setOutput(uid: uid) { rsLog.error("\(app): the output from before isn't connected") }
             outputToRestore = nil
@@ -369,6 +422,16 @@ final class LiveSessionDisplays: SessionDisplays {
     }
 
     func removeDisplay(_ id: CGDirectDisplayID) { video.removeStreamingDisplay(id: id) }
+
+    func findDisplay(named name: String) -> CGDirectDisplayID? {
+        guard !name.isEmpty else { return nil }
+        return displayNames.first { $0.name.localizedCaseInsensitiveContains(name) }?.id
+    }
+
+    /// The online displays' IDs and names, other than DAM's own.
+    var displayNames: [(id: CGDirectDisplayID, name: String)] {
+        video.allConnectedDisplays.filter { $0.cgDisplayID != 0 && !$0.isStreaming }.map { ($0.cgDisplayID, $0.name) }
+    }
 
     func place(_ id: CGDirectDisplayID, _ placement: SessionProfile.Placement, completion: @escaping (Bool) -> Void) {
         guard let display = video.allConnectedDisplays.first(where: { $0.cgDisplayID == id }) else {

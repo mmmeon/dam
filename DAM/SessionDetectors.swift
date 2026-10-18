@@ -7,6 +7,7 @@
 //  starts the app's session with the first and ends it with the last.
 //
 
+import CoreGraphics
 import Darwin
 import Foundation
 import os.log
@@ -47,6 +48,16 @@ enum SessionLogLines {
         if let m = captures(#"(\S+)#(\d+) connected\."#, in: line) {
             return .opened(key: "\(m[0])#\(m[1])", client: m[0])
         }
+        return nil
+    }
+
+    /// Chrome Remote Desktop's host: `Client connected: user@example.com/chromoting…` and
+    /// `Client disconnected: …`, by the client's JID (remoting/host/host_event_logger_posix.cc).
+    static func chromeRemoteDesktop(_ line: String) -> SessionEvent? {
+        if let m = captures(#"Client connected: (\S+)"#, in: line) {
+            return .opened(key: m[0], client: m[0].split(separator: "/").first.map(String.init))
+        }
+        if let m = captures(#"Client disconnected: (\S+)"#, in: line) { return .closed(key: m[0]) }
         return nil
     }
 
@@ -253,6 +264,52 @@ final class ProcessSessionDetector: SessionDetector {
     }
 }
 
+/// A connection for as long as a display whose name contains `name` is online, for apps that
+/// make their own display for each session: Jump Desktop, Splashtop, OpenDisplay, Duet, ….
+final class DisplaySessionDetector: SessionDetector {
+    let app: String
+    var onEvent: ((SessionEvent) -> Void)?
+    private let name: () -> String?
+    private let displays: () -> [(id: CGDirectDisplayID, name: String)]
+    private var timer: Timer?
+    /// The matching displays online.
+    private(set) var open: Set<CGDirectDisplayID> = []
+
+    init(app: String, name: @escaping () -> String?, displays: @escaping () -> [(id: CGDirectDisplayID, name: String)]) {
+        self.app = app
+        self.name = name
+        self.displays = displays
+    }
+
+    func start() {
+        guard timer == nil else { return }
+        check()
+        timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.check() }
+    }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+        for id in open { onEvent?(.closed(key: "\(id)")) }
+        open.removeAll()
+    }
+
+    func check() {
+        guard let name = name(), !name.isEmpty else { return }
+        let matching = displays().filter { $0.name.localizedCaseInsensitiveContains(name) }
+        let ids = Set(matching.map(\.id))
+        for gone in open.subtracting(ids) {
+            open.remove(gone)
+            onEvent?(.closed(key: "\(gone)"))
+        }
+        for display in matching where !open.contains(display.id) {
+            open.insert(display.id)
+            detLog.debug("\(self.app): \(display.name) came")
+            onEvent?(.opened(key: "\(display.id)", client: nil))
+        }
+    }
+}
+
 /// The processes running, by name.
 enum RunningProcesses {
     /// Every user's processes, root's among them, as `ps` lists them. Names are cut to 16
@@ -278,7 +335,11 @@ enum SessionDetectors {
     static var home: URL { FileManager.default.homeDirectoryForCurrentUser }
 
     /// The apps DAM can watch for sessions of.
-    static let watchable: Set<String> = ["rustdesk", "parsec", "screensharing"]
+    static let watchable: Set<String> = ["rustdesk", "parsec", "screensharing", "chromeremotedesktop", "teamviewer", "display"]
+
+    /// For "display": the displays online, and the name to watch for; set by the app.
+    static var displayNames: () -> [(id: CGDirectDisplayID, name: String)] = { [] }
+    static var adoptName: () -> String? = { nil }
 
     static func make(for app: String) -> SessionDetector? {
         switch app {
@@ -290,6 +351,14 @@ enum SessionDetectors {
                                       parse: SessionLogLines.parsec)
         case "screensharing":
             return ProcessSessionDetector(app: app, processName: "screensharingd")
+        case "chromeremotedesktop":
+            return LogSessionDetector(app: app, url: URL(fileURLWithPath: "/var/log/org.chromium.chromoting.log"),
+                                      parse: SessionLogLines.chromeRemoteDesktop)
+        case "teamviewer":
+            // Started for each incoming connection.
+            return ProcessSessionDetector(app: app, processName: "TeamViewer_Desktop")
+        case "display":
+            return DisplaySessionDetector(app: app, name: adoptName, displays: displayNames)
         default:
             return nil
         }
@@ -301,7 +370,10 @@ enum SessionDetectors {
         switch app {
         case "rustdesk": return fm.fileExists(atPath: "/Applications/RustDesk.app")
         case "parsec": return fm.fileExists(atPath: "/Applications/Parsec.app")
-        case "screensharing": return true
+        case "screensharing", "display": return true
+        case "chromeremotedesktop":
+            return fm.fileExists(atPath: "/Library/PrivilegedHelperTools/org.chromium.chromoting.me2me_host.app")
+        case "teamviewer": return fm.fileExists(atPath: "/Applications/TeamViewer.app")
         case "sunshine":
             return ["/Applications/Sunshine.app", "/usr/local/bin/sunshine", "/opt/homebrew/bin/sunshine"]
                 .contains { fm.fileExists(atPath: $0) }
@@ -347,9 +419,11 @@ final class SessionWatcher {
     func handle(_ event: SessionEvent, of app: String) {
         let name = RemoteSessionApp.name(of: app)
         switch event {
-        case .opened(_, let client):
+        case .opened(let key, let client):
             let first = coordinator.sessions[app] == nil
-            coordinator.begin(SessionRequest(app: app, client: client)) { [weak self] result in
+            // A display detector's key is the display it saw.
+            let seen = app == "display" ? CGDirectDisplayID(key) : nil
+            coordinator.begin(SessionRequest(app: app, client: client, adoptedDisplayID: seen)) { [weak self] result in
                 switch result {
                 case .success(let start):
                     for warning in start.warnings { detLog.error("\(app): \(warning)") }
