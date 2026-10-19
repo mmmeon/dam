@@ -525,6 +525,12 @@ final class SettingsWindowController: NSWindowController {
         var groups: [(label: String, controls: [NSView])] = apps.map { app in
             (label: "\(RemoteSessionApp.name(of: app)):", controls: sessionControls(for: app, coordinator: coordinator))
         }
+        groups.append((label: "Changes:", controls: [
+            smallNote("What is changed through \(AppIdentity.name) during a session (where its display is, its " +
+                      "size, the sound output, the blackout) is kept for the app's next session, and the Mac still " +
+                      "goes back as it was when the session ends. A setting picked here is locked against those " +
+                      "changes; click its lock to let it follow them again."),
+        ]))
         let command = Bundle.main.executablePath ?? AppIdentity.name
         groups.append((label: "Command Line:", controls: [
             selectableLabel("\(command) session start --app NAME"),
@@ -569,6 +575,19 @@ final class SettingsWindowController: NSWindowController {
                                      action: { profile.enabled = $0; save(profile) }))
         }
 
+        // A setting picked here is locked: a session's changes leave it. Open, it follows them.
+        var locks: [SessionProfile.Setting: NSButton] = [:]
+        for setting in SessionProfile.Setting.allCases {
+            locks[setting] = lockButton(locked: profile.locked.contains(setting)) { locked in
+                if locked { profile.locked.insert(setting) } else { profile.locked.remove(setting) }
+                save(profile)
+            }
+        }
+        let pick: (SessionProfile.Setting) -> Void = { setting in
+            profile.locked.insert(setting)
+            locks[setting]?.state = .on
+        }
+
         weak var sizeRef: NSPopUpButton?
         weak var placementRef: NSPopUpButton?
         let displayOptions = app == "display"
@@ -591,6 +610,7 @@ final class SettingsWindowController: NSWindowController {
             let parts = raw?.split(separator: "x").compactMap { Int($0) } ?? []
             profile.width = parts.count == 2 ? parts[0] : nil
             profile.height = parts.count == 2 ? parts[1] : nil
+            pick(.size)
             save(profile)
         }
         size.toolTip = app == "sunshine" ? "The client's size comes from Moonlight." :
@@ -600,13 +620,14 @@ final class SettingsWindowController: NSWindowController {
                                ("Mirrored by the others", SessionProfile.Placement.mirror.rawValue)],
                               selected: profile.placement.rawValue) { raw in
             profile.placement = raw.flatMap(SessionProfile.Placement.init(rawValue:)) ?? .extend
+            pick(.placement)
             save(profile)
         }
         sizeRef = size
         placementRef = placement
         size.isEnabled = profile.display == .create
         placement.isEnabled = profile.display != .none
-        let row = BaselineRowGridView(views: [[display, size, placement]])
+        let row = BaselineRowGridView(views: [[display, size, locks[.size]!, placement, locks[.placement]!]])
         row.columnSpacing = 8
         row.rowAlignment  = .firstBaseline
         controls.append(row)
@@ -618,18 +639,43 @@ final class SettingsWindowController: NSWindowController {
         if let uid = profile.audioOutputUID, !outputs.contains(where: { $0.1 == uid }) {
             outputOptions.append(("Sound to a device not connected", uid))
         }
-        controls.append(popup(outputOptions, selected: profile.audioOutputUID) { raw in
+        let output = popup(outputOptions, selected: profile.audioOutputUID) { raw in
             profile.audioOutputUID = raw
+            pick(.audio)
             save(profile)
-        })
+        }
+        controls.append(lockedRow(output, locks[.audio]!))
         let ownPrivacy = ["rustdesk": "RustDesk's privacy mode", "parsec": "Parsec's privacy mode"][app]
-        controls.append(checkbox(title: "Black out this Mac's screens", isOn: profile.blackout,
+        controls.append(lockedRow(checkbox(title: "Black out this Mac's screens", isOn: profile.blackout,
                                  help: "Turns this Mac's own screens black while the session is on, so whoever is " +
                                        "at the Mac doesn't see it; the session's display and the stream stay as " +
                                        "they are. The menu lights them again." +
                                        (ownPrivacy.map { " Leave it off if \($0) is on: the two would fight." } ?? ""),
-                                 action: { profile.blackout = $0; save(profile) }))
+                                 action: { profile.blackout = $0; pick(.blackout); save(profile) }), locks[.blackout]!))
         return controls
+    }
+
+    /// A lock beside a session setting: closed while the setting is kept as picked here,
+    /// open while it follows the changes made during sessions.
+    private func lockButton(locked: Bool, action: @escaping (Bool) -> Void) -> NSButton {
+        let button = ClosureButton(title: "", action: action)
+        button.setButtonType(.toggle)
+        button.isBordered = false
+        button.imagePosition = .imageOnly
+        button.image = NSImage(systemSymbolName: "lock.open", accessibilityDescription: "Follows sessions")
+        button.alternateImage = NSImage(systemSymbolName: "lock.fill", accessibilityDescription: "Kept as picked")
+        button.state = locked ? .on : .off
+        button.toolTip = "Locked, the setting stays as picked here. Open, it follows what is changed through " +
+                         "\(AppIdentity.name) during a session, for the next one."
+        return button
+    }
+
+    /// `control` with its lock after it, on one line.
+    private func lockedRow(_ control: NSView, _ lock: NSView) -> NSView {
+        let row = BaselineRowGridView(views: [[control, lock]])
+        row.columnSpacing = 4
+        row.rowAlignment  = .firstBaseline
+        return row
     }
 
     /// A pop-up of `options` (title, stored value) with `selected` chosen.
@@ -1011,6 +1057,12 @@ final class SettingsWindowController: NSWindowController {
     // MARK: - Present
 
     /// Shows the window on the Remote Sessions tab.
+    /// Builds the Remote Sessions tab again from the profiles, as when a session changed one.
+    func reloadSessions() {
+        sessionsContent = buildSessionsTab()
+        if selectedTab == TabID.sessions { selectTab(TabID.sessions) }
+    }
+
     func showSessions() {
         selectTab(TabID.sessions)
         show()

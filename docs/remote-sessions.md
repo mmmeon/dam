@@ -1,6 +1,6 @@
 # Remote sessions: displays and sound for other apps
 
-*As of 2026-10-18, on branch `feat/remote-sessions`.*
+*As of 2026-10-19, on branch `feat/remote-sessions`.*
 
 ## Summary
 
@@ -27,6 +27,29 @@ Sessions start in one of three ways:
 - when DAM sees them happen.
 
 The profiles are kept in `~/Library/Application Support/DAM/remote-sessions.json`.
+
+## Changes during a session
+
+When a session ends, the Mac goes back to how it was before the session started, even after
+changes made during it: the main display, the arrangement and the sound output. Those changes
+are kept instead, in the app's profile, for its next session:
+
+- **Placement:** the session's display made main or mirrored through DAM, or put back to
+  extended. Main counts only when it was chosen through DAM, not when WindowServer made the
+  display main by itself.
+- **Size:** a resolution or refresh rate picked for the display DAM made.
+- **Sound:** another output picked while the session was on. An output another session
+  switched to doesn't count.
+- **Blackout:** lifting it from the menu turns it off for the next sessions.
+
+A setting picked in Settings › Remote Sessions is locked, and the lock beside it closes.
+Changes made during sessions leave a locked setting as it is. Clicking the lock opens it, so
+the setting follows those changes again. A change that a request asked for (`--placement`,
+`--audio`, `--blackout`) applies to that session only, and isn't kept.
+
+While a session is on, choosing a main display or arranging the displays through DAM no longer
+moves the layout that is put back afterwards. Outside remote sessions it still does: a
+Moonlight stream's display keeps the arrangement chosen during the stream.
 
 ## Sunshine
 

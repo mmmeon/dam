@@ -19,6 +19,7 @@ private final class FakeSessionDisplays: SessionDisplays {
                      completion: @escaping (CGDirectDisplayID?) -> Void) {
         made.append((mode, identity))
         let id = nextID
+        if let id { modes[id] = mode }
         if pendingMakes != nil { pendingMakes?.append { completion(id) } } else { completion(id) }
     }
 
@@ -33,8 +34,18 @@ private final class FakeSessionDisplays: SessionDisplays {
 
     func place(_ id: CGDirectDisplayID, _ placement: SessionProfile.Placement, completion: @escaping (Bool) -> Void) {
         placed.append((id, placement))
+        if placeSucceeds { placements[id] = placement }
         completion(placeSucceeds)
     }
+
+    /// How each display is placed and its mode now; tests change them as a user would.
+    var placements: [CGDirectDisplayID: SessionProfile.Placement] = [:]
+    var modes: [CGDirectDisplayID: StreamingDisplayModes.Mode] = [:]
+    var holdsLayout = false
+
+    func placement(of id: CGDirectDisplayID) -> SessionProfile.Placement { placements[id] ?? .extend }
+    func mode(of id: CGDirectDisplayID) -> StreamingDisplayModes.Mode? { modes[id] }
+    func holdLayout(_ hold: Bool) { holdsLayout = hold }
 
     /// The displays kept lit while blacked out, or nil when not.
     var blackoutKeeping: Set<CGDirectDisplayID>?
@@ -284,6 +295,93 @@ final class RemoteSessionsTests: XCTestCase {
         // DAM quit without ending it.
         _ = coordinator(fake)
         XCTAssertEqual(fake.outputUID, "speakers")
+    }
+
+    // MARK: - Changes during a session
+
+    func testChangesDuringASessionAreKeptForTheNext() {
+        let fake = FakeSessionDisplays()
+        let c = coordinator(fake, profiles: ["rustdesk": SessionProfile()])
+        _ = start(c, SessionRequest(app: "rustdesk"))
+        XCTAssertTrue(fake.holdsLayout)
+        fake.placements[100] = .main
+        fake.modes[100] = StreamingDisplayModes.Mode(width: 1280, height: 800, refreshRate: 30)
+        fake.outputUID = "blackhole"
+        c.end(app: "rustdesk")
+        let next = c.profile(for: "rustdesk")
+        XCTAssertEqual(next.placement, .main)
+        XCTAssertEqual(next.width, 1280)
+        XCTAssertEqual(next.height, 800)
+        XCTAssertEqual(next.refreshRate, 30)
+        XCTAssertEqual(next.audioOutputUID, "blackhole")
+        // This time is still put back as it was.
+        XCTAssertEqual(fake.outputUID, "speakers")
+        XCTAssertFalse(fake.holdsLayout)
+        XCTAssertEqual(fake.removed, [100])
+    }
+
+    func testLockedSettingsStayAsPicked() {
+        let fake = FakeSessionDisplays()
+        var profile = SessionProfile()
+        profile.locked = Set(SessionProfile.Setting.allCases)
+        let c = coordinator(fake, profiles: ["rustdesk": profile])
+        _ = start(c, SessionRequest(app: "rustdesk"))
+        fake.placements[100] = .mirror
+        fake.modes[100] = StreamingDisplayModes.Mode(width: 1280, height: 800, refreshRate: 30)
+        fake.outputUID = "blackhole"
+        c.end(app: "rustdesk")
+        XCTAssertEqual(c.profile(for: "rustdesk"), profile)
+        XCTAssertEqual(fake.outputUID, "speakers")
+    }
+
+    func testNothingChangedKeepsTheProfile() {
+        let fake = FakeSessionDisplays()
+        var profile = SessionProfile()
+        profile.placement = .main
+        profile.audioOutputUID = "blackhole"
+        let c = coordinator(fake, profiles: ["rustdesk": profile])
+        // Asked for this time only, so not kept either.
+        _ = start(c, SessionRequest(app: "rustdesk", placement: .mirror))
+        c.end(app: "rustdesk")
+        XCTAssertEqual(c.profile(for: "rustdesk"), profile)
+    }
+
+    func testAnotherSessionsOutputIsntKept() {
+        let fake = FakeSessionDisplays()
+        var switching = SessionProfile()
+        switching.audioOutputUID = "blackhole"
+        let c = coordinator(fake, profiles: ["rustdesk": SessionProfile(), "sunshine": switching])
+        _ = start(c, SessionRequest(app: "rustdesk"))
+        fake.nextID = 101
+        _ = start(c, SessionRequest(app: "sunshine"))
+        c.end(app: "rustdesk")
+        XCTAssertNil(c.profile(for: "rustdesk").audioOutputUID)
+        c.end(app: "sunshine")
+        XCTAssertEqual(fake.outputUID, "speakers")
+    }
+
+    func testLiftingTheBlackoutIsKeptUnlessLocked() {
+        let fake = FakeSessionDisplays()
+        var open = SessionProfile()
+        open.blackout = true
+        var locked = open
+        locked.locked = [.blackout]
+        let c = coordinator(fake, profiles: ["rustdesk": open, "parsec": locked])
+        _ = start(c, SessionRequest(app: "rustdesk"))
+        fake.nextID = 101
+        _ = start(c, SessionRequest(app: "parsec"))
+        c.liftBlackout()
+        XCTAssertFalse(c.profile(for: "rustdesk").blackout)
+        XCTAssertTrue(c.profile(for: "parsec").blackout)
+    }
+
+    func testLocksRoundTripThroughTheFile() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        var profile = SessionProfile()
+        profile.locked = [.placement, .audio]
+        SessionProfiles.save(["rustdesk": profile], to: url)
+        XCTAssertEqual(SessionProfiles.load(from: url)["rustdesk"]?.locked, [.placement, .audio])
     }
 
     func testEndingWhatIsntOnFails() {

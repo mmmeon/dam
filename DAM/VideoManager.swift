@@ -202,6 +202,10 @@ final class VideoManager: ObservableObject {
     var streamingArrangement: DisplayArrangement?
     /// Whether the user made a streaming display main, which DAM then leaves it.
     var streamingDisplayIsMainByChoice = false
+    /// Whether a change of main or of positions leaves `streamingArrangement` as it is, so
+    /// the layout from before is put back once the streaming displays go: while a remote
+    /// session is on (RemoteSessions.swift). Otherwise the change is kept after them.
+    var holdsStreamingArrangement = false
     /// Whether a streaming display is being added or removed; the next change waits for it.
     var streamingChangeInFlight = false
     /// Whether main is being handed from a streaming display to another display.
@@ -721,7 +725,9 @@ final class VideoManager: ObservableObject {
             for (name, arrangement) in self.virtualAnchorArrangements {
                 self.virtualAnchorArrangements[name] = arrangement.makingMain(ownID)
             }
-            self.streamingArrangement = self.streamingArrangement?.makingMain(ownID)
+            if !self.holdsStreamingArrangement {
+                self.streamingArrangement = self.streamingArrangement?.makingMain(ownID)
+            }
         }
         // Set before the commit: the change it causes is checked before it reports back.
         streamingDisplayIsMainByChoice = streamingDisplayIDs.contains(ownID)

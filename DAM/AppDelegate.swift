@@ -203,6 +203,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let displays = LiveSessionDisplays(video: videoManager, audio: audioManager)
         let coordinator = RemoteSessionCoordinator(displays: displays)
         coordinator.onChange = { [weak self] in self?.rebuild() }
+        coordinator.onLearn = { [weak self] in self?.settingsWindow?.reloadSessions() }
         let handler = ControlHandler(coordinator: coordinator, video: videoManager, sessionDisplays: displays)
         let server = ControlServer { request, reply in handler.handle(request, reply: reply) }
         do {

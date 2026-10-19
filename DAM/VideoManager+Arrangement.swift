@@ -108,7 +108,9 @@ extension VideoManager {
                 for (name, arrangement) in self.virtualAnchorArrangements {
                     self.virtualAnchorArrangements[name] = arrangement.replacingOrigins(captured)
                 }
-                self.streamingArrangement = self.streamingArrangement?.replacingOrigins(captured)
+                if !self.holdsStreamingArrangement {
+                    self.streamingArrangement = self.streamingArrangement?.replacingOrigins(captured)
+                }
             }
             completion?(result)
         }

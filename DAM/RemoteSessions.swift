@@ -4,8 +4,9 @@
 //  Remote sessions: another app (Sunshine, RustDesk, Parsec, Screen Sharing, …) streaming the
 //  Mac to someone. A profile per app says what DAM does while one of its sessions is on: make
 //  a streaming display for it, place it, and switch the sound output. Everything is put back
-//  once the session ends. Sessions start and end through the control socket and URL scheme
-//  (ControlSocket.swift), or as DAM sees them happen.
+//  once the session ends. What is changed through DAM during a session is kept in the profile
+//  for the next one, but for the settings picked in Settings. Sessions start and end through
+//  the control socket and URL scheme (ControlSocket.swift), or as DAM sees them happen.
 //
 
 import CoreGraphics
@@ -51,6 +52,11 @@ struct SessionProfile: Codable, Equatable {
         case mirror
     }
 
+    /// A setting that can be picked in Settings, or follow what is changed during sessions.
+    enum Setting: String, Codable, CaseIterable {
+        case placement, size, audio, blackout
+    }
+
     var enabled = true
     /// Whether DAM watches for the app's sessions itself (see SessionDetectors.swift), for
     /// an app that can't start them through the command line.
@@ -69,6 +75,9 @@ struct SessionProfile: Codable, Equatable {
     var adoptName: String?
     /// Whether the Mac's own screens go black while the session is on (LocalBlackout.swift).
     var blackout = false
+    /// The settings picked in Settings. A change made through DAM during a session is kept
+    /// for the next session in the others, and leaves these as they are.
+    var locked: Set<Setting> = []
 
     init() {}
 
@@ -85,6 +94,7 @@ struct SessionProfile: Codable, Equatable {
         audioOutputUID = try c.decodeIfPresent(String.self, forKey: .audioOutputUID)
         adoptName = try c.decodeIfPresent(String.self, forKey: .adoptName)
         blackout = try c.decodeIfPresent(Bool.self, forKey: .blackout) ?? false
+        locked = try c.decodeIfPresent(Set<Setting>.self, forKey: .locked) ?? []
     }
 
     /// The mode to make the display in, for a client that asked for `width` × `height` at
@@ -205,6 +215,13 @@ protocol SessionDisplays: AnyObject {
     func setOutput(uid: String) -> Bool
     /// Blacks out the Mac's screens but `keeping`, or, with nil, lights them again.
     func blackOut(keeping: Set<CGDirectDisplayID>?)
+    /// How display `id` is placed now, as chosen through DAM.
+    func placement(of id: CGDirectDisplayID) -> SessionProfile.Placement
+    /// Display `id`'s mode now, or nil when it is gone.
+    func mode(of id: CGDirectDisplayID) -> StreamingDisplayModes.Mode?
+    /// While true, changes made to the displays leave the layout put back after the
+    /// sessions as it was before them.
+    func holdLayout(_ hold: Bool)
 }
 
 /// Starts and ends sessions, and puts back what they changed.
@@ -213,12 +230,18 @@ final class RemoteSessionCoordinator {
     struct Session: Equatable {
         let app: String
         var client: String?
+        /// Its app's profile with the changes its request asked for.
+        var profile = SessionProfile()
+        /// The sound output when it started.
+        var outputAtStart: String?
         /// How many times it was started and not yet ended.
         var count = 1
         /// The display made for it, or the app's own it was given, once it is placed.
         var displayID: CGDirectDisplayID?
         /// Whether DAM made the display, and removes it at the end.
         var madeDisplay = false
+        /// The mode DAM made it in.
+        var madeMode: StreamingDisplayModes.Mode?
         /// Whether it has its own sound output, switched to or already on.
         var ownsOutput = false
         /// Whether it blacks out the Mac's screens.
@@ -237,6 +260,8 @@ final class RemoteSessionCoordinator {
     private var waiting: [String: [(Result<SessionStart, SessionError>) -> Void]] = [:]
     /// Called whenever a session starts or ends.
     var onChange: (() -> Void)?
+    /// Called when a profile takes on what was changed during a session.
+    var onLearn: (() -> Void)?
 
     /// The output to go back to once no session wants its own, kept across launches in case
     /// DAM quits with one on.
@@ -246,16 +271,25 @@ final class RemoteSessionCoordinator {
     }
     private static let outputToRestoreKey = "\(AppIdentity.shortID).remoteSessions.outputToRestore"
 
+    /// The output from before the first of the sessions on, put back after the last even if
+    /// it was changed during them; kept across launches like `outputToRestore`.
+    private var outputBeforeSessions: String? {
+        get { defaults.string(forKey: Self.outputBeforeSessionsKey) }
+        set { defaults.set(newValue, forKey: Self.outputBeforeSessionsKey) }
+    }
+    private static let outputBeforeSessionsKey = "\(AppIdentity.shortID).remoteSessions.outputBeforeSessions"
+
     init(displays: SessionDisplays, profilesURL: URL? = SessionProfiles.defaultURL, defaults: UserDefaults = .dam) {
         self.displays = displays
         self.profilesURL = profilesURL
         self.defaults = defaults
         profiles = profilesURL.map(SessionProfiles.load(from:)) ?? [:]
         // A session was on when DAM last quit; its display went with it, the output didn't.
-        if let uid = outputToRestore {
+        if let uid = outputBeforeSessions ?? outputToRestore {
             rsLog.debug("putting back the output from before the last session")
             _ = displays.setOutput(uid: uid)
             outputToRestore = nil
+            outputBeforeSessions = nil
         }
     }
 
@@ -290,7 +324,11 @@ final class RemoteSessionCoordinator {
         let profile = request.applied(to: profile(for: app))
         guard profile.enabled else { return completion(.failure(.disabled(app))) }
         rsLog.debug("\(app): starting for \(request.client ?? "a client")")
-        sessions[app] = Session(app: app, client: request.client)
+        if sessions.isEmpty {
+            outputBeforeSessions = displays.outputUID
+            displays.holdLayout(true)
+        }
+        sessions[app] = Session(app: app, client: request.client, profile: profile, outputAtStart: displays.outputUID)
         waiting[app] = [completion]
         onChange?()
 
@@ -306,6 +344,7 @@ final class RemoteSessionCoordinator {
                     return self.finish(app, .failure(.noDisplay))
                 }
                 self.sessions[app]?.madeDisplay = true
+                self.sessions[app]?.madeMode = mode
                 self.place(app, id, profile: profile, start: SessionStart(displayID: id))
             }
         case .adopt:
@@ -404,6 +443,7 @@ final class RemoteSessionCoordinator {
         }
         rsLog.debug("\(app): ended")
         sessions[app] = nil
+        learn(from: session)
         // Removing the display puts the other displays back as they were before it came.
         if let id = session.displayID, session.madeDisplay { displays.removeDisplay(id) }
         if session.blacksOut { updateBlackout() }
@@ -411,8 +451,44 @@ final class RemoteSessionCoordinator {
             if !displays.setOutput(uid: uid) { rsLog.error("\(app): the output from before isn't connected") }
             outputToRestore = nil
         }
+        if sessions.isEmpty {
+            // Changed during the sessions without one of them asking.
+            if let uid = outputBeforeSessions, displays.outputUID != uid, !displays.setOutput(uid: uid) {
+                rsLog.error("\(app): the output from before isn't connected")
+            }
+            outputBeforeSessions = nil
+            displays.holdLayout(false)
+        }
         onChange?()
         return .success(())
+    }
+
+    /// Keeps in the app's profile what was changed through DAM during `session`, which has
+    /// just ended, for the next one; but not in the settings locked in Settings.
+    private func learn(from session: Session) {
+        let asked = session.profile
+        let saved = profile(for: session.app)
+        var next = saved
+        if let id = session.displayID, !saved.locked.contains(.placement) {
+            let now = displays.placement(of: id)
+            if now != asked.placement { next.placement = now }
+        }
+        if session.madeDisplay, let id = session.displayID, let made = session.madeMode,
+           !saved.locked.contains(.size), let now = displays.mode(of: id),
+           (now.pixelWidth, now.pixelHeight, now.refreshRate) != (made.pixelWidth, made.pixelHeight, made.refreshRate) {
+            next.width = now.pixelWidth
+            next.height = now.pixelHeight
+            next.refreshRate = now.refreshRate
+        }
+        // Not when another session switched it.
+        if !saved.locked.contains(.audio), !sessions.values.contains(where: \.ownsOutput),
+           let now = displays.outputUID, now != asked.audioOutputUID ?? session.outputAtStart {
+            next.audioOutputUID = now
+        }
+        guard next != saved else { return }
+        rsLog.debug("\(session.app): keeping the session's changes for the next one")
+        setProfile(next, for: session.app)
+        onLearn?()
     }
 
     /// Whether the Mac's screens are blacked out for a session.
@@ -424,9 +500,18 @@ final class RemoteSessionCoordinator {
         displays.blackOut(keeping: wanting.isEmpty ? nil : Set(sessions.values.compactMap(\.displayID)))
     }
 
-    /// Lights the screens again, for whoever is at the Mac, until the next session.
+    /// Lights the screens again, for whoever is at the Mac, until the next session; the next
+    /// sessions leave them lit unless blacking out is locked in Settings.
     func liftBlackout() {
-        for app in sessions.keys { sessions[app]?.blacksOut = false }
+        for (app, session) in sessions where session.blacksOut {
+            sessions[app]?.blacksOut = false
+            var saved = profile(for: app)
+            if saved.blackout, !saved.locked.contains(.blackout) {
+                saved.blackout = false
+                setProfile(saved, for: app)
+                onLearn?()
+            }
+        }
         updateBlackout()
         onChange?()
     }
@@ -492,6 +577,25 @@ final class LiveSessionDisplays: SessionDisplays {
     func blackOut(keeping: Set<CGDirectDisplayID>?) {
         if let keeping { blackout.start(keeping: keeping) } else { blackout.stop() }
     }
+
+    /// Mirrored when every display it can be mirrored on mirrors it; main when it is main
+    /// and, for a streaming display, was made main through DAM, not by WindowServer.
+    func placement(of id: CGDirectDisplayID) -> SessionProfile.Placement {
+        guard let display = video.allConnectedDisplays.first(where: { $0.cgDisplayID == id }) else { return .extend }
+        let targets = video.mirrorTargets(for: display).map(\.cgDisplayID).filter { $0 != 0 }
+        if !targets.isEmpty, targets.allSatisfy({ video.userMirrorMaster(of: $0) == id }) { return .mirror }
+        let chosen = !display.isStreaming || video.streamingDisplayIsMainByChoice
+        return CGDisplayIsMain(id) != 0 && chosen ? .main : .extend
+    }
+
+    func mode(of id: CGDirectDisplayID) -> StreamingDisplayModes.Mode? {
+        guard let mode = CGDisplayCopyDisplayMode(id) else { return nil }
+        return StreamingDisplayModes.Mode(width: mode.width, height: mode.height,
+                                          refreshRate: Int(mode.refreshRate.rounded()),
+                                          hiDPI: mode.pixelWidth > mode.width)
+    }
+
+    func holdLayout(_ hold: Bool) { video.holdsStreamingArrangement = hold }
 
     /// The UID of the output named or with UID `nameOrUID`, matching names without regard to case.
     func outputUID(matching nameOrUID: String) -> String? {
