@@ -97,10 +97,16 @@ relay (option 2).
   - Its listeners bind every interface, so `serverinfo` answers on the cable address.
   - It advertises `_nvstream._tcp` on `en12`.
   - It reports `LocalIP` 169.254.223.46 to a client on that link.
-- **Stock Moonlight on the iPad streams over the cable** with its Wi-Fi off. It was added by
-  address (169.254.223.46) and paired over the link.
+- **Stock Moonlight on the iPad streams over the cable** with its Wi-Fi off, and finds DAM
+  there by itself. The iPad was already paired with DAM over Wi-Fi; nothing was added by
+  hand, and Moonlight connected to DAM's cable address through the Bonjour advertisement on
+  the link.
   - `nettop` puts DAM's video (47998), control (47999) and audio (48000) flows all on `en12`.
-  - Pairing, `serverinfo` and RTSP all ran between the two 169.254 addresses.
+  - `serverinfo` and RTSP ran between the two 169.254 addresses.
+- **Pairing works over the cable.** With both sides' pairing forgotten and Wi-Fi off,
+  Moonlight found DAM again on its own after its host was deleted. DAM logged "pairing
+  requested from 169.254.187.129" and paired seven seconds later, then served the app
+  list, the launch and RTSP to the same address.
 - **Bandwidth.** The iPad enumerates at USB 2.0 speed (480 Mbit/s); the cable or the iPad
   may be the reason.
   - Raw UDP from the Mac to the iPad peaked at about 280 Mbit/s. That leaves very roughly
@@ -114,10 +120,12 @@ relay (option 2).
 ## Next steps
 
 - Compare latency against Wi-Fi (streamtest's QR codes).
-- Find out why the encoder makes only 8–18 Mbit/s against a 100 Mbit/s target.
-- Check whether Moonlight finds the host by itself over the link (mDNS), without an address.
+- The encoder, not the cable, limits the bitrate. Live, low-latency encoding meets targets
+  up to about 16 Mbit/s and tops out around 15–17. A loop that raised its target was tried
+  and shelved (branch `feat/low-latency-bitrate-loop`).
 - Detect cable links (link-local addresses on interfaces other than Wi-Fi) and show the
-  host's address on each in Settings › Moonlight.
+  host's address on each in Settings › Moonlight. The iPad doesn't need it (it finds DAM
+  through Bonjour), so this is a fallback for clients where mDNS doesn't cross the link.
 - DAM's UDP sockets are IPv4 only (`MoonlightUDPSocket`). A link with only IPv6 link-local
   addresses would fail.
 - Try Thunderbolt Bridge from the laptop. Linux's thunderbolt-net is reported to work with
