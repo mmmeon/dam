@@ -36,7 +36,7 @@ layout=$cache/layout
 # The name of the stand-in for another app's display, which the "display" profile adopts.
 other_name="Sessiontest Other"
 
-all_cases=(extend main mirror user-main blackout audio overlap same-app quit kill
+all_cases=(extend main mirror user-main blackout audio learn-audio locked-audio overlap same-app quit kill
            rustdesk parsec chromeremotedesktop screensharing teamviewer adopt)
 
 die() { print -u2 "sessiontest: $*"; exit 1 }
@@ -296,6 +296,38 @@ case_audio() {
     check_restored
 }
 
+# The sound output its profile has for app $1, or nothing.
+profile_output() {
+    python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get(sys.argv[2], {}).get("audioOutputUID", ""))' $profiles $1
+}
+
+# The output is changed during the session, from outside DAM. The end puts back the one from
+# before, and the app's profile keeps the new one for its next session.
+case_learn-audio() {
+    local uid=$(other_output)
+    [[ -n $uid ]] || { skip "no other sound output"; return }
+    local id=$(start_session sessiontest --placement extend)
+    [[ -n $id ]] || { fail "no display"; return }
+    $layout output $uid
+    pause 1
+    end_session sessiontest
+    check_restored
+    check "the profile keeps the output for next time" [ "$(profile_output sessiontest)" = "$uid" ]
+}
+
+# The same with the output locked in the profile: it stays as it was.
+case_locked-audio() {
+    local uid=$(other_output)
+    [[ -n $uid ]] || { skip "no other sound output"; return }
+    local id=$(start_session sessiontest-locked --placement extend)
+    [[ -n $id ]] || { fail "no display"; return }
+    $layout output $uid
+    pause 1
+    end_session sessiontest-locked
+    check_restored
+    check "the locked profile doesn't take the output" [ -z "$(profile_output sessiontest-locked)" ]
+}
+
 # Two apps' sessions at once, ended in the order they started.
 case_overlap() {
     local first=$(start_session sessiontest --placement extend)
@@ -432,14 +464,15 @@ case_adopt() {
 cmd_list() { print -l $all_cases }
 
 # Profiles for the run: every detector watched, each display made and extended, but the
-# other app's, which is adopted and made main.
+# other app's, which is adopted and made main; and one with every setting locked.
 write_profiles() {
     local app sep="" json="{"
     for app in rustdesk parsec chromeremotedesktop screensharing teamviewer; do
         json+="$sep\"$app\":{\"enabled\":true,\"watch\":true,\"display\":\"create\",\"placement\":\"extend\",\"blackout\":false}"
         sep=","
     done
-    json+=",\"display\":{\"enabled\":true,\"watch\":true,\"display\":\"adopt\",\"placement\":\"main\",\"adoptName\":\"$other_name\",\"blackout\":false}}"
+    json+=",\"display\":{\"enabled\":true,\"watch\":true,\"display\":\"adopt\",\"placement\":\"main\",\"adoptName\":\"$other_name\",\"blackout\":false}"
+    json+=",\"sessiontest-locked\":{\"enabled\":true,\"locked\":[\"placement\",\"size\",\"audio\",\"blackout\"]}}"
     print -r -- $json > $profiles
 }
 
@@ -456,7 +489,7 @@ cleanup() {
     pkill -f "$layout standin" 2>/dev/null
     if dam_running; then
         local app
-        for app in sessiontest sessiontest2 rustdesk parsec chromeremotedesktop screensharing teamviewer display; do
+        for app in sessiontest sessiontest2 sessiontest-locked rustdesk parsec chromeremotedesktop screensharing teamviewer display; do
             $dam session end --app $app --all >/dev/null 2>&1
         done
     fi
@@ -509,10 +542,11 @@ cmd_run() {
         print -r -- "--- $current" >> $out/layout.log
         before=$(settled)
         case_$current
+        print -r -- "profiles after $current: $(tr -d ' \n' < $profiles)" >> $out/layout.log
         # A case that failed half way may leave a session on.
         if [[ -n $(sessions) ]]; then
             fail "a session was still on after the case"
-            for app in sessiontest sessiontest2 rustdesk parsec chromeremotedesktop screensharing teamviewer display; do
+            for app in sessiontest sessiontest2 sessiontest-locked rustdesk parsec chromeremotedesktop screensharing teamviewer display; do
                 $dam session end --app $app --all >/dev/null 2>&1
             done
         fi

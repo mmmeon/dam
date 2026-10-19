@@ -12,6 +12,7 @@
 //    ./layout main ID             makes display ID main, as System Settings does (not through DAM)
 //    ./layout standin NAME        makes a 1280×800 display called NAME, as another app's, until killed
 //    ./layout regamma             puts every display's gamma back, as macOS can by itself
+//    ./layout output UID          makes UID the default sound output, as System Settings does
 //
 //  kind is "streaming" for DAM's streaming displays (vendor 0x3456, product 0x1236), "dam"
 //  for DAM's other virtual displays (anchors), "standin" for one made here, else "other".
@@ -151,11 +152,19 @@ case "outputs":
 case "main":
     guard args.count == 2, let id = UInt32(args[1]) else { fail("usage: layout main ID") }
     makeMain(id)
+case "output":
+    guard args.count == 2, let id = outputDevices().first(where: { string($0, kAudioDevicePropertyDeviceUID) == args[1] })
+    else { fail("usage: layout output UID (of a connected output)") }
+    var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+                                             mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+    var device = id
+    guard AudioObjectSetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil,
+                                     UInt32(MemoryLayout<AudioObjectID>.size), &device) == noErr else { fail("can't switch") }
 case "regamma":
     CGDisplayRestoreColorSyncSettings()
 case "standin":
     guard args.count == 2 else { fail("usage: layout standin NAME") }
     standIn(named: args[1])
 default:
-    fail("usage: layout snapshot|outputs|main ID|regamma|standin NAME")
+    fail("usage: layout snapshot|outputs|main ID|output UID|regamma|standin NAME")
 }

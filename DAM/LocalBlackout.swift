@@ -40,7 +40,10 @@ final class LocalBlackout {
         }
         apply()
         if watch == nil {
-            watch = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.applyWhereLit() }
+            // In every mode, so it still looks while a menu is open.
+            let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.applyWhereLit() }
+            RunLoop.main.add(timer, forMode: .common)
+            watch = timer
         }
     }
 
