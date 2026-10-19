@@ -302,6 +302,8 @@ final class RemoteSessionCoordinator {
         var profile = SessionProfile()
         // Another app's display is there to be placed, not made.
         if app == "display" || app == "opendisplay" { profile.display = .adopt }
+        // Parsec streams the main display, whichever that is when the display is placed.
+        if app == "parsec" { profile.placement = .main }
         return profile
     }
 

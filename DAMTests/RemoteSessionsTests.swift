@@ -123,6 +123,12 @@ final class RemoteSessionsTests: XCTestCase {
         XCTAssertNil(profile.audioOutputUID)
     }
 
+    func testParsecDefaultsToMain() {
+        let c = coordinator(FakeSessionDisplays())
+        XCTAssertEqual(c.profile(for: "parsec").placement, .main)
+        XCTAssertEqual(c.profile(for: "rustdesk").placement, .extend)
+    }
+
     func testProfilesRoundTripThroughTheFile() throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString)/remote-sessions.json")
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
