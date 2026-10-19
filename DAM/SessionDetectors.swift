@@ -341,19 +341,27 @@ enum SessionDetectors {
     static var displayNames: () -> [(id: CGDirectDisplayID, name: String)] = { [] }
     static var adoptName: () -> String? = { nil }
 
+    /// The log to follow for `app`: `standard`, or, for tests (tools/sessiontest), the path
+    /// the default SessionDetectorLogs gives for the app.
+    static func logURL(for app: String, standard: URL, defaults: UserDefaults = .standard) -> URL {
+        guard let path = (defaults.dictionary(forKey: "SessionDetectorLogs")?[app] as? String),
+              !path.isEmpty else { return standard }
+        return URL(fileURLWithPath: path)
+    }
+
     static func make(for app: String) -> SessionDetector? {
         switch app {
         case "rustdesk":
-            return LogSessionDetector(app: app, url: home.appendingPathComponent("Library/Logs/RustDesk/RustDesk_rCURRENT.log"),
-                                      parse: SessionLogLines.rustDesk)
+            let url = logURL(for: app, standard: home.appendingPathComponent("Library/Logs/RustDesk/RustDesk_rCURRENT.log"))
+            return LogSessionDetector(app: app, url: url, parse: SessionLogLines.rustDesk)
         case "parsec":
-            return LogSessionDetector(app: app, url: home.appendingPathComponent(".parsec/log.txt"),
-                                      parse: SessionLogLines.parsec)
+            let url = logURL(for: app, standard: home.appendingPathComponent(".parsec/log.txt"))
+            return LogSessionDetector(app: app, url: url, parse: SessionLogLines.parsec)
         case "screensharing":
             return ProcessSessionDetector(app: app, processName: "screensharingd")
         case "chromeremotedesktop":
-            return LogSessionDetector(app: app, url: URL(fileURLWithPath: "/var/log/org.chromium.chromoting.log"),
-                                      parse: SessionLogLines.chromeRemoteDesktop)
+            let url = logURL(for: app, standard: URL(fileURLWithPath: "/var/log/org.chromium.chromoting.log"))
+            return LogSessionDetector(app: app, url: url, parse: SessionLogLines.chromeRemoteDesktop)
         case "teamviewer":
             // Started for each incoming connection.
             return ProcessSessionDetector(app: app, processName: "TeamViewer_Desktop")

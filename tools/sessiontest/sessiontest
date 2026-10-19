@@ -1,0 +1,530 @@
+#!/bin/zsh
+#
+#  sessiontest
+#
+#  Runs remote sessions through the installed DAM and checks that each one leaves the Mac as
+#  it found it: every display where it was, in the same mode, the same one main, nothing
+#  mirrored or blacked out that wasn't, and the same sound output. Checks what each session
+#  does in the middle too. Needs the installed DAM running, from a build with
+#  SessionDetectorLogs (tools/streamtest/streamtest install), and Xcode's swiftc.
+#
+#    tools/sessiontest/sessiontest list               the cases
+#    tools/sessiontest/sessiontest run [case …]       those cases, or every one
+#
+#  The displays change while it runs, and the screens go black for a moment in `blackout`;
+#  don't use the Mac meanwhile. Moving the pointer is fine.
+#
+#  For the run, DAM gets profiles of its own (the user's are put back after) and follows logs
+#  in the run's folder instead of RustDesk's, Parsec's and Chrome Remote Desktop's, so lines
+#  written there stand for their connections. Screen Sharing and TeamViewer are stood in for
+#  by processes with their names. DAM is restarted at the start and the end.
+#
+#  Everything a run leaves is in /tmp/dam-sessiontest/<time>: dam.log (DAM's debug log),
+#  layout.log (snapshots), a .diff for each failed comparison, and summary.txt.
+#
+
+set -u
+setopt pipefail
+
+here=${0:A:h}
+repo=${here:h:h}
+dam=/Applications/DAM.app/Contents/MacOS/DAM
+bundle=mmmeon.dam
+profiles="$HOME/Library/Application Support/DAM/remote-sessions.json"
+cache=${TMPDIR:-/tmp}/dam-sessiontest
+layout=$cache/layout
+# The name of the stand-in for another app's display, which the "display" profile adopts.
+other_name="Sessiontest Other"
+
+all_cases=(extend main mirror user-main blackout audio overlap same-app quit kill
+           rustdesk parsec chromeremotedesktop screensharing teamviewer adopt)
+
+die() { print -u2 "sessiontest: $*"; exit 1 }
+say() { print "sessiontest: $*" }
+pause() { perl -e "select(undef, undef, undef, $1)" }
+
+build_tools() {
+    mkdir -p $cache
+    if [[ ! -x $layout || $here/layout.swift -nt $layout ]]; then
+        DEVELOPER_DIR=${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer} \
+            swiftc -O -suppress-warnings -import-objc-header $repo/DAM/CGVirtualDisplayPrivate.h \
+            -o $layout $here/layout.swift || die "could not build layout.swift"
+    fi
+    # Stand-ins for the processes the detectors look for, which sleep for as long as they're
+    # told. Built, as macOS kills a copy of /bin/sleep at once.
+    local name
+    for name in screensharingd TeamViewer_Desktop; do
+        [[ -x $cache/$name ]] && continue
+        print 'int sleep(int); int atoi(const char *); int main(int c, char **v) { sleep(c > 1 ? atoi(v[1]) : 60); return 0; }' \
+            | cc -x c -o $cache/$name - || die "could not make $name"
+    done
+}
+
+# MARK: - DAM
+
+dam_running() { $dam status >/dev/null 2>&1 }
+
+quit_dam() {
+    osascript -e 'tell application "DAM" to quit' >/dev/null 2>&1
+    local i
+    for i in {1..20}; do pgrep -xq DAM || return 0; pause 0.5; done
+    die "DAM did not quit"
+}
+
+start_dam() {
+    open /Applications/DAM.app
+    local i
+    for i in {1..40}; do dam_running && return 0; pause 0.5; done
+    die "DAM did not start listening for commands"
+}
+
+restart_dam() {
+    quit_dam
+    start_dam
+    # Its detectors take their first look.
+    pause 3
+}
+
+# The sessions DAM reports, one line each; nothing when there are none.
+sessions() { $dam status 2>/dev/null | grep -v '^No remote sessions\.$' }
+
+# Starts a session with `session start --app $1 …`; prints the display's ID, or nothing.
+start_session() {
+    local text
+    text=$($dam session start --app "$@" 2>&1)
+    local rc=$?
+    print -r -- "start $*: $text" >> $out/layout.log
+    (( rc == 0 )) || return 1
+    print -r -- $text | grep -v '^warning:' | tail -1 | grep -E '^[0-9]+$'
+}
+
+end_session() {
+    local text
+    text=$($dam session end --app "$@" 2>&1)
+    print -r -- "end $*: $text" >> $out/layout.log
+}
+
+# Waits up to $1 seconds for a session to be on with its display (or, with "none", for none); prints the
+# display of the first one on.
+wait_session() {
+    local seconds=$1 want=${2:-on} i
+    for i in {1..$(( seconds * 2 ))}; do
+        local s=$(sessions)
+        if [[ $want == none ]]; then
+            [[ -z $s ]] && return 0
+        else
+            # A session being set up has no display yet.
+            local id=$(print -r -- $s | head -1 | sed -nE 's/.*display ([0-9]+).*/\1/p')
+            [[ -n $id ]] && { print $id; return 0 }
+        fi
+        pause 0.5
+    done
+    return 1
+}
+
+# MARK: - Layout
+
+snap() { $layout snapshot }
+
+# The snapshot once nothing has changed for 3 s, at least 5 s after the call (DAM keeps
+# putting the layout back for 5 s after a display goes), and at most 20 s.
+settled() {
+    local start=$SECONDS last="" same=0 now
+    while (( SECONDS - start < 20 )); do
+        now=$(snap)
+        if [[ $now == $last ]]; then (( same++ )); else same=0; last=$now; fi
+        (( same >= 6 && SECONDS - start >= 5 )) && break
+        pause 0.5
+    done
+    print -r -- "settled ($current): ${last//$'\n'/ | }" >> $out/layout.log
+    print -r -- $last
+}
+
+# Fields of display $2 in snapshot $1: "x y width height pixel-width hz main mirrors dark".
+fields() { print -r -- $1 | awk -v id=$2 '$1 == "display" && $2 == id { print $4, $5, $6, $7, $8, $9, $10, $11, $12 }' }
+online() { print -r -- $1 | awk -v id=$2 '$1 == "display" && $2 == id' | grep -q . }
+main_of() { print -r -- $1 | awk '$1 == "display" && $10 == 1 { print $2 }' }
+others() { print -r -- $1 | awk '$1 == "display" && $3 == "other" { print $2 }' }
+output_of() { print -r -- $1 | awk '$1 == "output" { print $2 }' }
+without() { print -r -- $1 | awk -v id=$2 '!($1 == "display" && $2 == id)' }
+
+# MARK: - Results
+
+results=()
+passed=0
+failed=0
+skipped=0
+
+pass() { results+=("PASS  $current: $*"); (( passed++ )); print "  pass: $*" }
+fail() { results+=("FAIL  $current: $*"); (( failed++ )); print "  FAIL: $*" }
+skip() { results+=("SKIP  $current: $*"); (( skipped++ )); print "  skip: $*" }
+note() { results+=("NOTE  $current: $*"); print "  note: $*" }
+check() { local what=$1; shift; if "$@"; then pass $what; else fail $what; fi }
+not() { ! "$@" }
+
+# Passes when the Mac is as it was in $before, once settled; saves the difference otherwise.
+check_restored() {
+    # A removal waits for the display change before it, which can take seconds.
+    local start=$SECONDS
+    while [[ $(snap) == *' streaming '* ]] && (( SECONDS - start < 30 )); do pause 0.5; done
+    (( SECONDS - start > 3 )) && note "DAM's display took $(( SECONDS - start )) s to go"
+    local after=$(settled)
+    if [[ $after == $before ]]; then
+        pass "back as before"
+    else
+        diff <(print -r -- $before) <(print -r -- $after) > $out/$current.diff
+        fail "not back as before (see $current.diff): $(grep '^[<>]' $out/$current.diff | tr '\n' ';')"
+    fi
+}
+
+# Every display that isn't the session's $1 is where and as it was in $before.
+others_unchanged() {
+    local now=$(snap)
+    [[ $(without $now $1) == $(print -r -- $before) ]]
+}
+
+# A sound output to switch to that isn't the one on; nothing when there is none. Teams'
+# loopback can't be the default.
+other_output() {
+    $layout outputs | tail -n +2 | grep -v MSLoopbackDriverDevice | head -1 | cut -f1
+}
+
+# MARK: - Cases
+
+case_extend() {
+    local id=$(start_session sessiontest --placement extend)
+    [[ -n $id ]] || { fail "no display"; return }
+    pause 3
+    local now=$(snap)
+    check "the display is online" online $now $id
+    check "the display isn't main" [ "$(main_of $now)" != "$id" ]
+    check "the other displays are as they were" others_unchanged $id
+    end_session sessiontest
+    check_restored
+}
+
+case_main() {
+    local id=$(start_session sessiontest --placement main)
+    [[ -n $id ]] || { fail "no display"; return }
+    pause 3
+    check "the display is main" [ "$(main_of "$(snap)")" = "$id" ]
+    end_session sessiontest
+    check_restored
+}
+
+case_mirror() {
+    local id=$(start_session sessiontest --placement mirror)
+    [[ -n $id ]] || { fail "no display"; return }
+    pause 3
+    local now=$(snap) d all=1
+    for d in $(others $before); do
+        [[ $(fields $now $d | cut -d' ' -f8) == $id ]] || all=0
+    done
+    check "every other display mirrors it" [ $all = 1 ]
+    end_session sessiontest
+    check_restored
+}
+
+# The main display is changed during the session, as in System Settings: to the session's
+# display, and to another of the Mac's when there is one. The end puts back the main from
+# before the session.
+case_user-main() {
+    local id=$(start_session sessiontest --placement extend)
+    [[ -n $id ]] || { fail "no display"; return }
+    pause 3
+    $layout main $id
+    pause 4
+    local now=$(main_of "$(snap)")
+    [[ $now == $id ]] && note "the session's display stayed main once made main" \
+        || note "DAM handed main back to $now after the session's display was made main"
+    end_session sessiontest
+    check_restored
+
+    local mains=($(others $before)) first=$(main_of $before)
+    local second=${${mains:#$first}[1]:-}
+    [[ -n $second ]] || { skip "another of the Mac's displays made main: only one display"; return }
+    id=$(start_session sessiontest --placement extend)
+    [[ -n $id ]] || { fail "no display"; return }
+    pause 3
+    $layout main $second
+    pause 4
+    end_session sessiontest
+    check_restored
+}
+
+case_blackout() {
+    local id=$(start_session sessiontest --placement extend --blackout yes)
+    [[ -n $id ]] || { fail "no display"; return }
+    # Looked at for 6 s, as macOS can put the gamma back a moment after a display change.
+    local now d all=1 lit=1 i
+    for i in {1..12}; do
+        now=$(snap)
+        for d in $(others $before); do
+            [[ $(fields $now $d | cut -d' ' -f9) == 1 ]] || all=0
+        done
+        [[ $(fields $now $id | cut -d' ' -f9) == 0 ]] || lit=0
+        pause 0.5
+    done
+    check "the Mac's screens stay black" [ $all = 1 ]
+    check "the session's display stays lit" [ $lit = 1 ]
+    # Put back from outside, as macOS does after some changes, they go black again within
+    # DAM's look each second. macOS can put it back again a moment later by itself.
+    $layout regamma
+    local stretch=0 longest=0 dark
+    for i in {1..24}; do
+        now=$(snap)
+        dark=1
+        for d in $(others $before); do
+            [[ $(fields $now $d | cut -d' ' -f9) == 1 ]] || dark=0
+        done
+        if (( dark )); then stretch=0; else (( stretch++, longest = stretch > longest ? stretch : longest )); fi
+        pause 0.25
+    done
+    note "lit for up to $(( longest * 250 )) ms at a time after the gamma was put back"
+    check "the screens go black again after their gamma is put back" [ $dark = 1 -a $longest -le 6 ]
+    end_session sessiontest
+    check_restored
+}
+
+case_audio() {
+    local uid=$(other_output)
+    [[ -n $uid ]] || { skip "no other sound output"; return }
+    local id=$(start_session sessiontest --placement extend --audio $uid)
+    [[ -n $id ]] || { fail "no display"; return }
+    check "the output is switched" [ "$(output_of "$(snap)")" = "$uid" ]
+    end_session sessiontest
+    check_restored
+}
+
+# Two apps' sessions at once, ended in the order they started.
+case_overlap() {
+    local first=$(start_session sessiontest --placement extend)
+    local second=$(start_session sessiontest2 --placement extend)
+    [[ -n $first && -n $second ]] || { fail "no displays"; end_session sessiontest --all; end_session sessiontest2 --all; return }
+    pause 3
+    local now=$(snap)
+    check "two displays" [ "$first" != "$second" ]
+    check "neither is main" [ "$(main_of $now)" != "$first" -a "$(main_of $now)" != "$second" ]
+    end_session sessiontest
+    pause 4
+    now=$(snap)
+    check "the first's display goes" not online $now $first
+    check "the second's stays" online $now $second
+    check "the second's isn't main" [ "$(main_of $now)" != "$second" ]
+    end_session sessiontest2
+    check_restored
+}
+
+# A second start of the same app joins its session; it ends with the last end.
+case_same-app() {
+    local first=$(start_session sessiontest --placement extend)
+    local second=$(start_session sessiontest --placement extend)
+    [[ -n $first ]] || { fail "no display"; end_session sessiontest --all; return }
+    check "the second start gets the same display" [ "$first" = "$second" ]
+    end_session sessiontest
+    pause 2
+    check "one end leaves it on" online "$(snap)" $first
+    end_session sessiontest
+    check_restored
+}
+
+# DAM quits with a session on: its display and the output it switched go back.
+case_quit() {
+    local uid=$(other_output) audio=()
+    [[ -n $uid ]] && audio=(--audio $uid)
+    local id=$(start_session sessiontest --placement extend $audio)
+    [[ -n $id ]] || { fail "no display"; return }
+    quit_dam
+    local now=$(settled)
+    check "the display goes with DAM" not online $now $id
+    check "the output goes back when DAM quits" [ "$(output_of $now)" = "$(output_of $before)" ]
+    start_dam
+    check_restored
+}
+
+# DAM is killed with a session on: the output goes back once it starts again.
+case_kill() {
+    local uid=$(other_output)
+    [[ -n $uid ]] || { skip "no other sound output"; return }
+    local id=$(start_session sessiontest --placement extend --audio $uid)
+    [[ -n $id ]] || { fail "no display"; return }
+    kill -9 $(pgrep -x DAM)
+    pause 3
+    check "the display goes with DAM" not online "$(snap)" $id
+    start_dam
+    check_restored
+}
+
+# A detector that reads a log: line $2 opens a connection, $3 closes it. A close for a
+# connection DAM never saw open ($4) changes nothing.
+log_case() {
+    local app=$1 log=$out/logs/$1.log
+    print -r -- $4 >> $log
+    pause 3
+    check "a close it didn't see open is ignored" [ -z "$(sessions)" ]
+    print -r -- $2 >> $log
+    local id=$(wait_session 30)
+    [[ -n $id ]] || { fail "no session from the log"; return }
+    pause 3
+    local now=$(snap)
+    check "the display is online" online $now $id
+    check "the display isn't main" [ "$(main_of $now)" != "$id" ]
+    print -r -- $3 >> $log
+    check "the session ends with the close" wait_session 10 none
+    check_restored
+}
+
+case_rustdesk() {
+    log_case rustdesk \
+        "[2026-10-19 09:00:00.000000 -04:00] DEBUG [src/server/connection.rs:1498] #9001 Connection opened from 10.99.0.1:40000." \
+        "[2026-10-19 09:00:30.000000 -04:00] INFO [src/server/connection.rs:5249] #9001 Connection closed: Peer close" \
+        "[2026-10-19 08:59:00.000000 -04:00] INFO [src/server/connection.rs:5249] #9000 Connection closed: Peer close"
+}
+
+case_parsec() {
+    log_case parsec "[I 2026-10-19 09:00:00] sessiontest#4242 connected." \
+        "[I 2026-10-19 09:00:30] sessiontest#4242 disconnected." "[I 2026-10-19 08:59:00] earlier#1 disconnected."
+}
+
+case_chromeremotedesktop() {
+    log_case chromeremotedesktop \
+        "Oct 19 09:00:00 mac remoting_me2me_host[1]: Client connected: sessiontest@example.com/chromoting_ftl_1" \
+        "Oct 19 09:00:30 mac remoting_me2me_host[1]: Client disconnected: sessiontest@example.com/chromoting_ftl_1" \
+        "Oct 19 08:59:00 mac remoting_me2me_host[1]: Client disconnected: earlier@example.com/chromoting_ftl_0"
+}
+
+# A detector that looks for process $1 (cut to 16 characters by the system).
+process_case() {
+    local name=$1
+    pgrep -xq ${name[1,16]} && { skip "$name is already running"; return }
+    $cache/$name 600 & local pid=$!
+    local id=$(wait_session 15)
+    [[ -n $id ]] || { fail "no session while $name runs"; kill $pid; return }
+    pause 3
+    check "the display isn't main" [ "$(main_of "$(snap)")" != "$id" ]
+    kill $pid
+    wait $pid 2>/dev/null
+    # It waits 5 s before ending, as the process can come back for the next connection.
+    check "the session ends after $name goes" wait_session 15 none
+    check_restored
+}
+
+case_screensharing() { process_case screensharingd }
+case_teamviewer() { process_case TeamViewer_Desktop }
+
+# Another app's display comes; the "display" profile adopts it and makes it main. It goes
+# with the app, and the main from before comes back.
+case_adopt() {
+    $layout standin $other_name > $out/standin.txt 2>&1 & local pid=$!
+    local id=$(wait_session 20)
+    [[ -n $id ]] || { fail "no session for the other app's display"; kill $pid; return }
+    pause 3
+    check "the session has the other app's display" [ "$id" = "$(head -1 $out/standin.txt)" ]
+    check "the adopted display is main" [ "$(main_of "$(snap)")" = "$id" ]
+    kill $pid
+    wait $pid 2>/dev/null
+    check "the session ends when the display goes" wait_session 15 none
+    check_restored
+}
+
+# MARK: - Run
+
+cmd_list() { print -l $all_cases }
+
+# Profiles for the run: every detector watched, each display made and extended, but the
+# other app's, which is adopted and made main.
+write_profiles() {
+    local app sep="" json="{"
+    for app in rustdesk parsec chromeremotedesktop screensharing teamviewer; do
+        json+="$sep\"$app\":{\"enabled\":true,\"watch\":true,\"display\":\"create\",\"placement\":\"extend\",\"blackout\":false}"
+        sep=","
+    done
+    json+=",\"display\":{\"enabled\":true,\"watch\":true,\"display\":\"adopt\",\"placement\":\"main\",\"adoptName\":\"$other_name\",\"blackout\":false}}"
+    print -r -- $json > $profiles
+}
+
+had_profiles=0
+had_logs=0
+log_pid=
+setup_done=0
+
+cleanup() {
+    (( setup_done )) || return
+    setup_done=0
+    pkill -f "$cache/screensharingd" 2>/dev/null
+    pkill -f "$cache/TeamViewer_Desktop" 2>/dev/null
+    pkill -f "$layout standin" 2>/dev/null
+    if dam_running; then
+        local app
+        for app in sessiontest sessiontest2 rustdesk parsec chromeremotedesktop screensharing teamviewer display; do
+            $dam session end --app $app --all >/dev/null 2>&1
+        done
+    fi
+    if (( had_profiles )); then cp $out/remote-sessions.json.orig $profiles; else rm -f $profiles; fi
+    if (( had_logs )); then defaults import $bundle $out/defaults.orig.plist; else defaults delete $bundle SessionDetectorLogs 2>/dev/null; fi
+    say "putting DAM's own settings back"
+    restart_dam
+    [[ -n $log_pid ]] && kill $log_pid 2>/dev/null
+    local final=$(current=final settled)
+    if [[ $final != $baseline ]]; then
+        diff <(print -r -- $baseline) <(print -r -- $final) > $out/final.diff
+        results+=("FAIL  final: the Mac isn't as it was before the run (see final.diff)")
+        (( failed++ ))
+    fi
+    { print -l $results; print; print "$passed passed, $failed failed, $skipped skipped" } | tee $out/summary.txt
+    say "logs in $out"
+}
+
+cmd_run() {
+    local cases=("$@")
+    (( $#cases )) || cases=($all_cases)
+    local c
+    for c in $cases; do (( $all_cases[(Ie)$c] )) || die "no case $c (see sessiontest list)"; done
+    dam_running || die "DAM isn't running, or isn't listening for commands"
+    [[ -z $(sessions) ]] || die "a remote session is on; end it first"
+    build_tools
+    [[ $(snap) == *' streaming '* ]] && die "DAM has a streaming display up; end its stream first"
+
+    out=/tmp/dam-sessiontest/$(date +%Y%m%d-%H%M%S)
+    mkdir -p $out/logs
+    local app
+    for app in rustdesk parsec chromeremotedesktop; do : > $out/logs/$app.log; done
+    [[ -f $profiles ]] && { had_profiles=1; cp $profiles $out/remote-sessions.json.orig }
+    defaults read $bundle SessionDetectorLogs >/dev/null 2>&1 && { had_logs=1; defaults export $bundle $out/defaults.orig.plist }
+
+    current=setup
+    baseline=$(snap)
+    print -r -- "baseline: ${baseline//$'\n'/ | }" > $out/layout.log
+    setup_done=1
+    write_profiles
+    defaults write $bundle SessionDetectorLogs -dict \
+        rustdesk $out/logs/rustdesk.log parsec $out/logs/parsec.log chromeremotedesktop $out/logs/chromeremotedesktop.log
+    say "restarting DAM with the test's profiles"
+    restart_dam
+    /usr/bin/log stream --level debug --style compact --predicate "subsystem == \"$bundle\"" > $out/dam.log 2>&1 &
+    log_pid=$!
+
+    for current in $cases; do
+        say "$current"
+        print -r -- "--- $current" >> $out/layout.log
+        before=$(settled)
+        case_$current
+        # A case that failed half way may leave a session on.
+        if [[ -n $(sessions) ]]; then
+            fail "a session was still on after the case"
+            for app in sessiontest sessiontest2 rustdesk parsec chromeremotedesktop screensharing teamviewer display; do
+                $dam session end --app $app --all >/dev/null 2>&1
+            done
+        fi
+    done
+    (( failed == 0 ))
+}
+
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+
+case ${1:-} in
+    list) cmd_list ;;
+    run) shift; cmd_run "$@" ;;
+    *) sed -n '3,25p' $0 | sed -E 's/^# ?//'; exit 2 ;;
+esac
