@@ -5,7 +5,7 @@
 ## Summary
 
 DAM can set up the Mac when another app streams it: Sunshine, RustDesk, Parsec, Screen
-Sharing, Chrome Remote Desktop, TeamViewer, or an app that makes its own display. For each
+Sharing, Chrome Remote Desktop, TeamViewer, OpenDisplay, or an app that makes its own display. For each
 app, a profile in Settings › Remote Sessions says what to do while one of its sessions is on:
 
 - **Display:**
@@ -119,6 +119,7 @@ The same requests work as URLs, for example
 | Screen Sharing | `screensharingd` running; it runs only while someone is connected. The session ends 5 s after it exits. | No (Screen Sharing is off here) |
 | Chrome Remote Desktop | `Client connected:` / `Client disconnected:` in `/var/log/org.chromium.chromoting.log` | No (not installed) |
 | TeamViewer | `TeamViewer_Desktop` running | No (not installed) |
+| OpenDisplay | `capture started: … display ID … mode extend\|mirror … session ID` / `capture ended: session ID` in `~/Library/Logs/OpenDisplay/opendisplay.log` (`OpenDisplay Dev/` for the Debug build, whichever changed last). Ends too when OpenDisplay quits, and a session already on when DAM starts is taken up while OpenDisplay runs. Extending, the session adopts that display; mirroring, it leaves the displays alone. | Yes, with an iPad over WiFi: extend, mirror, switching between them, and DAM relaunched mid-session |
 | Another app's display | A display whose name contains the given text is online | Yes, with a stand-in virtual display |
 
 Follow the logs from their end, through rotation and truncation. A close for a connection
@@ -132,6 +133,10 @@ root's processes (`screensharingd`), and names are cut to 16 characters.
   so the hold no longer undoes it.
 - **Adopting:** a display that WindowServer mirrors as it comes has no screen, so DAM can't
   read its name. DAM can only adopt a display that the app extends.
+- **OpenDisplay:** upstream logs no session ID and nothing when a session stops. The lines
+  above come from the `dam-session-log` branch of the local fork (`/Users/Shared/opendisplay`).
+  Mirroring makes no display: OpenDisplay captures the main display with ScreenCaptureKit, and
+  in Extend mode it pulls its display out of any mirror set.
 - **Blackout:** it sets gamma to black. The pointer and the backlight stay on, and captures
   are unchanged. Leave it off where the app has its own privacy mode (RustDesk, Parsec),
   since the two would fight.

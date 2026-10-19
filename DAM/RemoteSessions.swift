@@ -25,6 +25,7 @@ enum RemoteSessionApp {
         ("screensharing", "Screen Sharing"),
         ("chromeremotedesktop", "Chrome Remote Desktop"),
         ("teamviewer", "TeamViewer"),
+        ("opendisplay", "OpenDisplay"),
         ("display", "Another App's Display")
     ]
 
@@ -297,7 +298,7 @@ final class RemoteSessionCoordinator {
         if let profile = profiles[app] { return profile }
         var profile = SessionProfile()
         // Another app's display is there to be placed, not made.
-        if app == "display" { profile.display = .adopt }
+        if app == "display" || app == "opendisplay" { profile.display = .adopt }
         return profile
     }
 

@@ -684,6 +684,7 @@ final class RemoteSessionsTests: XCTestCase {
     func testAnotherAppsDisplayIsAdoptedByDefault() {
         let c = coordinator(FakeSessionDisplays())
         XCTAssertEqual(c.profile(for: "display").display, .adopt)
+        XCTAssertEqual(c.profile(for: "opendisplay").display, .adopt)
         XCTAssertEqual(c.profile(for: "rustdesk").display, .create)
     }
 
@@ -697,10 +698,110 @@ final class RemoteSessionsTests: XCTestCase {
         online.append((5, "Jump Desktop"))
         detector.check()
         detector.check()
-        XCTAssertEqual(events, [.opened(key: "5", client: nil)])
+        XCTAssertEqual(events, [.opened(key: "5", client: nil, display: .own(5))])
         online.removeLast()
         detector.check()
         XCTAssertEqual(events.last, .closed(key: "5"))
+    }
+
+    func testOpenDisplayLines() {
+        XCTAssertEqual(SessionLogLines.openDisplay("[11:43:29.019] capture started: 2048x1536 display 4128835 generation 1 mode extend localCursor=true session wifi:Mo's iPad"),
+                       .opened(key: "wifi:Mo's iPad", client: "Mo's iPad", display: .own(4128835)))
+        XCTAssertEqual(SessionLogLines.openDisplay("[11:42:58.450] capture started: 1600x900 display 731413954 generation 1 mode mirror localCursor=true session usb:00008103-001"),
+                       .opened(key: "usb:00008103-001", client: nil, display: .mac))
+        XCTAssertEqual(SessionLogLines.openDisplay("[11:44:00.000] capture ended: session wifi:Mo's iPad"),
+                       .closed(key: "wifi:Mo's iPad"))
+        // Before the fork named the session.
+        XCTAssertNil(SessionLogLines.openDisplay("[11:43:29.019] capture started: 2048x1536 display 4128835 generation 1 mode extend localCursor=true"))
+        XCTAssertNil(SessionLogLines.openDisplay("[11:43:29.019] status[wifi:iPad]: Extending to iPad (2048×1536)"))
+    }
+
+    func testLogDetectorEndsWhenTheAppQuits() {
+        var running = false
+        let detector = LogSessionDetector(app: "opendisplay", url: URL(fileURLWithPath: "/nonexistent"),
+                                          parse: SessionLogLines.openDisplay, isRunning: { running })
+        var events: [SessionEvent] = []
+        detector.onEvent = { events.append($0) }
+        // Never seen running, as when the lines are written by hand: they still count.
+        detector.handle("capture started: 1x1 display 5 generation 1 mode extend localCursor=true session wifi:iPad")
+        detector.checkRunning()
+        XCTAssertEqual(events.count, 1)
+        running = true
+        detector.checkRunning()
+        running = false
+        detector.checkRunning()
+        XCTAssertEqual(events.last, .closed(key: "wifi:iPad"))
+        detector.stop()
+        XCTAssertEqual(events.count, 2)
+    }
+
+    func testLogDetectorTakesUpWhatTheLogLeftOpen() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("opendisplay.log")
+        try """
+        [1] capture started: 1x1 display 5 generation 1 mode extend localCursor=true session wifi:old
+        [2] capture ended: session wifi:old
+        [3] capture started: 1x1 display 5 generation 1 mode extend localCursor=true session wifi:iPad
+        [4] capture started: 1x1 display 6 generation 2 mode extend localCursor=true session wifi:iPad
+        [5] capture started: 1x1 display 1 generation 1 mode mirror localCursor=true session usb:x
+
+        """.write(to: url, atomically: false, encoding: .utf8)
+        var running = false
+        var events: [SessionEvent] = []
+        let quit = LogSessionDetector(app: "opendisplay", url: url, parse: SessionLogLines.openDisplay, isRunning: { running })
+        quit.onEvent = { events.append($0) }
+        quit.start()
+        quit.stop()
+        // The app isn't running, so what the log left open is over.
+        XCTAssertTrue(events.isEmpty)
+
+        running = true
+        let detector = LogSessionDetector(app: "opendisplay", url: url, parse: SessionLogLines.openDisplay, isRunning: { running })
+        detector.onEvent = { events.append($0) }
+        detector.start()
+        defer { detector.stop() }
+        XCTAssertEqual(events, [.opened(key: "wifi:iPad", client: "iPad", display: .own(6)),
+                                .opened(key: "usb:x", client: nil, display: .mac)])
+        XCTAssertEqual(LogSessionDetector.lastLines(of: url, bytes: 20).count, 0)
+    }
+
+    func testWatcherAdoptsTheDisplayTheDetectorSaw() {
+        final class FakeDetector: SessionDetector {
+            let app: String
+            var onEvent: ((SessionEvent) -> Void)?
+            init(app: String) { self.app = app }
+            func start() {}
+            func stop() {}
+        }
+        let fake = FakeSessionDisplays()
+        var profile = SessionProfile()
+        profile.watch = true
+        profile.display = .adopt
+        profile.placement = .main
+        let c = coordinator(fake, profiles: ["opendisplay": profile])
+        var detector: FakeDetector?
+        let watcher = SessionWatcher(coordinator: c) { app in
+            guard app == "opendisplay" else { return nil }
+            detector = FakeDetector(app: app)
+            return detector
+        }
+        watcher.update()
+        // Extending: its own display, by ID.
+        detector?.onEvent?(.opened(key: "wifi:iPad", client: "iPad", display: .own(7)))
+        XCTAssertEqual(c.sessions["opendisplay"]?.displayID, 7)
+        XCTAssertEqual(fake.placed.map(\.0), [7])
+        detector?.onEvent?(.closed(key: "wifi:iPad"))
+        // Mirroring: the Mac's screen, so nothing to adopt or place.
+        detector?.onEvent?(.opened(key: "wifi:iPad", client: "iPad", display: .mac))
+        XCTAssertEqual(c.sessions["opendisplay"]?.starting, false)
+        XCTAssertNil(c.sessions["opendisplay"]?.displayID)
+        XCTAssertEqual(fake.placed.count, 1)
+        detector?.onEvent?(.closed(key: "wifi:iPad"))
+        XCTAssertNil(c.sessions["opendisplay"])
+        XCTAssertTrue(fake.made.isEmpty)
+        XCTAssertTrue(fake.removed.isEmpty)
     }
 
     func testChromeRemoteDesktopLines() {

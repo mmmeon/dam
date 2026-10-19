@@ -521,7 +521,7 @@ final class SettingsWindowController: NSWindowController {
     /// What DAM does while each app's session is on.
     private func buildSessionsTab() -> NSView {
         guard let coordinator = sessionCoordinator else { return formTab([]) }
-        let apps = ["sunshine", "rustdesk", "parsec", "screensharing", "chromeremotedesktop", "teamviewer", "display"]
+        let apps = ["sunshine", "rustdesk", "parsec", "screensharing", "chromeremotedesktop", "teamviewer", "opendisplay", "display"]
         var groups: [(label: String, controls: [NSView])] = apps.map { app in
             (label: "\(RemoteSessionApp.name(of: app)):", controls: sessionControls(for: app, coordinator: coordinator))
         }
@@ -552,7 +552,7 @@ final class SettingsWindowController: NSWindowController {
         if app == "display" {
             controls.append(checkbox(title: "Watch for a display another app makes", isOn: profile.watch,
                                      help: "For apps that make a display of their own for each session, such as " +
-                                           "Jump Desktop, Splashtop, OpenDisplay or Duet: a session lasts while " +
+                                           "Jump Desktop, Splashtop or Duet: a session lasts while " +
                                            "a display with this name is online.",
                                      action: { profile.watch = $0; save(profile) }))
             let field = ClosureTextField(text: profile.adoptName ?? "", placeholder: "Part of its name, e.g. Jump") {
