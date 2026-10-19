@@ -295,23 +295,39 @@ final class WebStreamTests: XCTestCase {
         }
         XCTAssertTrue(host.isListening, host.lastError ?? "")
 
-        let page = try get("/watch", from: host)
+        // Nothing without the link's token.
+        for path in ["/", "/watch", "/apps.json", "/stream.mp4", "/watch?token=0123"] {
+            XCTAssertEqual(try get(path, from: host).status, 403, path)
+        }
+        let token = "token=\(host.webStreamToken)"
+        XCTAssertEqual(host.watchURL.query, token)
+        XCTAssertEqual(host.localWatchURL.query, token)
+
+        let page = try get("/watch?\(token)", from: host)
         XCTAssertEqual(page.status, 200)
         let html = String(decoding: page.body, as: UTF8.self)
         XCTAssertTrue(html.contains("<video"))
         XCTAssertTrue(html.contains("ManagedMediaSource"), "iPhones have only the managed kind")
-        XCTAssertEqual(try get("/", from: host).body, page.body)
+        XCTAssertEqual(try get("/?\(token)", from: host).body, page.body)
 
-        let apps = try get("/apps.json", from: host)
+        let apps = try get("/apps.json?\(token)", from: host)
         XCTAssertEqual(apps.status, 200)
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: apps.body) as? [String: Any])
         XCTAssertEqual((json["apps"] as? [[String: Any]])?.first?["title"] as? String, "Streaming Display 1")
         XCTAssertEqual(json["profile"] as? String, StreamProfile.preferred.rawValue)
         XCTAssertEqual((json["bitrates"] as? [String: Int])?["viewing"], 40_000)
 
-        XCTAssertEqual(try get("/stream.mp4?app=9", from: host).status, 404, "no such display")
+        XCTAssertEqual(try get("/stream.mp4?app=9&\(token)", from: host).status, 404, "no such display")
         XCTAssertEqual(try get("/serverinfo", from: host).status, 200, "Moonlight's own requests still answered")
         XCTAssertEqual(host.watchURL.path, "/watch")
         XCTAssertEqual(host.watchURL.port, Int(base))
+
+        // A new link turns the old one away, and is kept across restarts.
+        host.makeNewWebStreamLink()
+        XCTAssertEqual(try get("/watch?\(token)", from: host).status, 403)
+        XCTAssertEqual(try get("/watch?token=\(host.webStreamToken)", from: host).status, 200)
+        let kept = host.webStreamToken
+        let again = MoonlightHost(directory: directory, advertises: false)
+        XCTAssertEqual(again.webStreamToken, kept)
     }
 }

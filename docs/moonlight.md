@@ -18,6 +18,11 @@ The same HTTP port (47989) also serves displays to browsers and media players:
 - `/stream.mp4` is an endless fragmented MP4 that mpv, ffplay and VLC play as is.
 - `/apps.json` lists the displays.
 
+Each needs the `token` in the link that Open in Browser and Copy Address give; without
+it, the reply is 403. The token is kept in `browser-token` next to the paired devices.
+Settings › Moonlight › Make a New Link replaces it and cuts off anyone watching with the
+old one. The stream itself still crosses the network unencrypted.
+
 Three profiles (Interactive, Balanced, Viewing) set the defaults from Settings ›
 Moonlight. Each client can override profile, bitrate, frame rate and size in the query
 string, and turn on low-latency encoding with `lowlatency=1`.

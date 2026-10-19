@@ -191,6 +191,7 @@ final class MoonlightHost {
                 resizeDisplay(id, width, height, fps, done)
             }
             webStream.onChange = { [weak self] in self?.onChange?() }
+            webStream.token = { [weak self] in self?.webStreamToken }
             rtsp.launch = { [weak self] in self?.launch }
             rtsp.announce = { [weak self] launch, config in
                 guard let self else { return "Stopped" }
@@ -293,12 +294,42 @@ final class MoonlightHost {
 
     /// Where a browser on the network finds the player page.
     var watchURL: URL {
-        URL(string: "http://\(ProcessInfo.processInfo.hostName):\(httpPort.rawValue)/watch")!
+        URL(string: "http://\(ProcessInfo.processInfo.hostName):\(httpPort.rawValue)/watch?token=\(webStreamToken)")!
     }
 
     /// The player page on this Mac.
     var localWatchURL: URL {
-        URL(string: "http://localhost:\(httpPort.rawValue)/watch")!
+        URL(string: "http://localhost:\(httpPort.rawValue)/watch?token=\(webStreamToken)")!
+    }
+
+    private var webToken: String?
+
+    /// The token links to the browser stream carry, without which it is refused; made on
+    /// first use and kept, until a new link replaces it.
+    var webStreamToken: String {
+        if let webToken { return webToken }
+        let stored = (try? String(contentsOf: webTokenURL, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let token = stored.flatMap { $0.count == 32 ? $0 : nil } ?? makeWebStreamToken()
+        webToken = token
+        return token
+    }
+
+    /// Replaces the browser stream's link: the old one stops working, and those watching
+    /// with it are cut off.
+    func makeNewWebStreamLink() {
+        webToken = makeWebStreamToken()
+        webStream.stopAll()
+        onChange?()
+    }
+
+    private func makeWebStreamToken() -> String {
+        let token = MoonlightCrypto.hex(MoonlightPairing.randomBytes(16)).lowercased()
+        do {
+            try writePrivately(Data(token.utf8), to: webTokenURL)
+        } catch {
+            mlLog.error("saving the browser link: \(String(describing: error), privacy: .public)")
+        }
+        return token
     }
 
     private static func describe(_ error: NWError) -> String {
@@ -695,6 +726,7 @@ final class MoonlightHost {
     private var keyURL: URL { directory.appendingPathComponent("host-key.der") }
     private var certificateURL: URL { directory.appendingPathComponent("host-certificate.der") }
     private var clientsURL: URL { directory.appendingPathComponent("paired-clients.json") }
+    private var webTokenURL: URL { directory.appendingPathComponent("browser-token") }
 
     /// The host's key and certificate, made on first use and kept, as Moonlight pins the
     /// certificate it paired with. A new one unpairs every device.

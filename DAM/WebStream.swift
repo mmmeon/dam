@@ -172,6 +172,8 @@ final class WebStreamServer {
     var resizeDisplay: ((_ id: CGDirectDisplayID, _ width: Int, _ height: Int, _ fps: Int,
                          _ done: @escaping (Bool) -> Void) -> Void)?
     var preferredProfile: () -> StreamProfile = { .preferred }
+    /// The token every request must carry, from the link DAM hands out; nil turns all away.
+    var token: () -> String? = { nil }
     /// The number watching changed; on the main queue.
     var onChange: (() -> Void)?
 
@@ -185,6 +187,14 @@ final class WebStreamServer {
 
     /// Answers `path` if it is the stream's; returns whether it was. On the main queue.
     func handle(path: String, query: [String: String], on connection: NWConnection) -> Bool {
+        guard ["/", "/watch", "/apps.json", "/stream.mp4"].contains(path) else { return false }
+        // Only those given the link may watch: the stream needs no pairing, and anyone on
+        // the network could otherwise ask for it.
+        guard let token = token(), Self.matches(query["token"], token) else {
+            send(status: "403 Forbidden", body: Data("This link is out of date. Copy the address again from \(AppIdentity.name)'s menu.\n".utf8),
+                 to: connection)
+            return true
+        }
         switch path {
         case "/", "/watch":
             send(status: "200 OK", contentType: "text/html; charset=utf-8", body: Data(WebStreamPage.html.utf8), to: connection)
@@ -196,6 +206,13 @@ final class WebStreamServer {
             return false
         }
         return true
+    }
+
+    /// Whether `given` is `token`, taking as long whatever the first difference.
+    static func matches(_ given: String?, _ token: String) -> Bool {
+        let a = Array((given ?? "").utf8), b = Array(token.utf8)
+        guard a.count == b.count else { return false }
+        return zip(a, b).reduce(0) { $0 | ($1.0 ^ $1.1) } == 0
     }
 
     /// Ends every session; their viewers' connections are closed.
@@ -936,6 +953,7 @@ enum WebStreamPage {
       let info = { apps: [], profile: 'interactive', bitrates: {}, buffers: {} };
       let profile = params.get('profile'), bitrate = params.get('bitrate'), app = params.get('app');
       let buffer = params.get('buffer'), lowlatency = params.get('lowlatency');
+      const token = params.get('token') || '';
       let abort = null, source = null, sb = null, queue = [], bytes = 0, held = true, stalls = 0;
 
       const MS = window.ManagedMediaSource || window.MediaSource;
@@ -943,7 +961,7 @@ enum WebStreamPage {
 
       // Sound comes only when wanted: with it, each frame waits for the sound of its moment.
       function url() {
-        const q = new URLSearchParams();
+        const q = new URLSearchParams({ token });
         if (app) q.set('app', app);
         q.set('profile', profile);
         q.set('bitrate', Math.round(bitrate * 1000));
@@ -963,7 +981,7 @@ enum WebStreamPage {
         video.disableRemotePlayback = true;
         video.src = URL.createObjectURL(source);
         source.addEventListener('sourceopen', open, { once: true });
-        history.replaceState(null, '', '?' + new URLSearchParams({ ...(app ? { app } : {}), profile, bitrate: Math.round(bitrate * 1000), buffer: Math.round(buffer * 1000), ...(lowlatency ? { lowlatency } : {}) }));
+        history.replaceState(null, '', '?' + new URLSearchParams({ token, ...(app ? { app } : {}), profile, bitrate: Math.round(bitrate * 1000), buffer: Math.round(buffer * 1000), ...(lowlatency ? { lowlatency } : {}) }));
         // Making a display for the stream can take a while.
         $('msg').hidden = false; $('msg').textContent = 'Connecting…';
       }
@@ -1060,7 +1078,7 @@ enum WebStreamPage {
       let idle; function awake() { document.body.classList.remove('idle'); clearTimeout(idle); idle = setTimeout(() => document.body.classList.add('idle'), 3000); }
       ['mousemove', 'touchstart', 'keydown'].forEach(e => addEventListener(e, awake)); awake();
 
-      fetch('/apps.json').then(r => r.json()).then(j => {
+      fetch('/apps.json?' + new URLSearchParams({ token })).then(r => r.json()).then(j => {
         info = j;
         for (const a of j.apps) { const o = document.createElement('option'); o.value = a.id; o.textContent = a.title; $('app').append(o); }
         if (!j.apps.length) { const o = document.createElement('option'); o.value = ''; o.textContent = 'New Display'; $('app').append(o); }

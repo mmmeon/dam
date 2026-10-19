@@ -438,6 +438,11 @@ final class SettingsWindowController: NSWindowController {
         profile.toolTip = "The profile a browser or player gets unless its address asks for " +
                           "another. Hover over each for what it trades."
 
+        let newLink = ClosureButton(title: "Make a New Link") { [weak host] _ in host?.makeNewWebStreamLink() }
+        newLink.bezelStyle = .rounded
+        newLink.toolTip = "The browser stream needs the link Copy Address gives, with its token. A new " +
+                          "link stops the old one working, and cuts off anyone watching with it."
+
         let devices: [[NSView]] = host.clients.map { client in
             let lowLatency = checkbox(title: "Low-latency encoding", isOn: client.lowLatency,
                                       help: "Sends each frame the moment it is encoded, about a frame " +
@@ -462,6 +467,7 @@ final class SettingsWindowController: NSWindowController {
             ("Hosting:", hosting),
             ("Streams:", streams),
             ("Browser Profile:", [profile]),
+            ("Browser Link:", [newLink]),
             ("Paired Devices:", [devices.isEmpty ? placeholderLabel("None yet") : deviceGrid]),
         ], leftAligned: true)
     }
