@@ -30,9 +30,11 @@ The profiles are kept in `~/Library/Application Support/DAM/remote-sessions.json
 
 ## Sunshine
 
-Upstream Sunshine has signed macOS builds (x86_64 and arm64). It is the only host that
-tells a hook the client's size. The forks (Apollo, Vibepollo, foundation-sunshine) have no
-Mac builds.
+Upstream Sunshine has signed macOS builds (x86_64 and arm64), but they need macOS 14.2 or
+later; on 13 the binary fails to load (`_AVCaptureDeviceTypeExternal`). Before 2026 there is
+only a Homebrew formula, and current sources need Xcode 16.2. It is the only host that tells
+a hook the client's size. The forks (Apollo, Vibepollo, foundation-sunshine) have no Mac
+builds.
 
 1. In Settings › Moonlight, set **Host** to **Sunshine**. DAM's own host stops, so Sunshine
    can use ports 47984–48010.
