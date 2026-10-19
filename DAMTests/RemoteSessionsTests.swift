@@ -618,6 +618,7 @@ final class RemoteSessionsTests: XCTestCase {
         detector.onEvent?(.opened(key: "2", client: "10.0.0.3"))
         XCTAssertEqual(fake.made.count, 1)
         XCTAssertEqual(fake.made.first?.identity.name, "RustDesk (10.0.0.2)")
+        XCTAssertEqual(c.sessions["rustdesk"]?.followsApp, false)
         detector.onEvent?(.closed(key: "1"))
         XCTAssertTrue(fake.removed.isEmpty)
         detector.onEvent?(.closed(key: "2"))
@@ -791,12 +792,14 @@ final class RemoteSessionsTests: XCTestCase {
         // Extending: its own display, by ID.
         detector?.onEvent?(.opened(key: "wifi:iPad", client: "iPad", display: .own(7)))
         XCTAssertEqual(c.sessions["opendisplay"]?.displayID, 7)
+        XCTAssertEqual(c.sessions["opendisplay"]?.followsApp, true)
         XCTAssertEqual(fake.placed.map(\.0), [7])
         detector?.onEvent?(.closed(key: "wifi:iPad"))
         // Mirroring: the Mac's screen, so nothing to adopt or place.
         detector?.onEvent?(.opened(key: "wifi:iPad", client: "iPad", display: .mac))
         XCTAssertEqual(c.sessions["opendisplay"]?.starting, false)
         XCTAssertNil(c.sessions["opendisplay"]?.displayID)
+        XCTAssertEqual(c.sessions["opendisplay"]?.followsApp, true)
         XCTAssertEqual(fake.placed.count, 1)
         detector?.onEvent?(.closed(key: "wifi:iPad"))
         XCTAssertNil(c.sessions["opendisplay"])

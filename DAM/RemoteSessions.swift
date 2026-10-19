@@ -247,6 +247,9 @@ final class RemoteSessionCoordinator {
         var ownsOutput = false
         /// Whether it blacks out the Mac's screens.
         var blacksOut = false
+        /// Whether it lasts as long as the app's own display or stream, which DAM can't end:
+        /// ending it would leave the app streaming.
+        var followsApp = false
         /// Whether it is still being set up.
         var starting = true
         var started = Date()
@@ -330,6 +333,8 @@ final class RemoteSessionCoordinator {
             displays.holdLayout(true)
         }
         sessions[app] = Session(app: app, client: request.client, profile: profile, outputAtStart: displays.outputUID)
+        // Mirroring, OpenDisplay asks for no display, but its profile still adopts.
+        sessions[app]?.followsApp = profile.display == .adopt || self.profile(for: app).display == .adopt
         waiting[app] = [completion]
         onChange?()
 
