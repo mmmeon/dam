@@ -35,8 +35,9 @@ changes made during it: the main display, the arrangement and the sound output. 
 are kept instead, in the app's profile, for its next session:
 
 - **Placement:** the session's display made main or mirrored through DAM, or put back to
-  extended. Main counts only when it was chosen through DAM, not when WindowServer made the
-  display main by itself.
+  extended. Main and mirrored count only when chosen through DAM, not when WindowServer
+  applied a layout it saved for the display. Nothing is kept when the display is already gone,
+  as when an app removes its own display and so ends the session.
 - **Size:** a resolution or refresh rate picked for the display DAM made.
 - **Sound:** another output picked while the session was on. An output another session
   switched to doesn't count.

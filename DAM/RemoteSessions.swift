@@ -215,8 +215,8 @@ protocol SessionDisplays: AnyObject {
     func setOutput(uid: String) -> Bool
     /// Blacks out the Mac's screens but `keeping`, or, with nil, lights them again.
     func blackOut(keeping: Set<CGDirectDisplayID>?)
-    /// How display `id` is placed now, as chosen through DAM.
-    func placement(of id: CGDirectDisplayID) -> SessionProfile.Placement
+    /// How display `id` is placed now, as chosen through DAM; nil when it is gone.
+    func placement(of id: CGDirectDisplayID) -> SessionProfile.Placement?
     /// Display `id`'s mode now, or nil when it is gone.
     func mode(of id: CGDirectDisplayID) -> StreamingDisplayModes.Mode?
     /// While true, changes made to the displays leave the layout put back after the
@@ -469,9 +469,10 @@ final class RemoteSessionCoordinator {
         let asked = session.profile
         let saved = profile(for: session.app)
         var next = saved
-        if let id = session.displayID, !saved.locked.contains(.placement) {
-            let now = displays.placement(of: id)
-            if now != asked.placement { next.placement = now }
+        // An app's own display can be gone already, ending the session.
+        if let id = session.displayID, !saved.locked.contains(.placement),
+           let now = displays.placement(of: id), now != asked.placement {
+            next.placement = now
         }
         if session.madeDisplay, let id = session.displayID, let made = session.madeMode,
            !saved.locked.contains(.size), let now = displays.mode(of: id),
@@ -578,14 +579,18 @@ final class LiveSessionDisplays: SessionDisplays {
         if let keeping { blackout.start(keeping: keeping) } else { blackout.stop() }
     }
 
-    /// Mirrored when every display it can be mirrored on mirrors it; main when it is main
-    /// and, for a streaming display, was made main through DAM, not by WindowServer.
-    func placement(of id: CGDirectDisplayID) -> SessionProfile.Placement {
-        guard let display = video.allConnectedDisplays.first(where: { $0.cgDisplayID == id }) else { return .extend }
+    /// Mirrored when every display it can be mirrored on mirrors it, main when it is main;
+    /// for a streaming display, only when that was done through DAM, not by WindowServer
+    /// applying a layout it saved.
+    func placement(of id: CGDirectDisplayID) -> SessionProfile.Placement? {
+        guard let display = video.allConnectedDisplays.first(where: { $0.cgDisplayID == id }) else { return nil }
         let targets = video.mirrorTargets(for: display).map(\.cgDisplayID).filter { $0 != 0 }
-        if !targets.isEmpty, targets.allSatisfy({ video.userMirrorMaster(of: $0) == id }) { return .mirror }
-        let chosen = !display.isStreaming || video.streamingDisplayIsMainByChoice
-        return CGDisplayIsMain(id) != 0 && chosen ? .main : .extend
+        let mirroredByChoice = !display.isStreaming || video.streamingDisplaysMirroredByChoice.contains(id)
+        if mirroredByChoice, !targets.isEmpty, targets.allSatisfy({ video.userMirrorMaster(of: $0) == id }) {
+            return .mirror
+        }
+        let mainByChoice = !display.isStreaming || video.streamingDisplayIsMainByChoice
+        return CGDisplayIsMain(id) != 0 && mainByChoice ? .main : .extend
     }
 
     func mode(of id: CGDirectDisplayID) -> StreamingDisplayModes.Mode? {

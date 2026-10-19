@@ -202,6 +202,9 @@ final class VideoManager: ObservableObject {
     var streamingArrangement: DisplayArrangement?
     /// Whether the user made a streaming display main, which DAM then leaves it.
     var streamingDisplayIsMainByChoice = false
+    /// The streaming displays the others were mirrored onto through DAM, not by WindowServer
+    /// applying a layout it saved for them.
+    var streamingDisplaysMirroredByChoice: Set<CGDirectDisplayID> = []
     /// Whether a change of main or of positions leaves `streamingArrangement` as it is, so
     /// the layout from before is put back once the streaming displays go: while a remote
     /// session is on (RemoteSessions.swift). Otherwise the change is kept after them.
@@ -669,6 +672,7 @@ final class VideoManager: ObservableObject {
                 if keptAnchor != nil { self.anchorSetSlaves.formUnion(slaveIDs) }
                 // Or the layout kept after a streaming display came would undo it.
                 self.streamingSettle = self.streamingSettle.map { ($0.arrangement.mirroring(slaveIDs, on: masterID), $0.until) }
+                if self.streamingDisplayIDs.contains(masterID) { self.streamingDisplaysMirroredByChoice.insert(masterID) }
                 self.commitDisplayChange({ cfg in
                     for slave in slaveIDs { CGConfigureDisplayMirrorOfDisplay(cfg, slave, masterID) }
                 }, completion: finish)

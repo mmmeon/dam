@@ -43,7 +43,12 @@ private final class FakeSessionDisplays: SessionDisplays {
     var modes: [CGDirectDisplayID: StreamingDisplayModes.Mode] = [:]
     var holdsLayout = false
 
-    func placement(of id: CGDirectDisplayID) -> SessionProfile.Placement { placements[id] ?? .extend }
+    /// Displays gone offline.
+    var gone: Set<CGDirectDisplayID> = []
+
+    func placement(of id: CGDirectDisplayID) -> SessionProfile.Placement? {
+        gone.contains(id) ? nil : placements[id] ?? .extend
+    }
     func mode(of id: CGDirectDisplayID) -> StreamingDisplayModes.Mode? { modes[id] }
     func holdLayout(_ hold: Bool) { holdsLayout = hold }
 
@@ -344,6 +349,21 @@ final class RemoteSessionsTests: XCTestCase {
         _ = start(c, SessionRequest(app: "rustdesk", placement: .mirror))
         c.end(app: "rustdesk")
         XCTAssertEqual(c.profile(for: "rustdesk"), profile)
+    }
+
+    func testAGoneDisplaysPlacementIsntKept() {
+        let fake = FakeSessionDisplays()
+        fake.others["Jump Desktop"] = 7
+        var profile = SessionProfile()
+        profile.display = .adopt
+        profile.adoptName = "Jump"
+        profile.placement = .main
+        let c = coordinator(fake, profiles: ["jump": profile])
+        _ = start(c, SessionRequest(app: "jump"))
+        // The app took its display away, which ended the session.
+        fake.gone.insert(7)
+        c.end(app: "jump")
+        XCTAssertEqual(c.profile(for: "jump"), profile)
     }
 
     func testAnotherSessionsOutputIsntKept() {
