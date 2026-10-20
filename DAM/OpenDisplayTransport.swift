@@ -112,6 +112,12 @@ final class OpenDisplayTCPChannel: OpenDisplayChannel {
         connection.cancel()
     }
 
+    /// What the connection tried, for the log: its path and the endpoint it reached.
+    var pathDescription: String {
+        guard let path = connection.currentPath else { return "no path" }
+        return "\(path.status) via \(path.availableInterfaces.map(\.name)) to \(path.remoteEndpoint.map { "\($0)" } ?? "none")"
+    }
+
     private func finish(_ reason: String) {
         lock.lock()
         let first = onClose != nil

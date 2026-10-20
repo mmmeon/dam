@@ -30,6 +30,7 @@ final class OpenDisplaySender {
     private static let receiversKey = "\(AppIdentity.shortID).opendisplay.receivers"
     private static let namesKey = "\(AppIdentity.shortID).opendisplay.names"
     private static let usbIDsKey = "\(AppIdentity.shortID).opendisplay.usbIDs"
+    private static let bonjourIDsKey = "\(AppIdentity.shortID).opendisplay.bonjourIDs"
     private static let bitrateKey = "\(AppIdentity.shortID).opendisplay.bitrateKbps"
 
     /// Whether DAM sends to receivers at all.
@@ -59,6 +60,13 @@ final class OpenDisplaySender {
     private var usbIDs: [String: String] {
         get { UserDefaults.dam.dictionary(forKey: Self.usbIDsKey) as? [String: String] ?? [:] }
         set { UserDefaults.dam.set(newValue, forKey: Self.usbIDsKey) }
+    }
+
+    /// Receivers' IDs by their Bonjour name, from TXT records and hellos, for when a
+    /// result comes without its TXT record.
+    private var bonjourIDs: [String: String] {
+        get { UserDefaults.dam.dictionary(forKey: Self.bonjourIDsKey) as? [String: String] ?? [:] }
+        set { UserDefaults.dam.set(newValue, forKey: Self.bonjourIDsKey) }
     }
 
     // MARK: Hooks
@@ -184,12 +192,26 @@ final class OpenDisplaySender {
 
     private func found(_ results: Set<NWBrowser.Result>) {
         var found: [String: (name: String, endpoint: NWEndpoint)] = [:]
+        var known = bonjourIDs
+        // A receiver can be found once for each network it is on, not each with its TXT record.
+        var byName: [String: (id: String?, endpoint: NWEndpoint)] = [:]
         for result in results {
             guard case let .service(name, _, _, _) = result.endpoint else { continue }
             var id: String?
             if case let .bonjour(txt) = result.metadata { id = txt["id"].flatMap { $0.isEmpty ? nil : $0 } }
-            // One with no ID (before pv 2) is known by its name.
-            found[id ?? "bonjour:\(name)"] = (name, result.endpoint)
+            if byName[name]?.id == nil || id != nil { byName[name] = (id ?? byName[name]?.id, result.endpoint) }
+        }
+        for (name, result) in byName {
+            if let id = result.id { known[name] = id }
+            // One with no ID (before pv 2) is known by its name until a hello gives one.
+            found[result.id ?? known[name] ?? "bonjour:\(name)"] = (name, result.endpoint)
+        }
+        if known != bonjourIDs {
+            bonjourIDs = known
+            // A receiver turned on by its name is the same one by its ID.
+            var on = turnedOn
+            for (name, id) in known where on.remove("bonjour:\(name)") != nil { on.insert(id) }
+            if on != turnedOn { turnedOn = on }
         }
         guard found.mapValues(\.name) != wifi.mapValues(\.name) || found.count != wifi.count else {
             wifi = found
@@ -273,11 +295,19 @@ final class OpenDisplaySender {
     /// What a receiver's hello says of it: a USB device's receiver ID, which then keys it.
     fileprivate func session(_ session: OpenDisplaySession, saidID id: String?, device: String?) {
         if names[session.key] == nil, let device { names[session.key] = device }
-        guard let id, session.key.hasPrefix("usb:"), session.key != id else { return }
-        let serial = String(session.key.dropFirst(4))
-        var ids = usbIDs
-        ids[serial] = id
-        usbIDs = ids
+        guard let id, session.key != id else { return }
+        if session.key.hasPrefix("usb:") {
+            var ids = usbIDs
+            ids[String(session.key.dropFirst(4))] = id
+            usbIDs = ids
+        } else if session.key.hasPrefix("bonjour:") {
+            var ids = bonjourIDs
+            ids[String(session.key.dropFirst(8))] = id
+            bonjourIDs = ids
+            if let found = wifi.removeValue(forKey: session.key) { wifi[id] = found }
+        } else {
+            return
+        }
         var on = turnedOn
         if on.remove(session.key) != nil { on.insert(id) }
         turnedOn = on
@@ -401,6 +431,7 @@ final class OpenDisplaySession {
         // A dial to a Bonjour name that has gone never ends of itself.
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.dialTimeout) { [weak self, weak channel] in
             guard let self, let channel, self.link === channel, !self.linkReady else { return }
+            if let tcp = channel as? OpenDisplayTCPChannel { odLog.debug("\(self.name, privacy: .public): dial stuck: \(tcp.pathDescription, privacy: .public)") }
             self.lose(channel, "no answer in \(Int(Self.dialTimeout)) s")
         }
     }
