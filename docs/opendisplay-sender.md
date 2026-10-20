@@ -33,8 +33,11 @@ to it (decided 2026-10-20: DAM always sends).
 - **Input:** `touch` as the left button and drags, `pencil` the same (hovering moves the
   pointer), `scroll` in pixels, through Moonlight's input injector (needs Accessibility).
 - **Pointer:** not drawn into the video; `cursor` up to 60 times a second while it is on the
-  display (hidden when not), and `cursorImg` when its picture changes. TCP only: the UDP side
-  channel is left for later.
+  display (hidden when not), and `cursorImg` when its picture changes. Over Wi-Fi, a hello
+  with `cursorPort` gets positions as datagrams to that port at the address the connection
+  reached, the same over TCP too until `cursorAck`; with no ack within 3 s of the first
+  datagram, UDP stops for that connection. Sequence numbers start at 1 for each connection
+  and are shared by both paths. Not over USB, which carries only TCP.
 - **Liveness:** pings every 2 s, `pong` for the receiver's. Silence over 5 s drops the
   connection; the display waits 10 s for it to come back, then goes.
 - **Rotation:** a new `hello` (debounced 300 ms) resizes the display in place.
@@ -64,3 +67,10 @@ copy with its TXT record, so it showed twice (fixed: IDs win, and are remembered
 from TXT and hello). Once after unplugging, dials to the Bonjour name hung for 34 s on a
 satisfied Wi-Fi path without resolving; every other dial after a failure now goes to the
 address last reached, which hasn't been needed since.
+
+Pointer over UDP, tried against `tools/odreceiver` on the same Mac (2026-10-20): with the
+ack, positions move to UDP and TCP stops carrying them; `--no-ack` falls back to TCP after
+3 s; `--no-udp` stays on TCP. Datagrams a Mac sends to its own Wi-Fi address are often
+dropped by its kernel (counted as "dropped due to full socket buffers" in
+`netstat -s -p udp`, whatever the sender) while 127.0.0.1 loses none, so runs there
+fall back to TCP about half the time; a receiver on another device doesn't see this.

@@ -5,13 +5,16 @@
 //   tools/odreceiver/odreceiver [--seconds N] [--size WxH] [--id ID] [--touch] [--no-close]
 //
 // --no-close drops the connection at the end without saying closing, as a cut cable does.
+// --hover moves the Mac's pointer across the display (stylus hover: no clicks), to see
+// pointer messages. The pointer goes over UDP to a port of its own unless --no-udp; --no-ack never
+// acknowledges it, so the sender should fall back to TCP.
 //
 // --touch sends a tap in the middle of the display: it moves the Mac's pointer.
 
 import Foundation
 import Network
 
-var seconds = 12.0, width = 2048, height = 1536, id = "dam-odreceiver-test", touch = false, noClose = false
+var seconds = 12.0, width = 2048, height = 1536, id = "dam-odreceiver-test", touch = false, noClose = false, hover = false, udp = true, ack = true
 var args = CommandLine.arguments.dropFirst()
 while let arg = args.popFirst() {
     switch arg {
@@ -22,6 +25,9 @@ while let arg = args.popFirst() {
     case "--id": id = args.popFirst() ?? id
     case "--touch": touch = true
     case "--no-close": noClose = true
+    case "--hover": hover = true
+    case "--no-udp": udp = false
+    case "--no-ack": ack = false
     default: print("unknown option \(arg)"); exit(2)
     }
 }
@@ -48,6 +54,7 @@ var latencies: [Double] = []
 var connectedAt: Date?
 var problems: [String] = []
 var kfAskedAt: Date?, kfAnswered: Double?
+var udpCursors = 0, tcpCursors = 0, tcpCursorsAfterAck = 0, lastSeq = 0, seqProblems = 0, acked = false
 
 func nalTypes(_ unit: Data) -> [UInt8] {
     var types: [UInt8] = []
@@ -68,6 +75,11 @@ func handle(_ payload: Data) {
         if type == "streamConfig" { streamConfig = json; say("streamConfig \(json)") }
         if type == "welcome" { say("welcome \(json)") }
         if type == "pong", let t = json["t"] as? Double { latencies.append(nowMs() - t) }
+        if type == "cursor" {
+            tcpCursors += 1
+            if acked { tcpCursorsAfterAck += 1 }
+            if let seq = json["s"] as? Int { if seq > lastSeq { lastSeq = seq } }
+        }
         return
     }
     // Video: the telemetry prefix, then Annex B.
@@ -123,8 +135,46 @@ func receive(_ c: NWConnection) {
     }
 }
 
+/// The UDP port pointer datagrams come to, a plain socket of its own each run (a socket left
+/// on a shared port can take the datagrams).
+var cursorPort: Int?
+if udp {
+    let fd = socket(AF_INET, SOCK_DGRAM, 0)
+    var address = sockaddr_in()
+    address.sin_family = sa_family_t(AF_INET)
+    address.sin_addr.s_addr = INADDR_ANY
+    _ = withUnsafePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) } }
+    var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+    _ = withUnsafeMutablePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &length) } }
+    cursorPort = Int(UInt16(bigEndian: address.sin_port))
+    Thread {
+        var buffer = [UInt8](repeating: 0, count: 2048)
+        while true {
+            let n = recv(fd, &buffer, buffer.count, 0)
+            guard n > 0 else { continue }
+            let data = Data(buffer[0..<n])
+            DispatchQueue.main.async {
+                guard let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                      json["type"] as? String == "cursor", let seq = json["s"] as? Int else { return }
+                udpCursors += 1
+                if seq < lastSeq { seqProblems += 1 }
+                lastSeq = max(lastSeq, seq)
+                if !acked && ack {
+                    acked = true
+                    send(["type": "cursorAck"])
+                    say("first pointer datagram (s=\(seq)); sent cursorAck")
+                }
+            }
+        }
+    }.start()
+}
+
 let tcp = NWProtocolTCP.Options(); tcp.noDelay = true
-let listener = try! NWListener(using: NWParameters(tls: nil, tcp: tcp), on: 9000)
+let tcpParameters = NWParameters(tls: nil, tcp: tcp)
+// IPv4 only: on the sender's own Mac, a dial would otherwise land on a link-local IPv6
+// address of one of its interfaces, which carries TCP to itself but not UDP.
+(tcpParameters.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options)?.version = .v4
+let listener = try! NWListener(using: tcpParameters, on: 9000)
 listener.service = NWListener.Service(name: "DAM test receiver", type: "_opensidecar._tcp",
                                       txtRecord: NWTXTRecord(["id": id, "pv": "3"]))
 listener.newConnectionHandler = { c in
@@ -132,7 +182,8 @@ listener.newConnectionHandler = { c in
     say("sender dialed from \(c.endpoint)")
     c.start(queue: .main)
     let hello = framed(["type": "hello", "pixelsWide": width, "pixelsHigh": height, "scale": 2, "device": "iPad", "id": id, "pv": 3,
-          "panel": ["pixelsWide": width, "pixelsHigh": height, "scale": 2], "displayMaxFrameRate": 60])
+          "panel": ["pixelsWide": width, "pixelsHigh": height, "scale": 2], "displayMaxFrameRate": 60]
+        .merging(cursorPort.map { ["cursorPort": $0] } ?? [:]) { $1 })
     c.send(content: hello, completion: .idempotent)
     receive(c)
 }
@@ -155,6 +206,15 @@ Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { timer in
     let t = Date().timeIntervalSince(at)
     if phase == 0 && t > seconds * 0.5 {
         phase = 1; kfAskedAt = Date(); send(["type": "kf"]); say("asked for a keyframe")
+        if hover {
+            say("hovering across the display")
+            for i in 0..<40 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05 * Double(i)) {
+                    send(["type": "pencil", "phase": "hover", "x": 0.2 + 0.015 * Double(i), "y": 0.5,
+                          "pressure": 0, "azimuth": 0, "altitude": 1.5, "rotation": 0])
+                }
+            }
+        }
         if touch {
             send(["type": "touch", "phase": "began", "x": 0.5, "y": 0.5])
             send(["type": "touch", "phase": "ended", "x": 0.5, "y": 0.5])
@@ -176,6 +236,7 @@ Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { timer in
             streamConfig: \(streamConfig.map { "\($0["codec"] ?? "")" + " \($0["width"] ?? "")x\($0["height"] ?? "")@\($0["framesPerSecond"] ?? "")" } ?? "none")
             keyframe after kf: \(kfAnswered.map { String(format: "%.0f ms", $0) } ?? "none")
             ping round trip: \(latencies.isEmpty ? "none" : String(format: "%.1f ms median", latencies.sorted()[latencies.count / 2]))
+            pointer: \(udpCursors) over UDP, \(tcpCursors) over TCP (\(tcpCursorsAfterAck) after the ack), highest s \(lastSeq), out of order \(seqProblems)
             problems: \(problems.isEmpty ? "none" : problems.joined(separator: "; "))
             """)
             exit(problems.isEmpty && firstVideoIsIDR == true ? 0 : 1)

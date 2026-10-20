@@ -364,6 +364,14 @@ final class OpenDisplaySession {
     private var injector: MoonlightInputInjector?
     private var capture: SharedScreenCapture.Subscription?
     private var cursor = OpenDisplayCursor()
+    /// The pointer's positions over UDP, while the receiver offers a port (Wi-Fi only).
+    private var cursorUDP: NWConnection?
+    private var cursorUDPPort: UInt16?
+    /// When the first datagram went, which the receiver has a few seconds to acknowledge.
+    private var cursorUDPFirstSent: Date?
+    private var cursorAcked = false
+    /// The last pointer message's number on this connection; positions over UDP and TCP share it.
+    private var cursorSequence = 0
 
     /// Shared with the encoder's and capture's threads.
     private let lock = NSLock()
@@ -408,6 +416,9 @@ final class OpenDisplaySession {
         link = channel
         linkReady = false
         deframer = OpenDisplayDeframer()
+        // The receiver numbers pointer messages afresh on each connection.
+        closeCursorUDP()
+        cursorSequence = 0
         channel.onReady = { [weak self, weak channel] in
             guard let self, let channel, self.link === channel else { return }
             self.linkReady = true
@@ -450,6 +461,7 @@ final class OpenDisplaySession {
         link = nil
         linkReady = false
         channel.close()
+        closeCursorUDP()
         lock.lock()
         sendLink = nil
         lock.unlock()
@@ -472,6 +484,7 @@ final class OpenDisplaySession {
         pendingHello?.cancel()
         link?.close()
         link = nil
+        closeCursorUDP()
         stopMedia()
         stopTimers()
         if let displayID { sender?.removeDisplay?(displayID) }
@@ -487,6 +500,7 @@ final class OpenDisplaySession {
         case .hello(let hello):
             send(OpenDisplayReply.welcome())
             sender?.session(self, saidID: hello.id, device: hello.device)
+            offerCursorUDP(hello.cursorPort)
             guard let wanted = hello.desktop() else {
                 odLog.error("\(self.name, privacy: .public): a hello with no size")
                 return
@@ -504,6 +518,11 @@ final class OpenDisplaySession {
             send(OpenDisplayReply.pong(t: t))
         case .keyFrame:
             requestKeyFrame()
+        case .cursorAck:
+            if cursorUDP != nil, !cursorAcked {
+                cursorAcked = true
+                odLog.debug("\(self.name, privacy: .public): pointer over UDP")
+            }
         case .touch, .pencil:
             injector?.handle(OpenDisplayTouches.events(for: message))
         case let .scroll(dx, dy):
@@ -730,7 +749,51 @@ final class OpenDisplaySession {
 
     private func followPointer() {
         guard let displayID, hasLink, desktop != nil else { return }
-        for message in cursor.update(displayID: displayID) { send(message) }
+        let (image, position) = cursor.update(displayID: displayID)
+        if let image { send(image) }
+        guard let position else { return }
+        cursorSequence += 1
+        if let udp = cursorUDP {
+            if !cursorAcked, let first = cursorUDPFirstSent, Date().timeIntervalSince(first) > Self.cursorAckTimeout {
+                odLog.debug("\(self.name, privacy: .public): no cursorAck in \(Int(Self.cursorAckTimeout)) s; the pointer stays on TCP")
+                closeCursorUDP(keepingPort: true)
+            } else {
+                if let datagram = OpenDisplayReply.cursorDatagram(at: position, sequence: cursorSequence) {
+                    if cursorUDPFirstSent == nil { cursorUDPFirstSent = Date() }
+                    udp.send(content: datagram, completion: .idempotent)
+                }
+                // Until a datagram is known to arrive, the same goes over TCP too.
+                if cursorAcked { return }
+            }
+        }
+        send(OpenDisplayReply.cursor(at: position, sequence: cursorSequence))
+    }
+
+    /// How long a receiver has to say a pointer datagram arrived.
+    static let cursorAckTimeout: TimeInterval = 3
+
+    /// Sends pointer positions to `port` over UDP, at the host the connection reached, or
+    /// stops with nil; a cable can't carry UDP, and a port that never acknowledged isn't
+    /// tried again on the same connection.
+    private func offerCursorUDP(_ port: UInt16?) {
+        guard let port, let tcp = link as? OpenDisplayTCPChannel,
+              case let .hostPort(host, _)? = tcp.reachedAddress else { return closeCursorUDP() }
+        guard port != cursorUDPPort else { return }
+        closeCursorUDP()
+        let udp = NWConnection(host: host, port: NWEndpoint.Port(rawValue: port)!, using: .udp)
+        udp.start(queue: .main)
+        cursorUDP = udp
+        cursorUDPPort = port
+        cursorUDPFirstSent = nil
+        cursorAcked = false
+        odLog.debug("\(self.name, privacy: .public): pointer to UDP \(host.debugDescription, privacy: .public):\(port)")
+    }
+
+    private func closeCursorUDP(keepingPort: Bool = false) {
+        cursorUDP?.cancel()
+        cursorUDP = nil
+        cursorAcked = false
+        if !keepingPort { cursorUDPPort = nil }
     }
 }
 
@@ -749,17 +812,19 @@ struct OpenDisplayCursor {
         checkedImage = .distantPast
     }
 
-    mutating func update(displayID: CGDirectDisplayID) -> [Data?] {
-        var out: [Data?] = []
+    /// The picture to send, framed, if it changed, and where the pointer went if it moved:
+    /// a normalized point, or nil when it left the display.
+    mutating func update(displayID: CGDirectDisplayID) -> (image: Data?, position: CGPoint??) {
+        var image: Data?
         let bounds = CGDisplayBounds(displayID)
-        guard bounds.width > 0, bounds.height > 0 else { return out }
+        guard bounds.width > 0, bounds.height > 0 else { return (nil, nil) }
         if Date().timeIntervalSince(checkedImage) > 0.25 {
             checkedImage = Date()
             if let (png, size, hotSpot) = Self.picture(), png != lastImage {
                 lastImage = png
-                out.append(OpenDisplayReply.cursorImage(
+                image = OpenDisplayReply.cursorImage(
                     png: png, size: CGSize(width: size.width / bounds.width, height: size.height / bounds.height),
-                    hotSpot: CGPoint(x: hotSpot.x / max(size.width, 1), y: hotSpot.y / max(size.height, 1))))
+                    hotSpot: CGPoint(x: hotSpot.x / max(size.width, 1), y: hotSpot.y / max(size.height, 1)))
             }
         }
         let location = CGEvent(source: nil)?.location ?? .zero
@@ -773,11 +838,9 @@ struct OpenDisplayCursor {
         case (.some(nil), nil): moved = false
         default: moved = true
         }
-        if moved {
-            last = .some(point)
-            out.append(OpenDisplayReply.cursor(at: point))
-        }
-        return out
+        guard moved else { return (image, nil) }
+        last = .some(point)
+        return (image, .some(point))
     }
 
     /// The pointer's picture as a PNG at twice its size, small enough to send, with its size

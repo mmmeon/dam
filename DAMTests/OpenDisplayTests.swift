@@ -71,11 +71,17 @@ final class OpenDisplayTests: XCTestCase {
         XCTAssertEqual(h.id, "A-1")
         XCTAssertEqual(h.device, "iPad")
         XCTAssertEqual(h.pv, 3)
+        XCTAssertNil(h.cursorPort)
         let desktop = try XCTUnwrap(h.desktop())
         XCTAssertEqual(desktop.mode, StreamingDisplayModes.Mode(width: 1024, height: 768, refreshRate: 60, hiDPI: true))
         XCTAssertEqual(desktop.streamWidth, 2048)
         XCTAssertEqual(desktop.streamHeight, 1536)
         XCTAssertEqual(desktop.fps, 60)
+    }
+
+    func testCursorPortIsTakenWhenItIsOne() throws {
+        XCTAssertEqual(try XCTUnwrap(hello(#"{"type":"hello","pixelsWide":4,"pixelsHigh":4,"cursorPort":9001}"#)).cursorPort, 9001)
+        XCTAssertNil(try XCTUnwrap(hello(#"{"type":"hello","pixelsWide":4,"pixelsHigh":4,"cursorPort":70000}"#)).cursorPort)
     }
 
     func testAMacReceiverGivesItsPoints() throws {
@@ -133,7 +139,8 @@ final class OpenDisplayTests: XCTestCase {
         XCTAssertEqual(OpenDisplayMessage.parse(Data(#"{"type":"kf"}"#.utf8)), .keyFrame)
         XCTAssertEqual(OpenDisplayMessage.parse(Data(#"{"type":"closing"}"#.utf8)), .closing)
         XCTAssertEqual(OpenDisplayMessage.parse(Data(#"{"type":"sleeping"}"#.utf8)), .sleeping)
-        XCTAssertEqual(OpenDisplayMessage.parse(Data(#"{"type":"cursorAck"}"#.utf8)), .other("cursorAck"))
+        XCTAssertEqual(OpenDisplayMessage.parse(Data(#"{"type":"cursorAck"}"#.utf8)), .cursorAck)
+        XCTAssertEqual(OpenDisplayMessage.parse(Data(#"{"type":"stroke"}"#.utf8)), .other("stroke"))
         // Not JSON, or no type: ignored, not fatal.
         XCTAssertNil(OpenDisplayMessage.parse(Data("hello".utf8)))
         XCTAssertNil(OpenDisplayMessage.parse(Data(#"{"phase":"began"}"#.utf8)))
@@ -156,6 +163,11 @@ final class OpenDisplayTests: XCTestCase {
         let hidden = try XCTUnwrap(OpenDisplayReply.cursor(at: nil))
         XCTAssertEqual(String(decoding: hidden.dropFirst(4), as: UTF8.self), #"{"type":"cursor","v":0}"#)
         XCTAssertNil(OpenDisplayReply.cursorImage(png: Data(count: 24001), size: .zero, hotSpot: .zero))
+        // Numbered, over TCP and as a datagram alike; the datagram has no length before it.
+        let framed = try XCTUnwrap(OpenDisplayReply.cursor(at: CGPoint(x: 0.5, y: 0.25), sequence: 88))
+        let datagram = try XCTUnwrap(OpenDisplayReply.cursorDatagram(at: CGPoint(x: 0.5, y: 0.25), sequence: 88))
+        XCTAssertEqual(Data(framed.dropFirst(4)), datagram)
+        XCTAssertEqual(String(decoding: datagram, as: UTF8.self), #"{"s":88,"type":"cursor","v":1,"x":0.5,"y":0.25}"#)
     }
 
     // MARK: usbmuxd

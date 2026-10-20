@@ -108,12 +108,14 @@ struct OpenDisplayHello: Equatable {
     var maxEncodeHigh: Int?
     /// Its H.264 envelopes from `videoCaps`: largest size and rate.
     var h264Caps: [(maxWidth: Int?, maxHeight: Int?, maxFrameRate: Int?)] = []
+    /// The UDP port it takes pointer positions on, while it listens there.
+    var cursorPort: UInt16?
 
     static func == (a: Self, b: Self) -> Bool {
         a.id == b.id && a.device == b.device && a.pv == b.pv && a.panel == b.panel
             && a.pixelsWide == b.pixelsWide && a.pixelsHigh == b.pixelsHigh
             && a.displayMaxFrameRate == b.displayMaxFrameRate
-            && a.maxEncodeWide == b.maxEncodeWide && a.maxEncodeHigh == b.maxEncodeHigh
+            && a.maxEncodeWide == b.maxEncodeWide && a.maxEncodeHigh == b.maxEncodeHigh && a.cursorPort == b.cursorPort
             && a.h264Caps.count == b.h264Caps.count
             && zip(a.h264Caps, b.h264Caps).allSatisfy { $0 == $1 }
     }
@@ -131,6 +133,7 @@ struct OpenDisplayHello: Equatable {
         displayMaxFrameRate = int(json["displayMaxFrameRate"]).flatMap { $0 > 0 ? $0 : nil }
         maxEncodeWide = int(json["maxEncodeWide"]).flatMap { $0 > 0 ? $0 : nil }
         maxEncodeHigh = int(json["maxEncodeHigh"]).flatMap { $0 > 0 ? $0 : nil }
+        cursorPort = int(json["cursorPort"]).flatMap { (1...65535).contains($0) ? UInt16($0) : nil }
         if let caps = json["videoCaps"] as? [[String: Any]] {
             h264Caps = caps.filter { ($0["codec"] as? String)?.lowercased() == "h264" }.map {
                 (int($0["maxWidth"]), int($0["maxHeight"]), int($0["maxFrameRate"]))
@@ -223,6 +226,8 @@ enum OpenDisplayMessage: Equatable {
     /// The stylus; "down", "move", "up" or "hover".
     case pencil(String, x: Double, y: Double)
     case keyFrame
+    /// The first pointer datagram arrived.
+    case cursorAck
     case sleeping
     case closing
     /// Telemetry, only for the log.
@@ -254,6 +259,8 @@ enum OpenDisplayMessage: Equatable {
             return .pencil(phase, x: x, y: y)
         case "kf":
             return .keyFrame
+        case "cursorAck":
+            return .cursorAck
         case "sleeping":
             return .sleeping
         case "closing":
@@ -289,11 +296,28 @@ enum OpenDisplayReply {
                                  "framesPerSecond": fps])
     }
 
-    /// The pointer at a normalized point of the video, or hidden with nil.
-    static func cursor(at point: CGPoint?) -> Data? {
-        guard let point else { return OpenDisplayWire.control(["type": "cursor", "v": 0]) }
-        func rounded(_ v: CGFloat) -> Double { (Double(v) * 10_000).rounded() / 10_000 }
-        return OpenDisplayWire.control(["type": "cursor", "x": rounded(point.x), "y": rounded(point.y), "v": 1])
+    /// The pointer at a normalized point of the video, or hidden with nil; with its number
+    /// in the connection's sequence, which the receiver keeps rising across UDP and TCP.
+    static func cursor(at point: CGPoint?, sequence: Int? = nil) -> Data? {
+        OpenDisplayWire.control(cursorObject(point, sequence))
+    }
+
+    /// The same as a UDP datagram: the message alone, without its length.
+    static func cursorDatagram(at point: CGPoint?, sequence: Int) -> Data? {
+        let object = cursorObject(point, sequence)
+        guard let json = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else { return nil }
+        return json
+    }
+
+    private static func cursorObject(_ point: CGPoint?, _ sequence: Int?) -> [String: Any] {
+        var object: [String: Any] = ["type": "cursor", "v": point == nil ? 0 : 1]
+        if let point {
+            func rounded(_ v: CGFloat) -> Double { (Double(v) * 10_000).rounded() / 10_000 }
+            object["x"] = rounded(point.x)
+            object["y"] = rounded(point.y)
+        }
+        if let sequence { object["s"] = sequence }
+        return object
     }
 
     /// The pointer's picture: a PNG of at most 24000 bytes, its size as fractions of the
