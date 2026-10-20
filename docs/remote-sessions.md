@@ -5,7 +5,7 @@
 ## Summary
 
 DAM can set up the Mac when another app streams it: Sunshine, RustDesk, Parsec, Screen
-Sharing, Chrome Remote Desktop, TeamViewer, or an app that makes its own display. For each
+Sharing, Chrome Remote Desktop, TeamViewer, OpenDisplay, or an app that makes its own display. For each
 app, a profile in Settings › Remote Sessions says what to do while one of its sessions is on:
 
 - **Display:**
@@ -115,10 +115,11 @@ The same requests work as URLs, for example
 | App | Signal | Seen working |
 |---|---|---|
 | RustDesk | `#N Connection opened from IP:port.` / `#N Connection closed` in `~/Library/Logs/RustDesk/RustDesk_rCURRENT.log` | Lines from real sessions parsed; a live session is still to be tried |
-| Parsec | `user#id connected.` / `disconnected.` in `~/.parsec/log.txt` | No (format from Parsec's binary) |
+| Parsec | `user#id connected.` / `disconnected.` in `~/.parsec/log.txt` | Yes, 2026-10-19: display made 2 s after `connected.`, removed in the same ms as `disconnected.` |
 | Screen Sharing | `screensharingd` running; it runs only while someone is connected. The session ends 5 s after it exits. | No (Screen Sharing is off here) |
 | Chrome Remote Desktop | `Client connected:` / `Client disconnected:` in `/var/log/org.chromium.chromoting.log` | No (not installed) |
 | TeamViewer | `TeamViewer_Desktop` running | No (not installed) |
+| OpenDisplay | `capture started: … display ID … mode extend\|mirror … session ID` / `capture ended: session ID` in `~/Library/Logs/OpenDisplay/opendisplay.log` (`OpenDisplay Dev/` for the Debug build, whichever changed last). Ends too when OpenDisplay quits, and a session already on when DAM starts is taken up while OpenDisplay runs. Extending, the session adopts that display; mirroring, it leaves the displays alone. | Yes, with an iPad over WiFi: extend, mirror, switching between them, and DAM relaunched mid-session |
 | Another app's display | A display whose name contains the given text is online | Yes, with a stand-in virtual display |
 
 Follow the logs from their end, through rotation and truncation. A close for a connection
@@ -130,8 +131,30 @@ root's processes (`screensharingd`), and names are cut to 16 characters.
 - **Main or mirror placement:** a streaming display DAM has just placed is held in place
   for 5 s. Making it main or mirrored inside that time now updates the layout being held,
   so the hold no longer undoes it.
+- **Parsec** streams the main display, and follows it when another display is made main
+  during the session. Extending leaves the client on the Mac's own screen, so Parsec's
+  profile defaults to Main. On this Intel Mac, Parsec's hardware H.265 encoder fails to start
+  (`VTSessionSetProperty = -12900`) and it falls back to software, at 4–15 fps, with or without
+  DAM. Findings from 2026-10-19 (Parsec 150-105c), toward streaming an empty extended display:
+  - Host › Display picks the display, saved as `host_output` in `~/.parsec/config.json`: the
+    CGDirectDisplayID in hex (`"3F0043"` is 4128835). Picking DAM's display mid-session
+    switches the client to it.
+  - Parsec reads `host_output` only as a session starts. DAM's display comes up ~2 s after
+    `connected.`, so even when it gets the same ID, Parsec has already fallen back to Display 1
+    (and later saved the Lenovo's ID back). macOS picks the ID (4128834 or 4128835 here).
+  - An edit to `config.json` mid-session changes nothing.
+  - Parsec restarts capture (`capture = screen_capture_kit` in its log) when displays change.
+  - Untested: whether Parsec stays on a display after main moves away from it. Making DAM's
+    display main from outside DAM was undone within 2 s by DAM's keep-off-main rule.
+  - Ways on: make the display main until Parsec captures it, then hand main back (needs the
+    test above, with DAM not undoing it); or keep a Parsec display while Parsec runs, so
+    `host_output` finds it at connect; or leave it main.
 - **Adopting:** a display that WindowServer mirrors as it comes has no screen, so DAM can't
   read its name. DAM can only adopt a display that the app extends.
+- **OpenDisplay:** upstream logs no session ID and nothing when a session stops. The lines
+  above come from the `dam-session-log` branch of the local fork (`/Users/Shared/opendisplay`).
+  Mirroring makes no display: OpenDisplay captures the main display with ScreenCaptureKit, and
+  in Extend mode it pulls its display out of any mirror set.
 - **Blackout:** it sets gamma to black. The pointer and the backlight stay on, and captures
   are unchanged. Leave it off where the app has its own privacy mode (RustDesk, Parsec),
   since the two would fight.

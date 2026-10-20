@@ -14,9 +14,18 @@ import os.log
 
 private let detLog = Logger(subsystem: AppIdentity.bundleID, category: "SessionDetectors")
 
+/// What a detector knows of the screen an app streams.
+enum StreamedDisplay: Equatable {
+    case unknown
+    /// A display the app made for the session, to adopt.
+    case own(CGDirectDisplayID)
+    /// The Mac's own screen, as the app mirrors it: no display to make or adopt.
+    case mac
+}
+
 /// A connection opening or closing, by a key that pairs the two.
 enum SessionEvent: Equatable {
-    case opened(key: String, client: String?)
+    case opened(key: String, client: String?, display: StreamedDisplay = .unknown)
     case closed(key: String)
 }
 
@@ -58,6 +67,21 @@ enum SessionLogLines {
             return .opened(key: m[0], client: m[0].split(separator: "/").first.map(String.init))
         }
         if let m = captures(#"Client disconnected: (\S+)"#, in: line) { return .closed(key: m[0]) }
+        return nil
+    }
+
+    /// OpenDisplay, as the fork's `dam-session-log` branch writes it: `capture started: 2048x1536
+    /// display 4128835 generation 1 mode extend localCursor=true session wifi:iPad` and
+    /// `capture ended: session wifi:iPad`, by its session for the device. Extending, it
+    /// streams a display of its own; mirroring, the Mac's main one.
+    static func openDisplay(_ line: String) -> SessionEvent? {
+        if let m = captures(#"capture started: \S+ display (\d+) generation \d+ mode (\w+) .*?session (\S.*)$"#, in: line) {
+            let display: StreamedDisplay = m[1] == "extend" ? CGDirectDisplayID(m[0]).map { .own($0) } ?? .unknown : .mac
+            // A WiFi session is named after the device's service; a USB one by its UDID.
+            let client = m[2].hasPrefix("wifi:") ? String(m[2].dropFirst(5)) : nil
+            return .opened(key: m[2], client: client, display: display)
+        }
+        if let m = captures(#"capture ended: session (\S.*)$"#, in: line) { return .closed(key: m[0]) }
         return nil
     }
 
@@ -171,42 +195,106 @@ final class LogSessionDetector: SessionDetector {
     var onEvent: ((SessionEvent) -> Void)?
     private let url: URL
     private let parse: (String) -> SessionEvent?
+    /// Whether the app runs, for one that can quit without logging the close. With it, a
+    /// connection the log's end shows open when DAM starts watching counts while the app runs.
+    private let isRunning: (() -> Bool)?
     private var follower: LogFollower?
+    private var timer: Timer?
+    private var wasRunning = false
     /// The connections open, so a close of one opened before DAM looked is ignored.
     private(set) var open: Set<String> = []
 
-    init(app: String, url: URL, parse: @escaping (String) -> SessionEvent?) {
+    init(app: String, url: URL, parse: @escaping (String) -> SessionEvent?, isRunning: (() -> Bool)? = nil) {
         self.app = app
         self.url = url
         self.parse = parse
+        self.isRunning = isRunning
     }
 
     func start() {
         guard follower == nil else { return }
         detLog.debug("\(self.app): following \(self.url.path)")
+        if let isRunning, isRunning() {
+            for event in Self.stillOpen(in: Self.lastLines(of: url), parse: parse) { report(event) }
+        }
         let follower = LogFollower(url: url) { [weak self] in self?.handle($0) }
         follower.start()
         self.follower = follower
+        if isRunning != nil {
+            checkRunning()
+            timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.checkRunning() }
+        }
     }
 
     func stop() {
         follower?.stop()
         follower = nil
+        timer?.invalidate()
+        timer = nil
         // Ends what is still open, so the session doesn't outlive the watching.
+        closeAll()
+    }
+
+    private func closeAll() {
         for key in open { onEvent?(.closed(key: key)) }
         open.removeAll()
     }
 
+    /// Ends what is open once the app quits. Only after it was seen running, so lines
+    /// written by hand (tools/sessiontest) still count.
+    func checkRunning() {
+        guard let isRunning else { return }
+        if isRunning() {
+            wasRunning = true
+        } else if wasRunning {
+            wasRunning = false
+            if !open.isEmpty { detLog.debug("\(self.app): quit") }
+            closeAll()
+        }
+    }
+
     func handle(_ line: String) {
-        guard let event = parse(line) else { return }
+        if let event = parse(line) { report(event) }
+    }
+
+    private func report(_ event: SessionEvent) {
         switch event {
-        case .opened(let key, _):
+        case .opened(let key, _, _):
             guard open.insert(key).inserted else { return }
         case .closed(let key):
             guard open.remove(key) != nil else { return }
         }
         detLog.debug("\(self.app): \(String(describing: event))")
         onEvent?(event)
+    }
+}
+
+extension LogSessionDetector {
+    /// The connections `lines` leave open, each as it was last opened, in the order opened.
+    static func stillOpen(in lines: [String], parse: (String) -> SessionEvent?) -> [SessionEvent] {
+        var open: [(key: String, event: SessionEvent)] = []
+        for event in lines.compactMap(parse) {
+            switch event {
+            case .opened(let key, _, _):
+                if let i = open.firstIndex(where: { $0.key == key }) { open[i].event = event } else { open.append((key, event)) }
+            case .closed(let key):
+                open.removeAll { $0.key == key }
+            }
+        }
+        return open.map(\.event)
+    }
+
+    /// The whole lines in the last `bytes` of the file at `url`.
+    static func lastLines(of url: URL, bytes: UInt64 = 256 * 1024) -> [String] {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return [] }
+        defer { try? handle.close() }
+        guard let size = try? handle.seekToEnd() else { return [] }
+        let start = size > bytes ? size - bytes : 0
+        guard (try? handle.seek(toOffset: start)) != nil, let data = try? handle.readToEnd() else { return [] }
+        var lines = String(decoding: data, as: UTF8.self).components(separatedBy: "\n")
+        // The first is cut short unless the read began at the start.
+        if start > 0, !lines.isEmpty { lines.removeFirst() }
+        return lines.filter { !$0.isEmpty }
     }
 }
 
@@ -265,7 +353,7 @@ final class ProcessSessionDetector: SessionDetector {
 }
 
 /// A connection for as long as a display whose name contains `name` is online, for apps that
-/// make their own display for each session: Jump Desktop, Splashtop, OpenDisplay, Duet, ….
+/// make their own display for each session: Jump Desktop, Splashtop, Duet, ….
 final class DisplaySessionDetector: SessionDetector {
     let app: String
     var onEvent: ((SessionEvent) -> Void)?
@@ -305,7 +393,7 @@ final class DisplaySessionDetector: SessionDetector {
         for display in matching where !open.contains(display.id) {
             open.insert(display.id)
             detLog.debug("\(self.app): \(display.name) came")
-            onEvent?(.opened(key: "\(display.id)", client: nil))
+            onEvent?(.opened(key: "\(display.id)", client: nil, display: .own(display.id)))
         }
     }
 }
@@ -335,7 +423,7 @@ enum SessionDetectors {
     static var home: URL { FileManager.default.homeDirectoryForCurrentUser }
 
     /// The apps DAM can watch for sessions of.
-    static let watchable: Set<String> = ["rustdesk", "parsec", "screensharing", "chromeremotedesktop", "teamviewer", "display"]
+    static let watchable: Set<String> = ["rustdesk", "parsec", "screensharing", "chromeremotedesktop", "teamviewer", "opendisplay", "display"]
 
     /// For "display": the displays online, and the name to watch for; set by the app.
     static var displayNames: () -> [(id: CGDirectDisplayID, name: String)] = { [] }
@@ -365,11 +453,25 @@ enum SessionDetectors {
         case "teamviewer":
             // Started for each incoming connection.
             return ProcessSessionDetector(app: app, processName: "TeamViewer_Desktop")
+        case "opendisplay":
+            // The Debug build logs to a folder of its own.
+            let logs = home.appendingPathComponent("Library/Logs")
+            let standard = newest(["OpenDisplay", "OpenDisplay Dev"].map { logs.appendingPathComponent("\($0)/opendisplay.log") })
+            return LogSessionDetector(app: app, url: logURL(for: app, standard: standard), parse: SessionLogLines.openDisplay,
+                                      isRunning: { !RunningProcesses.names().isDisjoint(with: ["OpenDisplay", "OpenDisplay Dev"]) })
         case "display":
             return DisplaySessionDetector(app: app, name: adoptName, displays: displayNames)
         default:
             return nil
         }
+    }
+
+    /// The one of `urls` changed last, or the first when none is there.
+    static func newest(_ urls: [URL]) -> URL {
+        func modified(_ url: URL) -> Date {
+            (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+        }
+        return urls.max { modified($0) < modified($1) } ?? urls[0]
     }
 
     /// Whether the app is on this Mac.
@@ -382,6 +484,11 @@ enum SessionDetectors {
         case "chromeremotedesktop":
             return fm.fileExists(atPath: "/Library/PrivilegedHelperTools/org.chromium.chromoting.me2me_host.app")
         case "teamviewer": return fm.fileExists(atPath: "/Applications/TeamViewer.app")
+        case "opendisplay":
+            // Often built from source, so its log tells too.
+            let logs = home.appendingPathComponent("Library/Logs").path
+            return fm.fileExists(atPath: "/Applications/OpenDisplay.app") || fm.fileExists(atPath: "\(logs)/OpenDisplay")
+                || fm.fileExists(atPath: "\(logs)/OpenDisplay Dev")
         case "sunshine":
             return ["/Applications/Sunshine.app", "/usr/local/bin/sunshine", "/opt/homebrew/bin/sunshine"]
                 .contains { fm.fileExists(atPath: $0) }
@@ -427,11 +534,15 @@ final class SessionWatcher {
     func handle(_ event: SessionEvent, of app: String) {
         let name = RemoteSessionApp.name(of: app)
         switch event {
-        case .opened(let key, let client):
+        case .opened(_, let client, let display):
             let first = coordinator.sessions[app] == nil
-            // A display detector's key is the display it saw.
-            let seen = app == "display" ? CGDirectDisplayID(key) : nil
-            coordinator.begin(SessionRequest(app: app, client: client, adoptedDisplayID: seen)) { [weak self] result in
+            var request = SessionRequest(app: app, client: client)
+            switch display {
+            case .unknown: break
+            case .own(let id): request.adoptedDisplayID = id
+            case .mac: request.display = SessionProfile.DisplayChoice.none
+            }
+            coordinator.begin(request) { [weak self] result in
                 switch result {
                 case .success(let start):
                     for warning in start.warnings { detLog.error("\(app): \(warning)") }

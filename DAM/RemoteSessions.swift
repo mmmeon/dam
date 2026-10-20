@@ -25,6 +25,7 @@ enum RemoteSessionApp {
         ("screensharing", "Screen Sharing"),
         ("chromeremotedesktop", "Chrome Remote Desktop"),
         ("teamviewer", "TeamViewer"),
+        ("opendisplay", "OpenDisplay"),
         ("display", "Another App's Display")
     ]
 
@@ -246,6 +247,9 @@ final class RemoteSessionCoordinator {
         var ownsOutput = false
         /// Whether it blacks out the Mac's screens.
         var blacksOut = false
+        /// Whether it lasts as long as the app's own display or stream, which DAM can't end:
+        /// ending it would leave the app streaming.
+        var followsApp = false
         /// Whether it is still being set up.
         var starting = true
         var started = Date()
@@ -297,7 +301,9 @@ final class RemoteSessionCoordinator {
         if let profile = profiles[app] { return profile }
         var profile = SessionProfile()
         // Another app's display is there to be placed, not made.
-        if app == "display" { profile.display = .adopt }
+        if app == "display" || app == "opendisplay" { profile.display = .adopt }
+        // Parsec streams the main display, whichever that is when the display is placed.
+        if app == "parsec" { profile.placement = .main }
         return profile
     }
 
@@ -329,6 +335,8 @@ final class RemoteSessionCoordinator {
             displays.holdLayout(true)
         }
         sessions[app] = Session(app: app, client: request.client, profile: profile, outputAtStart: displays.outputUID)
+        // Mirroring, OpenDisplay asks for no display, but its profile still adopts.
+        sessions[app]?.followsApp = profile.display == .adopt || self.profile(for: app).display == .adopt
         waiting[app] = [completion]
         onChange?()
 
