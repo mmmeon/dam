@@ -136,6 +136,13 @@ root's processes (`screensharingd`), and names are cut to 16 characters.
   displays in its toolbar. On 2026-10-20 RustDesk started its server again mid-session (a new
   log file, beginning `try start server`) without logging the open connection's close, so the
   session outlived the disconnect. That line, or RustDesk quitting, now ends every connection.
+  Tried 2026-10-20 toward streaming an extended display, neither works: RustDesk follows main
+  (handing main back to the Lenovo mid-session moved it back to the Lenovo within a second),
+  and a display picked in the client's toolbar (`current=1`) went back to display 0 at the
+  next display change, 3.5 s later. DAM learns of a session only once it is open and its
+  display takes ~3 s, so it is always too late for the app's own choice: Main it is, for
+  RustDesk and Parsec. A display kept for as long as the app runs would work for Parsec
+  (`host_output`), but the user ruled it out.
 - **A display commit that changes nothing takes 10 s to return** (`CGCompleteDisplayConfiguration`,
   on any thread, seen 2026-10-20). WindowServer often lays a new display out as DAM would
   place it, from a layout it saved for the set, so placing it changed nothing and the
