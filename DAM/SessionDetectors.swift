@@ -51,6 +51,42 @@ enum SessionLogLines {
         return nil
     }
 
+    /// RustDesk's desktop connections, told apart from its terminals (and other connections
+    /// with no screen) by the lines that follow `Connection opened` within a few milliseconds.
+    /// A desktop's: `new wakelock, require display on: true` (logged only for the first
+    /// connection), `Option update: OptionMessage { … }` and video capture starting
+    /// (`video_service.rs:485] #displays=2, current=0, …`). A terminal's: `require display on:
+    /// false` and `terminal_service.rs` lines. Holds an opened connection until one comes; one
+    /// still held when the next opens counts as a desktop.
+    final class RustDeskConnections {
+        private var pending: SessionEvent?
+
+        func parse(_ line: String) -> SessionEvent? {
+            if let event = SessionLogLines.rustDesk(line) {
+                switch event {
+                case .opened:
+                    let earlier = pending
+                    pending = event
+                    return earlier
+                case .closed(let key):
+                    if case .opened(key, _, _)? = pending { pending = nil }
+                    return event
+                }
+            }
+            guard let held = pending else { return nil }
+            if line.contains("require display on: false") || line.contains("terminal_service.rs") {
+                pending = nil
+                return nil
+            }
+            if line.contains("require display on: true") || line.contains("Option update: OptionMessage")
+                || (line.contains("video_service.rs") && line.contains("#displays=")) {
+                pending = nil
+                return held
+            }
+            return nil
+        }
+    }
+
     /// RustDesk starting its server afresh, `… INFO [src/server.rs:744] try start server`, after
     /// which no earlier connection is left, though their closes went unlogged.
     static func rustDeskRestarted(_ line: String) -> Bool { line.contains("try start server") }
@@ -488,7 +524,7 @@ enum SessionDetectors {
         case "rustdesk":
             let url = logURL(for: app, standard: home.appendingPathComponent("Library/Logs/RustDesk/RustDesk_rCURRENT.log"))
             // A restart or quit ends connections without logging their closes.
-            return LogSessionDetector(app: app, url: url, parse: SessionLogLines.rustDesk,
+            return LogSessionDetector(app: app, url: url, parse: SessionLogLines.RustDeskConnections().parse,
                                       isRunning: { RunningProcesses.isRunning("RustDesk") },
                                       restarted: SessionLogLines.rustDeskRestarted)
         case "parsec":

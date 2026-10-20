@@ -136,6 +136,11 @@ root's processes (`screensharingd`), and names are cut to 16 characters.
   displays in its toolbar. On 2026-10-20 RustDesk started its server again mid-session (a new
   log file, beginning `try start server`) without logging the open connection's close, so the
   session outlived the disconnect. That line, or RustDesk quitting, now ends every connection.
+  RustDesk's terminal (and, presumably, its file transfer) is a connection too, with the same
+  `Connection opened` line. Desktops are told apart by the lines that follow within ~10 ms:
+  `new wakelock, require display on: true` (first connection only), `Option update:
+  OptionMessage` and video capture starting; a terminal logs `require display on: false` and
+  `terminal_service.rs` lines and makes no session.
   Tried 2026-10-20 toward streaming an extended display, neither works: RustDesk follows main
   (handing main back to the Lenovo mid-session moved it back to the Lenovo within a second),
   and a display picked in the client's toolbar (`current=1`) went back to display 0 at the

@@ -532,6 +532,31 @@ final class RemoteSessionsTests: XCTestCase {
         XCTAssertNil(SessionLogLines.rustDesk("[2026-10-16 13:42:12.553353 -04:00] INFO [src/common.rs:2213] Connection secured"))
     }
 
+    func testRustDeskTerminalsMakeNoSession() {
+        let lines = SessionLogLines.RustDeskConnections()
+        // As RustDesk 1.5.0 wrote them on 2026-10-20: a desktop, then a terminal.
+        XCTAssertNil(lines.parse("[2026-10-20 15:26:04.995863 -04:00] DEBUG [src/server/connection.rs:1498] #1951 Connection opened from 10.10.1.123:36321."))
+        XCTAssertEqual(lines.parse("[2026-10-20 15:26:05.005147 -04:00] INFO [src/platform/mod.rs:112] new wakelock, require display on: true"),
+                       .opened(key: "1951", client: "10.10.1.123"))
+        XCTAssertNil(lines.parse("[2026-10-20 15:26:05.011789 -04:00] INFO [src/server/connection.rs:4857] Option update: OptionMessage { image_quality: NotSet }"))
+        XCTAssertEqual(lines.parse("[2026-10-20 15:27:12.557025 -04:00] INFO [src/server/connection.rs:5249] #1951 Connection closed: Peer close"),
+                       .closed(key: "1951"))
+        XCTAssertNil(lines.parse("[2026-10-20 15:27:22.031451 -04:00] DEBUG [src/server/connection.rs:1498] #1952 Connection opened from 10.10.1.123:40321."))
+        XCTAssertNil(lines.parse("[2026-10-20 15:27:22.041027 -04:00] INFO [src/platform/mod.rs:112] new wakelock, require display on: false"))
+        XCTAssertNil(lines.parse("[2026-10-20 15:27:22.047539 -04:00] INFO [src/server/terminal_service.rs:180] Creating new terminal service: ts_1 (persistent: false)"))
+        XCTAssertNil(lines.parse("[2026-10-20 15:27:22.100000 -04:00] INFO [src/server/connection.rs:4857] Option update: OptionMessage { image_quality: NotSet }"))
+        // Its close is passed on; the detector ignores a close of what it never saw open.
+        XCTAssertEqual(lines.parse("#1952 Connection closed: Peer close"), .closed(key: "1952"))
+
+        // A second desktop, which logs no new wakelock, by its options; one held when the next
+        // opens counts as a desktop.
+        XCTAssertNil(lines.parse("#3 Connection opened from 10.0.0.3:1."))
+        XCTAssertEqual(lines.parse("Option update: OptionMessage { image_quality: NotSet }"), .opened(key: "3", client: "10.0.0.3"))
+        XCTAssertNil(lines.parse("#4 Connection opened from 10.0.0.4:1."))
+        XCTAssertEqual(lines.parse("#5 Connection opened from 10.0.0.5:1."), .opened(key: "4", client: "10.0.0.4"))
+        XCTAssertEqual(lines.parse("video_service.rs:485] #displays=2, current=0, origin: (0, 0)"), .opened(key: "5", client: "10.0.0.5"))
+    }
+
     func testParsecLines() {
         XCTAssertEqual(SessionLogLines.parsec("[I 2026-10-18 12:00:00] friend#1234 connected."),
                        .opened(key: "friend#1234", client: "friend"))
