@@ -11,6 +11,7 @@
 import CoreMedia
 import CryptoKit
 import Foundation
+import Network
 import os.log
 
 private let msLog = Logger(subsystem: AppIdentity.bundleID, category: "MoonlightStream")
@@ -18,6 +19,74 @@ private let msLog = Logger(subsystem: AppIdentity.bundleID, category: "Moonlight
 enum MoonlightStreamError: Error {
     case socket(String, Int32)
     case enet
+}
+
+// MARK: - Networks
+
+/// Whether an address is on one of the Mac's own networks: loopback, link-local (as over a
+/// USB or Thunderbolt cable), or within the subnet of one of its interfaces.
+enum LocalNetwork {
+    struct Subnet: Equatable {
+        let address: [UInt8]
+        let mask: [UInt8]
+
+        func contains(_ bytes: [UInt8]) -> Bool {
+            bytes.count == address.count && mask.count == address.count
+                && zip(zip(bytes, address), mask).allSatisfy { ($0.0 & $1) == ($0.1 & $1) }
+        }
+    }
+
+    static func contains(_ endpoint: NWEndpoint?, subnets: [Subnet] = interfaceSubnets()) -> Bool {
+        guard case .hostPort(let host, _) = endpoint else { return false }
+        switch host {
+        case .ipv4(let address): return contains([UInt8](address.rawValue), subnets: subnets)
+        case .ipv6(let address): return contains([UInt8](address.rawValue), subnets: subnets)
+        default: return false
+        }
+    }
+
+    /// `bytes` is an IPv4 or IPv6 address; an IPv4 one written as IPv6 counts as IPv4.
+    static func contains(_ bytes: [UInt8], subnets: [Subnet]) -> Bool {
+        var bytes = bytes
+        if bytes.count == 16, bytes.prefix(10).allSatisfy({ $0 == 0 }), bytes[10] == 0xFF, bytes[11] == 0xFF {
+            bytes = Array(bytes[12...])
+        }
+        if bytes.count == 4, bytes[0] == 127 || (bytes[0] == 169 && bytes[1] == 254) { return true }
+        if bytes.count == 16, bytes == [UInt8](repeating: 0, count: 15) + [1]
+            || (bytes[0] == 0xFE && bytes[1] & 0xC0 == 0x80) { return true }
+        return subnets.contains { $0.contains(bytes) }
+    }
+
+    /// The subnets of the interfaces that are up.
+    static func interfaceSubnets() -> [Subnet] {
+        var first: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&first) == 0 else { return [] }
+        defer { freeifaddrs(first) }
+        var subnets: [Subnet] = []
+        var next = first
+        while let entry = next?.pointee {
+            next = entry.ifa_next
+            guard entry.ifa_flags & UInt32(IFF_UP) != 0, let address = entry.ifa_addr, let mask = entry.ifa_netmask,
+                  let bytes = Self.bytes(address), let maskBytes = Self.bytes(mask, family: address.pointee.sa_family),
+                  bytes.count == maskBytes.count else { continue }
+            subnets.append(Subnet(address: bytes, mask: maskBytes))
+        }
+        return subnets
+    }
+
+    /// An address's bytes. A netmask may come without its family, so the address's is
+    /// given, and cut short where the rest is zeros, so only `sa_len` bytes are read.
+    private static func bytes(_ address: UnsafeMutablePointer<sockaddr>, family: sa_family_t? = nil) -> [UInt8]? {
+        let (offset, count): (Int, Int)
+        switch Int32(family ?? address.pointee.sa_family) {
+        case AF_INET: (offset, count) = (MemoryLayout<sockaddr_in>.offset(of: \.sin_addr)!, 4)
+        case AF_INET6: (offset, count) = (MemoryLayout<sockaddr_in6>.offset(of: \.sin6_addr)!, 16)
+        default: return nil
+        }
+        let length = Int(address.pointee.sa_len)
+        let raw = UnsafeRawPointer(address)
+        return (offset..<(offset + count)).map { $0 < length ? raw.load(fromByteOffset: $0, as: UInt8.self) : 0 }
+    }
 }
 
 // MARK: - UDP
@@ -154,6 +223,8 @@ final class MoonlightVideoSender {
     private var running = true
     /// Only touched on `queue`.
     private var packetizer: MoonlightPacketizer
+    /// Seals each packet, when the client turned on encrypted video; on `queue`.
+    private var crypto: MoonlightVideoCrypto?
     private let start = DispatchTime.now().uptimeNanoseconds
     /// Nanoseconds each byte may take on the way out.
     private let nanosecondsPerByte: Double
@@ -174,7 +245,9 @@ final class MoonlightVideoSender {
     /// Parity for a fifth of each block's data, as Sunshine sends by default.
     static let fecPercentage = 20
 
-    init(port: UInt16, pingPayload: String, packetSize: Int, minimumParity: Int, bitrateKbps: Int) throws {
+    /// `key` seals every packet, for a client that turned on encrypted video.
+    init(port: UInt16, pingPayload: String, packetSize: Int, minimumParity: Int, bitrateKbps: Int,
+         key: Data? = nil) throws {
         socket = try MoonlightUDPSocket(port: port)
         // Six times the stream's rate, within 60 to 400 Mbit/s: a typical frame in a fraction
         // of a frame's time, a keyframe spread over a few frames'.
@@ -183,6 +256,7 @@ final class MoonlightVideoSender {
         self.pingPayload = Data(pingPayload.utf8)
         packetizer = MoonlightPacketizer(packetSize: packetSize, fecPercentage: Self.fecPercentage,
                                          minimumParity: minimumParity)
+        crypto = key.map(MoonlightVideoCrypto.init(key:))
     }
 
     var hasPeer: Bool {
@@ -270,7 +344,9 @@ final class MoonlightVideoSender {
         // the next one starts.
         let began = DispatchTime.now().uptimeNanoseconds
         var bytes = 0, packets = 0, refused = 0
-        func send(_ packet: Data) {
+        func send(_ plain: Data) {
+            // Sealed last, after parity was worked out over the plain packets.
+            guard let packet = crypto == nil ? plain : crypto?.seal(plain) else { refused += 1; return }
             // Paced: wait until this packet's share of the rate is due.
             let due = began + UInt64(Double(bytes) * nanosecondsPerByte)
             let now = DispatchTime.now().uptimeNanoseconds
@@ -528,6 +604,41 @@ final class MoonlightControlServer {
 
 // MARK: - Session
 
+/// When Moonlight's video goes encrypted, for clients that can take it so (Moonlight on a
+/// Mac, PC, iPhone or iPad, and Android with fast AES). Control and audio always are.
+enum MoonlightVideoEncryption: String, CaseIterable {
+    /// For clients outside the Mac's own networks, as Sunshine does by default.
+    case offLocalNetwork
+    case always
+    case never
+
+    var title: String {
+        switch self {
+        case .offLocalNetwork: return "Off the Local Network"
+        case .always: return "Always"
+        case .never: return "Never"
+        }
+    }
+
+    var summary: String {
+        switch self {
+        case .offLocalNetwork:
+            return "Encrypts video for devices outside this Mac's own networks, such as over the internet or a VPN."
+        case .always: return "Encrypts video for every device, at a little more work for each."
+        case .never: return "Sends video unencrypted; anyone who can see the network traffic can watch."
+        }
+    }
+
+    /// Whether to offer it to a client at `peer`.
+    func offers(to peer: NWEndpoint?) -> Bool {
+        switch self {
+        case .offLocalNetwork: return !LocalNetwork.contains(peer)
+        case .always: return true
+        case .never: return false
+        }
+    }
+}
+
 /// A stream from one display to one Moonlight client.
 final class MoonlightStream {
     static let videoPort: UInt16 = 47998
@@ -536,6 +647,14 @@ final class MoonlightStream {
 
     private static let adaptsBitrateKey = "\(AppIdentity.shortID).moonlight.adaptiveBitrate"
     private static let showsPointerKey = "\(AppIdentity.shortID).moonlight.showsPointer"
+    private static let videoEncryptionKey = "\(AppIdentity.shortID).moonlight.videoEncryption"
+
+    /// When video goes encrypted; from the next launch.
+    static var videoEncryption: MoonlightVideoEncryption {
+        get { UserDefaults.dam.string(forKey: videoEncryptionKey).flatMap(MoonlightVideoEncryption.init(rawValue:))
+              ?? .offLocalNetwork }
+        set { UserDefaults.dam.set(newValue.rawValue, forKey: videoEncryptionKey) }
+    }
 
     /// Whether streams lower their bitrate when the client loses packets, and raise it back.
     static var adaptsBitrate: Bool {
@@ -578,7 +697,8 @@ final class MoonlightStream {
         self.config = config
         self.displayID = displayID
         video = try MoonlightVideoSender(port: Self.videoPort, pingPayload: pingPayload, packetSize: config.packetSize,
-                                         minimumParity: config.minimumParity, bitrateKbps: config.bitrateKbps)
+                                         minimumParity: config.minimumParity, bitrateKbps: config.bitrateKbps,
+                                         key: config.videoEncrypted ? key : nil)
         control = try MoonlightControlServer(port: Self.controlPort, key: key, connectData: connectData)
         audio = try MoonlightAudioSender(port: Self.audioPort, pingPayload: pingPayload, config: config,
                                          key: key, keyID: keyID, stats: video.stats)
@@ -632,7 +752,7 @@ final class MoonlightStream {
             guard let self, !self.video.hasPeer else { return }
             self.end("Moonlight never asked for video")
         }
-        msLog.debug("stream \(self.config.width)×\(self.config.height)@\(self.config.fps) from display \(self.displayID)")
+        msLog.debug("stream \(self.config.width)×\(self.config.height)@\(self.config.fps) from display \(self.displayID), video \(self.config.videoEncrypted ? "encrypted" : "plain", privacy: .public)")
     }
 
     /// Stops everything; Moonlight is told the host ended the stream.

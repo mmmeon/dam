@@ -4,7 +4,8 @@
 //  The RTSP handshake Moonlight performs after launching an app: OPTIONS, DESCRIBE, three
 //  SETUPs, ANNOUNCE with the stream's settings, and PLAY, each on a TCP connection of its
 //  own that the host closes after replying, as that is how Moonlight finds the reply's end.
-//  The host offers H.264, unencrypted video and the encrypted control stream (v2).
+//  The host offers H.264, the encrypted control stream (v2), encrypted audio, and
+//  encrypted video when the launch is to have it.
 //
 
 import Foundation
@@ -30,6 +31,8 @@ struct MoonlightLaunch {
     let ownsDisplay: Bool
     /// Whether the device that launched it wants low-latency rate control.
     var lowLatency = false
+    /// Whether encrypted video is offered; clients turn it on whenever it is.
+    var offersEncryptedVideo = false
 
     init(appID: Int, displayID: CGDirectDisplayID, key: Data, keyID: UInt32 = 0, ownsDisplay: Bool = false) {
         self.appID = appID
@@ -128,9 +131,11 @@ final class MoonlightRTSP {
             return reply("200 OK")
         case "DESCRIBE":
             // No HEVC or AV1 markers, so H.264; control encryption v2 and audio encryption,
-            // which Moonlight asks for regardless, but plain video.
+            // which Moonlight asks for regardless, and video encryption when offered. None
+            // is required, so a client without fast AES may leave video plain.
+            let supported = 0x05 | (launch.offersEncryptedVideo ? MoonlightVideoCrypto.encryptionBit : 0)
             return reply("200 OK", body: "a=x-ss-general.featureFlags:0\r\n" +
-                                         "a=x-ss-general.encryptionSupported:5\r\n" +
+                                         "a=x-ss-general.encryptionSupported:\(supported)\r\n" +
                                          "a=x-ss-general.encryptionRequested:0\r\n")
         case "SETUP":
             let stream = request.target.split(separator: "=").dropFirst().first?.split(separator: "/").first ?? ""
@@ -151,7 +156,7 @@ final class MoonlightRTSP {
             guard var config = MoonlightStreamConfig.parse(sdp: request.body) else { return reply("400 Bad Request") }
             // Moonlight names the host in Host only when stereo may be high quality.
             config.highQualityAudio = !(request.headers["Host"] ?? "0.0.0.0").contains("0.0.0.0")
-            guard config.videoFormat == 0, config.encryptionEnabled & 0x02 == 0 else {
+            guard config.videoFormat == 0, !config.videoEncrypted || launch.offersEncryptedVideo else {
                 return reply("400 Bad Request")
             }
             if let problem = announce(launch, config) {

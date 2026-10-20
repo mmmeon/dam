@@ -438,6 +438,22 @@ final class SettingsWindowController: NSWindowController {
         profile.toolTip = "The profile a browser or player gets unless its address asks for " +
                           "another. Hover over each for what it trades."
 
+        let encryption = ClosurePopup(onSelect: { raw in
+            guard let choice = raw.flatMap(MoonlightVideoEncryption.init(rawValue:)) else { return }
+            MoonlightStream.videoEncryption = choice
+        })
+        encryption.font = .systemFont(ofSize: NSFont.systemFontSize)
+        for option in MoonlightVideoEncryption.allCases {
+            let item = NSMenuItem(title: option.title, action: nil, keyEquivalent: "")
+            item.representedObject = option.rawValue
+            item.toolTip = option.summary
+            encryption.menu?.addItem(item)
+            if option == MoonlightStream.videoEncryption { encryption.select(item) }
+        }
+        encryption.toolTip = "When Moonlight's video is encrypted; the controls and sound always are. " +
+                             "Moonlight on a Mac, PC, iPhone or iPad takes it whenever it is offered. " +
+                             "Takes effect from the next launch."
+
         let newLink = ClosureButton(title: "Make a New Link") { [weak host] _ in host?.makeNewWebStreamLink() }
         newLink.bezelStyle = .rounded
         newLink.toolTip = "The browser stream needs the link Copy Address gives, with its token. A new " +
@@ -466,6 +482,7 @@ final class SettingsWindowController: NSWindowController {
         return formTab([
             ("Hosting:", hosting),
             ("Streams:", streams),
+            ("Encrypt Video:", [encryption]),
             ("Browser Profile:", [profile]),
             ("Browser Link:", [newLink]),
             ("Paired Devices:", [devices.isEmpty ? placeholderLabel("None yet") : deviceGrid]),

@@ -62,10 +62,14 @@ flowchart LR
 
 `MoonlightRTSP`, TCP 48010:
 
-- DESCRIBE offers H.264 only. It supports encrypted control and audio, but not
-  encrypted video.
+- DESCRIBE offers H.264 only. It supports encrypted control and audio, and encrypted
+  video when Settings › Moonlight › Encrypt Video says so for the client's address: Off
+  the Local Network (the default, as Sunshine's), Always or Never. "Local" is loopback,
+  link-local, or a subnet of one of the Mac's interfaces. Nothing is required, so a client
+  without fast AES may leave video plain.
 - ANNOUNCE is parsed for size, fps, packet size, bitrate, minimum FEC and audio
-  settings. It is refused if the client asks for another codec or for encrypted video.
+  settings. It is refused if the client asks for another codec, or for encrypted video
+  that wasn't offered.
 - Control runs on UDP 47999 over vendored ENet 1.3.18, with AES-128-GCM messages. Only
   keyframe requests, reference-frame invalidation and termination are handled.
 
@@ -94,6 +98,10 @@ flowchart LR
   skips a frame before encoding it.
 - **FEC:** each frame is split into up to four blocks, each with 20% Reed-Solomon parity
   (nanors-compatible), or more if the client asks for it.
+- **Encryption:** when the client turned it on, each packet, data and parity alike, is
+  sealed after parity is worked out: AES-128-GCM under the launch's key, sent behind a
+  32-byte prefix of the nonce (a packet counter, three zeros and "V"), the frame index in
+  the clear, and the tag (`MoonlightVideoCrypto`).
 - **Still screen:** the last picture is resent every 0.5 s.
 - **Keyframe requests:** at most one keyframe per 0.25 s. A request is skipped while the
   keyframe asked for is still to be sent, or when it arrives less than a round trip (at

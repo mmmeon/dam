@@ -488,10 +488,12 @@ final class MoonlightHost {
         let appID = request.query["appid"].flatMap(Int.init) ?? launch?.appID ?? Self.newDisplayAppID
         let address = Self.address(connection.currentPath?.localEndpoint)
         let lowLatency = clients.first { $0.certificate == certificate }?.lowLatency ?? true
+        let encrypts = MoonlightStream.videoEncryption.offers(to: connection.currentPath?.remoteEndpoint ?? connection.endpoint)
         let answer = { [weak self] (launch: MoonlightLaunch) in
             guard let self else { return }
             var launch = launch
             launch.lowLatency = lowLatency
+            launch.offersEncryptedVideo = encrypts
             self.endStream()
             self.launch = launch
             self.lastStreamEnd = nil
