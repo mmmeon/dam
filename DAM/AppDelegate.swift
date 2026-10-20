@@ -602,6 +602,13 @@ extension AppDelegate: NSMenuDelegate {
         SpeechSynthesizer.shared.announce(Spoken.copied(address))
     }
 
+    /// Ends one Moonlight device's stream; Moonlight shows that the host ended it.
+    @objc func endMoonlightStream(_ sender: NSMenuItem) {
+        guard let certificate = sender.representedObject as? Data else { return }
+        moonlightHost.endLaunch(of: certificate)
+        rebuild()
+    }
+
     /// Unpairs a Moonlight device.
     private func forget(_ client: MoonlightClient) {
         moonlightHost.forget(client)

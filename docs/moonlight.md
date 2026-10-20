@@ -58,9 +58,29 @@ flowchart LR
   Application Support, readable only by the user. The TLS identity is built in memory,
   so the keychain isn't involved.
 
+### Several devices
+
+Each paired device has a session of its own, from /launch until /cancel, up to four at
+once (`MoonlightHost.maxSessions`). A fifth gets a 503.
+
+- Session *n* (0 to 3) has RTSP on TCP 48010 + *n*, given in /launch's `sessionUrl0`, and
+  its stream on UDP 47998–48000 + 100 × *n*, given in the SETUP replies. The first
+  session's are GameStream's, which port forwards are set up for.
+- `/serverinfo` and `/cancel` are the asking device's own: a device sees its own launch
+  as running and the host free otherwise, so Moonlight never asks it to quit another
+  device's app.
+- Each stream has its own encoder, bitrate, keyframes, FEC and encryption. Streams of one
+  display at one size, rate and pointer setting share one capture (`SharedScreenCapture`),
+  sound included; one that joins gets the last picture at once.
+- A display made for one device that another device streams too stays until both are
+  done.
+- The menu lists the devices streaming, each with End Stream.
+- On the test Mac (Intel Iris Plus 650), three 1080p60 encoders at once kept their
+  frames within 25 ms (p90); with four, the slowest tenth took 43–83 ms.
+
 ### RTSP and control
 
-`MoonlightRTSP`, TCP 48010:
+`MoonlightRTSP`, TCP 48010 (and one port on per further session):
 
 - DESCRIBE offers H.264 only. It supports encrypted control and audio, and encrypted
   video when Settings › Moonlight › Encrypt Video says so for the client's address: Off
@@ -79,7 +99,7 @@ flowchart LR
 `MoonlightFEC` → UDP 47998:
 
 - **Capture:** ScreenCaptureKit captures in 4:2:0 at the stream's size and rate, with a
-  queue depth of 6.
+  queue depth of 6, shared between streams that want the same.
 - **Encoding:** VideoToolbox hardware H.264 (High profile, CABAC, real time, no frame
   reordering, keyframes only on request).
 - **Nudge:** the encoder holds each frame until the next one arrives. So if no new frame

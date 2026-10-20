@@ -3,6 +3,13 @@
 *Plan, 2026-10-19. Protocol details are from Sunshine and moonlight-common-c master;
 line references below are to those sources and to DAM as of this date.*
 
+**Status, 2026-10-19:** all three done on `feat/moonlight-sessions`; see
+`docs/moonlight.md`. The browser stream took the token option, with no localhost
+exception. Several clients took port blocks. Encoder test on the test Mac (Intel Iris
+Plus 650, 1080p60, low-latency): one to three encoders kept a p90 of 18–24 ms, four
+43–83 ms; output was about 41 fps for each whatever the count, the benchmark's limit.
+Not yet tried with two real devices.
+
 ## Summary
 
 DAM streams to one Moonlight client at a time, and sends its video in the clear. Control

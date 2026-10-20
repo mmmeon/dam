@@ -27,12 +27,19 @@ struct MoonlightLaunch {
     /// The token Moonlight connects to the control stream with.
     let connectData: UInt32
     let sessionID: String
-    /// Whether the display was made for this launch, and goes with it.
-    let ownsDisplay: Bool
+    /// Whether the display was made for this launch, and goes with it; handed on to another
+    /// launch streaming the same display when this one ends first.
+    var ownsDisplay: Bool
     /// Whether the device that launched it wants low-latency rate control.
     var lowLatency = false
     /// Whether encrypted video is offered; clients turn it on whenever it is.
     var offersEncryptedVideo = false
+    /// Which of the host's sessions it is, which sets its ports.
+    var slot = 0
+
+    /// The UDP ports of its stream. The first session has GameStream's, which port forwards
+    /// are set up for; each other one a hundred further on.
+    var ports: MoonlightStream.Ports { MoonlightStream.Ports(slot: slot) }
 
     init(appID: Int, displayID: CGDirectDisplayID, key: Data, keyID: UInt32 = 0, ownsDisplay: Bool = false) {
         self.appID = appID
@@ -141,13 +148,13 @@ final class MoonlightRTSP {
             let stream = request.target.split(separator: "=").dropFirst().first?.split(separator: "/").first ?? ""
             switch stream {
             case "audio":
-                return reply("200 OK", ["Session": session, "Transport": "server_port=\(MoonlightStream.audioPort)",
+                return reply("200 OK", ["Session": session, "Transport": "server_port=\(launch.ports.audio)",
                                         "X-SS-Ping-Payload": launch.pingPayload])
             case "video":
-                return reply("200 OK", ["Session": session, "Transport": "server_port=\(MoonlightStream.videoPort)",
+                return reply("200 OK", ["Session": session, "Transport": "server_port=\(launch.ports.video)",
                                         "X-SS-Ping-Payload": launch.pingPayload])
             case "control":
-                return reply("200 OK", ["Session": session, "Transport": "server_port=\(MoonlightStream.controlPort)",
+                return reply("200 OK", ["Session": session, "Transport": "server_port=\(launch.ports.control)",
                                         "X-SS-Connect-Data": "\(launch.connectData)"])
             default:
                 return reply("404 Not Found")

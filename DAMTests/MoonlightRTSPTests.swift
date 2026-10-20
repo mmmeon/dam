@@ -74,6 +74,17 @@ final class MoonlightRTSPTests: XCTestCase {
         XCTAssertTrue(LocalNetwork.interfaceSubnets().contains { $0.address == [127, 0, 0, 1] })
     }
 
+    func testEachSessionHasPortsOfItsOwn() {
+        var second = launch
+        second.slot = 1
+        func reply(_ stream: String) -> String {
+            MoonlightRTSP.response(to: request("SETUP", "streamid=\(stream)/0/0"), launch: second, announce: { _, _ in nil })
+        }
+        XCTAssertTrue(reply("audio").contains("Transport: server_port=48100\r\n"))
+        XCTAssertTrue(reply("video").contains("Transport: server_port=48098\r\n"))
+        XCTAssertTrue(reply("control").contains("Transport: server_port=48099\r\n"))
+    }
+
     func testSetupGivesEachStreamItsPortAndTokens() {
         let audio = respond(request("SETUP", "streamid=audio/0/0"))
         XCTAssertTrue(audio.contains("Session: \(launch.sessionID);timeout = 90\r\n"))

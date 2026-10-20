@@ -645,6 +645,21 @@ final class MoonlightStream {
     static let controlPort: UInt16 = 47999
     static let audioPort: UInt16 = 48000
 
+    /// A stream's UDP ports, GameStream's for the first session and a hundred further on
+    /// for each other one; Moonlight takes them from the RTSP SETUP replies.
+    struct Ports: Equatable {
+        let video: UInt16
+        let control: UInt16
+        let audio: UInt16
+
+        init(slot: Int) {
+            let offset = UInt16(slot * 100)
+            video = MoonlightStream.videoPort + offset
+            control = MoonlightStream.controlPort + offset
+            audio = MoonlightStream.audioPort + offset
+        }
+    }
+
     private static let adaptsBitrateKey = "\(AppIdentity.shortID).moonlight.adaptiveBitrate"
     private static let showsPointerKey = "\(AppIdentity.shortID).moonlight.showsPointer"
     private static let videoEncryptionKey = "\(AppIdentity.shortID).moonlight.videoEncryption"
@@ -675,7 +690,7 @@ final class MoonlightStream {
     private let audio: MoonlightAudioSender
     private let lock = NSLock()
     private var encoder: MoonlightVideoEncoder?
-    private var capture: MoonlightScreenCapture?
+    private var capture: SharedScreenCapture.Subscription?
     private var lastFrame: (buffer: CVPixelBuffer, time: CMTime, at: UInt64)?
     private var repeater: DispatchSourceTimer?
     private var ended = false
@@ -693,14 +708,14 @@ final class MoonlightStream {
     private var statsTimer: DispatchSourceTimer?
 
     init(config: MoonlightStreamConfig, displayID: CGDirectDisplayID, key: Data, keyID: UInt32,
-         pingPayload: String, connectData: UInt32) throws {
+         pingPayload: String, connectData: UInt32, ports: Ports = Ports(slot: 0)) throws {
         self.config = config
         self.displayID = displayID
-        video = try MoonlightVideoSender(port: Self.videoPort, pingPayload: pingPayload, packetSize: config.packetSize,
+        video = try MoonlightVideoSender(port: ports.video, pingPayload: pingPayload, packetSize: config.packetSize,
                                          minimumParity: config.minimumParity, bitrateKbps: config.bitrateKbps,
                                          key: config.videoEncrypted ? key : nil)
-        control = try MoonlightControlServer(port: Self.controlPort, key: key, connectData: connectData)
-        audio = try MoonlightAudioSender(port: Self.audioPort, pingPayload: pingPayload, config: config,
+        control = try MoonlightControlServer(port: ports.control, key: key, connectData: connectData)
+        audio = try MoonlightAudioSender(port: ports.audio, pingPayload: pingPayload, config: config,
                                          key: key, keyID: keyID, stats: video.stats)
     }
 
@@ -764,7 +779,7 @@ final class MoonlightStream {
         repeater?.cancel()
         repeater = nil
         lock.unlock()
-        capture?.stop()
+        capture?.cancel()
         control.stop()
         video.stop()
         audio.stop()
@@ -817,8 +832,14 @@ final class MoonlightStream {
                 self?.video.send(frame)
             }
             video.onFrameTooLarge = { [weak self] in self?.sendKeyFrame(roundTrip: nil) }
-            let capture = MoonlightScreenCapture(displayID: displayID, width: config.width, height: config.height,
-                                                 fps: config.fps) { [weak self] buffer, time in
+            // What the Mac plays, as it plays it; where it plays is left alone.
+            let audio = self.audio
+            let key = SharedScreenCapture.Key(displayID: displayID, width: config.width, height: config.height,
+                                              fps: config.fps, showsCursor: Self.showsPointer)
+            lock.lock()
+            self.encoder = encoder
+            lock.unlock()
+            let capture = SharedScreenCapture.subscribe(key, frame: { [weak self] buffer, time in
                 guard let self else { return }
                 self.lock.lock()
                 self.lastFrame = (buffer, time, DispatchTime.now().uptimeNanoseconds)
@@ -827,17 +848,9 @@ final class MoonlightStream {
                 // behind it; it is kept as the last picture and left out instead.
                 guard !self.video.isBehind else { return }
                 encoder.encode(buffer, at: time)
-            }
-            capture.showsCursor = Self.showsPointer
-            // What the Mac plays, as it plays it; where it plays is left alone.
-            let audio = self.audio
-            capture.audioQueue = audio.queue
-            capture.audio = { audio.encode($0) }
-            lock.lock()
-            self.encoder = encoder
-            self.capture = capture
-            lock.unlock()
-            capture.start { [weak self] error in
+            }, audio: { sample in
+                audio.queue.async { audio.encode(sample) }
+            }, started: { [weak self] error in
                 guard let error else { return }
                 switch error {
                 case MoonlightCaptureError.serviceNotAnswering:
@@ -847,7 +860,13 @@ final class MoonlightStream {
                 default:
                     self?.end("Capture failed: \(error.localizedDescription)")
                 }
-            }
+            })
+            lock.lock()
+            let ended = self.ended
+            if !ended { self.capture = capture }
+            lock.unlock()
+            // Stopped while subscribing: let go at once.
+            if ended { capture.cancel() }
             // Capture can start and still send nothing; say so rather than leave Moonlight
             // waiting for video that will not come. Allows for capture restarting replayd.
             let wait = 5 + MoonlightScreenCapture.answerTimeout + 1

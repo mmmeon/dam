@@ -259,6 +259,19 @@ private func moonlightItem(host: MoonlightHost) -> NSMenuItem {
     submenu.addItem(toggle)
     if let error = host.lastError { submenu.addItem(disabledItem(error)) }
     if host.isRunning {
+        let streaming = host.streamingClients
+        if !streaming.isEmpty {
+            submenu.addItem(.separator())
+            submenu.addItem(sectionHeader("Streaming"))
+            for client in streaming {
+                let end = NSMenuItem(title: "End Stream to \(client.name)",
+                                     action: #selector(AppDelegate.endMoonlightStream(_:)), keyEquivalent: "")
+                end.representedObject = client.certificate
+                end.toolTip = "Ends what \(client.name) launched, and removes the display made for it. " +
+                              "Other devices go on streaming."
+                submenu.addItem(end)
+            }
+        }
         submenu.addItem(.separator())
         submenu.addItem(sectionHeader("Browser Stream"))
         let open = NSMenuItem(title: "Open in Browser", action: #selector(AppDelegate.openWebStream(_:)), keyEquivalent: "")
