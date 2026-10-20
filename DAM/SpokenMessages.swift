@@ -140,6 +140,11 @@ enum Spoken {
         String(localized: "Stopped: \(reason)", comment: "Moonlight hosting stopped; the value is the system's reason")
     }
 
+    static let browsersCanWatch = String(localized: "Browsers can watch", comment: "Browser stream turned on")
+    static let browsersCanNoLongerWatch = String(localized: "Browsers can no longer watch", comment: "Browser stream turned off")
+    static let browserStreamCouldNotStart = String(localized: "The browser stream could not start",
+                                                   comment: "Browser stream failed with no reason")
+
     static let moonlightWantsToPair = String(localized: "Moonlight wants to pair. Type the PIN it shows.",
                                              comment: "Shown with the pairing PIN prompt")
 

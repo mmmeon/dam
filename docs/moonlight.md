@@ -12,20 +12,23 @@ client's resolution and frame rate. DAM streams it as H.264 video with Reed-Solo
 and Opus audio. Cancelling from Moonlight removes the display; resuming keeps it,
 changed in place to the size the client asks for now.
 
-The same HTTP port (47989) also serves displays to browsers and media players:
+Apart from Moonlight, DAM also serves displays to browsers and media players, on HTTP
+port 47995. It is turned on and set up on its own: the Browser Stream menu and Settings ›
+Browser Stream, independent of Moonlight hosting and its settings.
 
 - `/watch` plays the stream in a browser through Media Source Extensions.
 - `/stream.mp4` is an endless fragmented MP4 that mpv, ffplay and VLC play as is.
 - `/apps.json` lists the displays.
 
 Each needs the `token` in the link that Open in Browser and Copy Address give; without
-it, the reply is 403. The token is kept in `browser-token` next to the paired devices.
-Settings › Moonlight › Make a New Link replaces it and cuts off anyone watching with the
-old one. The stream itself still crosses the network unencrypted.
+it, the reply is 403. The token is kept in `Application Support/DAM/Browser/token`.
+Settings › Browser Stream › Make a New Link replaces it and cuts off anyone watching with
+the old one. The stream itself still crosses the network unencrypted.
 
-Three profiles (Interactive, Balanced, Viewing) set the defaults from Settings ›
-Moonlight. Each client can override profile, bitrate, frame rate and size in the query
-string, and turn on low-latency encoding with `lowlatency=1`.
+Three profiles (Interactive, Balanced, Viewing) set the defaults from Settings › Browser
+Stream, which also has its own Show the Pointer. Each client can override profile,
+bitrate, frame rate and size in the query string, and turn on low-latency encoding with
+`lowlatency=1`.
 
 ## How it works
 
@@ -42,7 +45,7 @@ flowchart LR
     F --> G["7. Encode<br/>VideoToolbox H.264, Opus"]
     G --> H["8. Packetize + FEC<br/>Reed-Solomon parity, paced"]
     H --> I["To Moonlight<br/>UDP 47998 video, 48000 audio"]
-    G --> J["Browser or player<br/>fragmented MP4: /watch, /stream.mp4"]
+    G --> J["Browser or player, port 47995<br/>fragmented MP4: /watch, /stream.mp4"]
 ```
 
 ### Discovery and pairing
@@ -164,7 +167,8 @@ its own name and serial.
 
 ### Browser and player stream
 
-`WebStream`, `MP4Fragmenter`: one MP4 fragment per frame, H.264 plus AAC at 48 kHz.
+`WebStream`, `MP4Fragmenter`, TCP 47995 (`WebStreamServer`, its own listener): one MP4
+fragment per frame, H.264 plus AAC at 48 kHz.
 
 - Viewers of the same display with the same settings share one capture and one encoder.
 - A new viewer starts at a keyframe. A viewer more than 1 s behind skips ahead to the

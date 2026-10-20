@@ -268,8 +268,8 @@ final class WebStreamTests: XCTestCase {
 
     // MARK: - The host's routes
 
-    private func get(_ path: String, from host: MoonlightHost) throws -> (status: Int, body: Data) {
-        let url = URL(string: "http://127.0.0.1:\(host.httpPort.rawValue)\(path)")!
+    private func get(_ path: String, port: NWEndpoint.Port) throws -> (status: Int, body: Data) {
+        let url = URL(string: "http://127.0.0.1:\(port.rawValue)\(path)")!
         let done = expectation(description: path)
         var result: (Int, Data)?
         URLSession.shared.dataTask(with: url) { data, response, _ in
@@ -280,54 +280,75 @@ final class WebStreamTests: XCTestCase {
         return try XCTUnwrap(result)
     }
 
-    func testHostServesThePageAndTheDisplays() throws {
+    /// The stream is served on its own port, with Moonlight hosting off.
+    func testServesThePageAndTheDisplaysOnItsOwnPort() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let base = UInt16.random(in: 40000...59000)
-        let host = MoonlightHost(httpPort: NWEndpoint.Port(rawValue: base)!, httpsPort: NWEndpoint.Port(rawValue: base + 1)!,
-                                 rtspPort: NWEndpoint.Port(rawValue: base + 2)!, directory: directory, advertises: false)
-        defer { host.stop() }
-        host.apps = [MoonlightApp(id: 1, title: "Streaming Display 1", displayID: 7)]
-        host.start()
+        let port = NWEndpoint.Port(rawValue: UInt16.random(in: 40000...48000))!
+        let server = WebStreamServer(port: port, directory: directory)
+        defer { server.stop() }
+        server.apps = { [MoonlightApp(id: 1, title: "Streaming Display 1", displayID: 7)] }
+        server.start()
         let deadline = Date().addingTimeInterval(5)
-        while !host.isListening, host.lastError == nil, Date() < deadline {
+        while !server.isListening, server.lastError == nil, Date() < deadline {
             RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         }
-        XCTAssertTrue(host.isListening, host.lastError ?? "")
+        XCTAssertTrue(server.isListening, server.lastError ?? "")
+        func get(_ path: String) throws -> (status: Int, body: Data) { try self.get(path, port: port) }
 
         // Nothing without the link's token.
         for path in ["/", "/watch", "/apps.json", "/stream.mp4", "/watch?token=0123"] {
-            XCTAssertEqual(try get(path, from: host).status, 403, path)
+            XCTAssertEqual(try get(path).status, 403, path)
         }
-        let token = "token=\(host.webStreamToken)"
-        XCTAssertEqual(host.watchURL.query, token)
-        XCTAssertEqual(host.localWatchURL.query, token)
+        let token = "token=\(server.token)"
+        XCTAssertEqual(server.watchURL.query, token)
+        XCTAssertEqual(server.localWatchURL.query, token)
+        XCTAssertEqual(server.watchURL.path, "/watch")
+        XCTAssertEqual(server.watchURL.port, Int(port.rawValue))
 
-        let page = try get("/watch?\(token)", from: host)
+        let page = try get("/watch?\(token)")
         XCTAssertEqual(page.status, 200)
         let html = String(decoding: page.body, as: UTF8.self)
         XCTAssertTrue(html.contains("<video"))
         XCTAssertTrue(html.contains("ManagedMediaSource"), "iPhones have only the managed kind")
-        XCTAssertEqual(try get("/?\(token)", from: host).body, page.body)
+        XCTAssertEqual(try get("/?\(token)").body, page.body)
 
-        let apps = try get("/apps.json?\(token)", from: host)
+        let apps = try get("/apps.json?\(token)")
         XCTAssertEqual(apps.status, 200)
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: apps.body) as? [String: Any])
         XCTAssertEqual((json["apps"] as? [[String: Any]])?.first?["title"] as? String, "Streaming Display 1")
         XCTAssertEqual(json["profile"] as? String, StreamProfile.preferred.rawValue)
         XCTAssertEqual((json["bitrates"] as? [String: Int])?["viewing"], 40_000)
 
-        XCTAssertEqual(try get("/stream.mp4?app=9&\(token)", from: host).status, 404, "no such display")
-        XCTAssertEqual(try get("/serverinfo", from: host).status, 200, "Moonlight's own requests still answered")
-        XCTAssertEqual(host.watchURL.path, "/watch")
-        XCTAssertEqual(host.watchURL.port, Int(base))
+        XCTAssertEqual(try get("/stream.mp4?app=9&\(token)").status, 404, "no such display")
+        XCTAssertEqual(try get("/serverinfo").status, 404, "Moonlight's requests are not this server's")
 
         // A new link turns the old one away, and is kept across restarts.
-        host.makeNewWebStreamLink()
-        XCTAssertEqual(try get("/watch?\(token)", from: host).status, 403)
-        XCTAssertEqual(try get("/watch?token=\(host.webStreamToken)", from: host).status, 200)
-        let kept = host.webStreamToken
-        let again = MoonlightHost(directory: directory, advertises: false)
-        XCTAssertEqual(again.webStreamToken, kept)
+        server.makeNewLink()
+        XCTAssertEqual(try get("/watch?\(token)").status, 403)
+        XCTAssertEqual(try get("/watch?token=\(server.token)").status, 200)
+        XCTAssertEqual(WebStreamServer(port: port, directory: directory).token, server.token)
+
+        // Stopped, it answers nothing.
+        server.stop()
+        XCTAssertEqual(try get("/watch?token=\(server.token)").status, 0)
+    }
+
+    /// Moonlight's HTTP port no longer serves the stream.
+    func testMoonlightsPortDoesNotServeTheStream() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let base = UInt16.random(in: 40000...48000)
+        let host = MoonlightHost(httpPort: NWEndpoint.Port(rawValue: base)!, httpsPort: NWEndpoint.Port(rawValue: base + 1)!,
+                                 rtspPort: NWEndpoint.Port(rawValue: base + 2)!, directory: directory, advertises: false)
+        defer { host.stop() }
+        host.start()
+        let deadline = Date().addingTimeInterval(5)
+        while !host.isListening, host.lastError == nil, Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+        XCTAssertTrue(host.isListening, host.lastError ?? "")
+        XCTAssertEqual(try get("/watch", port: host.httpPort).status, 404)
+        XCTAssertEqual(try get("/serverinfo", port: host.httpPort).status, 200)
     }
 }

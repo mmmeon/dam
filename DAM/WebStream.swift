@@ -1,10 +1,11 @@
 //
 //  WebStream.swift
 //
-//  Streams a display to browsers and media players over plain HTTP, on the port Moonlight
-//  finds this Mac on: one endless response of fragmented MP4 at /stream.mp4, which a page
-//  at /watch plays through Media Source Extensions and mpv, ffplay or VLC play as it is.
-//  The capture and encoder are Moonlight's; each stream has a profile that trades delay
+//  Streams a display to browsers and media players over plain HTTP, on a port of its own,
+//  turned on and set up apart from Moonlight hosting: one endless response of fragmented
+//  MP4 at /stream.mp4, which a page at /watch plays through Media Source Extensions and
+//  mpv, ffplay or VLC play as it is. Every request needs the token in the link DAM hands out.
+//  The capture and encoder are Moonlight's code; each stream has a profile that trades delay
 //  for picture quality, from Interactive (as Moonlight gets it) to Viewing (frames out of
 //  order, bigger bursts, regular keyframes, a second of buffer in the browser).
 //
@@ -161,21 +162,200 @@ struct WebStreamRequest: Equatable {
 
 // MARK: - Server
 
-/// Answers the stream's requests on the Moonlight host's HTTP port and keeps the sessions.
+/// Serves the stream on its own HTTP port and keeps the sessions.
 final class WebStreamServer {
 
-    /// The displays Moonlight lists, as the stream lists them too.
+    private static let enabledKey = "\(AppIdentity.shortID).browser.enabled"
+    private static let showsPointerKey = "\(AppIdentity.shortID).browser.showsPointer"
+
+    /// Whether the user turned the browser stream on; it starts with the app then.
+    static var isEnabled: Bool {
+        get { UserDefaults.dam.bool(forKey: enabledKey) }
+        set { UserDefaults.dam.set(newValue, forKey: enabledKey) }
+    }
+
+    /// Whether streams show the pointer; from the next stream.
+    static var showsPointer: Bool {
+        get { UserDefaults.dam.object(forKey: showsPointerKey) as? Bool ?? true }
+        set { UserDefaults.dam.set(newValue, forKey: showsPointerKey) }
+    }
+
+    /// Off GameStream's ports and Sunshine's (47990 is its web page).
+    static let defaultPort: NWEndpoint.Port = 47995
+
+    static var defaultDirectory: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent(AppIdentity.name, isDirectory: true)
+            .appendingPathComponent("Browser", isDirectory: true)
+    }
+
+    let port: NWEndpoint.Port
+    /// Where the link's token is kept.
+    let directory: URL
+
+    init(port: NWEndpoint.Port = WebStreamServer.defaultPort, directory: URL = WebStreamServer.defaultDirectory) {
+        self.port = port
+        self.directory = directory
+    }
+
+    /// The streaming displays, which viewers pick from.
     var apps: () -> [MoonlightApp] = { [] }
-    /// Makes and removes a display for streams when none is listed; as MoonlightHost's.
+    /// Makes and removes a display for streams when none is listed.
     var makeDisplay: ((_ width: Int, _ height: Int, _ fps: Int, _ done: @escaping (CGDirectDisplayID?) -> Void) -> Void)?
     var removeDisplay: ((CGDirectDisplayID) -> Void)?
     var resizeDisplay: ((_ id: CGDirectDisplayID, _ width: Int, _ height: Int, _ fps: Int,
                          _ done: @escaping (Bool) -> Void) -> Void)?
     var preferredProfile: () -> StreamProfile = { .preferred }
-    /// The token every request must carry, from the link DAM hands out; nil turns all away.
-    var token: () -> String? = { nil }
-    /// The number watching changed; on the main queue.
+    /// The number watching changed, or the server started or stopped; on the main queue.
     var onChange: (() -> Void)?
+
+    // MARK: Serving
+
+    private var listener: NWListener?
+    private var connections: [ObjectIdentifier: NWConnection] = [:]
+    private(set) var isRunning = false
+    /// Whether it is accepting connections.
+    private(set) var isListening = false
+    /// Why it stopped, when it did on its own.
+    private(set) var lastError: String?
+
+    /// Starts serving. Runs on the main queue.
+    func start() {
+        guard !isRunning else { return }
+        do {
+            let parameters = NWParameters.tcp
+            parameters.allowLocalEndpointReuse = true
+            // Each fragment goes out the moment it is ready, not held for an acknowledgement.
+            (parameters.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options)?.noDelay = true
+            let listener = try NWListener(using: parameters, on: port)
+            listener.newConnectionHandler = { [weak self] in self?.accept($0) }
+            listener.stateUpdateHandler = { [weak self, weak listener] state in
+                guard let self, let listener, listener === self.listener else { return }
+                switch state {
+                case .ready:
+                    self.isListening = true
+                    self.onChange?()
+                case .failed(let error):
+                    wsLog.error("listener failed: \(String(describing: error), privacy: .public)")
+                    if case .posix(.EADDRINUSE) = error {
+                        self.stop(error: "Another app is using port \(self.port.rawValue)")
+                    } else {
+                        self.stop(error: error.localizedDescription)
+                    }
+                default:
+                    break
+                }
+            }
+            self.listener = listener
+            listener.start(queue: .main)
+            isRunning = true
+            lastError = nil
+        } catch {
+            stop(error: error.localizedDescription)
+            return
+        }
+        onChange?()
+    }
+
+    /// Stops serving; those watching are cut off.
+    func stop() { stop(error: nil) }
+
+    private func stop(error: String?) {
+        listener?.cancel()
+        listener = nil
+        isListening = false
+        connections.values.forEach { $0.cancel() }
+        connections = [:]
+        stopAll()
+        isRunning = false
+        lastError = error
+        onChange?()
+    }
+
+    private func accept(_ connection: NWConnection) {
+        connections[ObjectIdentifier(connection)] = connection
+        connection.stateUpdateHandler = { [weak self, weak connection] state in
+            guard let self, let connection else { return }
+            switch state {
+            case .ready: self.receive(on: connection, buffer: Data())
+            case .failed: connection.cancel()
+            case .cancelled: self.connections[ObjectIdentifier(connection)] = nil
+            default: break
+            }
+        }
+        connection.start(queue: .main)
+    }
+
+    /// Reads a request's head, then answers it. A viewer's connection is the session's from then.
+    private func receive(on connection: NWConnection, buffer: Data) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 16384) { [weak self] data, _, isComplete, error in
+            guard let self else { return }
+            let buffer = buffer + (data ?? Data())
+            if let end = buffer.range(of: Data("\r\n\r\n".utf8)) {
+                self.connections[ObjectIdentifier(connection)] = nil
+                let line = String(decoding: buffer[..<end.lowerBound], as: UTF8.self).components(separatedBy: "\r\n")[0]
+                let parts = line.split(separator: " ")
+                guard parts.count >= 2, parts[0] == "GET", let url = URLComponents(string: String(parts[1])) else {
+                    return self.send(status: "400 Bad Request", body: Data(), to: connection)
+                }
+                var query: [String: String] = [:]
+                for item in url.queryItems ?? [] where query[item.name] == nil { query[item.name] = item.value ?? "" }
+                if !self.handle(path: url.path, query: query, on: connection) {
+                    self.send(status: "404 Not Found", body: Data(), to: connection)
+                }
+                return
+            }
+            guard !isComplete, error == nil, buffer.count < 16384 else { return connection.cancel() }
+            self.receive(on: connection, buffer: buffer)
+        }
+    }
+
+    // MARK: The link
+
+    private var tokenURL: URL { directory.appendingPathComponent("token") }
+    private var storedToken: String?
+
+    /// The token links carry, without which every request is refused; made on first use and
+    /// kept, until a new link replaces it.
+    var token: String {
+        if let storedToken { return storedToken }
+        let stored = (try? String(contentsOf: tokenURL, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let token = stored.flatMap { $0.count == 32 ? $0 : nil } ?? makeToken()
+        storedToken = token
+        return token
+    }
+
+    /// Where a browser on the network finds the player page.
+    var watchURL: URL {
+        URL(string: "http://\(ProcessInfo.processInfo.hostName):\(port.rawValue)/watch?token=\(token)")!
+    }
+
+    /// The player page on this Mac.
+    var localWatchURL: URL {
+        URL(string: "http://localhost:\(port.rawValue)/watch?token=\(token)")!
+    }
+
+    /// Replaces the link: the old one stops working, and those watching with it are cut off.
+    func makeNewLink() {
+        storedToken = makeToken()
+        stopAll()
+        onChange?()
+    }
+
+    private func makeToken() -> String {
+        let token = MoonlightCrypto.hex(MoonlightPairing.randomBytes(16)).lowercased()
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                                                    attributes: [.posixPermissions: 0o700])
+            try Data(token.utf8).write(to: tokenURL, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: tokenURL.path)
+        } catch {
+            wsLog.error("saving the link: \(String(describing: error), privacy: .public)")
+        }
+        return token
+    }
+
+    // MARK: Requests
 
     private var sessions: [WebStreamSession.Key: WebStreamSession] = [:]
     /// A display made for streams, removed once no session uses it.
@@ -190,7 +370,7 @@ final class WebStreamServer {
         guard ["/", "/watch", "/apps.json", "/stream.mp4"].contains(path) else { return false }
         // Only those given the link may watch: the stream needs no pairing, and anyone on
         // the network could otherwise ask for it.
-        guard let token = token(), Self.matches(query["token"], token) else {
+        guard Self.matches(query["token"], token) else {
             send(status: "403 Forbidden", body: Data("This link is out of date. Copy the address again from \(AppIdentity.name)'s menu.\n".utf8),
                  to: connection)
             return true
@@ -453,7 +633,7 @@ final class WebStreamSession {
             let at = DispatchTime.now().uptimeNanoseconds
             self.queue.async { self.encode(buffer, captured: time, at: at) }
         }
-        capture.showsCursor = MoonlightStream.showsPointer
+        capture.showsCursor = WebStreamServer.showsPointer
         capture.audioQueue = queue
         capture.audio = { [weak self] sample in self?.took(audio: sample) }
         capture.onStop = { [weak self] error in self?.end("capture stopped: \(error.localizedDescription)") }

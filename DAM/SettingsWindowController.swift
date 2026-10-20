@@ -17,6 +17,7 @@ final class SettingsWindowController: NSWindowController {
     private let videoManager: VideoManager
     private let sidecarManager: SidecarManager
     private let moonlightHost: MoonlightHost
+    private let webStream: WebStreamServer
 
     var onSave: ((HotkeyPreference) -> Void)?
     var onSaveAirPlayConnect: ((HotkeyPreference) -> Void)?
@@ -31,6 +32,8 @@ final class SettingsWindowController: NSWindowController {
     var onToggleMoonlight: (() -> Void)?
     /// Unpairs a Moonlight device, as the menu did.
     var onForgetMoonlightClient: ((MoonlightClient) -> Void)?
+    /// Turns the browser stream on or off, as the menu does.
+    var onToggleWebStream: (() -> Void)?
 
     // Tab content views — built once, reused on every tab switch.
     private lazy var hotkeyContent:  NSView = buildHotkeysTab()
@@ -41,6 +44,9 @@ final class SettingsWindowController: NSWindowController {
     private lazy var moonlightContent: NSView = buildMoonlightTab()
     /// What the Moonlight tab was built from, to tell when it is out of date.
     private var moonlightShown = MoonlightState(host: nil)
+    /// Rebuilt when the browser stream starts or stops.
+    private lazy var browserContent: NSView = buildBrowserTab()
+    private var browserShown = BrowserState(server: nil)
     private var selectedTab = TabID.general
 
     // MARK: - Toolbar identifiers
@@ -51,7 +57,8 @@ final class SettingsWindowController: NSWindowController {
         static let devices = NSToolbarItem.Identifier("\(AppIdentity.shortID).settings.devices")
         static let virtual = NSToolbarItem.Identifier("\(AppIdentity.shortID).settings.virtual")
         static let moonlight = NSToolbarItem.Identifier("\(AppIdentity.shortID).settings.moonlight")
-        static let all: [NSToolbarItem.Identifier] = [general, hotkeys, devices, virtual, moonlight]
+        static let browser = NSToolbarItem.Identifier("\(AppIdentity.shortID).settings.browser")
+        static let all: [NSToolbarItem.Identifier] = [general, hotkeys, devices, virtual, moonlight, browser]
     }
 
     // MARK: - Init
@@ -66,7 +73,8 @@ final class SettingsWindowController: NSWindowController {
          audioManager: AudioManager,
          videoManager: VideoManager,
          sidecarManager: SidecarManager,
-         moonlightHost: MoonlightHost) {
+         moonlightHost: MoonlightHost,
+         webStream: WebStreamServer) {
         recorder              = KeyRecorderView(preference: current)
         recorderAirPlay       = KeyRecorderView(preference: currentAirPlayConnect)
         recorderMirrorToggle  = KeyRecorderView(preference: currentMirrorToggle)
@@ -78,6 +86,7 @@ final class SettingsWindowController: NSWindowController {
         self.videoManager     = videoManager
         self.sidecarManager   = sidecarManager
         self.moonlightHost    = moonlightHost
+        self.webStream        = webStream
 
         let win = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 420, height: 280),
@@ -125,6 +134,8 @@ final class SettingsWindowController: NSWindowController {
             content = virtualContent; title = "Virtual Display"
         case TabID.moonlight:
             content = moonlightContent; title = "Moonlight"
+        case TabID.browser:
+            content = browserContent; title = "Browser Stream"
         default:
             content = hotkeyContent;  title = "Hotkeys"
         }
@@ -417,26 +428,10 @@ final class SettingsWindowController: NSWindowController {
                      action: { MoonlightStream.adaptsBitrate = $0 }),
             checkbox(title: "Show the pointer",
                      isOn: MoonlightStream.showsPointer,
-                     help: "Draws the Mac's pointer into Moonlight and browser streams. Takes " +
-                           "effect from the next stream.",
+                     help: "Draws the Mac's pointer into Moonlight streams. Takes effect from the " +
+                           "next stream.",
                      action: { MoonlightStream.showsPointer = $0 }),
         ]
-
-        let profile = ClosurePopup(onSelect: { [weak self] raw in
-            guard let profile = raw.flatMap(StreamProfile.init(rawValue:)) else { return }
-            StreamProfile.preferred = profile
-            self?.onRebuild?()
-        })
-        profile.font = .systemFont(ofSize: NSFont.systemFontSize)
-        for option in StreamProfile.allCases {
-            let item = NSMenuItem(title: option.title, action: nil, keyEquivalent: "")
-            item.representedObject = option.rawValue
-            item.toolTip = option.summary
-            profile.menu?.addItem(item)
-            if option == StreamProfile.preferred { profile.select(item) }
-        }
-        profile.toolTip = "The profile a browser or player gets unless its address asks for " +
-                          "another. Hover over each for what it trades."
 
         let encryption = ClosurePopup(onSelect: { raw in
             guard let choice = raw.flatMap(MoonlightVideoEncryption.init(rawValue:)) else { return }
@@ -453,11 +448,6 @@ final class SettingsWindowController: NSWindowController {
         encryption.toolTip = "When Moonlight's video is encrypted; the controls and sound always are. " +
                              "Moonlight on a Mac, PC, iPhone or iPad takes it whenever it is offered. " +
                              "Takes effect from the next launch."
-
-        let newLink = ClosureButton(title: "Make a New Link") { [weak host] _ in host?.makeNewWebStreamLink() }
-        newLink.bezelStyle = .rounded
-        newLink.toolTip = "The browser stream needs the link Copy Address gives, with its token. A new " +
-                          "link stops the old one working, and cuts off anyone watching with it."
 
         let devices: [[NSView]] = host.clients.map { client in
             let lowLatency = checkbox(title: "Low-latency encoding", isOn: client.lowLatency,
@@ -483,10 +473,65 @@ final class SettingsWindowController: NSWindowController {
             ("Hosting:", hosting),
             ("Streams:", streams),
             ("Encrypt Video:", [encryption]),
-            ("Browser Profile:", [profile]),
-            ("Browser Link:", [newLink]),
             ("Paired Devices:", [devices.isEmpty ? placeholderLabel("None yet") : deviceGrid]),
         ], leftAligned: true)
+    }
+
+    /// The browser stream: on or off, its profile, the pointer, and its link.
+    private func buildBrowserTab() -> NSView {
+        let server = webStream
+        browserShown = BrowserState(server: server)
+        var serving: [NSView] = []
+        weak var allowButton: NSButton?
+        let allow = checkbox(title: "Allow browsers to watch", isOn: server.isRunning,
+                             help: "Lets a browser or player given the link play a streaming display, on " +
+                                   "port \(server.port.rawValue). It needs neither Moonlight nor pairing.",
+                             action: { [weak self, weak server] _ in
+                                 self?.onToggleWebStream?()
+                                 allowButton?.state = server?.isRunning == true ? .on : .off
+                             })
+        allowButton = allow as? NSButton
+        serving.append(allow)
+        if let error = server.lastError { serving.append(placeholderLabel(error)) }
+
+        let pointer = checkbox(title: "Show the pointer", isOn: WebStreamServer.showsPointer,
+                               help: "Draws the Mac's pointer into browser streams. Takes effect from the next stream.",
+                               action: { WebStreamServer.showsPointer = $0 })
+
+        let profile = ClosurePopup(onSelect: { [weak self] raw in
+            guard let profile = raw.flatMap(StreamProfile.init(rawValue:)) else { return }
+            StreamProfile.preferred = profile
+            self?.onRebuild?()
+        })
+        profile.font = .systemFont(ofSize: NSFont.systemFontSize)
+        for option in StreamProfile.allCases {
+            let item = NSMenuItem(title: option.title, action: nil, keyEquivalent: "")
+            item.representedObject = option.rawValue
+            item.toolTip = option.summary
+            profile.menu?.addItem(item)
+            if option == StreamProfile.preferred { profile.select(item) }
+        }
+        profile.toolTip = "The profile a browser or player gets unless its address asks for " +
+                          "another. Hover over each for what it trades."
+
+        let newLink = ClosureButton(title: "Make a New Link") { [weak server] _ in server?.makeNewLink() }
+        newLink.bezelStyle = .rounded
+        newLink.toolTip = "Browsers and players need the link Copy Address gives, with its token. A new " +
+                          "link stops the old one working, and cuts off anyone watching with it."
+
+        return formTab([
+            ("Serving:", serving),
+            ("Streams:", [pointer]),
+            ("Profile:", [profile]),
+            ("Link:", [newLink]),
+        ], leftAligned: true)
+    }
+
+    /// Rebuilds the Browser Stream tab if what it shows of the server has changed.
+    func browserStreamDidChange() {
+        guard BrowserState(server: webStream) != browserShown else { return }
+        browserContent = buildBrowserTab()
+        if selectedTab == TabID.browser { window?.contentView = browserContent }
     }
 
     /// Rebuilds the Moonlight tab if what it shows of the host has changed.
@@ -830,6 +875,12 @@ final class SettingsWindowController: NSWindowController {
 
     // MARK: - Present
 
+    /// Shows the window on the Browser Stream tab.
+    func showBrowserStream() {
+        selectTab(TabID.browser)
+        show()
+    }
+
     /// Shows the window on the Moonlight tab.
     func showMoonlight() {
         selectTab(TabID.moonlight)
@@ -887,6 +938,10 @@ extension SettingsWindowController: NSToolbarDelegate {
             item.label = "Moonlight"
             item.image = NSImage(systemSymbolName: "moon.stars",
                                  accessibilityDescription: "Moonlight")
+        case TabID.browser:
+            item.label = "Browser Stream"
+            item.image = NSImage(systemSymbolName: "globe",
+                                 accessibilityDescription: "Browser Stream")
         default:
             return nil
         }
@@ -938,6 +993,18 @@ private struct MoonlightState: Equatable {
         isRunning = host.isRunning
         lastError = host.lastError
         clients = host.clients.map(\.certificate)
+    }
+}
+
+/// What the Browser Stream tab shows of the server, to tell when it must be rebuilt.
+private struct BrowserState: Equatable {
+    var isRunning = false
+    var lastError: String?
+
+    init(server: WebStreamServer?) {
+        guard let server else { return }
+        isRunning = server.isRunning
+        lastError = server.lastError
     }
 }
 

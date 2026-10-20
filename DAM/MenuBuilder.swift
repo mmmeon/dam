@@ -8,6 +8,7 @@ func buildStatusMenu(audio: AudioManager,
                      video: VideoManager,
                      sidecar: SidecarManager,
                      moonlight: MoonlightHost,
+                     webStream: WebStreamServer,
                      onRefresh: @escaping () -> Void) -> NSMenu {
     let menu = NSMenu()
 
@@ -144,6 +145,7 @@ func buildStatusMenu(audio: AudioManager,
         : "There can be up to \(VideoManager.maxStreamingDisplays) streaming displays."
     menu.addItem(create)
     menu.addItem(moonlightItem(host: moonlight))
+    menu.addItem(browserStreamItem(server: webStream))
 
     // — Connected Displays section — physical displays; Sidecar iPads and streaming
     // displays are listed above
@@ -272,24 +274,46 @@ private func moonlightItem(host: MoonlightHost) -> NSMenuItem {
                 submenu.addItem(end)
             }
         }
-        submenu.addItem(.separator())
-        submenu.addItem(sectionHeader("Browser Stream"))
-        let open = NSMenuItem(title: "Open in Browser", action: #selector(AppDelegate.openWebStream(_:)), keyEquivalent: "")
-        open.toolTip = "Plays a streaming display in this Mac's browser, as any browser or player on the network can at " +
-                       host.watchURL.absoluteString
-        submenu.addItem(open)
-        let copy = NSMenuItem(title: "Copy Address", action: #selector(AppDelegate.copyWebStreamAddress(_:)), keyEquivalent: "")
-        copy.toolTip = "Copies \(host.watchURL.absoluteString). Players like mpv and VLC take the stream itself at " +
-                       "\(host.watchURL.deletingLastPathComponent().absoluteString)stream.mp4."
-        submenu.addItem(copy)
-        let watching = host.webStream.viewerCount
-        if watching > 0 { submenu.addItem(disabledItem(watching == 1 ? "1 watching" : "\(watching) watching")) }
     }
     submenu.addItem(.separator())
     let settings = NSMenuItem(title: "Moonlight Settings…",
                               action: #selector(AppDelegate.openMoonlightSettings(_:)),
                               keyEquivalent: "")
     settings.toolTip = "Pairing, the paired devices, and how streams are made."
+    submenu.addItem(settings)
+    item.submenu = submenu
+    return item
+}
+
+/// The stream for browsers and players, on or off, its address; the rest is in Settings.
+private func browserStreamItem(server: WebStreamServer) -> NSMenuItem {
+    let item = NSMenuItem(title: "Browser Stream", action: nil, keyEquivalent: "")
+    item.state = server.isRunning ? .on : .off
+    let submenu = NSMenu()
+    let toggle = NSMenuItem(title: "Allow Browsers to Watch",
+                            action: #selector(AppDelegate.toggleWebStream(_:)), keyEquivalent: "")
+    toggle.state = server.isRunning ? .on : .off
+    toggle.toolTip = "Lets a browser or player given the link play a streaming display, on port " +
+                     "\(server.port.rawValue). Apart from Moonlight."
+    submenu.addItem(toggle)
+    if let error = server.lastError { submenu.addItem(disabledItem(error)) }
+    if server.isRunning {
+        submenu.addItem(.separator())
+        let open = NSMenuItem(title: "Open in Browser", action: #selector(AppDelegate.openWebStream(_:)), keyEquivalent: "")
+        open.toolTip = "Plays a streaming display in this Mac's browser, as any browser or player on the network can " +
+                       "with the link Copy Address gives."
+        submenu.addItem(open)
+        let copy = NSMenuItem(title: "Copy Address", action: #selector(AppDelegate.copyWebStreamAddress(_:)), keyEquivalent: "")
+        copy.toolTip = "Copies the player page's link, with its token. Players like mpv and VLC take the stream " +
+                       "itself: the same link with stream.mp4 in place of watch."
+        submenu.addItem(copy)
+        let watching = server.viewerCount
+        if watching > 0 { submenu.addItem(disabledItem(watching == 1 ? "1 watching" : "\(watching) watching")) }
+    }
+    submenu.addItem(.separator())
+    let settings = NSMenuItem(title: "Browser Stream Settings…",
+                              action: #selector(AppDelegate.openBrowserStreamSettings(_:)), keyEquivalent: "")
+    settings.toolTip = "The profile, the pointer, and the link."
     submenu.addItem(settings)
     item.submenu = submenu
     return item

@@ -8,7 +8,6 @@
 //  launching one leads to the RTSP handshake (MoonlightRTSP) and the stream (MoonlightStream).
 //  Each paired device has a session of its own, up to `maxSessions` at once, with its own
 //  RTSP and UDP ports: devices stream side by side, and each sees only its own as running.
-//  The HTTP server also serves the displays to browsers and players (WebStream).
 //
 
 import Foundation
@@ -122,8 +121,6 @@ final class MoonlightHost {
     var pairingAbandoned: (() -> Void)?
     /// Something the menu shows changed.
     var onChange: (() -> Void)?
-    /// Streams for browsers and players, on the HTTP port.
-    let webStream = WebStreamServer()
 
     let httpPort: NWEndpoint.Port
     let httpsPort: NWEndpoint.Port
@@ -212,18 +209,6 @@ final class MoonlightHost {
             let httpsListener = try NWListener(using: tlsParameters(identity: identity.secIdentity), on: httpsPort)
             let rtspListeners = try (0..<Self.maxSessions).map { try NWListener(using: http, on: rtspPort(slot: $0)) }
             listeners = [httpListener, httpsListener] + rtspListeners
-            webStream.apps = { [weak self] in self?.apps ?? [] }
-            webStream.makeDisplay = { [weak self] width, height, fps, done in
-                guard let self, let makeDisplay = self.makeDisplay else { return done(nil) }
-                makeDisplay(width, height, fps, done)
-            }
-            webStream.removeDisplay = { [weak self] id in self?.removeDisplay?(id) }
-            webStream.resizeDisplay = { [weak self] id, width, height, fps, done in
-                guard let self, let resizeDisplay = self.resizeDisplay else { return done(false) }
-                resizeDisplay(id, width, height, fps, done)
-            }
-            webStream.onChange = { [weak self] in self?.onChange?() }
-            webStream.token = { [weak self] in self?.webStreamToken }
             for (slot, rtsp) in rtsps.enumerated() {
                 rtsp.launch = { [weak self] in self?.sessions.first { $0.launch.slot == slot }?.launch }
                 rtsp.announce = { [weak self] launch, config in
@@ -283,7 +268,6 @@ final class MoonlightHost {
         listeners = []
         httpListener = nil
         readyListeners = []
-        webStream.stopAll()
         connections.values.forEach { $0.cancel() }
         rtsps.forEach { $0.closeAll() }
         for session in sessions { endLaunch(of: session.certificate) }
@@ -326,46 +310,6 @@ final class MoonlightHost {
 
     private static var hostName: String {
         Host.current().localizedName ?? ProcessInfo.processInfo.hostName
-    }
-
-    /// Where a browser on the network finds the player page.
-    var watchURL: URL {
-        URL(string: "http://\(ProcessInfo.processInfo.hostName):\(httpPort.rawValue)/watch?token=\(webStreamToken)")!
-    }
-
-    /// The player page on this Mac.
-    var localWatchURL: URL {
-        URL(string: "http://localhost:\(httpPort.rawValue)/watch?token=\(webStreamToken)")!
-    }
-
-    private var webToken: String?
-
-    /// The token links to the browser stream carry, without which it is refused; made on
-    /// first use and kept, until a new link replaces it.
-    var webStreamToken: String {
-        if let webToken { return webToken }
-        let stored = (try? String(contentsOf: webTokenURL, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let token = stored.flatMap { $0.count == 32 ? $0 : nil } ?? makeWebStreamToken()
-        webToken = token
-        return token
-    }
-
-    /// Replaces the browser stream's link: the old one stops working, and those watching
-    /// with it are cut off.
-    func makeNewWebStreamLink() {
-        webToken = makeWebStreamToken()
-        webStream.stopAll()
-        onChange?()
-    }
-
-    private func makeWebStreamToken() -> String {
-        let token = MoonlightCrypto.hex(MoonlightPairing.randomBytes(16)).lowercased()
-        do {
-            try writePrivately(Data(token.utf8), to: webTokenURL)
-        } catch {
-            mlLog.error("saving the browser link: \(String(describing: error), privacy: .public)")
-        }
-        return token
     }
 
     private static func describe(_ error: NWError) -> String {
@@ -451,7 +395,6 @@ final class MoonlightHost {
             return reply(Self.xml(status: 401, message: "The client is not authorized. Certificate verification failed."),
                          to: connection)
         }
-        if !secure, webStream.handle(path: request.path, query: request.query, on: connection) { return }
         switch request.path {
         case "/serverinfo":
             reply(serverInfo(paired: secure, launch: secure ? session(for: certificate)?.launch : nil,
@@ -805,7 +748,6 @@ final class MoonlightHost {
     private var keyURL: URL { directory.appendingPathComponent("host-key.der") }
     private var certificateURL: URL { directory.appendingPathComponent("host-certificate.der") }
     private var clientsURL: URL { directory.appendingPathComponent("paired-clients.json") }
-    private var webTokenURL: URL { directory.appendingPathComponent("browser-token") }
 
     /// The host's key and certificate, made on first use and kept, as Moonlight pins the
     /// certificate it paired with. A new one unpairs every device.
