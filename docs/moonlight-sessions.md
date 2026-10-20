@@ -8,7 +8,10 @@ line references below are to those sources and to DAM as of this date.*
 exception. Several clients took port blocks. Encoder test on the test Mac (Intel Iris
 Plus 650, 1080p60, low-latency): one to three encoders kept a p90 of 18–24 ms, four
 43–83 ms; output was about 41 fps for each whatever the count, the benchmark's limit.
-Not yet tried with two real devices.
+Tried with two real devices on 2026-10-19: the iPad over USB (session 0, its streaming
+display the main one) and the Mac's own Moonlight via streamtest (session 1, RTSP 48011,
+a display of its own). Both ran at 53–59 fps side by side with no frames lost; quitting
+the Mac's ended only its session and display, and the iPad streamed on.
 
 ## Summary
 
