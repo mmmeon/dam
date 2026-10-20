@@ -864,4 +864,94 @@ final class RemoteSessionsTests: XCTestCase {
         XCTAssertEqual(try ControlCLI.request(from: ["session", "start", "--app", "x", "--blackout", "yes"], environment: [:]).blackout, true)
         XCTAssertThrowsError(try ControlCLI.request(from: ["session", "start", "--app", "x", "--blackout", "maybe"], environment: [:]))
     }
+
+    // MARK: - Added apps
+
+    func testAddedAppLogLines() throws {
+        let parse = try XCTUnwrap(SessionLogLines.custom(opened: #"#(?<id>\d+) Connection opened from (?<client>[\d.]+)"#,
+                                                          closed: #"#(?<id>\d+) Connection closed"#))
+        XCTAssertEqual(parse("12:00 #7 Connection opened from 10.0.0.2:4000"), .opened(key: "7", client: "10.0.0.2"))
+        XCTAssertEqual(parse("12:05 #7 Connection closed: reset"), .closed(key: "7"))
+        XCTAssertNil(parse("12:05 something else"))
+        // Without an id in both, one session runs from the first open to the next close.
+        let plain = try XCTUnwrap(SessionLogLines.custom(opened: "client joined", closed: "client left"))
+        XCTAssertEqual(plain("a client joined"), .opened(key: "", client: nil))
+        XCTAssertEqual(plain("a client left"), .closed(key: ""))
+        XCTAssertNil(SessionLogLines.custom(opened: "(", closed: "left"))
+        XCTAssertNil(SessionLogLines.custom(opened: "joined", closed: ""))
+    }
+
+    func testAddedAppIDs() {
+        XCTAssertEqual(RemoteSessionApp.id(forName: "Jump Desktop", taken: []), "jump-desktop")
+        XCTAssertEqual(RemoteSessionApp.id(forName: "Jump Desktop", taken: ["jump-desktop"]), "jump-desktop-2")
+        XCTAssertEqual(RemoteSessionApp.id(forName: "Parsec", taken: []), "parsec-2")
+        XCTAssertEqual(RemoteSessionApp.id(forName: "!!", taken: []), "app")
+    }
+
+    func testAddingAndRemovingAnApp() {
+        let fake = FakeSessionDisplays()
+        let c = coordinator(fake)
+        let app = c.addApp(named: "Jump Desktop", kind: .display)
+        XCTAssertEqual(c.addedApps, [app])
+        XCTAssertEqual(RemoteSessionApp.name(of: app), "Jump Desktop")
+        XCTAssertEqual(c.profile(for: app).display, .adopt)
+        XCTAssertEqual(c.profile(for: app).detection?.problem(adoptName: nil), "Give part of its display's name.")
+        fake.others = ["Jump Desktop Display": 200]
+        var mine = c.profile(for: app)
+        mine.adoptName = "Jump"
+        c.setProfile(mine, for: app)
+        XCTAssertEqual(start(c, SessionRequest(app: app)), .success(SessionStart(displayID: 200)))
+        c.removeApp(app)
+        XCTAssertNil(c.sessions[app])
+        XCTAssertTrue(c.addedApps.isEmpty)
+        XCTAssertEqual(RemoteSessionApp.name(of: app), app)
+        // A known app isn't removed.
+        c.removeApp("rustdesk")
+    }
+
+    func testAddedProfileRoundTrips() throws {
+        var profile = SessionProfile()
+        profile.name = "Mine"
+        var detection = SessionDetection()
+        detection.logPath = "~/x.log"
+        detection.opened = "in"
+        detection.closed = "out"
+        profile.detection = detection
+        let decoded = try JSONDecoder().decode(SessionProfile.self, from: JSONEncoder().encode(profile))
+        XCTAssertEqual(decoded, profile)
+        XCTAssertNil(try JSONDecoder().decode(SessionProfile.self, from: Data("{}".utf8)).detection)
+    }
+
+    func testWatcherRemakesAnAddedAppsDetector() {
+        final class FakeDetector: SessionDetector {
+            let app: String
+            var onEvent: ((SessionEvent) -> Void)?
+            var running = false
+            init(app: String) { self.app = app }
+            func start() { running = true }
+            func stop() { running = false }
+        }
+        let c = coordinator(FakeSessionDisplays())
+        let app = c.addApp(named: "Mine", kind: .process)
+        var made: [FakeDetector] = []
+        let watcher = SessionWatcher(coordinator: c) { name in
+            guard name == app else { return nil }
+            let d = FakeDetector(app: name)
+            made.append(d)
+            return d
+        }
+        watcher.update()
+        XCTAssertEqual(made.count, 1)
+        var profile = c.profile(for: app)
+        profile.detection?.processName = "minehost"
+        c.setProfile(profile, for: app)
+        watcher.update()
+        XCTAssertEqual(made.count, 2)
+        XCTAssertEqual(made[0].running, false)
+        XCTAssertEqual(made[1].running, true)
+        c.removeApp(app)
+        watcher.update()
+        XCTAssertEqual(made[1].running, false)
+        XCTAssertNil(watcher.detectors[app])
+    }
 }

@@ -85,6 +85,32 @@ enum SessionLogLines {
         return nil
     }
 
+    /// An added app's lines, by the regular expressions `opened` and `closed`, or nil when
+    /// either isn't one. A group named `id` in both pairs a close with its open, so
+    /// connections can overlap; without, a session lasts from the first line matching `opened`
+    /// to the next matching `closed`. A group named `client` in `opened` names the client.
+    static func custom(opened: String, closed: String) -> ((String) -> SessionEvent?)? {
+        guard !opened.isEmpty, !closed.isEmpty,
+              let open = try? NSRegularExpression(pattern: opened),
+              let close = try? NSRegularExpression(pattern: closed) else { return nil }
+        let paired = opened.contains("(?<id>") && closed.contains("(?<id>")
+        let named = opened.contains("(?<client>")
+        func group(_ name: String, of match: NSTextCheckingResult, in line: String) -> String? {
+            Range(match.range(withName: name), in: line).map { String(line[$0]) }
+        }
+        return { line in
+            let range = NSRange(line.startIndex..., in: line)
+            if let m = close.firstMatch(in: line, range: range) {
+                return .closed(key: paired ? group("id", of: m, in: line) ?? "" : "")
+            }
+            if let m = open.firstMatch(in: line, range: range) {
+                let client = named ? group("client", of: m, in: line).flatMap { $0.isEmpty ? nil : $0 } : nil
+                return .opened(key: paired ? group("id", of: m, in: line) ?? "" : "", client: client)
+            }
+            return nil
+        }
+    }
+
     /// The groups `pattern` captures in `line`, or nil when it doesn't match.
     static func captures(_ pattern: String, in line: String) -> [String]? {
         guard let regex = try? NSRegularExpression(pattern: pattern),
@@ -437,7 +463,11 @@ enum SessionDetectors {
         return URL(fileURLWithPath: path)
     }
 
-    static func make(for app: String) -> SessionDetector? {
+    /// The detector for `app`; for an app added in Settings, as its `profile` says.
+    static func make(for app: String, profile: SessionProfile? = nil) -> SessionDetector? {
+        if let profile, let detection = profile.detection {
+            return make(added: app, detection, adoptName: profile.adoptName)
+        }
         switch app {
         case "rustdesk":
             let url = logURL(for: app, standard: home.appendingPathComponent("Library/Logs/RustDesk/RustDesk_rCURRENT.log"))
@@ -463,6 +493,20 @@ enum SessionDetectors {
             return DisplaySessionDetector(app: app, name: adoptName, displays: displayNames)
         default:
             return nil
+        }
+    }
+
+    /// The detector for an app added in Settings, or nil while it isn't set up.
+    static func make(added app: String, _ detection: SessionDetection, adoptName: String?) -> SessionDetector? {
+        guard detection.problem(adoptName: adoptName) == nil else { return nil }
+        switch detection.kind {
+        case .log:
+            guard let parse = SessionLogLines.custom(opened: detection.opened, closed: detection.closed) else { return nil }
+            return LogSessionDetector(app: app, url: logURL(for: app, standard: detection.logURL), parse: parse)
+        case .process:
+            return ProcessSessionDetector(app: app, processName: detection.processName)
+        case .display:
+            return DisplaySessionDetector(app: app, name: { adoptName }, displays: displayNames)
         }
     }
 
@@ -503,25 +547,38 @@ final class SessionWatcher {
     private let coordinator: RemoteSessionCoordinator
     private let make: (String) -> SessionDetector?
     private(set) var detectors: [String: SessionDetector] = [:]
+    /// What each added app's detector was made from, to make it again when that changes.
+    private var madeFrom: [String: SessionProfile] = [:]
     /// Called with what to announce when a watched session starts or ends.
     var announce: ((String) -> Void)?
 
-    init(coordinator: RemoteSessionCoordinator, make: @escaping (String) -> SessionDetector? = SessionDetectors.make) {
+    init(coordinator: RemoteSessionCoordinator, make: ((String) -> SessionDetector?)? = nil) {
         self.coordinator = coordinator
-        self.make = make
+        self.make = make ?? { [unowned coordinator] app in
+            SessionDetectors.make(for: app, profile: coordinator.profile(for: app))
+        }
     }
 
     /// Starts and stops detectors to match the profiles.
     func update() {
-        for app in SessionDetectors.watchable {
+        let added = Set(coordinator.addedApps)
+        for app in SessionDetectors.watchable.union(added).union(detectors.keys) {
             let profile = coordinator.profile(for: app)
-            let wanted = profile.enabled && profile.watch
+            let wanted = profile.enabled && profile.watch && (SessionDetectors.watchable.contains(app) || added.contains(app))
+            // An added app's detector is made again once what it watches changes.
+            if added.contains(app), let made = madeFrom[app],
+               made.detection != profile.detection || made.adoptName != profile.adoptName,
+               let detector = detectors.removeValue(forKey: app) {
+                detector.stop()
+            }
             if wanted, detectors[app] == nil, let detector = make(app) {
+                if added.contains(app) { madeFrom[app] = profile }
                 detector.onEvent = { [weak self] in self?.handle($0, of: app) }
                 detectors[app] = detector
                 detector.start()
             } else if !wanted, let detector = detectors.removeValue(forKey: app) {
                 detector.stop()
+                madeFrom[app] = nil
             }
         }
     }

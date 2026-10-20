@@ -305,6 +305,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         iconAnimator.show(count: connectionCount)
         settingsWindow?.moonlightDidChange()
         settingsWindow?.browserStreamDidChange()
+        settingsWindow?.sessionsDidChange()
     }
 
     /// Connections running through the app, shown by the menu bar icon's outflow: AirPlay
