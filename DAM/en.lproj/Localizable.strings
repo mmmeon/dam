@@ -87,6 +87,12 @@
 /* Menu action */
 "Creating a streaming display" = "Creating a streaming display";
 
+/* Another app's remote session started; the value is the app */
+"%@ session started" = "%@ session started";
+
+/* Another app's remote session ended; the value is the app */
+"%@ session ended" = "%@ session ended";
+
 /* Removing a streaming display */
 "Removing %@" = "Removing %@";
 

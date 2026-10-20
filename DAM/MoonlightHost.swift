@@ -77,6 +77,14 @@ final class MoonlightHost {
         set { UserDefaults.dam.set(newValue, forKey: enabledKey) }
     }
 
+    /// Whether an external Sunshine streams instead, with DAM's own host off so it can have
+    /// the ports; DAM then makes and places displays for Sunshine's streams (RemoteSessions.swift).
+    static var usesExternalSunshine: Bool {
+        get { UserDefaults.dam.bool(forKey: externalSunshineKey) }
+        set { UserDefaults.dam.set(newValue, forKey: externalSunshineKey) }
+    }
+    private static let externalSunshineKey = "\(AppIdentity.shortID).moonlight.externalSunshine"
+
     /// Whether a device not yet paired may ask to pair; when not, only paired devices connect.
     static var allowsPairing: Bool {
         get { UserDefaults.dam.object(forKey: allowsPairingKey) as? Bool ?? true }

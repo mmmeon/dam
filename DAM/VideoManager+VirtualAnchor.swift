@@ -45,6 +45,13 @@ struct DisplayArrangement {
                                   mirrorMasters: mirrorMasters, modes: modes)
     }
 
+    /// The same arrangement with `slaves` mirroring `master`, or extended for a master of 0,
+    /// so that restoring it keeps a mirror set made meanwhile.
+    func mirroring(_ slaves: [CGDirectDisplayID], on master: CGDirectDisplayID) -> DisplayArrangement {
+        DisplayArrangement(origins: origins,
+                           mirrorMasters: mirrorMasters.merging(slaves.map { ($0, master) }) { $1 }, modes: modes)
+    }
+
     /// The same arrangement with the displays in `new` at those origins, so that restoring
     /// it keeps an arrangement made meanwhile.
     func replacingOrigins(_ new: [CGDirectDisplayID: CGPoint]) -> DisplayArrangement {

@@ -8,6 +8,8 @@ func buildStatusMenu(audio: AudioManager,
                      video: VideoManager,
                      sidecar: SidecarManager,
                      moonlight: MoonlightHost,
+                     sessions: [RemoteSessionCoordinator.Session] = [],
+                     blackedOut: Bool = false,
                      onRefresh: @escaping () -> Void) -> NSMenu {
     let menu = NSMenu()
 
@@ -144,6 +146,13 @@ func buildStatusMenu(audio: AudioManager,
         : "There can be up to \(VideoManager.maxStreamingDisplays) streaming displays."
     menu.addItem(create)
     menu.addItem(moonlightItem(host: moonlight))
+    for session in sessions { menu.addItem(remoteSessionItem(session)) }
+    if blackedOut {
+        let light = NSMenuItem(title: "Light This Mac's Screens", action: #selector(AppDelegate.liftBlackout(_:)),
+                               keyEquivalent: "")
+        light.toolTip = "Ends the blackout for this session; the next session blacks them out again."
+        menu.addItem(light)
+    }
 
     // — Connected Displays section — physical displays; Sidecar iPads and streaming
     // displays are listed above
@@ -245,11 +254,38 @@ private func debugMenuItem() -> NSMenuItem {
 }
 #endif
 
+/// Another app's remote session, and a way to end it and put things back.
+private func remoteSessionItem(_ session: RemoteSessionCoordinator.Session) -> NSMenuItem {
+    let title = "\(RemoteSessionApp.name(of: session.app)) Session" + (session.client.map { " (\($0))" } ?? "")
+    let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+    item.state = .on
+    let submenu = NSMenu()
+    if session.count > 1 { submenu.addItem(disabledItem("\(session.count) connections")) }
+    let end = NSMenuItem(title: "End and Put Back", action: #selector(AppDelegate.endRemoteSession(_:)), keyEquivalent: "")
+    end.representedObject = session.app
+    end.toolTip = "Removes the session's display and puts the sound output back, as when it ends. " +
+                  "The other app's connection stays open."
+    submenu.addItem(end)
+    submenu.addItem(.separator())
+    submenu.addItem(withTitle: "Remote Sessions Settings…", action: #selector(AppDelegate.openSessionSettings(_:)),
+                    keyEquivalent: "")
+    item.submenu = submenu
+    return item
+}
+
 /// Hosting for Moonlight, on or off, and the browser stream; the rest is in Settings.
 private func moonlightItem(host: MoonlightHost) -> NSMenuItem {
     let item = NSMenuItem(title: "Moonlight", action: nil, keyEquivalent: "")
     item.state = host.isRunning ? .on : .off
     let submenu = NSMenu()
+    guard !MoonlightHost.usesExternalSunshine else {
+        submenu.addItem(disabledItem("Sunshine Hosts Moonlight"))
+        submenu.addItem(.separator())
+        submenu.addItem(withTitle: "Moonlight Settings…", action: #selector(AppDelegate.openMoonlightSettings(_:)),
+                        keyEquivalent: "")
+        item.submenu = submenu
+        return item
+    }
     let toggle = NSMenuItem(title: "Allow Moonlight to Connect",
                             action: #selector(AppDelegate.toggleMoonlightHost(_:)),
                             keyEquivalent: "")

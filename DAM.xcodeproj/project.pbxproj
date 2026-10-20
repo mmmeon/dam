@@ -45,6 +45,10 @@
 		CC000C022F8D60780090E796 /* AudioOutputPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B022F8D60780090E796 /* AudioOutputPicker.swift */; };
 		CC000C302F8D60780090E796 /* ScreenMirroringPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B302F8D60780090E796 /* ScreenMirroringPanel.swift */; };
 		CC000C312F8D60780090E796 /* SidecarManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B312F8D60780090E796 /* SidecarManager.swift */; };
+		AB300C052F8D60790090E796 /* LocalBlackout.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB300B052F8D60790090E796 /* LocalBlackout.swift */; };
+		AB300C042F8D60790090E796 /* SessionDetectors.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB300B042F8D60790090E796 /* SessionDetectors.swift */; };
+		AB300C022F8D60790090E796 /* ControlSocket.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB300B022F8D60790090E796 /* ControlSocket.swift */; };
+		AB300C012F8D60790090E796 /* RemoteSessions.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB300B012F8D60790090E796 /* RemoteSessions.swift */; };
 		7FA2D5C972AFA91BF026B64F /* callbacks.c in Sources */ = {isa = PBXBuildFile; fileRef = 1F0917EA16E2F3A133C6AB87 /* callbacks.c */; settings = {COMPILER_FLAGS = "-w -DHAS_FCNTL -DHAS_GETADDRINFO -DHAS_GETNAMEINFO -DHAS_INET_NTOP -DHAS_INET_PTON -DHAS_MSGHDR_FLAGS -DHAS_POLL -DHAS_SOCKLEN_T"; }; };
 		A3D33B22C62D529A5BF75DE3 /* compress.c in Sources */ = {isa = PBXBuildFile; fileRef = D29DF9B0EAA50E90D22A0AA8 /* compress.c */; settings = {COMPILER_FLAGS = "-w -DHAS_FCNTL -DHAS_GETADDRINFO -DHAS_GETNAMEINFO -DHAS_INET_NTOP -DHAS_INET_PTON -DHAS_MSGHDR_FLAGS -DHAS_POLL -DHAS_SOCKLEN_T"; }; };
 		427FBC004DC56DFD3EC92FA8 /* host.c in Sources */ = {isa = PBXBuildFile; fileRef = 3544B101F1D05676D0180FFC /* host.c */; settings = {COMPILER_FLAGS = "-w -DHAS_FCNTL -DHAS_GETADDRINFO -DHAS_GETNAMEINFO -DHAS_INET_NTOP -DHAS_INET_PTON -DHAS_MSGHDR_FLAGS -DHAS_POLL -DHAS_SOCKLEN_T"; }; };
@@ -81,6 +85,7 @@
 		DD100B012F8D607C0090E796 /* ArrangeTouchBarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A012F8D607C0090E796 /* ArrangeTouchBarTests.swift */; };
 		DD100B0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift */; };
 		DD100B1B2F8D607C0090E7A1 /* StreamingDisplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A1B2F8D607C0090E7A1 /* StreamingDisplayTests.swift */; };
+		AB300C032F8D60790090E796 /* RemoteSessionsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB300B032F8D60790090E796 /* RemoteSessionsTests.swift */; };
 		3574EAA6216A48EEBA6BBE4A /* MoonlightPairingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9735AC4A58E6545843504CEA /* MoonlightPairingTests.swift */; };
 		CFDD9A328A7A0EA0990B70EF /* MoonlightHostTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4455386FE67430944B0A55CB /* MoonlightHostTests.swift */; };
 		7F4AAE31590ECEFCFAB54CEA /* MoonlightAudioProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFF748CCAC3EE2416A1563B4 /* MoonlightAudioProtocolTests.swift */; };
@@ -152,6 +157,10 @@
 		CC000B022F8D60780090E796 /* AudioOutputPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioOutputPicker.swift; sourceTree = "<group>"; };
 		CC000B302F8D60780090E796 /* ScreenMirroringPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenMirroringPanel.swift; sourceTree = "<group>"; };
 		CC000B312F8D60780090E796 /* SidecarManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarManager.swift; sourceTree = "<group>"; };
+		AB300B052F8D60790090E796 /* LocalBlackout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalBlackout.swift; sourceTree = "<group>"; };
+		AB300B042F8D60790090E796 /* SessionDetectors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionDetectors.swift; sourceTree = "<group>"; };
+		AB300B022F8D60790090E796 /* ControlSocket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlSocket.swift; sourceTree = "<group>"; };
+		AB300B012F8D60790090E796 /* RemoteSessions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteSessions.swift; sourceTree = "<group>"; };
 		1F0917EA16E2F3A133C6AB87 /* callbacks.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = callbacks.c; sourceTree = "<group>"; };
 		D29DF9B0EAA50E90D22A0AA8 /* compress.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = compress.c; sourceTree = "<group>"; };
 		3544B101F1D05676D0180FFC /* host.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = host.c; sourceTree = "<group>"; };
@@ -188,6 +197,7 @@
 		DD100A012F8D607C0090E796 /* ArrangeTouchBarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArrangeTouchBarTests.swift; sourceTree = "<group>"; };
 		DD100A0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayNicknameTests.swift; sourceTree = "<group>"; };
 		DD100A1B2F8D607C0090E7A1 /* StreamingDisplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamingDisplayTests.swift; sourceTree = "<group>"; };
+		AB300B032F8D60790090E796 /* RemoteSessionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteSessionsTests.swift; sourceTree = "<group>"; };
 		9735AC4A58E6545843504CEA /* MoonlightPairingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightPairingTests.swift; sourceTree = "<group>"; };
 		4455386FE67430944B0A55CB /* MoonlightHostTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightHostTests.swift; sourceTree = "<group>"; };
 		CFF748CCAC3EE2416A1563B4 /* MoonlightAudioProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightAudioProtocolTests.swift; sourceTree = "<group>"; };
@@ -293,6 +303,10 @@
 				EE200B012F8D60790090E796 /* DisplayRotation.swift */,
 				CC000B302F8D60780090E796 /* ScreenMirroringPanel.swift */,
 				CC000B312F8D60780090E796 /* SidecarManager.swift */,
+				AB300B052F8D60790090E796 /* LocalBlackout.swift */,
+				AB300B042F8D60790090E796 /* SessionDetectors.swift */,
+				AB300B022F8D60790090E796 /* ControlSocket.swift */,
+				AB300B012F8D60790090E796 /* RemoteSessions.swift */,
 				451E728FE68D6B9E5602973C /* enet */,
 				9C8E74953F71FE05D48FC1A7 /* MoonlightCrypto.swift */,
 				4A28EDF0DA41FDB067A73C72 /* MoonlightPairing.swift */,
@@ -350,6 +364,7 @@
 				DD100A0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift */,
 				DD100A0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift */,
 				DD100A1B2F8D607C0090E7A1 /* StreamingDisplayTests.swift */,
+				AB300B032F8D60790090E796 /* RemoteSessionsTests.swift */,
 				9735AC4A58E6545843504CEA /* MoonlightPairingTests.swift */,
 				4455386FE67430944B0A55CB /* MoonlightHostTests.swift */,
 				CFF748CCAC3EE2416A1563B4 /* MoonlightAudioProtocolTests.swift */,
@@ -516,6 +531,10 @@
 				EE200C012F8D60790090E796 /* DisplayRotation.swift in Sources */,
 				CC000C302F8D60780090E796 /* ScreenMirroringPanel.swift in Sources */,
 				CC000C312F8D60780090E796 /* SidecarManager.swift in Sources */,
+				AB300C052F8D60790090E796 /* LocalBlackout.swift in Sources */,
+				AB300C042F8D60790090E796 /* SessionDetectors.swift in Sources */,
+				AB300C022F8D60790090E796 /* ControlSocket.swift in Sources */,
+				AB300C012F8D60790090E796 /* RemoteSessions.swift in Sources */,
 				7FA2D5C972AFA91BF026B64F /* callbacks.c in Sources */,
 				A3D33B22C62D529A5BF75DE3 /* compress.c in Sources */,
 				427FBC004DC56DFD3EC92FA8 /* host.c in Sources */,
@@ -569,6 +588,7 @@
 				DD100B0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift in Sources */,
 				DD100B0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift in Sources */,
 				DD100B1B2F8D607C0090E7A1 /* StreamingDisplayTests.swift in Sources */,
+				AB300C032F8D60790090E796 /* RemoteSessionsTests.swift in Sources */,
 				3574EAA6216A48EEBA6BBE4A /* MoonlightPairingTests.swift in Sources */,
 				CFDD9A328A7A0EA0990B70EF /* MoonlightHostTests.swift in Sources */,
 				7F4AAE31590ECEFCFAB54CEA /* MoonlightAudioProtocolTests.swift in Sources */,

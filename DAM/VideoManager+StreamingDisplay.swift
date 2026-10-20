@@ -93,8 +93,13 @@ extension VideoManager {
     struct StreamingDisplay {
         /// The CGVirtualDisplay; dropping the last reference removes the display.
         let display: AnyObject
-        /// Which of the streaming displays it is, from 0; it picks the name and serial number.
+        /// Which of the streaming displays it is, from 0; it picks the name and serial number
+        /// unless the display was made for someone in particular (see `StreamingIdentity`).
         let index: Int
+        /// Its name, which its rotation is kept by.
+        let name: String
+        /// Its serial number, which it is found by once online.
+        let serial: UInt32
         /// The mode it comes up in, or was last resized to, turned by `rotation`.
         var start: StreamingDisplayModes.Mode
         /// How far its picture is turned; captures turn their frames back by as much.
@@ -122,6 +127,15 @@ extension VideoManager {
     /// The name of streaming display `index`: "DAM Streaming", then "DAM Streaming 2", ….
     static func streamingDisplayName(_ index: Int) -> String {
         index == 0 ? "\(AppIdentity.name) Streaming" : "\(AppIdentity.name) Streaming \(index + 1)"
+    }
+
+    /// The serial number of a streaming display made for `seed`: the same for the same seed,
+    /// so macOS keeps its place and resolution from one session to the next, and never one
+    /// of `streamingSerial(_:)`'s.
+    static func streamingSerial(seed: String) -> UInt32 {
+        // FNV-1a, which is the same on every launch, unlike Hasher.
+        let hash = seed.utf8.reduce(UInt32(2_166_136_261)) { ($0 ^ UInt32($1)) &* 16_777_619 }
+        return 0x8000_0000 | (hash & 0x7FFF_FFFF)
     }
 
     /// The name of a stand-in for the display named `name`: "tv (Rotated)".
@@ -179,7 +193,8 @@ extension VideoManager {
     /// with nil; a resize or rotation whether it was done. The modes asked for are the
     /// stream's, before the display's rotation.
     enum StreamingRequest {
-        case add(StreamingDisplayModes.Mode, standIn: StandIn? = nil, completion: ((CGDirectDisplayID?) -> Void)?)
+        case add(StreamingDisplayModes.Mode, standIn: StandIn? = nil, identity: StreamingIdentity? = nil,
+                 completion: ((CGDirectDisplayID?) -> Void)?)
         case remove(index: Int)
         case resize(id: CGDirectDisplayID, StreamingDisplayModes.Mode, completion: (Bool) -> Void)
         case rotate(id: CGDirectDisplayID, DisplayRotation, completion: (Bool) -> Void)
@@ -199,6 +214,15 @@ extension VideoManager {
         }
     }
 
+    /// What a streaming display made for one app or client is called and known by, in place
+    /// of "DAM Streaming n" and its slot's serial number.
+    struct StreamingIdentity: Equatable {
+        /// Its name, as System Settings and the app capturing it show it.
+        let name: String
+        /// What its serial number comes from (see `streamingSerial(seed:)`).
+        let seed: String
+    }
+
     /// A streaming display made to stand in for another display: turned as asked, and not
     /// kept as the rotation of its place.
     struct StandIn {
@@ -213,13 +237,14 @@ extension VideoManager {
 
     var canCreateStreamingDisplay: Bool { plannedStreamingDisplayCount < Self.maxStreamingDisplays }
 
-    /// Asks for one more streaming display, in `mode`; `completion` gets its ID once it is
-    /// placed, or nil if none could be made. Additions and removals run one at a time, each
-    /// once the one before has settled.
+    /// Asks for one more streaming display, in `mode`, called and known as `identity` says if
+    /// given; `completion` gets its ID once it is placed, or nil if none could be made.
+    /// Additions and removals run one at a time, each once the one before has settled.
     func createStreamingDisplay(mode: StreamingDisplayModes.Mode = StreamingDisplayModes.start,
+                                identity: StreamingIdentity? = nil,
                                 completion: ((CGDirectDisplayID?) -> Void)? = nil) {
         guard canCreateStreamingDisplay else { completion?(nil); return }
-        streamingRequests.append(.add(mode, completion: completion))
+        streamingRequests.append(.add(mode, identity: identity, completion: completion))
         processStreamingRequests()
     }
 
@@ -287,8 +312,8 @@ extension VideoManager {
     private func processStreamingRequests() {
         while !streamingChangeInFlight, !streamingReassertInFlight, !streamingRequests.isEmpty {
             switch streamingRequests.removeFirst() {
-            case .add(let mode, let standIn, let completion):
-                addStreamingDisplay(mode, standIn: standIn, completion: completion)
+            case .add(let mode, let standIn, let identity, let completion):
+                addStreamingDisplay(mode, standIn: standIn, identity: identity, completion: completion)
             case .remove(let index):                removeStreamingDisplay(index: index)
             case .resize(let id, let mode, let completion):
                 let rotation = streamingRotation(of: id) ?? .standard
@@ -314,21 +339,29 @@ extension VideoManager {
     /// Creates a streaming display in `mode` and places it right of the other displays. The
     /// arrangement from before the first is put back when the last is removed.
     private func addStreamingDisplay(_ mode: StreamingDisplayModes.Mode, standIn: StandIn?,
+                                     identity: StreamingIdentity?,
                                      completion: ((CGDirectDisplayID?) -> Void)?) {
         let used = Set(streamingDisplays.map(\.index))
         guard let index = (0..<Self.maxStreamingDisplays).first(where: { !used.contains($0) }) else {
             completion?(nil)
             return
         }
-        let rotation = standIn?.rotation ?? StreamingRotationPreferences.rotation(for: Self.streamingDisplayName(index))
+        // Two at once for the same seed would be one display to macOS; the second takes its slot's.
+        let ownSerial = identity.map { Self.streamingSerial(seed: $0.seed) }
+            .flatMap { serial in streamingDisplays.contains { $0.serial == serial } ? nil : serial }
+        let serial = ownSerial ?? Self.streamingSerial(index)
+        // Named after the display it stands in for, which System Settings shows it as.
+        let name = standIn.map { Self.standInDisplayName(for: $0.name) }
+            ?? identity.map { ownSerial != nil ? $0.name : "\($0.name) \(index + 1)" }
+            ?? Self.streamingDisplayName(index)
+        let rotation = standIn?.rotation ?? StreamingRotationPreferences.rotation(for: name)
         let mode = mode.rotated(rotation)
         sdLog.debug("add \(index) at \(mode.width)×\(mode.height)@\(mode.refreshRate)\(mode.hiDPI ? " HiDPI" : "")")
 
         let descriptor = CGVirtualDisplayDescriptor()
         // Must call setDispatchQueue: (see enableVirtualAnchor).
         descriptor.setDispatchQueue(.main)
-        // Named after the display it stands in for, which System Settings shows it as.
-        descriptor.name = standIn.map { Self.standInDisplayName(for: $0.name) } ?? Self.streamingDisplayName(index)
+        descriptor.name = name
         descriptor.sizeInMillimeters = CGSize(width: 600, height: 340)
         // As much either way, so it can be turned on its side where it is.
         let side = max(StreamingDisplayModes.maxPixelsSide, mode.pixelWidth, mode.pixelHeight)
@@ -336,7 +369,7 @@ extension VideoManager {
         descriptor.maxPixelsHigh = UInt32(side)
         descriptor.vendorID  = Self.anchorVendorID
         descriptor.productID = Self.streamingProductID
-        descriptor.serialNum = Self.streamingSerial(index)
+        descriptor.serialNum = serial
         descriptor.terminationHandler = { [weak self] _, _ in
             DispatchQueue.main.async { self?.streamingDisplayEnded(index: index) }
         }
@@ -363,15 +396,15 @@ extension VideoManager {
             if streamingDisplays.isEmpty { streamingArrangement = nil }
             completion?(nil)
             // The additions waiting would fail the same way.
-            for case .add(_, _, let waiting) in streamingRequests { waiting?(nil) }
+            for case .add(_, _, _, let waiting) in streamingRequests { waiting?(nil) }
             streamingRequests.removeAll(where: \.isAddition)
             return
         }
-        streamingDisplays.append(StreamingDisplay(display: vd, index: index, start: mode, rotation: rotation,
-                                                  standsInFor: standIn?.name))
+        streamingDisplays.append(StreamingDisplay(display: vd, index: index, name: name, serial: serial,
+                                                  start: mode, rotation: rotation, standsInFor: standIn?.name))
         streamingAddCompletion = completion
         streamingChangeInFlight = true
-        waitForStreamingDisplay(vd, index: index, before: before, attempt: 0)
+        waitForStreamingDisplay(vd, index: index, serial: serial, before: before, attempt: 0)
     }
 
     /// Removes streaming display `index`, if it is still there, and puts the others back
@@ -388,6 +421,8 @@ extension VideoManager {
         if streamingDisplays.count == 1 || CGDisplayIsMain(last.id) != 0 {
             streamingDisplayIsMainByChoice = false
         }
+        // Its ID can come back for another display.
+        streamingDisplaysMirroredByChoice.remove(last.id)
         // Dropping the last reference removes the display. While the set settles without
         // it, each change puts the resolutions and positions back if WindowServer's saved
         // layout for the smaller set changed them.
@@ -484,7 +519,7 @@ extension VideoManager {
         guard let i = streamingDisplays.firstIndex(where: { $0.id == id && id != 0 }) else { return completion(false) }
         let display = streamingDisplays[i]
         let kept = display.standsInFor == nil
-        if kept { StreamingRotationPreferences.setRotation(rotation, for: Self.streamingDisplayName(display.index)) }
+        if kept { StreamingRotationPreferences.setRotation(rotation, for: display.name) }
         guard rotation != display.rotation else { return completion(true) }
         sdLog.debug("rotate \(display.index) to \(rotation.rawValue)")
         let mode = display.start.rotated(display.rotation.inverse).rotated(rotation)
@@ -494,7 +529,7 @@ extension VideoManager {
             if !done, let i = self.streamingDisplays.firstIndex(where: { $0.id == id }) {
                 self.streamingDisplays[i].rotation = display.rotation
                 if kept {
-                    StreamingRotationPreferences.setRotation(display.rotation, for: Self.streamingDisplayName(display.index))
+                    StreamingRotationPreferences.setRotation(display.rotation, for: display.name)
                 }
             }
             self.publishStreamRotations()
@@ -559,6 +594,7 @@ extension VideoManager {
     private func streamingDisplayEnded(index: Int) {
         guard let i = streamingDisplays.firstIndex(where: { $0.index == index }) else { return }
         sdLog.debug("terminationHandler: streaming display \(index) ended")
+        streamingDisplaysMirroredByChoice.remove(streamingDisplays[i].id)
         streamingDisplays.remove(at: i)
         if streamingDisplays.isEmpty {
             streamingArrangement = nil
@@ -572,12 +608,11 @@ extension VideoManager {
         streamingDisplays.contains { $0.display === vd }
     }
 
-    private func waitForStreamingDisplay(_ vd: CGVirtualDisplay, index: Int, before: DisplayArrangement,
-                                         attempt: Int) {
+    private func waitForStreamingDisplay(_ vd: CGVirtualDisplay, index: Int, serial: UInt32,
+                                         before: DisplayArrangement, attempt: Int) {
         // Ended meanwhile; nothing else finishes this change.
         guard isStreamingDisplay(vd) else { return finishStreamingChange() }
         let online = DisplayArrangement.onlineDisplayIDs()
-        let serial = Self.streamingSerial(index)
         let id = vd.displayID != 0 && online.contains(vd.displayID)
             ? vd.displayID
             : online.first {
@@ -603,7 +638,7 @@ extension VideoManager {
             return finishStreamingChange()
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-            self?.waitForStreamingDisplay(vd, index: index, before: before, attempt: attempt + 1)
+            self?.waitForStreamingDisplay(vd, index: index, serial: serial, before: before, attempt: attempt + 1)
         }
     }
 

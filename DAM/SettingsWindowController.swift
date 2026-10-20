@@ -17,6 +17,7 @@ final class SettingsWindowController: NSWindowController {
     private let videoManager: VideoManager
     private let sidecarManager: SidecarManager
     private let moonlightHost: MoonlightHost
+    private let sessionCoordinator: RemoteSessionCoordinator?
 
     var onSave: ((HotkeyPreference) -> Void)?
     var onSaveAirPlayConnect: ((HotkeyPreference) -> Void)?
@@ -31,6 +32,10 @@ final class SettingsWindowController: NSWindowController {
     var onToggleMoonlight: (() -> Void)?
     /// Unpairs a Moonlight device, as the menu did.
     var onForgetMoonlightClient: ((MoonlightClient) -> Void)?
+    /// Hands streaming to an external Sunshine, or back to DAM's own host.
+    var onUseExternalSunshine: ((Bool) -> Void)?
+    /// Called when a remote-session profile changes, so the watching follows it.
+    var onSessionProfilesChanged: (() -> Void)?
 
     // Tab content views — built once, reused on every tab switch.
     private lazy var hotkeyContent:  NSView = buildHotkeysTab()
@@ -39,6 +44,7 @@ final class SettingsWindowController: NSWindowController {
     private lazy var virtualContent: NSView = buildVirtualTab()
     /// Rebuilt when hosting starts or stops or the paired devices change.
     private lazy var moonlightContent: NSView = buildMoonlightTab()
+    private lazy var sessionsContent: NSView = buildSessionsTab()
     /// What the Moonlight tab was built from, to tell when it is out of date.
     private var moonlightShown = MoonlightState(host: nil)
     private var selectedTab = TabID.general
@@ -51,7 +57,8 @@ final class SettingsWindowController: NSWindowController {
         static let devices = NSToolbarItem.Identifier("\(AppIdentity.shortID).settings.devices")
         static let virtual = NSToolbarItem.Identifier("\(AppIdentity.shortID).settings.virtual")
         static let moonlight = NSToolbarItem.Identifier("\(AppIdentity.shortID).settings.moonlight")
-        static let all: [NSToolbarItem.Identifier] = [general, hotkeys, devices, virtual, moonlight]
+        static let sessions = NSToolbarItem.Identifier("\(AppIdentity.shortID).settings.sessions")
+        static let all: [NSToolbarItem.Identifier] = [general, hotkeys, devices, virtual, moonlight, sessions]
     }
 
     // MARK: - Init
@@ -66,7 +73,8 @@ final class SettingsWindowController: NSWindowController {
          audioManager: AudioManager,
          videoManager: VideoManager,
          sidecarManager: SidecarManager,
-         moonlightHost: MoonlightHost) {
+         moonlightHost: MoonlightHost,
+         sessionCoordinator: RemoteSessionCoordinator? = nil) {
         recorder              = KeyRecorderView(preference: current)
         recorderAirPlay       = KeyRecorderView(preference: currentAirPlayConnect)
         recorderMirrorToggle  = KeyRecorderView(preference: currentMirrorToggle)
@@ -78,6 +86,7 @@ final class SettingsWindowController: NSWindowController {
         self.videoManager     = videoManager
         self.sidecarManager   = sidecarManager
         self.moonlightHost    = moonlightHost
+        self.sessionCoordinator = sessionCoordinator
 
         let win = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 420, height: 280),
@@ -125,6 +134,8 @@ final class SettingsWindowController: NSWindowController {
             content = virtualContent; title = "Virtual Display"
         case TabID.moonlight:
             content = moonlightContent; title = "Moonlight"
+        case TabID.sessions:
+            content = sessionsContent; title = "Remote Sessions"
         default:
             content = hotkeyContent;  title = "Hotkeys"
         }
@@ -134,8 +145,8 @@ final class SettingsWindowController: NSWindowController {
         window?.title                           = title
     }
 
-    /// Wide enough for the toolbar's five items.
-    private static let minContentWidth: CGFloat = 420
+    /// Wide enough for the toolbar's six items.
+    private static let minContentWidth: CGFloat = 520
 
     /// The least height the window can be made, below which a tab scrolls.
     private static let minContentHeight: CGFloat = 200
@@ -145,7 +156,7 @@ final class SettingsWindowController: NSWindowController {
     /// window stays resizable down to what the widest tab needs.
     private func fitWindow() {
         guard let win = window else { return }
-        let stacks = [generalContent, hotkeyContent, devicesContent, virtualContent, moonlightContent]
+        let stacks = [generalContent, hotkeyContent, devicesContent, virtualContent, moonlightContent, sessionsContent]
             .compactMap { ($0 as? NSScrollView)?.documentView }
         stacks.forEach { $0.layoutSubtreeIfNeeded() }
         var height = stacks.map(\.fittingSize.height).max() ?? 0
@@ -381,6 +392,21 @@ final class SettingsWindowController: NSWindowController {
     private func buildMoonlightTab() -> NSView {
         let host = moonlightHost
         moonlightShown = MoonlightState(host: host)
+        let hostChoice = ClosurePopup(onSelect: { [weak self] raw in
+            self?.onUseExternalSunshine?(raw == "sunshine")
+        })
+        hostChoice.font = .systemFont(ofSize: NSFont.systemFontSize)
+        for (title, key) in [("\(AppIdentity.name)", "dam"), ("Sunshine", "sunshine")] {
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            item.representedObject = key
+            hostChoice.menu?.addItem(item)
+        }
+        hostChoice.selectItem(at: MoonlightHost.usesExternalSunshine ? 1 : 0)
+        hostChoice.toolTip = "Who Moonlight connects to: \(AppIdentity.name)'s own host, or Sunshine " +
+                             "running on this Mac, for which \(AppIdentity.name) makes and places the displays."
+        guard !MoonlightHost.usesExternalSunshine else {
+            return formTab([("Host:", [hostChoice])] + sunshineGroups(), leftAligned: true)
+        }
         var hosting: [NSView] = []
         // Hosting may fail to start, leaving nothing changed for the tab to be rebuilt by.
         weak var allowButton: NSButton?
@@ -459,11 +485,234 @@ final class SettingsWindowController: NSWindowController {
         deviceGrid.rowAlignment  = .firstBaseline
 
         return formTab([
+            ("Host:", [hostChoice]),
             ("Hosting:", hosting),
             ("Streams:", streams),
             ("Browser Profile:", [profile]),
             ("Paired Devices:", [devices.isEmpty ? placeholderLabel("None yet") : deviceGrid]),
         ], leftAligned: true)
+    }
+
+    /// What to set up in Sunshine for it to stream the displays DAM makes.
+    private func sunshineGroups() -> [(label: String, controls: [NSView])] {
+        let installed = SessionDetectors.isInstalled("sunshine")
+        let running = RunningProcesses.isRunning("sunshine")
+        let status = placeholderLabel(running ? "Running" : installed ? "Installed, not running" : "Not found on this Mac")
+        let command = Bundle.main.executablePath ?? "/Applications/\(AppIdentity.name).app/Contents/MacOS/\(AppIdentity.name)"
+        let start = "\(command) session start --app sunshine"
+        let end = "\(command) session end --app sunshine"
+        let copy = ClosureButton(title: "Copy") { _ in
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString("do: \(start)\nundo: \(end)", forType: .string)
+        }
+        copy.bezelStyle  = .rounded
+        copy.controlSize = .small
+        copy.font        = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        return [
+            ("Sunshine:", [status, smallNote("\(AppIdentity.name)'s own host is off, so Sunshine can use the ports.")]),
+            ("Prep Command:", [selectableLabel("Do: \(start)"), selectableLabel("Undo: \(end)"), copy,
+                               smallNote("Add these in Sunshine › Configuration › General › Command Preparations. " +
+                                         "Each stream then gets a display at the client's size, set up as " +
+                                         "Remote Sessions › Sunshine says. The start command prints the " +
+                                         "display's ID; set Sunshine's output_name to it.")]),
+        ]
+    }
+
+    /// What DAM does while each app's session is on.
+    private func buildSessionsTab() -> NSView {
+        guard let coordinator = sessionCoordinator else { return formTab([]) }
+        let apps = ["sunshine", "rustdesk", "parsec", "screensharing", "chromeremotedesktop", "teamviewer", "display"]
+        var groups: [(label: String, controls: [NSView])] = apps.map { app in
+            (label: "\(RemoteSessionApp.name(of: app)):", controls: sessionControls(for: app, coordinator: coordinator))
+        }
+        groups.append((label: "Changes:", controls: [
+            smallNote("What is changed through \(AppIdentity.name) during a session (where its display is, its " +
+                      "size, the sound output, the blackout) is kept for the app's next session, and the Mac still " +
+                      "goes back as it was when the session ends. A setting picked here is locked against those " +
+                      "changes; click its lock to let it follow them again."),
+        ]))
+        let command = Bundle.main.executablePath ?? AppIdentity.name
+        groups.append((label: "Command Line:", controls: [
+            selectableLabel("\(command) session start --app NAME"),
+            smallNote("Starts a session for any app, from its own scripts; `session end --app NAME` ends it. " +
+                      "Run with `help` for the rest."),
+        ]))
+        return formTab(groups, leftAligned: true)
+    }
+
+    private func sessionControls(for app: String, coordinator: RemoteSessionCoordinator) -> [NSView] {
+        var profile = coordinator.profile(for: app)
+        let save: (SessionProfile) -> Void = { [weak self] new in
+            profile = new
+            coordinator.setProfile(new, for: app)
+            self?.onSessionProfilesChanged?()
+        }
+        var controls: [NSView] = []
+        let name = RemoteSessionApp.name(of: app)
+        if app == "display" {
+            controls.append(checkbox(title: "Watch for a display another app makes", isOn: profile.watch,
+                                     help: "For apps that make a display of their own for each session, such as " +
+                                           "Jump Desktop, Splashtop, OpenDisplay or Duet: a session lasts while " +
+                                           "a display with this name is online.",
+                                     action: { profile.watch = $0; save(profile) }))
+            let field = ClosureTextField(text: profile.adoptName ?? "", placeholder: "Part of its name, e.g. Jump") {
+                profile.adoptName = $0.isEmpty ? nil : $0
+                save(profile)
+            }
+            field.widthAnchor.constraint(equalToConstant: 200).isActive = true
+            controls.append(field)
+        } else if SessionDetectors.watchable.contains(app) {
+            let installed = SessionDetectors.isInstalled(app)
+            controls.append(checkbox(title: "Watch for \(name) sessions" + (installed ? "" : " (not installed)"),
+                                     isOn: profile.watch,
+                                     help: "Starts a session when someone connects through \(name), and ends it " +
+                                           "when the last one leaves.",
+                                     action: { profile.watch = $0; save(profile) }))
+        } else {
+            controls.append(checkbox(title: "Start sessions from Sunshine's prep commands", isOn: profile.enabled,
+                                     help: "Unchecked, the prep commands are turned away and Sunshine streams " +
+                                           "the displays as they are.",
+                                     action: { profile.enabled = $0; save(profile) }))
+        }
+
+        // A setting picked here is locked: a session's changes leave it. Open, it follows them.
+        var locks: [SessionProfile.Setting: NSButton] = [:]
+        for setting in SessionProfile.Setting.allCases {
+            locks[setting] = lockButton(locked: profile.locked.contains(setting)) { locked in
+                if locked { profile.locked.insert(setting) } else { profile.locked.remove(setting) }
+                save(profile)
+            }
+        }
+        let pick: (SessionProfile.Setting) -> Void = { setting in
+            profile.locked.insert(setting)
+            locks[setting]?.state = .on
+        }
+
+        weak var sizeRef: NSPopUpButton?
+        weak var placementRef: NSPopUpButton?
+        let displayOptions = app == "display"
+            ? [("Its display", SessionProfile.DisplayChoice.adopt.rawValue)]
+            : [("Make a display", SessionProfile.DisplayChoice.create.rawValue),
+               ("Use \(name)'s display", SessionProfile.DisplayChoice.adopt.rawValue),
+               ("Leave the displays", SessionProfile.DisplayChoice.none.rawValue)]
+        let display = popup(displayOptions, selected: profile.display.rawValue) { raw in
+            profile.display = raw.flatMap(SessionProfile.DisplayChoice.init(rawValue:)) ?? .create
+            sizeRef?.isEnabled = profile.display == .create
+            placementRef?.isEnabled = profile.display != .none
+            save(profile)
+        }
+        display.toolTip = "Make a display for the session, use the one \(name) makes itself (found by its " +
+                          "name), or leave the displays as they are."
+        let sizes = [("Client's size", nil as String?)] + StreamingDisplayModes.sizes.map {
+            ("\($0.width) × \($0.height)", "\($0.width)x\($0.height)" as String?)
+        }
+        let size = popup(sizes, selected: profile.width.flatMap { w in profile.height.map { "\(w)x\($0)" } }) { raw in
+            let parts = raw?.split(separator: "x").compactMap { Int($0) } ?? []
+            profile.width = parts.count == 2 ? parts[0] : nil
+            profile.height = parts.count == 2 ? parts[1] : nil
+            pick(.size)
+            save(profile)
+        }
+        size.toolTip = app == "sunshine" ? "The client's size comes from Moonlight." :
+            "\(name) doesn't say the client's size, so its display is 1920 × 1080 unless set here."
+        let placement = popup([("Extended", SessionProfile.Placement.extend.rawValue),
+                               ("As main display", SessionProfile.Placement.main.rawValue),
+                               ("Mirrored by the others", SessionProfile.Placement.mirror.rawValue)],
+                              selected: profile.placement.rawValue) { raw in
+            profile.placement = raw.flatMap(SessionProfile.Placement.init(rawValue:)) ?? .extend
+            pick(.placement)
+            save(profile)
+        }
+        sizeRef = size
+        placementRef = placement
+        size.isEnabled = profile.display == .create
+        placement.isEnabled = profile.display != .none
+        let row = BaselineRowGridView(views: [[display, size, locks[.size]!, placement, locks[.placement]!]])
+        row.columnSpacing = 8
+        row.rowAlignment  = .firstBaseline
+        controls.append(row)
+
+        let outputs = [("Leave the sound output", nil as String?)] + audioManager.allOutputDevices.compactMap { device in
+            AudioManager.uid(of: device.id).map { ("Sound to \(device.label)", $0 as String?) }
+        }
+        var outputOptions = outputs
+        if let uid = profile.audioOutputUID, !outputs.contains(where: { $0.1 == uid }) {
+            outputOptions.append(("Sound to a device not connected", uid))
+        }
+        let output = popup(outputOptions, selected: profile.audioOutputUID) { raw in
+            profile.audioOutputUID = raw
+            pick(.audio)
+            save(profile)
+        }
+        controls.append(lockedRow(output, locks[.audio]!))
+        let ownPrivacy = ["rustdesk": "RustDesk's privacy mode", "parsec": "Parsec's privacy mode"][app]
+        controls.append(lockedRow(checkbox(title: "Black out this Mac's screens", isOn: profile.blackout,
+                                 help: "Turns this Mac's own screens black while the session is on, so whoever is " +
+                                       "at the Mac doesn't see it; the session's display and the stream stay as " +
+                                       "they are. The menu lights them again." +
+                                       (ownPrivacy.map { " Leave it off if \($0) is on: the two would fight." } ?? ""),
+                                 action: { profile.blackout = $0; pick(.blackout); save(profile) }), locks[.blackout]!))
+        return controls
+    }
+
+    /// A lock beside a session setting: closed while the setting is kept as picked here,
+    /// open while it follows the changes made during sessions.
+    private func lockButton(locked: Bool, action: @escaping (Bool) -> Void) -> NSButton {
+        let button = ClosureButton(title: "", action: action)
+        button.setButtonType(.toggle)
+        button.isBordered = false
+        button.imagePosition = .imageOnly
+        button.image = NSImage(systemSymbolName: "lock.open", accessibilityDescription: "Follows sessions")
+        button.alternateImage = NSImage(systemSymbolName: "lock.fill", accessibilityDescription: "Kept as picked")
+        button.state = locked ? .on : .off
+        button.toolTip = "Locked, the setting stays as picked here. Open, it follows what is changed through " +
+                         "\(AppIdentity.name) during a session, for the next one."
+        return button
+    }
+
+    /// `control` with its lock after it, on one line.
+    private func lockedRow(_ control: NSView, _ lock: NSView) -> NSView {
+        let row = BaselineRowGridView(views: [[control, lock]])
+        row.columnSpacing = 4
+        row.rowAlignment  = .firstBaseline
+        return row
+    }
+
+    /// A pop-up of `options` (title, stored value) with `selected` chosen.
+    private func popup(_ options: [(String, String?)], selected: String?,
+                       onSelect: @escaping (String?) -> Void) -> NSPopUpButton {
+        let popup = ClosurePopup(onSelect: onSelect)
+        popup.font = .systemFont(ofSize: NSFont.systemFontSize)
+        for (title, key) in options {
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            item.representedObject = key
+            popup.menu?.addItem(item)
+        }
+        popup.selectItem(at: options.firstIndex { $0.1 == selected } ?? 0)
+        return popup
+    }
+
+    private func selectableLabel(_ text: String) -> NSView {
+        let tf = NSTextField(labelWithString: text)
+        tf.font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+        tf.isSelectable = true
+        tf.lineBreakMode = .byCharWrapping
+        tf.preferredMaxLayoutWidth = 420
+        return tf
+    }
+
+    private func smallNote(_ text: String) -> NSView {
+        let tf = NSTextField(wrappingLabelWithString: text)
+        tf.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        tf.textColor = .secondaryLabelColor
+        tf.preferredMaxLayoutWidth = 420
+        return tf
+    }
+
+    /// Rebuilds the Moonlight tab, as when the host changes.
+    func rebuildMoonlightTab() {
+        moonlightContent = buildMoonlightTab()
+        if selectedTab == TabID.moonlight { window?.contentView = moonlightContent }
     }
 
     /// Rebuilds the Moonlight tab if what it shows of the host has changed.
@@ -807,6 +1056,18 @@ final class SettingsWindowController: NSWindowController {
 
     // MARK: - Present
 
+    /// Shows the window on the Remote Sessions tab.
+    /// Builds the Remote Sessions tab again from the profiles, as when a session changed one.
+    func reloadSessions() {
+        sessionsContent = buildSessionsTab()
+        if selectedTab == TabID.sessions { selectTab(TabID.sessions) }
+    }
+
+    func showSessions() {
+        selectTab(TabID.sessions)
+        show()
+    }
+
     /// Shows the window on the Moonlight tab.
     func showMoonlight() {
         selectTab(TabID.moonlight)
@@ -864,6 +1125,10 @@ extension SettingsWindowController: NSToolbarDelegate {
             item.label = "Moonlight"
             item.image = NSImage(systemSymbolName: "moon.stars",
                                  accessibilityDescription: "Moonlight")
+        case TabID.sessions:
+            item.label = "Remote Sessions"
+            item.image = NSImage(systemSymbolName: "display.2",
+                                 accessibilityDescription: "Remote Sessions")
         default:
             return nil
         }
@@ -956,6 +1221,28 @@ private final class ClosurePopup: NSPopUpButton {
 
     @objc private func selectionChanged() {
         handler(selectedItem?.representedObject as? String)
+    }
+}
+
+// MARK: - ClosureTextField
+
+/// A text field that hands its text to a closure when editing ends.
+private final class ClosureTextField: NSTextField, NSTextFieldDelegate {
+    private let handler: (String) -> Void
+
+    init(text: String, placeholder: String, onEnd: @escaping (String) -> Void) {
+        handler = onEnd
+        super.init(frame: .zero)
+        stringValue = text
+        placeholderString = placeholder
+        font = .systemFont(ofSize: NSFont.systemFontSize)
+        delegate = self
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        handler(stringValue.trimmingCharacters(in: .whitespaces))
     }
 }
 
