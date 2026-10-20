@@ -5,6 +5,8 @@ import CoreGraphics
 /// Stands in for the displays and sound outputs, recording what the coordinator asks.
 private final class FakeSessionDisplays: SessionDisplays {
     var made: [(mode: StreamingDisplayModes.Mode, identity: VideoManager.StreamingIdentity)] = []
+    /// Those of `made` asked to be main as they were placed.
+    var madeMain: [VideoManager.StreamingIdentity] = []
     var removed: [CGDirectDisplayID] = []
     var placed: [(CGDirectDisplayID, SessionProfile.Placement)] = []
     var outputUID: String? = "speakers"
@@ -15,9 +17,10 @@ private final class FakeSessionDisplays: SessionDisplays {
     /// Displays asked for and not yet made; nil makes them at once.
     var pendingMakes: [() -> Void]?
 
-    func makeDisplay(_ mode: StreamingDisplayModes.Mode, identity: VideoManager.StreamingIdentity,
+    func makeDisplay(_ mode: StreamingDisplayModes.Mode, identity: VideoManager.StreamingIdentity, main: Bool,
                      completion: @escaping (CGDirectDisplayID?) -> Void) {
         made.append((mode, identity))
+        if main { madeMain.append(identity) }
         let id = nextID
         if let id { modes[id] = mode }
         if pendingMakes != nil { pendingMakes?.append { completion(id) } } else { completion(id) }
@@ -177,6 +180,15 @@ final class RemoteSessionsTests: XCTestCase {
         XCTAssertEqual(fake.removed, [100])
         XCTAssertEqual(fake.outputUID, "speakers")
         XCTAssertTrue(c.sessions.isEmpty)
+    }
+
+    func testMainIsAskedForWithTheDisplay() {
+        let fake = FakeSessionDisplays()
+        let c = coordinator(fake)
+        _ = start(c, SessionRequest(app: "rustdesk"))
+        XCTAssertEqual(fake.madeMain.count, 1)
+        _ = start(c, SessionRequest(app: "screensharing"))
+        XCTAssertEqual(fake.madeMain.count, 1)
     }
 
     func testExtendNeedsNoPlacing() {

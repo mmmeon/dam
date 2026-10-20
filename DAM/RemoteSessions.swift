@@ -276,8 +276,9 @@ struct SessionStart: Equatable {
 
 /// What the coordinator changes the Mac through, so it can be tested without displays.
 protocol SessionDisplays: AnyObject {
-    /// Makes a streaming display; `completion` gets its ID once it is placed, or nil.
-    func makeDisplay(_ mode: StreamingDisplayModes.Mode, identity: VideoManager.StreamingIdentity,
+    /// Makes a streaming display, main already when `main`; `completion` gets its ID once it
+    /// is placed, or nil.
+    func makeDisplay(_ mode: StreamingDisplayModes.Mode, identity: VideoManager.StreamingIdentity, main: Bool,
                      completion: @escaping (CGDirectDisplayID?) -> Void)
     func removeDisplay(_ id: CGDirectDisplayID)
     /// The display online whose name contains `name`, ignoring case, other than DAM's own.
@@ -452,7 +453,9 @@ final class RemoteSessionCoordinator {
             switchOutput(app, profile: profile, start: SessionStart())
         case .create:
             let mode = profile.mode(clientWidth: request.width, clientHeight: request.height, clientFPS: request.fps)
-            displays.makeDisplay(mode, identity: request.identity) { [weak self] id in
+            // Main in the commit that places it: one commit fewer, each of which can take
+            // seconds while the app is already capturing the main display.
+            displays.makeDisplay(mode, identity: request.identity, main: profile.placement == .main) { [weak self] id in
                 guard let self else { return }
                 guard let id else {
                     rsLog.error("\(app): no display")
@@ -648,9 +651,9 @@ final class LiveSessionDisplays: SessionDisplays {
         self.audio = audio
     }
 
-    func makeDisplay(_ mode: StreamingDisplayModes.Mode, identity: VideoManager.StreamingIdentity,
+    func makeDisplay(_ mode: StreamingDisplayModes.Mode, identity: VideoManager.StreamingIdentity, main: Bool,
                      completion: @escaping (CGDirectDisplayID?) -> Void) {
-        video.createStreamingDisplay(mode: mode, identity: identity, completion: completion)
+        video.createStreamingDisplay(mode: mode, identity: identity, main: main, completion: completion)
     }
 
     func removeDisplay(_ id: CGDirectDisplayID) { video.removeStreamingDisplay(id: id) }

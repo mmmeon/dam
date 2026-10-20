@@ -136,6 +136,12 @@ root's processes (`screensharingd`), and names are cut to 16 characters.
   displays in its toolbar. On 2026-10-20 RustDesk started its server again mid-session (a new
   log file, beginning `try start server`) without logging the open connection's close, so the
   session outlived the disconnect. That line, or RustDesk quitting, now ends every connection.
+- **A display commit that changes nothing takes 10 s to return** (`CGCompleteDisplayConfiguration`,
+  on any thread, seen 2026-10-20). WindowServer often lays a new display out as DAM would
+  place it, from a layout it saved for the set, so placing it changed nothing and the
+  session waited ~13 s for its display. Placing now skips a commit with nothing to change,
+  and makes the display main in that same commit when the profile says Main: 2.6–3.8 s
+  from asking to placed, where it was 13 s.
 - **Parsec** streams the main display, and follows it when another display is made main
   during the session. Extending leaves the client on the Mac's own screen, so Parsec's
   profile defaults to Main. On this Intel Mac, Parsec's hardware H.265 encoder fails to start

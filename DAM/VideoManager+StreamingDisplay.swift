@@ -194,7 +194,7 @@ extension VideoManager {
     /// stream's, before the display's rotation.
     enum StreamingRequest {
         case add(StreamingDisplayModes.Mode, standIn: StandIn? = nil, identity: StreamingIdentity? = nil,
-                 completion: ((CGDirectDisplayID?) -> Void)?)
+                 main: Bool = false, completion: ((CGDirectDisplayID?) -> Void)?)
         case remove(index: Int)
         case resize(id: CGDirectDisplayID, StreamingDisplayModes.Mode, completion: (Bool) -> Void)
         case rotate(id: CGDirectDisplayID, DisplayRotation, completion: (Bool) -> Void)
@@ -238,13 +238,14 @@ extension VideoManager {
     var canCreateStreamingDisplay: Bool { plannedStreamingDisplayCount < Self.maxStreamingDisplays }
 
     /// Asks for one more streaming display, in `mode`, called and known as `identity` says if
-    /// given; `completion` gets its ID once it is placed, or nil if none could be made.
+    /// given, and made main as it is placed when `main`, in the same commit rather than one
+    /// after; `completion` gets its ID once it is placed, or nil if none could be made.
     /// Additions and removals run one at a time, each once the one before has settled.
     func createStreamingDisplay(mode: StreamingDisplayModes.Mode = StreamingDisplayModes.start,
-                                identity: StreamingIdentity? = nil,
+                                identity: StreamingIdentity? = nil, main: Bool = false,
                                 completion: ((CGDirectDisplayID?) -> Void)? = nil) {
         guard canCreateStreamingDisplay else { completion?(nil); return }
-        streamingRequests.append(.add(mode, identity: identity, completion: completion))
+        streamingRequests.append(.add(mode, identity: identity, main: main, completion: completion))
         processStreamingRequests()
     }
 
@@ -312,8 +313,8 @@ extension VideoManager {
     private func processStreamingRequests() {
         while !streamingChangeInFlight, !streamingReassertInFlight, !streamingRequests.isEmpty {
             switch streamingRequests.removeFirst() {
-            case .add(let mode, let standIn, let identity, let completion):
-                addStreamingDisplay(mode, standIn: standIn, identity: identity, completion: completion)
+            case .add(let mode, let standIn, let identity, let main, let completion):
+                addStreamingDisplay(mode, standIn: standIn, identity: identity, main: main, completion: completion)
             case .remove(let index):                removeStreamingDisplay(index: index)
             case .resize(let id, let mode, let completion):
                 let rotation = streamingRotation(of: id) ?? .standard
@@ -339,7 +340,7 @@ extension VideoManager {
     /// Creates a streaming display in `mode` and places it right of the other displays. The
     /// arrangement from before the first is put back when the last is removed.
     private func addStreamingDisplay(_ mode: StreamingDisplayModes.Mode, standIn: StandIn?,
-                                     identity: StreamingIdentity?,
+                                     identity: StreamingIdentity?, main: Bool,
                                      completion: ((CGDirectDisplayID?) -> Void)?) {
         let used = Set(streamingDisplays.map(\.index))
         guard let index = (0..<Self.maxStreamingDisplays).first(where: { !used.contains($0) }) else {
@@ -396,7 +397,7 @@ extension VideoManager {
             if streamingDisplays.isEmpty { streamingArrangement = nil }
             completion?(nil)
             // The additions waiting would fail the same way.
-            for case .add(_, _, _, let waiting) in streamingRequests { waiting?(nil) }
+            for case .add(_, _, _, _, let waiting) in streamingRequests { waiting?(nil) }
             streamingRequests.removeAll(where: \.isAddition)
             return
         }
@@ -404,7 +405,7 @@ extension VideoManager {
                                                   start: mode, rotation: rotation, standsInFor: standIn?.name))
         streamingAddCompletion = completion
         streamingChangeInFlight = true
-        waitForStreamingDisplay(vd, index: index, serial: serial, before: before, attempt: 0)
+        waitForStreamingDisplay(vd, index: index, serial: serial, before: before, main: main, attempt: 0)
     }
 
     /// Removes streaming display `index`, if it is still there, and puts the others back
@@ -609,7 +610,7 @@ extension VideoManager {
     }
 
     private func waitForStreamingDisplay(_ vd: CGVirtualDisplay, index: Int, serial: UInt32,
-                                         before: DisplayArrangement, attempt: Int) {
+                                         before: DisplayArrangement, main: Bool, attempt: Int) {
         // Ended meanwhile; nothing else finishes this change.
         guard isStreamingDisplay(vd) else { return finishStreamingChange() }
         let online = DisplayArrangement.onlineDisplayIDs()
@@ -627,7 +628,7 @@ extension VideoManager {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                 guard let self else { return }
                 guard self.isStreamingDisplay(vd) else { return self.finishStreamingChange() }
-                self.placeStreamingDisplay(id, before: before)
+                self.placeStreamingDisplay(id, before: before, main: main)
             }
             return
         }
@@ -638,31 +639,17 @@ extension VideoManager {
             return finishStreamingChange()
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-            self?.waitForStreamingDisplay(vd, index: index, serial: serial, before: before, attempt: attempt + 1)
+            self?.waitForStreamingDisplay(vd, index: index, serial: serial, before: before, main: main, attempt: attempt + 1)
         }
     }
 
     /// Puts the other displays back as they were in `before`, switches the new display to
-    /// its start mode, and sets it right of the rest.
-    private func placeStreamingDisplay(_ id: CGDirectDisplayID, before: DisplayArrangement) {
-        var config: CGDisplayConfigRef?
-        guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else {
-            mergeDevices()
-            finishStreamingChange()
-            return
-        }
-        // WindowServer may have mirrored or moved the others for the new set.
-        CGConfigureDisplayMirrorOfDisplay(cfg, id, CGDirectDisplayID(0))
-        before.restore(in: cfg, excluding: [id])
-        // It can also change their resolutions.
-        before.restoreModes(in: cfg, excluding: [id])
+    /// its start mode, and sets it right of the rest; with `main`, the whole arrangement then
+    /// slides so that it is main.
+    private func placeStreamingDisplay(_ id: CGDirectDisplayID, before: DisplayArrangement, main: Bool) {
         let start = streamingDisplays.first { $0.id == id }?.start ?? StreamingDisplayModes.start
         let startMode = Self.displayMode(start, of: id)
-        if let mode = startMode {
-            CGConfigureDisplayWithDisplayMode(cfg, id, mode, nil)
-        } else {
-            sdLog.error("place: no \(start.width)×\(start.height) mode")
-        }
+        if startMode == nil { sdLog.error("place: no \(start.width)×\(start.height) mode") }
         let others = before.origins.compactMap { otherID, origin -> CGRect? in
             guard otherID != id, before.mirrorMasters[otherID] == 0 else { return nil }
             // The size it is put back to, not the one WindowServer gave it.
@@ -670,22 +657,42 @@ extension VideoManager {
             return CGRect(origin: origin, size: size ?? CGDisplayBounds(otherID).size)
         }
         let origin = Self.streamingDisplayOrigin(others: others)
-        CGConfigureDisplayOrigin(cfg, id, Int32(origin.x), Int32(origin.y))
-        let placed = before.adding(id, origin: origin, mode: startMode ?? CGDisplayCopyDisplayMode(id))
+        var placed = before.adding(id, origin: origin, mode: startMode ?? CGDisplayCopyDisplayMode(id))
+        if main {
+            placed = placed.makingMain(id)
+            // Set before the commit, or the check after it would hand main back.
+            streamingDisplayIsMainByChoice = true
+        }
+        let settle = { [weak self] in
+            // WindowServer can still change the others' resolutions for the new set.
+            self?.streamingSettle = (placed, Date().addingTimeInterval(5))
+            self?.reassertStreamingLayout()
+            self?.mergeDevices()
+            // The display that was main may be gone, and a commit that changes nothing
+            // fires no reconfiguration to check this.
+            self?.finishStreamingChange(placed: id)
+        }
+        var config: CGDisplayConfigRef?
+        guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else {
+            mergeDevices()
+            finishStreamingChange()
+            return
+        }
+        // WindowServer may have mirrored, moved or changed the resolutions of the others for the
+        // new set, or laid it out as placed already, from a layout it saved for the set.
+        let moved = placed.restore(in: cfg, excluding: [])
+        guard placed.restoreModes(in: cfg, excluding: []) || moved else {
+            // A commit that changes nothing takes 10 s to return.
+            sdLog.debug("place: already in place")
+            CGCancelDisplayConfiguration(cfg)
+            return settle()
+        }
         // For the session, not the app: when another app's own changes end, WindowServer goes
         // back to the session's layout, which would undo app-only ones.
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        DispatchQueue.global(qos: .userInitiated).async {
             let err = CGCompleteDisplayConfiguration(cfg, .forSession)
             sdLog.debug("place: CompleteDisplayConfiguration err=\(err.rawValue)")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                // WindowServer can still change the others' resolutions for the new set.
-                self?.streamingSettle = (placed, Date().addingTimeInterval(5))
-                self?.reassertStreamingLayout()
-                self?.mergeDevices()
-                // The display that was main may be gone, and a commit that changes nothing
-                // fires no reconfiguration to check this.
-                self?.finishStreamingChange(placed: id)
-            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: settle)
         }
     }
 }

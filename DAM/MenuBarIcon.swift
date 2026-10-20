@@ -50,11 +50,12 @@ enum MenuBarIcon {
     }
 
     /// A template image of the symbol with the outflow at `fraction` and the dam turned
-    /// `spin` degrees; ridges move right as `spin` grows.
-    static func image(fraction: CGFloat, spin: CGFloat = 0) -> NSImage {
+    /// `spin` degrees; ridges move right as `spin` grows. The outflow's curve near the dam
+    /// bends toward `upstream` (`fraction` if nil), so a stream whose ends disagree bulges.
+    static func image(fraction: CGFloat, spin: CGFloat = 0, upstream: CGFloat? = nil) -> NSImage {
         let image = NSImage(size: size, flipped: true) { rect in
             let scale = symbolHeight / (topHeight + barHeight + cutHeight + stroke)
-            let path = symbol(fraction: fraction, spin: spin)
+            let path = symbol(fraction: fraction, upstream: upstream ?? fraction, spin: spin)
             // The symbol is centred on the page's centre; put that on the image's.
             var transform = AffineTransform(translationByX: rect.midX, byY: rect.midY)
             transform.scale(scale)
@@ -72,11 +73,11 @@ enum MenuBarIcon {
         return image
     }
 
-    private static func symbol(fraction: CGFloat, spin: CGFloat) -> NSBezierPath {
+    private static func symbol(fraction: CGFloat, upstream: CGFloat, spin: CGFloat) -> NSBezierPath {
         let path = NSBezierPath()
         appendReservoir(to: path)
         path.appendRect(NSRect(x: barLeft, y: barY, width: barWidth, height: barHeight))
-        appendOutflow(to: path, fraction: fraction)
+        appendOutflow(to: path, fraction: fraction, upstream: upstream)
         appendRidges(to: path, spin: spin)
         return path
     }
@@ -94,10 +95,12 @@ enum MenuBarIcon {
     }
 
     /// The outflow's two sides, cut where they have dropped `cutHeight` below the dam. Open
-    /// at the bottom, so the gap between their ends shows the width.
-    private static func appendOutflow(to path: NSBezierPath, fraction: CGFloat) {
+    /// at the bottom, so the gap between their ends shows the width. The control points
+    /// take their place from `upstream` instead.
+    private static func appendOutflow(to path: NSBezierPath, fraction: CGFloat, upstream: CGFloat) {
         let bottomLeft = centreX - barWidth * fraction / 2
-        let x = { (t: CGFloat) in barLeft + t * (bottomLeft - barLeft) }
+        let upstreamLeft = centreX - barWidth * upstream / 2
+        let x = { (t: CGFloat) in barLeft + t * (upstreamLeft - barLeft) }
         let side = cut([
             NSPoint(x: barLeft, y: barBottom),
             NSPoint(x: x(outflowControls[0].across), y: barBottom + outflowControls[0].down * outflowHeight),
@@ -151,16 +154,48 @@ enum MenuBarIcon {
 }
 
 /// Shows `MenuBarIcon` on a status item button. When the connection count changes, the
-/// outflow eases to its new width while the dam turns, and the dam comes to rest with its
-/// ridges where they started.
+/// outflow flows to its new width like poured liquid while the dam turns: the stream near the
+/// dam leads on a stiff spring, its open end follows on a looser one that overshoots and
+/// wobbles before settling, and the dam comes to rest with its ridges where they started.
 final class MenuBarIconAnimator {
+    /// How long the dam turns for; the springs settle in about the same time.
     static let duration: TimeInterval = 1.5
     /// Degrees the dam turns per second of the change, rounded to whole ridge spacings.
     static let turnRate: CGFloat = 100
 
+    /// A damped spring toward a target, stepped through time.
+    private struct Spring {
+        var value: CGFloat
+        var velocity: CGFloat = 0
+        /// Seconds per swing were it undamped.
+        let response: CGFloat
+        /// Under 1 overshoots; the lower, the more it wobbles.
+        let dampingRatio: CGFloat
+
+        mutating func step(toward target: CGFloat, by seconds: CGFloat) {
+            let stiffness = pow(2 * .pi / response, 2)
+            let damping = 4 * .pi * dampingRatio / response
+            // Short steps keep it stable when a frame comes late.
+            let steps = max(1, Int((seconds * 240).rounded(.up)))
+            let dt = seconds / CGFloat(steps)
+            for _ in 0..<steps {
+                velocity += (-stiffness * (value - target) - damping * velocity) * dt
+                value += velocity * dt
+            }
+        }
+
+        func isSettled(at target: CGFloat) -> Bool {
+            abs(value - target) < 0.0005 && abs(velocity) < 0.005
+        }
+    }
+
     private weak var button: NSStatusBarButton?
     private var count: Int?
-    private var fraction = MenuBarIcon.outflowFraction(for: 0)
+    private var target = MenuBarIcon.outflowFraction(for: 0)
+    /// The stream by the dam: quick, barely overshooting.
+    private var upstream = Spring(value: MenuBarIcon.outflowFraction(for: 0), response: 0.45, dampingRatio: 0.7)
+    /// The stream's open end: lagging, and sloshing past the new width.
+    private var outflow = Spring(value: MenuBarIcon.outflowFraction(for: 0), response: 0.7, dampingRatio: 0.45)
     private var spin: CGFloat = 0
     private var timer: Timer?
 
@@ -170,42 +205,54 @@ final class MenuBarIconAnimator {
 
     /// Shows `count` connections: at once the first time or with Reduce Motion on (unless
     /// `ignoringReduceMotion`, for previews), animated otherwise. A change mid-animation
-    /// carries on from where the icon is.
+    /// carries on from where the icon is, momentum included.
     func show(count newCount: Int, ignoringReduceMotion: Bool = false) {
         let newCount = min(max(newCount, 0), MenuBarIcon.maxCount)
         guard newCount != count else { return }
         let isFirst = count == nil
         count = newCount
-        let target = MenuBarIcon.outflowFraction(for: newCount)
+        target = MenuBarIcon.outflowFraction(for: newCount)
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion && !ignoringReduceMotion
         guard !isFirst, !reduceMotion else {
             timer?.invalidate()
             timer = nil
-            fraction = target
-            spin = 0
+            settle()
             draw()
             return
         }
-        animate(to: target)
+        animate()
     }
 
-    private func animate(to target: CGFloat) {
+    private func settle() {
+        upstream.value = target
+        upstream.velocity = 0
+        outflow.value = target
+        outflow.velocity = 0
+        spin = 0
+    }
+
+    private func animate() {
         timer?.invalidate()
         let spacing = MenuBarIcon.ridgeSpacing
-        let startFraction = fraction, startSpin = spin
+        let startSpin = spin
         let turns = max(1, (CGFloat(Self.duration) * Self.turnRate / spacing).rounded())
         let endSpin = ((startSpin / spacing).rounded(.down) + turns) * spacing
         let start = ProcessInfo.processInfo.systemUptime
+        var last = start
         let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] timer in
             guard let self else { return timer.invalidate() }
-            let progress = min(1, (ProcessInfo.processInfo.systemUptime - start) / Self.duration)
+            let now = ProcessInfo.processInfo.systemUptime
+            let elapsed = CGFloat(min(now - last, 0.1))
+            last = now
+            self.upstream.step(toward: self.target, by: elapsed)
+            self.outflow.step(toward: self.target, by: elapsed)
+            let progress = min(1, (now - start) / Self.duration)
             let eased = CGFloat(1 - cos(.pi * progress)) / 2
-            self.fraction = startFraction + (target - startFraction) * eased
             self.spin = startSpin + (endSpin - startSpin) * eased
-            if progress >= 1 {
+            if progress >= 1, self.upstream.isSettled(at: self.target), self.outflow.isSettled(at: self.target) {
                 timer.invalidate()
                 self.timer = nil
-                self.spin = 0
+                self.settle()
             }
             self.draw()
         }
@@ -215,6 +262,8 @@ final class MenuBarIconAnimator {
     }
 
     private func draw() {
-        button?.image = MenuBarIcon.image(fraction: fraction, spin: spin)
+        // An overshoot past no width at all would cross the stream's sides; pinch it shut instead.
+        button?.image = MenuBarIcon.image(fraction: max(0, outflow.value), spin: spin,
+                                          upstream: max(0, upstream.value))
     }
 }
