@@ -50,4 +50,17 @@ later reuse the display; a drop while the display is being made ends it 12 s lat
 dial racing IPv6 and IPv4 opens two connections, which a receiver sorts out by its
 newcomer rule.
 
-Not yet tried: a real receiver (iPad over Wi-Fi and USB), touch on a real device, rotation.
+With the iPad (OpenDisplay iOS receiver, pv 3), 2026-10-20: over USB and Wi-Fi; touch,
+scroll and rotation work (a turn resizes the display in place). Over a dozen cable swaps
+the stream moved to USB within 5 ms of usbmuxd reporting the iPad, and back to Wi-Fi
+1.5–1.8 s after unplugging, on the one display throughout. The receiver's stats: 40–43 ms
+end to end over USB while the screen moves. On a still screen they show ~1 s, an artifact:
+the encoder (Intel, plain real-time) holds each frame until the next, so the copy that
+nudges the last frame out goes out with the next change, stamped with its old time; it is
+the picture the receiver already shows.
+
+Found with it and fixed: Bonjour lists a receiver once for each network it is on, not each
+copy with its TXT record, so it showed twice (fixed: IDs win, and are remembered by name,
+from TXT and hello). Once after unplugging, dials to the Bonjour name hung for 34 s on a
+satisfied Wi-Fi path without resolving; every other dial after a failure now goes to the
+address last reached, which hasn't been needed since.
