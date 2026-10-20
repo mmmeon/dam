@@ -711,6 +711,15 @@ final class RemoteSessionsTests: XCTestCase {
         XCTAssertNil(SessionLogLines.chromeRemoteDesktop("Channel IP for client: me@example.com/x ip='1.2.3.4'"))
     }
 
+    func testLogsCanBeMovedForTests() {
+        let defaults = UserDefaults(suiteName: "dam.tests.\(UUID().uuidString)")!
+        let standard = URL(fileURLWithPath: "/var/log/app.log")
+        XCTAssertEqual(SessionDetectors.logURL(for: "rustdesk", standard: standard, defaults: defaults), standard)
+        defaults.set(["rustdesk": "/tmp/rustdesk.log"], forKey: "SessionDetectorLogs")
+        XCTAssertEqual(SessionDetectors.logURL(for: "rustdesk", standard: standard, defaults: defaults).path, "/tmp/rustdesk.log")
+        XCTAssertEqual(SessionDetectors.logURL(for: "parsec", standard: standard, defaults: defaults), standard)
+    }
+
     func testProcessNamesAreMatchedAsTheSystemCutsThem() {
         // TeamViewer_Desktop is longer than the 16 characters kept.
         XCTAssertFalse(RunningProcesses.isRunning("TeamViewer_Desktop_not_running_here"))

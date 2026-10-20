@@ -5,7 +5,8 @@
 //  doesn't see what the remote user does. It turns each screen's gamma to black: the picture
 //  is still drawn, and captures and streams of it are untouched; only the light leaves.
 //  macOS resets gamma when the displays change, so it is set again after each change, and
-//  puts it back itself when DAM quits, however it quits.
+//  puts it back itself when DAM quits, however it quits. It can also reset it with no change
+//  reported, as after a display's mode is put back, so it is looked at every second too.
 //
 
 import CoreGraphics
@@ -22,6 +23,7 @@ final class LocalBlackout {
     private let shouldBlackOut: (CGDirectDisplayID) -> Bool
     private var registered = false
     private var reapply: DispatchWorkItem?
+    private var watch: Timer?
 
     init(shouldBlackOut: @escaping (CGDirectDisplayID) -> Bool) {
         self.shouldBlackOut = shouldBlackOut
@@ -37,12 +39,20 @@ final class LocalBlackout {
             registered = true
         }
         apply()
+        if watch == nil {
+            // In every mode, so it still looks while a menu is open.
+            let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.applyWhereLit() }
+            RunLoop.main.add(timer, forMode: .common)
+            watch = timer
+        }
     }
 
     func stop() {
         guard isOn else { return }
         isOn = false
         reapply?.cancel()
+        watch?.invalidate()
+        watch = nil
         if registered {
             CGDisplayRemoveReconfigurationCallback(Self.reconfigured, Unmanaged.passUnretained(self).toOpaque())
             registered = false
@@ -63,6 +73,25 @@ final class LocalBlackout {
             if err != .success { boLog.error("display \(id): \(err.rawValue)") }
         }
         boLog.debug("blacked out \(self.blackedOut)")
+    }
+
+    /// Blacks out again the displays whose gamma something else put back.
+    private func applyWhereLit() {
+        guard isOn else { return }
+        let lit = blackedOut.filter { !Self.isBlack($0) }
+        guard !lit.isEmpty else { return }
+        boLog.debug("lit again: \(lit)")
+        apply()
+    }
+
+    /// Whether the display's gamma is black, as `apply` leaves it.
+    static func isBlack(_ id: CGDirectDisplayID) -> Bool {
+        var red = [CGGammaValue](repeating: 0, count: 256)
+        var green = red, blue = red
+        var count: UInt32 = 0
+        guard CGGetDisplayTransferByTable(id, 256, &red, &green, &blue, &count) == .success, count > 0 else { return true }
+        let n = Int(count)
+        return (red.prefix(n) + green.prefix(n) + blue.prefix(n)).max() ?? 0 < 0.05
     }
 
     private static let reconfigured: CGDisplayReconfigurationCallBack = { _, flags, info in
