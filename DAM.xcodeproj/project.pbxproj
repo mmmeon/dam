@@ -88,6 +88,7 @@
 		DD100B0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift */; };
 		DD100B1B2F8D607C0090E7A1 /* StreamingDisplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A1B2F8D607C0090E7A1 /* StreamingDisplayTests.swift */; };
 		AB300C032F8D60790090E796 /* RemoteSessionsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB300B032F8D60790090E796 /* RemoteSessionsTests.swift */; };
+		EB94268BD6DA23691BCF4FD9 /* OpenDisplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63988274234B083F5858F28E /* OpenDisplayTests.swift */; };
 		3574EAA6216A48EEBA6BBE4A /* MoonlightPairingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9735AC4A58E6545843504CEA /* MoonlightPairingTests.swift */; };
 		CFDD9A328A7A0EA0990B70EF /* MoonlightHostTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4455386FE67430944B0A55CB /* MoonlightHostTests.swift */; };
 		7F4AAE31590ECEFCFAB54CEA /* MoonlightAudioProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFF748CCAC3EE2416A1563B4 /* MoonlightAudioProtocolTests.swift */; };
@@ -105,6 +106,9 @@
 		66F9582C81ED74C1C1531F5A /* MP4Fragmenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE0CD9E5791F871CE7094055 /* MP4Fragmenter.swift */; };
 		E6043C4BC52D9BAB1E864C77 /* WebStream.swift in Sources */ = {isa = PBXBuildFile; fileRef = A327655CF2C53297256286B4 /* WebStream.swift */; };
 		1C8B9F037DE70D78D298448D /* WebStreamAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = 372C7B8E893CD1AC0E6E4C5B /* WebStreamAccess.swift */; };
+		1F1E14BD6C3DA11EBB22BF6F /* OpenDisplaySender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17FA4882FAC63BD4612F54C0 /* OpenDisplaySender.swift */; };
+		052EED12F9424D6C55EB5841 /* OpenDisplayTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6300124031447B685BFFAA17 /* OpenDisplayTransport.swift */; };
+		9B6B561047451DD75A09A753 /* OpenDisplayProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = F50EE8E2FE70AB3F9AFC37A0 /* OpenDisplayProtocol.swift */; };
 		3AFBEAD2E1BBF03AFA1A8BEC /* MP4FragmenterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BA07475618CF8DB04DE3FB9 /* MP4FragmenterTests.swift */; };
 		F6E46A746FC7A24D2BD7EE7D /* WebStreamTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2056DD5F10F1AC3A231B9ACB /* WebStreamTests.swift */; };
 		36880DC40C690B498C12EE09 /* WebStreamAccessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93900D1C9CE4CC827B6B525C /* WebStreamAccessTests.swift */; };
@@ -205,6 +209,7 @@
 		DD100A0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayNicknameTests.swift; sourceTree = "<group>"; };
 		DD100A1B2F8D607C0090E7A1 /* StreamingDisplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamingDisplayTests.swift; sourceTree = "<group>"; };
 		AB300B032F8D60790090E796 /* RemoteSessionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteSessionsTests.swift; sourceTree = "<group>"; };
+		63988274234B083F5858F28E /* OpenDisplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenDisplayTests.swift; sourceTree = "<group>"; };
 		9735AC4A58E6545843504CEA /* MoonlightPairingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightPairingTests.swift; sourceTree = "<group>"; };
 		4455386FE67430944B0A55CB /* MoonlightHostTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightHostTests.swift; sourceTree = "<group>"; };
 		CFF748CCAC3EE2416A1563B4 /* MoonlightAudioProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightAudioProtocolTests.swift; sourceTree = "<group>"; };
@@ -222,6 +227,9 @@
 		EE0CD9E5791F871CE7094055 /* MP4Fragmenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MP4Fragmenter.swift; sourceTree = "<group>"; };
 		A327655CF2C53297256286B4 /* WebStream.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebStream.swift; sourceTree = "<group>"; };
 		372C7B8E893CD1AC0E6E4C5B /* WebStreamAccess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebStreamAccess.swift; sourceTree = "<group>"; };
+		17FA4882FAC63BD4612F54C0 /* OpenDisplaySender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenDisplaySender.swift; sourceTree = "<group>"; };
+		6300124031447B685BFFAA17 /* OpenDisplayTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenDisplayTransport.swift; sourceTree = "<group>"; };
+		F50EE8E2FE70AB3F9AFC37A0 /* OpenDisplayProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenDisplayProtocol.swift; sourceTree = "<group>"; };
 		3BA07475618CF8DB04DE3FB9 /* MP4FragmenterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MP4FragmenterTests.swift; sourceTree = "<group>"; };
 		2056DD5F10F1AC3A231B9ACB /* WebStreamTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebStreamTests.swift; sourceTree = "<group>"; };
 		93900D1C9CE4CC827B6B525C /* WebStreamAccessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebStreamAccessTests.swift; sourceTree = "<group>"; };
@@ -333,6 +341,9 @@
 				A1159B5C56E5AEA19A1BF950 /* H264OneReference.swift */,
 				A327655CF2C53297256286B4 /* WebStream.swift */,
 				372C7B8E893CD1AC0E6E4C5B /* WebStreamAccess.swift */,
+				17FA4882FAC63BD4612F54C0 /* OpenDisplaySender.swift */,
+				6300124031447B685BFFAA17 /* OpenDisplayTransport.swift */,
+				F50EE8E2FE70AB3F9AFC37A0 /* OpenDisplayProtocol.swift */,
 				EE0CD9E5791F871CE7094055 /* MP4Fragmenter.swift */,
 				CC000B012F8D60780090E796 /* HUD.swift */,
 				EE200A012F8D60780090E796 /* MenuBarIcon.swift */,
@@ -378,6 +389,7 @@
 				DD100A0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift */,
 				DD100A1B2F8D607C0090E7A1 /* StreamingDisplayTests.swift */,
 				AB300B032F8D60790090E796 /* RemoteSessionsTests.swift */,
+				63988274234B083F5858F28E /* OpenDisplayTests.swift */,
 				9735AC4A58E6545843504CEA /* MoonlightPairingTests.swift */,
 				4455386FE67430944B0A55CB /* MoonlightHostTests.swift */,
 				CFF748CCAC3EE2416A1563B4 /* MoonlightAudioProtocolTests.swift */,
@@ -573,6 +585,9 @@
 				2C9CE688FB1E9FA0E028656C /* H264OneReference.swift in Sources */,
 				E6043C4BC52D9BAB1E864C77 /* WebStream.swift in Sources */,
 				1C8B9F037DE70D78D298448D /* WebStreamAccess.swift in Sources */,
+				1F1E14BD6C3DA11EBB22BF6F /* OpenDisplaySender.swift in Sources */,
+				052EED12F9424D6C55EB5841 /* OpenDisplayTransport.swift in Sources */,
+				9B6B561047451DD75A09A753 /* OpenDisplayProtocol.swift in Sources */,
 				66F9582C81ED74C1C1531F5A /* MP4Fragmenter.swift in Sources */,
 				CC000C012F8D60780090E796 /* HUD.swift in Sources */,
 				EE200B012F8D60780090E796 /* MenuBarIcon.swift in Sources */,
@@ -607,6 +622,7 @@
 				DD100B0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift in Sources */,
 				DD100B1B2F8D607C0090E7A1 /* StreamingDisplayTests.swift in Sources */,
 				AB300C032F8D60790090E796 /* RemoteSessionsTests.swift in Sources */,
+				EB94268BD6DA23691BCF4FD9 /* OpenDisplayTests.swift in Sources */,
 				3574EAA6216A48EEBA6BBE4A /* MoonlightPairingTests.swift in Sources */,
 				CFDD9A328A7A0EA0990B70EF /* MoonlightHostTests.swift in Sources */,
 				7F4AAE31590ECEFCFAB54CEA /* MoonlightAudioProtocolTests.swift in Sources */,

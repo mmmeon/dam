@@ -21,6 +21,7 @@ final class SettingsWindowController: NSWindowController {
     private let moonlightHost: MoonlightHost
     private let sessionCoordinator: RemoteSessionCoordinator?
     private let webStream: WebStreamServer
+    private let openDisplay: OpenDisplaySender?
 
     var onSave: ((HotkeyPreference) -> Void)?
     var onSaveAirPlayConnect: ((HotkeyPreference) -> Void)?
@@ -55,6 +56,10 @@ final class SettingsWindowController: NSWindowController {
     /// Rebuilt when the browser stream starts or stops.
     private lazy var browserContent: NSView = buildBrowserTab()
     private var browserShown = BrowserState(server: nil)
+    /// Rebuilt when the receivers found or their sessions change.
+    private lazy var openDisplayContent: NSView = buildOpenDisplayTab()
+    private var openDisplayShown: [OpenDisplaySender.Receiver] = []
+    private var openDisplayRunning = false
     /// The Streaming tab, holding the Moonlight, Browser Stream and Remote Sessions pages.
     private lazy var streamingContent = StreamingTabView(titles: TabID.streamingPages.map(Self.title)) {
         [weak self] index in self?.selectTab(TabID.streamingPages[index])
@@ -80,11 +85,12 @@ final class SettingsWindowController: NSWindowController {
         static let moonlight = NSToolbarItem.Identifier("\(AppIdentity.shortID).settings.moonlight")
         static let sessions = NSToolbarItem.Identifier("\(AppIdentity.shortID).settings.sessions")
         static let browser = NSToolbarItem.Identifier("\(AppIdentity.shortID).settings.browser")
+        static let opendisplay = NSToolbarItem.Identifier("\(AppIdentity.shortID).settings.opendisplay")
         static let streaming = NSToolbarItem.Identifier("\(AppIdentity.shortID).settings.streaming")
         /// The toolbar's tabs.
         static let all: [NSToolbarItem.Identifier] = [general, hotkeys, devices, virtual, streaming]
         /// The Streaming tab's pages, in the order its bar shows them.
-        static let streamingPages: [NSToolbarItem.Identifier] = [moonlight, browser, sessions]
+        static let streamingPages: [NSToolbarItem.Identifier] = [moonlight, browser, opendisplay, sessions]
     }
 
     // MARK: - Init
@@ -101,6 +107,7 @@ final class SettingsWindowController: NSWindowController {
          sidecarManager: SidecarManager,
          moonlightHost: MoonlightHost,
          webStream: WebStreamServer,
+         openDisplay: OpenDisplaySender? = nil,
          sessionCoordinator: RemoteSessionCoordinator? = nil) {
         recorder              = KeyRecorderView(preference: current)
         recorderAirPlay       = KeyRecorderView(preference: currentAirPlayConnect)
@@ -115,6 +122,7 @@ final class SettingsWindowController: NSWindowController {
         self.moonlightHost    = moonlightHost
         self.sessionCoordinator = sessionCoordinator
         self.webStream        = webStream
+        self.openDisplay      = openDisplay
 
         let win = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 420, height: 280),
@@ -158,6 +166,7 @@ final class SettingsWindowController: NSWindowController {
         case TabID.moonlight: return "Moonlight"
         case TabID.sessions:  return "Remote Sessions"
         case TabID.browser:   return "Browser Stream"
+        case TabID.opendisplay: return "OpenDisplay"
         case TabID.streaming: return "Streaming"
         default:              return "Hotkeys"
         }
@@ -174,6 +183,7 @@ final class SettingsWindowController: NSWindowController {
         case TabID.moonlight: page = moonlightContent
         case TabID.sessions:  page = sessionsContent
         case TabID.browser:   page = browserContent
+        case TabID.opendisplay: page = openDisplayContent
         default:              page = hotkeyContent
         }
         var tab = id, content = page, above: CGFloat = 0
@@ -670,6 +680,62 @@ final class SettingsWindowController: NSWindowController {
             ("Profile:", [profile]),
             ("HTTPS:", https),
         ], leftAligned: true)
+    }
+
+    private func buildOpenDisplayTab() -> NSView {
+        guard let sender = openDisplay else { return formTab([]) }
+        openDisplayShown = sender.receivers
+        openDisplayRunning = sender.isRunning
+        let send = checkbox(title: "Send to OpenDisplay receivers", isOn: OpenDisplaySender.isEnabled,
+                            help: "Streams a display of its own to each receiver turned on below: the OpenDisplay " +
+                                  "app on an iPhone, iPad or Mac, over Wi-Fi or a USB cable. The display is made " +
+                                  "at the size the receiver asks for before any video goes out.",
+                            action: { [weak self, weak sender] on in
+                                OpenDisplaySender.isEnabled = on
+                                if on { sender?.start() } else { sender?.stop() }
+                                self?.openDisplayDidChange()
+                            })
+        let rows: [[NSView]] = openDisplayShown.map { receiver in
+            let toggle = ClosureButton(title: receiver.name) { [weak sender] on in
+                sender?.setOn(on, key: receiver.key)
+            }
+            toggle.setButtonType(.switch)
+            toggle.state = receiver.isOn ? .on : .off
+            toggle.toolTip = receiver.key.hasPrefix("usb:") ? "On a cable; its ID comes with its first connection."
+                                                            : "Receiver ID \(receiver.key)"
+            let via = placeholderLabel(receiver.transports.map(\.rawValue).joined(separator: ", "))
+            let status = placeholderLabel(receiver.status)
+            var row: [NSView] = [toggle, via, status]
+            if receiver.transports.isEmpty {
+                let forget = ClosureButton(title: "Forget") { [weak sender] _ in sender?.forget(key: receiver.key) }
+                forget.toolTip = "Takes \(receiver.name) off the list until it is found again."
+                row.append(small(forget))
+            } else {
+                row.append(NSView())
+            }
+            return row
+        }
+        let grid = BaselineRowGridView(views: rows)
+        grid.rowSpacing    = 6
+        grid.columnSpacing = 8
+        grid.rowAlignment  = .firstBaseline
+        let receivers: NSView = rows.isEmpty
+            ? placeholderLabel(sender.isRunning ? "None found. Open OpenDisplay on the device." : "Turn sending on to look for them.")
+            : grid
+        return formTab([
+            ("Sending:", [send]),
+            ("Receivers:", [receivers,
+                            smallNote("A receiver takes the newest sender, so DAM dials only those turned on. " +
+                                      "Turning one on takes it from the OpenDisplay Mac app if that is streaming to it.")]),
+        ], leftAligned: true)
+    }
+
+    /// Rebuilds the OpenDisplay page if what it shows of the receivers has changed.
+    func openDisplayDidChange() {
+        guard let sender = openDisplay,
+              sender.receivers != openDisplayShown || sender.isRunning != openDisplayRunning else { return }
+        openDisplayContent = buildOpenDisplayTab()
+        if selectedTab == TabID.opendisplay { selectTab(TabID.opendisplay) }
     }
 
     private func small(_ button: NSButton) -> NSButton {
