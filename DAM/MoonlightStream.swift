@@ -510,6 +510,8 @@ final class MoonlightControlServer {
     var onKeyFrameRequest: ((UInt64) -> Void)?
     /// Called on the control thread when Moonlight reports a frame that needed parity.
     var onFrameStatus: ((MoonlightFrameFecStatus) -> Void)?
+    /// Called on the control thread with each input message's payload (see MoonlightInput).
+    var onInput: ((Data) -> Void)?
     /// Called on the control thread when Moonlight connects, and when it leaves.
     var onConnect: (() -> Void)?
     var onDisconnect: (() -> Void)?
@@ -577,6 +579,8 @@ final class MoonlightControlServer {
             } else if message.type == MoonlightFrameFecStatus.messageType,
                       let status = MoonlightFrameFecStatus(payload: message.payload) {
                 onFrameStatus?(status)
+            } else if message.type == MoonlightInput.messageType {
+                onInput?(message.payload)
             }
         case ENET_EVENT_TYPE_DISCONNECT:
             guard event.peer == peer else { return }
@@ -688,12 +692,14 @@ final class MoonlightStream {
     private let video: MoonlightVideoSender
     private let control: MoonlightControlServer
     private let audio: MoonlightAudioSender
+    private let input: MoonlightInputInjector
     private let lock = NSLock()
     private var encoder: MoonlightVideoEncoder?
     private var capture: SharedScreenCapture.Subscription?
     private var lastFrame: (buffer: CVPixelBuffer, time: CMTime, at: UInt64)?
     private var repeater: DispatchSourceTimer?
     private var ended = false
+    private var inputAllowed: Bool
     private var keyFrames = MoonlightKeyFrameRequests()
     /// The bitrate, set from the client's losses; nil when `adaptsBitrate` is off, for the
     /// client's bitrate throughout.
@@ -708,9 +714,11 @@ final class MoonlightStream {
     private var statsTimer: DispatchSourceTimer?
 
     init(config: MoonlightStreamConfig, displayID: CGDirectDisplayID, key: Data, keyID: UInt32,
-         pingPayload: String, connectData: UInt32, ports: Ports = Ports(slot: 0)) throws {
+         pingPayload: String, connectData: UInt32, ports: Ports = Ports(slot: 0), allowsInput: Bool = true) throws {
         self.config = config
         self.displayID = displayID
+        inputAllowed = allowsInput
+        input = MoonlightInputInjector(displayID: displayID, streamWidth: config.width, streamHeight: config.height)
         video = try MoonlightVideoSender(port: ports.video, pingPayload: pingPayload, packetSize: config.packetSize,
                                          minimumParity: config.minimumParity, bitrateKbps: config.bitrateKbps,
                                          key: config.videoEncrypted ? key : nil)
@@ -755,6 +763,10 @@ final class MoonlightStream {
         }
         statsTimer = stats
         stats.resume()
+        control.onInput = { [weak self] payload in
+            guard let self, self.allowsInput else { return }
+            self.input.handle(MoonlightInput.parse(payload))
+        }
         control.onDisconnect = { [weak self] in self?.end("Moonlight disconnected") }
         video.onFirstPing = { [weak self] in self?.startPicture() }
         activity = ProcessInfo.processInfo.beginActivity(
@@ -770,6 +782,18 @@ final class MoonlightStream {
         msLog.debug("stream \(self.config.width)×\(self.config.height)@\(self.config.fps) from display \(self.displayID), video \(self.config.videoEncrypted ? "encrypted" : "plain", privacy: .public)")
     }
 
+    /// Whether the client's mouse, keyboard and text reach the Mac; turned off, whatever
+    /// it holds down is let go.
+    var allowsInput: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return inputAllowed }
+        set {
+            lock.lock()
+            inputAllowed = newValue
+            lock.unlock()
+            if !newValue { input.releaseAll() }
+        }
+    }
+
     /// Stops everything; Moonlight is told the host ended the stream.
     func stop() {
         lock.lock()
@@ -780,6 +804,7 @@ final class MoonlightStream {
         repeater = nil
         lock.unlock()
         capture?.cancel()
+        input.close()
         control.stop()
         video.stop()
         audio.stop()

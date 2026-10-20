@@ -1,7 +1,7 @@
 # Moonlight and web streaming — implementation
 
-*As of 2026-10-14 (merged to `main` on 2026-10-13 in 3aa3588). H.264 only, no input
-control yet.*
+*As of 2026-10-14 (merged to `main` on 2026-10-13 in 3aa3588). H.264 only. Mouse,
+keyboard and text input since 2026-10-20; no controllers, touch or pen.*
 
 ## Summary
 
@@ -113,8 +113,38 @@ once (`MoonlightHost.maxSessions`). A fifth gets a 503.
 - ANNOUNCE is parsed for size, fps, packet size, bitrate, minimum FEC and audio
   settings. It is refused if the client asks for another codec, or for encrypted video
   that wasn't offered.
-- Control runs on UDP 47999 over vendored ENet 1.3.18, with AES-128-GCM messages. Only
-  keyframe requests, reference-frame invalidation and termination are handled.
+- Control runs on UDP 47999 over vendored ENet 1.3.18, with AES-128-GCM messages.
+  Keyframe requests, reference-frame invalidation, frame FEC status, input and
+  termination are handled; the rest (pings, loss stats) are dropped.
+
+### Input
+
+Moonlight sends input as control message 0x0206 (`MoonlightInput.swift`). With the
+whole control stream encrypted, the packets inside are plain, as moonlight-common-c
+sends them to a Sunshine host (DAM reports 7.1.431.-1). `MoonlightInputInjector` posts
+them as HID events, one injector per stream:
+
+- **Pointer:** absolute moves map from the client's picture onto the streamed display's
+  points, undoing a turned display's rotation and allowing for bars around a display of
+  another shape. Relative moves (Moonlight's captured mouse) move from where the pointer
+  is, kept on that display. Buttons carry a click count, and moves while a button is held
+  are drags.
+- **Scrolling:** whole wheel notches scroll a line each; finer amounts, from trackpads and
+  touch screens, scroll by pixels. Horizontal scrolling is a Sunshine extension clients
+  send DAM.
+- **Keys:** Windows virtual-key codes map to the Mac's at a US keyboard's places. Ctrl is
+  Control, Alt is Option and the Windows key is Command, so a PC's Ctrl+C is not ⌘C.
+  Text from a phone's keyboard is typed as it is, whatever the layout.
+- **Permission:** posting events needs Accessibility access. Without it the input is
+  dropped and the stream goes on as it would without input; streams don't ask for it, the
+  Allow Input setting does when turned on. Input starts within a second of access being
+  given. Each paired device has that setting, on by default, which takes effect at once.
+  Events are posted on a queue of their own, so they never hold up the control stream. Whatever a stream holds down is let
+  go when it ends or input is turned off.
+- **Not handled:** controllers (macOS has no way for an app to make a virtual gamepad
+  without a driver Apple must entitle), and touch and pen (DESCRIBE's feature flags stay
+  0, so clients send taps as mouse events). Every client streaming a display may move its
+  pointer; there is no arbitration.
 
 ### Video
 

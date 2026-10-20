@@ -25,18 +25,21 @@ struct MoonlightClient: Codable, Equatable {
     let paired: Date
     /// Whether its streams use low-latency rate control; see MoonlightVideoEncoder.
     var lowLatency = true
+    /// Whether its mouse, keyboard and text reach the Mac; see MoonlightInputInjector.
+    var allowsInput = true
 
-    init(name: String, certificate: Data, paired: Date, lowLatency: Bool = true) {
+    init(name: String, certificate: Data, paired: Date, lowLatency: Bool = true, allowsInput: Bool = true) {
         self.name = name
         self.certificate = certificate
         self.paired = paired
         self.lowLatency = lowLatency
+        self.allowsInput = allowsInput
     }
 
     // Saved under a key of its own since low-latency became the default, so that devices
     // saved with the old default (off) get it too; devices saved before either have none.
     private enum CodingKeys: String, CodingKey {
-        case name, certificate, paired
+        case name, certificate, paired, allowsInput
         case lowLatency = "lowLatencyEncoding"
     }
 
@@ -46,6 +49,7 @@ struct MoonlightClient: Codable, Equatable {
         certificate = try container.decode(Data.self, forKey: .certificate)
         paired = try container.decode(Date.self, forKey: .paired)
         lowLatency = try container.decodeIfPresent(Bool.self, forKey: .lowLatency) ?? true
+        allowsInput = try container.decodeIfPresent(Bool.self, forKey: .allowsInput) ?? true
     }
 }
 
@@ -304,6 +308,15 @@ final class MoonlightHost {
     func setLowLatency(_ lowLatency: Bool, for client: MoonlightClient) {
         guard let index = clients.firstIndex(where: { $0.certificate == client.certificate }) else { return }
         clients[index].lowLatency = lowLatency
+        saveClients()
+        onChange?()
+    }
+
+    /// Sets whether `client`'s mouse, keyboard and text reach the Mac, its stream's at once.
+    func setAllowsInput(_ allowsInput: Bool, for client: MoonlightClient) {
+        guard let index = clients.firstIndex(where: { $0.certificate == client.certificate }) else { return }
+        clients[index].allowsInput = allowsInput
+        session(for: client.certificate)?.stream?.allowsInput = allowsInput
         saveClients()
         onChange?()
     }
@@ -573,7 +586,8 @@ final class MoonlightHost {
         do {
             let stream = try MoonlightStream(config: config, displayID: launch.displayID, key: launch.key,
                                              keyID: launch.keyID, pingPayload: launch.pingPayload,
-                                             connectData: launch.connectData, ports: launch.ports)
+                                             connectData: launch.connectData, ports: launch.ports,
+                                             allowsInput: clients.first { $0.certificate == session.certificate }?.allowsInput ?? true)
             stream.onEnd = { [weak self, weak session, weak stream] reason in
                 guard let self, let session, let stream, session.stream === stream else { return }
                 session.stream = nil

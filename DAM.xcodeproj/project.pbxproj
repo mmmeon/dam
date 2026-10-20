@@ -58,6 +58,8 @@
 		02A99799EC392553BDFAB04C /* MoonlightHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = C68B3D68AC12D5598EE8B8E9 /* MoonlightHost.swift */; };
 		68BD7D187AA0EF5CAE70F117 /* MoonlightAudioEncoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB5FF30512E697DC9B7662D8 /* MoonlightAudioEncoder.swift */; };
 		D26BBD89F3A1C3D7C03604CF /* MoonlightFEC.swift in Sources */ = {isa = PBXBuildFile; fileRef = 784629ADB6669294FEA5ADF1 /* MoonlightFEC.swift */; };
+		5B08C25F3A637C3D08E66D3E /* MoonlightInputInjector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 692FEFC74A921580B3C843E6 /* MoonlightInputInjector.swift */; };
+		A232975BE234A7FDC7540752 /* MoonlightInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F92A09AF9CB050220424D6C /* MoonlightInput.swift */; };
 		7E7DDBC779EC68B41D7D10EF /* MoonlightRTSP.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFC8C61841BBB205D3EA9391 /* MoonlightRTSP.swift */; };
 		624C00ADF377331C64CA5675 /* MoonlightStream.swift in Sources */ = {isa = PBXBuildFile; fileRef = F773308ADEA915FD2424ABA0 /* MoonlightStream.swift */; };
 		292B82ED857C094FE67B1321 /* MoonlightProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86EAA97394CE979125862EBE /* MoonlightProtocol.swift */; };
@@ -86,6 +88,7 @@
 		7F4AAE31590ECEFCFAB54CEA /* MoonlightAudioProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFF748CCAC3EE2416A1563B4 /* MoonlightAudioProtocolTests.swift */; };
 		5B357A9B3B762368E74DD52E /* MoonlightAudioEncoderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52D72CB2538DBEDDEF7AF121 /* MoonlightAudioEncoderTests.swift */; };
 		AB5D97B89462D5963F680736 /* MoonlightFECTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6E199A368AAB648D2E6834F /* MoonlightFECTests.swift */; };
+		DD605817AFD89CB1169D7DD8 /* MoonlightInputTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07C9DEB005D528DA3ED2076F /* MoonlightInputTests.swift */; };
 		7DF2AC72D7898D5D7743470D /* MoonlightRTSPTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 099344138B995E7D8BA5D18F /* MoonlightRTSPTests.swift */; };
 		358CF5FF29CD6C1A162D1005 /* MoonlightProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9CBD2E4642EC3C66CD4EA92 /* MoonlightProtocolTests.swift */; };
 		DAB2123AFCAFA563C55F10EA /* MoonlightScreenCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 257CBE83156D2C54B408C340 /* MoonlightScreenCaptureTests.swift */; };
@@ -167,6 +170,8 @@
 		C68B3D68AC12D5598EE8B8E9 /* MoonlightHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightHost.swift; sourceTree = "<group>"; };
 		EB5FF30512E697DC9B7662D8 /* MoonlightAudioEncoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightAudioEncoder.swift; sourceTree = "<group>"; };
 		784629ADB6669294FEA5ADF1 /* MoonlightFEC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightFEC.swift; sourceTree = "<group>"; };
+		692FEFC74A921580B3C843E6 /* MoonlightInputInjector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightInputInjector.swift; sourceTree = "<group>"; };
+		7F92A09AF9CB050220424D6C /* MoonlightInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightInput.swift; sourceTree = "<group>"; };
 		BFC8C61841BBB205D3EA9391 /* MoonlightRTSP.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightRTSP.swift; sourceTree = "<group>"; };
 		F773308ADEA915FD2424ABA0 /* MoonlightStream.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightStream.swift; sourceTree = "<group>"; };
 		86EAA97394CE979125862EBE /* MoonlightProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightProtocol.swift; sourceTree = "<group>"; };
@@ -195,6 +200,7 @@
 		CFF748CCAC3EE2416A1563B4 /* MoonlightAudioProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightAudioProtocolTests.swift; sourceTree = "<group>"; };
 		52D72CB2538DBEDDEF7AF121 /* MoonlightAudioEncoderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightAudioEncoderTests.swift; sourceTree = "<group>"; };
 		A6E199A368AAB648D2E6834F /* MoonlightFECTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightFECTests.swift; sourceTree = "<group>"; };
+		07C9DEB005D528DA3ED2076F /* MoonlightInputTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightInputTests.swift; sourceTree = "<group>"; };
 		099344138B995E7D8BA5D18F /* MoonlightRTSPTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightRTSPTests.swift; sourceTree = "<group>"; };
 		F9CBD2E4642EC3C66CD4EA92 /* MoonlightProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightProtocolTests.swift; sourceTree = "<group>"; };
 		257CBE83156D2C54B408C340 /* MoonlightScreenCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightScreenCaptureTests.swift; sourceTree = "<group>"; };
@@ -303,6 +309,8 @@
 				C68B3D68AC12D5598EE8B8E9 /* MoonlightHost.swift */,
 				EB5FF30512E697DC9B7662D8 /* MoonlightAudioEncoder.swift */,
 				784629ADB6669294FEA5ADF1 /* MoonlightFEC.swift */,
+				692FEFC74A921580B3C843E6 /* MoonlightInputInjector.swift */,
+				7F92A09AF9CB050220424D6C /* MoonlightInput.swift */,
 				BFC8C61841BBB205D3EA9391 /* MoonlightRTSP.swift */,
 				F773308ADEA915FD2424ABA0 /* MoonlightStream.swift */,
 				86EAA97394CE979125862EBE /* MoonlightProtocol.swift */,
@@ -360,6 +368,7 @@
 				CFF748CCAC3EE2416A1563B4 /* MoonlightAudioProtocolTests.swift */,
 				52D72CB2538DBEDDEF7AF121 /* MoonlightAudioEncoderTests.swift */,
 				A6E199A368AAB648D2E6834F /* MoonlightFECTests.swift */,
+				07C9DEB005D528DA3ED2076F /* MoonlightInputTests.swift */,
 				099344138B995E7D8BA5D18F /* MoonlightRTSPTests.swift */,
 				F9CBD2E4642EC3C66CD4EA92 /* MoonlightProtocolTests.swift */,
 				257CBE83156D2C54B408C340 /* MoonlightScreenCaptureTests.swift */,
@@ -535,6 +544,8 @@
 				02A99799EC392553BDFAB04C /* MoonlightHost.swift in Sources */,
 				68BD7D187AA0EF5CAE70F117 /* MoonlightAudioEncoder.swift in Sources */,
 				D26BBD89F3A1C3D7C03604CF /* MoonlightFEC.swift in Sources */,
+				5B08C25F3A637C3D08E66D3E /* MoonlightInputInjector.swift in Sources */,
+				A232975BE234A7FDC7540752 /* MoonlightInput.swift in Sources */,
 				7E7DDBC779EC68B41D7D10EF /* MoonlightRTSP.swift in Sources */,
 				624C00ADF377331C64CA5675 /* MoonlightStream.swift in Sources */,
 				292B82ED857C094FE67B1321 /* MoonlightProtocol.swift in Sources */,
@@ -581,6 +592,7 @@
 				7F4AAE31590ECEFCFAB54CEA /* MoonlightAudioProtocolTests.swift in Sources */,
 				5B357A9B3B762368E74DD52E /* MoonlightAudioEncoderTests.swift in Sources */,
 				AB5D97B89462D5963F680736 /* MoonlightFECTests.swift in Sources */,
+				DD605817AFD89CB1169D7DD8 /* MoonlightInputTests.swift in Sources */,
 				7DF2AC72D7898D5D7743470D /* MoonlightRTSPTests.swift in Sources */,
 				358CF5FF29CD6C1A162D1005 /* MoonlightProtocolTests.swift in Sources */,
 				DAB2123AFCAFA563C55F10EA /* MoonlightScreenCaptureTests.swift in Sources */,

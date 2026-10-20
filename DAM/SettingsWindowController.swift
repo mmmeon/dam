@@ -456,6 +456,14 @@ final class SettingsWindowController: NSWindowController {
                                       help: "Sends each frame the moment it is encoded, about a frame " +
                                             "sooner. Takes effect from the next stream.",
                                       action: { [weak host] in host?.setLowLatency($0, for: client) })
+            let input = checkbox(title: "Allow input", isOn: client.allowsInput,
+                                 help: "Lets the device use the Mac's pointer and keyboard on the display it " +
+                                       "streams. \(AppIdentity.name) also needs Accessibility access for it. " +
+                                       "Takes effect at once.",
+                                 action: { [weak host] allows in
+                                     host?.setAllowsInput(allows, for: client)
+                                     if allows { _ = VideoManager.hasAccessibilityAccess(prompting: true) }
+                                 })
             let forget = ClosureButton(title: "Forget") { [weak self] _ in self?.onForgetMoonlightClient?(client) }
             forget.bezelStyle  = .rounded
             forget.controlSize = .small
@@ -463,7 +471,7 @@ final class SettingsWindowController: NSWindowController {
             forget.toolTip     = "Unpairs \(client.name): it has to pair again to connect."
             let name = rowLabel(client.name)
             name.toolTip = "Paired \(client.paired.formatted(date: .abbreviated, time: .shortened))"
-            return [name, lowLatency, forget]
+            return [name, lowLatency, input, forget]
         }
         // A grid, so each device's controls line up whatever the length of its name.
         let deviceGrid = BaselineRowGridView(views: devices)

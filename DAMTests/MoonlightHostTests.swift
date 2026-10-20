@@ -212,6 +212,26 @@ final class MoonlightHostTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode([MoonlightClient].self, from: saved).map(\.lowLatency), [false])
     }
 
+    func testInputIsAllowedPerDeviceAndKept() throws {
+        host.requestPIN = { _, answer in answer("1234") }
+        startHost()
+        let client = try Client.make()
+        XCTAssertTrue(try pair(client, pin: "1234"))
+        XCTAssertTrue(try XCTUnwrap(host.clients.first).allowsInput)
+        host.setAllowsInput(false, for: try XCTUnwrap(host.clients.first))
+        XCTAssertFalse(try XCTUnwrap(host.clients.first).allowsInput)
+        let saved = try Data(contentsOf: directory.appendingPathComponent("paired-clients.json"))
+        XCTAssertEqual(try JSONDecoder().decode([MoonlightClient].self, from: saved).map(\.allowsInput), [false])
+    }
+
+    func testDevicesSavedBeforeInputAllowItOn() throws {
+        let saved = try JSONEncoder().encode([MoonlightClient(name: "10.0.0.2", certificate: Data([1]), paired: Date())])
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: saved) as? [[String: Any]])
+        object[0].removeValue(forKey: "allowsInput")
+        let clients = try JSONDecoder().decode([MoonlightClient].self, from: JSONSerialization.data(withJSONObject: object))
+        XCTAssertEqual(clients.map(\.allowsInput), [true])
+    }
+
     func testDevicesSavedBeforeLowLatencyWasTheDefaultHaveItOn() throws {
         let saved = try JSONEncoder().encode([MoonlightClient(name: "10.0.0.2", certificate: Data([1]), paired: Date())])
         var object = try XCTUnwrap(JSONSerialization.jsonObject(with: saved) as? [[String: Any]])

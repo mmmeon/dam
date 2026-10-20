@@ -145,8 +145,8 @@ and not link-local; USB links (`docs/usb.md`) count as local.
    current size instead of resizing it (`MoonlightHost.swift:497–507`).
 7. **Status.** The menu and Settings show each client streaming, by device name, with a
    way to end one.
-8. **Input.** Every client's input goes to the Mac (when DAM handles input); no
-   arbitration at first.
+8. **Input.** Every client's input goes to the Mac, unless its Allow Input setting is
+   off; no arbitration (see moonlight.md, Input).
 
 ### Cost of each extra client
 
