@@ -114,7 +114,7 @@ The same requests work as URLs, for example
 
 | App | Signal | Seen working |
 |---|---|---|
-| RustDesk | `#N Connection opened from IP:port.` / `#N Connection closed` in `~/Library/Logs/RustDesk/RustDesk_rCURRENT.log` | Lines from real sessions parsed; a live session is still to be tried |
+| RustDesk | `#N Connection opened from IP:port.` / `#N Connection closed` in `~/Library/Logs/RustDesk/RustDesk_rCURRENT.log` | Seen live 2026-10-19 and 2026-10-20 |
 | Parsec | `user#id connected.` / `disconnected.` in `~/.parsec/log.txt` | Yes, 2026-10-19: display made 2 s after `connected.`, removed in the same ms as `disconnected.` |
 | Screen Sharing | `screensharingd` running; it runs only while someone is connected. The session ends 5 s after it exits. | No (Screen Sharing is off here) |
 | Chrome Remote Desktop | `Client connected:` / `Client disconnected:` in `/var/log/org.chromium.chromoting.log` | No (not installed) |
@@ -131,6 +131,11 @@ root's processes (`screensharingd`), and names are cut to 16 characters.
 - **Main or mirror placement:** a streaming display DAM has just placed is held in place
   for 5 s. Making it main or mirrored inside that time now updates the layout being held,
   so the hold no longer undoes it.
+- **RustDesk** (1.5.0) streams display 0, the main one, from the connect (`#displays=2,
+  current=0`), so its profile defaults to Main as Parsec's does; the client can still switch
+  displays in its toolbar. On 2026-10-20 RustDesk started its server again mid-session (a new
+  log file, beginning `try start server`) without logging the open connection's close, so the
+  session outlived the disconnect. That line, or RustDesk quitting, now ends every connection.
 - **Parsec** streams the main display, and follows it when another display is made main
   during the session. Extending leaves the client on the Mac's own screen, so Parsec's
   profile defaults to Main. On this Intel Mac, Parsec's hardware H.265 encoder fails to start

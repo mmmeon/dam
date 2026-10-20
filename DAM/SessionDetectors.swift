@@ -51,6 +51,10 @@ enum SessionLogLines {
         return nil
     }
 
+    /// RustDesk starting its server afresh, `… INFO [src/server.rs:744] try start server`, after
+    /// which no earlier connection is left, though their closes went unlogged.
+    static func rustDeskRestarted(_ line: String) -> Bool { line.contains("try start server") }
+
     /// Parsec: `<user>#<id> connected.` and `<user>#<id> disconnected.`, its guest's name and number.
     static func parsec(_ line: String) -> SessionEvent? {
         if let m = captures(#"(\S+#\d+) disconnected\."#, in: line) { return .closed(key: m[0]) }
@@ -224,24 +228,28 @@ final class LogSessionDetector: SessionDetector {
     /// Whether the app runs, for one that can quit without logging the close. With it, a
     /// connection the log's end shows open when DAM starts watching counts while the app runs.
     private let isRunning: (() -> Bool)?
+    /// Whether a line says the app started again, which ends every connection open.
+    private let restarted: ((String) -> Bool)?
     private var follower: LogFollower?
     private var timer: Timer?
     private var wasRunning = false
     /// The connections open, so a close of one opened before DAM looked is ignored.
     private(set) var open: Set<String> = []
 
-    init(app: String, url: URL, parse: @escaping (String) -> SessionEvent?, isRunning: (() -> Bool)? = nil) {
+    init(app: String, url: URL, parse: @escaping (String) -> SessionEvent?, isRunning: (() -> Bool)? = nil,
+         restarted: ((String) -> Bool)? = nil) {
         self.app = app
         self.url = url
         self.parse = parse
         self.isRunning = isRunning
+        self.restarted = restarted
     }
 
     func start() {
         guard follower == nil else { return }
         detLog.debug("\(self.app): following \(self.url.path)")
         if let isRunning, isRunning() {
-            for event in Self.stillOpen(in: Self.lastLines(of: url), parse: parse) { report(event) }
+            for event in Self.stillOpen(in: Self.lastLines(of: url), parse: parse, restarted: restarted) { report(event) }
         }
         let follower = LogFollower(url: url) { [weak self] in self?.handle($0) }
         follower.start()
@@ -280,7 +288,12 @@ final class LogSessionDetector: SessionDetector {
     }
 
     func handle(_ line: String) {
-        if let event = parse(line) { report(event) }
+        if let restarted, restarted(line) {
+            if !open.isEmpty { detLog.debug("\(self.app): restarted") }
+            closeAll()
+        } else if let event = parse(line) {
+            report(event)
+        }
     }
 
     private func report(_ event: SessionEvent) {
@@ -297,9 +310,12 @@ final class LogSessionDetector: SessionDetector {
 
 extension LogSessionDetector {
     /// The connections `lines` leave open, each as it was last opened, in the order opened.
-    static func stillOpen(in lines: [String], parse: (String) -> SessionEvent?) -> [SessionEvent] {
+    static func stillOpen(in lines: [String], parse: (String) -> SessionEvent?,
+                          restarted: ((String) -> Bool)? = nil) -> [SessionEvent] {
         var open: [(key: String, event: SessionEvent)] = []
-        for event in lines.compactMap(parse) {
+        for line in lines {
+            if let restarted, restarted(line) { open.removeAll(); continue }
+            guard let event = parse(line) else { continue }
             switch event {
             case .opened(let key, _, _):
                 if let i = open.firstIndex(where: { $0.key == key }) { open[i].event = event } else { open.append((key, event)) }
@@ -471,7 +487,10 @@ enum SessionDetectors {
         switch app {
         case "rustdesk":
             let url = logURL(for: app, standard: home.appendingPathComponent("Library/Logs/RustDesk/RustDesk_rCURRENT.log"))
-            return LogSessionDetector(app: app, url: url, parse: SessionLogLines.rustDesk)
+            // A restart or quit ends connections without logging their closes.
+            return LogSessionDetector(app: app, url: url, parse: SessionLogLines.rustDesk,
+                                      isRunning: { RunningProcesses.isRunning("RustDesk") },
+                                      restarted: SessionLogLines.rustDeskRestarted)
         case "parsec":
             let url = logURL(for: app, standard: home.appendingPathComponent(".parsec/log.txt"))
             return LogSessionDetector(app: app, url: url, parse: SessionLogLines.parsec)

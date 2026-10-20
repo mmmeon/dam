@@ -123,10 +123,11 @@ final class RemoteSessionsTests: XCTestCase {
         XCTAssertNil(profile.audioOutputUID)
     }
 
-    func testParsecDefaultsToMain() {
+    func testParsecAndRustDeskDefaultToMain() {
         let c = coordinator(FakeSessionDisplays())
         XCTAssertEqual(c.profile(for: "parsec").placement, .main)
-        XCTAssertEqual(c.profile(for: "rustdesk").placement, .extend)
+        XCTAssertEqual(c.profile(for: "rustdesk").placement, .main)
+        XCTAssertEqual(c.profile(for: "screensharing").placement, .extend)
     }
 
     func testProfilesRoundTripThroughTheFile() throws {
@@ -181,7 +182,7 @@ final class RemoteSessionsTests: XCTestCase {
     func testExtendNeedsNoPlacing() {
         let fake = FakeSessionDisplays()
         let c = coordinator(fake)
-        _ = start(c, SessionRequest(app: "rustdesk"))
+        _ = start(c, SessionRequest(app: "screensharing"))
         XCTAssertTrue(fake.placed.isEmpty)
         XCTAssertEqual(fake.made.count, 1)
     }
@@ -541,6 +542,23 @@ final class RemoteSessionsTests: XCTestCase {
         detector.handle("#3 Connection opened from 10.0.0.3:1.")
         detector.stop()
         XCTAssertEqual(events.last, .closed(key: "3"))
+    }
+
+    func testLogDetectorEndsWhatARestartLeftOpen() {
+        let detector = LogSessionDetector(app: "rustdesk", url: URL(fileURLWithPath: "/nonexistent"),
+                                          parse: SessionLogLines.rustDesk, restarted: SessionLogLines.rustDeskRestarted)
+        var events: [SessionEvent] = []
+        detector.onEvent = { events.append($0) }
+        // As seen 2026-10-20: RustDesk started again mid-session, and #1541's close never came.
+        detector.handle("[2026-10-20 14:22:28.506591 -04:00] DEBUG [src/server/connection.rs:1498] #1541 Connection opened from 10.10.1.123:41257.")
+        detector.handle("[2026-10-20 14:27:41.999746 -04:00] INFO [src/server.rs:744] try start server")
+        detector.handle("[2026-10-20 14:27:44.498728 -04:00] DEBUG [src/server/connection.rs:1498] #1948 Connection opened from 10.10.1.123:41839.")
+        detector.handle("[2026-10-20 14:35:21.288666 -04:00] INFO [src/server/connection.rs:5249] #1948 Connection closed: Peer close")
+        XCTAssertEqual(events, [.opened(key: "1541", client: "10.10.1.123"), .closed(key: "1541"),
+                                .opened(key: "1948", client: "10.10.1.123"), .closed(key: "1948")])
+        XCTAssertTrue(LogSessionDetector.stillOpen(in: ["#1 Connection opened from 10.0.0.1:1.", "try start server"],
+                                                   parse: SessionLogLines.rustDesk,
+                                                   restarted: SessionLogLines.rustDeskRestarted).isEmpty)
     }
 
     func testProcessDetectorWaitsBeforeEnding() {
