@@ -4,7 +4,8 @@
 //  Streams a display to browsers and media players over plain HTTP, on a port of its own,
 //  turned on and set up apart from Moonlight hosting: one endless response of fragmented
 //  MP4 at /stream.mp4, which a page at /watch plays through Media Source Extensions and
-//  mpv, ffplay or VLC play as it is. Every request needs the token in the link DAM hands out.
+//  mpv, ffplay or VLC play as it is, and on the port after it over HTTPS. Only devices DAM
+//  knows may watch: a player by its link, a browser once it has paired (WebStreamAccess).
 //  The capture and encoder are Moonlight's code; each stream has a profile that trades delay
 //  for picture quality, from Interactive (as Moonlight gets it) to Viewing (frames out of
 //  order, bigger bursts, regular keyframes, a second of buffer in the browser).
@@ -190,7 +191,7 @@ final class WebStreamServer {
     }
 
     let port: NWEndpoint.Port
-    /// Where the link's token is kept.
+    /// Where the devices, the certificates and their keys are kept.
     let directory: URL
 
     init(port: NWEndpoint.Port = WebStreamServer.defaultPort, directory: URL = WebStreamServer.defaultDirectory) {
@@ -211,43 +212,78 @@ final class WebStreamServer {
 
     // MARK: Serving
 
-    private var listener: NWListener?
+    private var listeners: [NWListener] = []
+    private var readyListeners: Set<ObjectIdentifier> = []
     private var connections: [ObjectIdentifier: NWConnection] = [:]
     private(set) var isRunning = false
-    /// Whether it is accepting connections.
-    private(set) var isListening = false
+    /// Whether both ports are accepting connections.
+    var isListening: Bool { !listeners.isEmpty && readyListeners.count == listeners.count }
     /// Why it stopped, when it did on its own.
     private(set) var lastError: String?
 
-    /// Starts serving. Runs on the main queue.
+    /// The port for HTTPS, the one after `port`.
+    var securePort: NWEndpoint.Port { NWEndpoint.Port(rawValue: port.rawValue + 1)! }
+
+    /// The devices that may watch.
+    private(set) lazy var devices = WebStreamDevices(directory: directory)
+    let pairing = WebStreamPairing()
+    /// The certificates of the HTTPS port, once it has started.
+    private(set) var certificates: WebStreamCertificates?
+
+    /// Asks the user to type the code a browser at `address` shows; `answer` is nil when
+    /// they decline. On the main queue.
+    var requestCode: ((_ address: String, _ name: String, _ answer: @escaping (String?) -> Void) -> Void)?
+
+    private static let allowsPairingKey = "\(AppIdentity.shortID).browser.allowsPairing"
+
+    /// Whether a browser not yet paired may ask to.
+    static var allowsPairing: Bool {
+        get { UserDefaults.dam.object(forKey: allowsPairingKey) as? Bool ?? true }
+        set { UserDefaults.dam.set(newValue, forKey: allowsPairingKey) }
+    }
+
+    /// Starts serving, HTTP on `port` and HTTPS on the one after. Runs on the main queue.
     func start() {
         guard !isRunning else { return }
         do {
+            let certificates = try WebStreamCertificates(directory: directory)
+            self.certificates = certificates
             let parameters = NWParameters.tcp
             parameters.allowLocalEndpointReuse = true
             // Each fragment goes out the moment it is ready, not held for an acknowledgement.
             (parameters.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options)?.noDelay = true
-            let listener = try NWListener(using: parameters, on: port)
-            listener.newConnectionHandler = { [weak self] in self?.accept($0) }
-            listener.stateUpdateHandler = { [weak self, weak listener] state in
-                guard let self, let listener, listener === self.listener else { return }
-                switch state {
-                case .ready:
-                    self.isListening = true
-                    self.onChange?()
-                case .failed(let error):
-                    wsLog.error("listener failed: \(String(describing: error), privacy: .public)")
-                    if case .posix(.EADDRINUSE) = error {
-                        self.stop(error: "Another app is using port \(self.port.rawValue)")
-                    } else {
-                        self.stop(error: error.localizedDescription)
-                    }
-                default:
-                    break
-                }
+            let tls = NWProtocolTLS.Options()
+            if let authority = SecCertificateCreateWithData(nil, certificates.authority as CFData),
+               let identity = sec_identity_create_with_certificates(certificates.identity, [authority] as CFArray) {
+                sec_protocol_options_set_local_identity(tls.securityProtocolOptions, identity)
             }
-            self.listener = listener
-            listener.start(queue: .main)
+            let tcp = NWProtocolTCP.Options()
+            tcp.noDelay = true
+            let secure = NWParameters(tls: tls, tcp: tcp)
+            secure.allowLocalEndpointReuse = true
+            listeners = [try NWListener(using: parameters, on: port), try NWListener(using: secure, on: securePort)]
+            for (listener, isSecure) in zip(listeners, [false, true]) {
+                listener.newConnectionHandler = { [weak self] in self?.accept($0, secure: isSecure) }
+                listener.stateUpdateHandler = { [weak self, weak listener] state in
+                    guard let self, let listener, self.listeners.contains(where: { $0 === listener }) else { return }
+                    switch state {
+                    case .ready:
+                        self.readyListeners.insert(ObjectIdentifier(listener))
+                        self.onChange?()
+                    case .failed(let error):
+                        wsLog.error("listener failed: \(String(describing: error), privacy: .public)")
+                        let port = listener.port?.rawValue ?? self.port.rawValue
+                        if case .posix(.EADDRINUSE) = error {
+                            self.stop(error: "Another app is using port \(port)")
+                        } else {
+                            self.stop(error: error.localizedDescription)
+                        }
+                    default:
+                        break
+                    }
+                }
+                listener.start(queue: .main)
+            }
             isRunning = true
             lastError = nil
         } catch {
@@ -261,9 +297,9 @@ final class WebStreamServer {
     func stop() { stop(error: nil) }
 
     private func stop(error: String?) {
-        listener?.cancel()
-        listener = nil
-        isListening = false
+        listeners.forEach { $0.cancel() }
+        listeners = []
+        readyListeners = []
         connections.values.forEach { $0.cancel() }
         connections = [:]
         stopAll()
@@ -272,12 +308,12 @@ final class WebStreamServer {
         onChange?()
     }
 
-    private func accept(_ connection: NWConnection) {
+    private func accept(_ connection: NWConnection, secure: Bool) {
         connections[ObjectIdentifier(connection)] = connection
         connection.stateUpdateHandler = { [weak self, weak connection] state in
             guard let self, let connection else { return }
             switch state {
-            case .ready: self.receive(on: connection, buffer: Data())
+            case .ready: self.receive(on: connection, secure: secure, buffer: Data())
             case .failed: connection.cancel()
             case .cancelled: self.connections[ObjectIdentifier(connection)] = nil
             default: break
@@ -286,73 +322,110 @@ final class WebStreamServer {
         connection.start(queue: .main)
     }
 
+    /// One GET request: its path, query and headers, and where it came from.
+    struct Request {
+        let path: String
+        let query: [String: String]
+        /// Header names in lower case.
+        let headers: [String: String]
+        let secure: Bool
+        let peer: NWEndpoint?
+
+        /// The value of cookie `name`.
+        func cookie(_ name: String) -> String? {
+            for part in (headers["cookie"] ?? "").split(separator: ";") {
+                let pair = part.trimmingCharacters(in: .whitespaces).split(separator: "=", maxSplits: 1)
+                if pair.count == 2, pair[0] == name { return String(pair[1]) }
+            }
+            return nil
+        }
+
+        /// The peer's address, without its port.
+        var address: String {
+            guard case .hostPort(let host, _) = peer else { return "" }
+            var text = "\(host)"
+            if let percent = text.firstIndex(of: "%") { text = String(text[..<percent]) }
+            if text.hasPrefix("::ffff:") { text.removeFirst("::ffff:".count) }
+            return text
+        }
+
+        static func parse(_ head: String, secure: Bool, peer: NWEndpoint?) -> Request? {
+            var lines = head.components(separatedBy: "\r\n")
+            let parts = lines.removeFirst().split(separator: " ")
+            guard parts.count >= 2, parts[0] == "GET", let url = URLComponents(string: String(parts[1])) else { return nil }
+            var query: [String: String] = [:]
+            for item in url.queryItems ?? [] where query[item.name] == nil { query[item.name] = item.value ?? "" }
+            var headers: [String: String] = [:]
+            for line in lines {
+                guard let colon = line.firstIndex(of: ":") else { continue }
+                headers[line[..<colon].lowercased()] = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+            }
+            return Request(path: url.path, query: query, headers: headers, secure: secure, peer: peer)
+        }
+    }
+
     /// Reads a request's head, then answers it. A viewer's connection is the session's from then.
-    private func receive(on connection: NWConnection, buffer: Data) {
+    private func receive(on connection: NWConnection, secure: Bool, buffer: Data) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 16384) { [weak self] data, _, isComplete, error in
             guard let self else { return }
             let buffer = buffer + (data ?? Data())
             if let end = buffer.range(of: Data("\r\n\r\n".utf8)) {
                 self.connections[ObjectIdentifier(connection)] = nil
-                let line = String(decoding: buffer[..<end.lowerBound], as: UTF8.self).components(separatedBy: "\r\n")[0]
-                let parts = line.split(separator: " ")
-                guard parts.count >= 2, parts[0] == "GET", let url = URLComponents(string: String(parts[1])) else {
+                guard let request = Request.parse(String(decoding: buffer[..<end.lowerBound], as: UTF8.self), secure: secure,
+                                                  peer: connection.currentPath?.remoteEndpoint ?? connection.endpoint) else {
                     return self.send(status: "400 Bad Request", body: Data(), to: connection)
                 }
-                var query: [String: String] = [:]
-                for item in url.queryItems ?? [] where query[item.name] == nil { query[item.name] = item.value ?? "" }
-                if !self.handle(path: url.path, query: query, on: connection) {
-                    self.send(status: "404 Not Found", body: Data(), to: connection)
-                }
+                self.handle(request, on: connection)
                 return
             }
             guard !isComplete, error == nil, buffer.count < 16384 else { return connection.cancel() }
-            self.receive(on: connection, buffer: buffer)
+            self.receive(on: connection, secure: secure, buffer: buffer)
         }
     }
 
-    // MARK: The link
+    // MARK: Addresses
 
-    private var tokenURL: URL { directory.appendingPathComponent("token") }
-    private var storedToken: String?
-
-    /// The token links carry, without which every request is refused; made on first use and
-    /// kept, until a new link replaces it.
-    var token: String {
-        if let storedToken { return storedToken }
-        let stored = (try? String(contentsOf: tokenURL, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let token = stored.flatMap { $0.count == 32 ? $0 : nil } ?? makeToken()
-        storedToken = token
-        return token
+    /// The Mac's name on the network, as browsers find it.
+    private var hostName: String {
+        WebStreamCertificates.localHostName.map { "\($0).local" } ?? ProcessInfo.processInfo.hostName
     }
 
-    /// Where a browser on the network finds the player page.
-    var watchURL: URL {
-        URL(string: "http://\(ProcessInfo.processInfo.hostName):\(port.rawValue)/watch?token=\(token)")!
+    /// The player page on the network; a browser pairs there.
+    var watchURL: URL { URL(string: "http://\(hostName):\(port.rawValue)/watch")! }
+
+    /// The player page over HTTPS, for a browser that trusts DAM's certificate authority.
+    var secureWatchURL: URL { URL(string: "https://\(hostName):\(securePort.rawValue)/watch")! }
+
+    /// Where a device installs the certificate authority from.
+    var authorityURL: URL { URL(string: "http://\(hostName):\(port.rawValue)/ca.cer")! }
+
+    /// The player page on this Mac, with This Mac's link.
+    var localWatchURL: URL { URL(string: "http://localhost:\(port.rawValue)/watch?token=\(devices.thisMac.token)")! }
+
+    /// A link device's addresses: the page, and the stream for players.
+    func links(for device: WebStreamDevice) -> (page: URL, stream: URL) {
+        (URL(string: "http://\(hostName):\(port.rawValue)/watch?token=\(device.token)")!,
+         URL(string: "http://\(hostName):\(port.rawValue)/stream.mp4?token=\(device.token)")!)
     }
 
-    /// The player page on this Mac.
-    var localWatchURL: URL {
-        URL(string: "http://localhost:\(port.rawValue)/watch?token=\(token)")!
+    /// The address a QR code holds: it pairs whoever opens it once, for a few minutes.
+    func makeQRLink() -> URL {
+        URL(string: "http://\(hostName):\(port.rawValue)/watch?pair=\(pairing.makeKey())")!
     }
 
-    /// Replaces the link: the old one stops working, and those watching with it are cut off.
-    func makeNewLink() {
-        storedToken = makeToken()
+    /// Adds a link for a player, named `name`.
+    @discardableResult
+    func addLink(named name: String) -> WebStreamDevice {
+        let device = devices.add(WebStreamDevice(name: name, kind: .link))
+        onChange?()
+        return device
+    }
+
+    /// Forgets a device: its link or cookie stops working, and if it is watching, it is cut off.
+    func forget(_ device: WebStreamDevice) {
+        devices.remove(id: device.id)
         stopAll()
         onChange?()
-    }
-
-    private func makeToken() -> String {
-        let token = MoonlightCrypto.hex(MoonlightPairing.randomBytes(16)).lowercased()
-        do {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
-                                                    attributes: [.posixPermissions: 0o700])
-            try Data(token.utf8).write(to: tokenURL, options: .atomic)
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: tokenURL.path)
-        } catch {
-            wsLog.error("saving the link: \(String(describing: error), privacy: .public)")
-        }
-        return token
     }
 
     // MARK: Requests
@@ -365,27 +438,90 @@ final class WebStreamServer {
 
     var viewerCount: Int { sessions.values.reduce(0) { $0 + $1.viewerCount } }
 
-    /// Answers `path` if it is the stream's; returns whether it was. On the main queue.
-    func handle(path: String, query: [String: String], on connection: NWConnection) -> Bool {
-        guard ["/", "/watch", "/apps.json", "/stream.mp4"].contains(path) else { return false }
-        // Only those given the link may watch: the stream needs no pairing, and anyone on
-        // the network could otherwise ask for it.
-        guard Self.matches(query["token"], token) else {
-            send(status: "403 Forbidden", body: Data("This link is out of date. Copy the address again from \(AppIdentity.name)'s menu.\n".utf8),
-                 to: connection)
-            return true
+    static let cookieName = "dam_watch"
+
+    /// Answers `request`. On the main queue.
+    func handle(_ request: Request, on connection: NWConnection) {
+        guard WebStreamReach.current.allows(request.peer) else {
+            wsLog.debug("refused \(request.address, privacy: .public): out of reach")
+            return send(status: "403 Forbidden", body: Data("\(AppIdentity.name) does not stream to \(request.address).\n".utf8),
+                        to: connection)
         }
-        switch path {
+        switch request.path {
         case "/", "/watch":
+            if let key = request.query["pair"] {
+                guard pairing.use(key: key) else {
+                    return send(status: "403 Forbidden", body: Data("This QR code was used already, or is too old.\n".utf8),
+                                to: connection)
+                }
+                let device = devices.add(WebStreamDevice(
+                    name: WebStreamPairing.name(userAgent: request.headers["user-agent"], address: request.address), kind: .browser))
+                wsLog.debug("paired \(device.name, privacy: .public) by QR code")
+                onChange?()
+                return send(status: "303 See Other", headers: ["Location: /watch", cookie(for: device, secure: request.secure)],
+                            body: Data(), to: connection)
+            }
             send(status: "200 OK", contentType: "text/html; charset=utf-8", body: Data(WebStreamPage.html.utf8), to: connection)
-        case "/apps.json":
-            send(status: "200 OK", contentType: "application/json", body: appsJSON(), to: connection)
-        case "/stream.mp4":
-            serve(WebStreamRequest.parse(query, preferred: preferredProfile()), on: connection)
+        case "/ca.cer":
+            guard let certificates else { return send(status: "404 Not Found", body: Data(), to: connection) }
+            send(status: "200 OK", contentType: "application/x-x509-ca-cert",
+                 headers: ["Content-Disposition: attachment; filename=\"\(AppIdentity.name) Browser Stream.cer\""],
+                 body: certificates.authority, to: connection)
+        case "/pair/begin":
+            beginPairing(request, on: connection)
+        case "/pair/wait":
+            guard let id = request.query["id"], let pending = pairing.request(id: id) else {
+                return sendJSON(["state": "expired"], to: connection)
+            }
+            if let device = pending.device {
+                return sendJSON(["state": "paired"], headers: [cookie(for: device, secure: request.secure)], to: connection)
+            }
+            sendJSON(["state": pending.declined ? "declined" : "waiting"], to: connection)
+        case "/apps.json", "/stream.mp4":
+            guard (devices.device(token: request.query["token"]) ?? devices.device(token: request.cookie(Self.cookieName))) != nil
+            else {
+                return send(status: "401 Unauthorized", body: Data("Pair this browser, or use a link from \(AppIdentity.name).\n".utf8),
+                            to: connection)
+            }
+            if request.path == "/apps.json" {
+                send(status: "200 OK", contentType: "application/json", body: appsJSON(), to: connection)
+            } else {
+                serve(WebStreamRequest.parse(request.query, preferred: preferredProfile()), on: connection)
+            }
         default:
-            return false
+            send(status: "404 Not Found", body: Data(), to: connection)
         }
-        return true
+    }
+
+    private func beginPairing(_ request: Request, on connection: NWConnection) {
+        guard Self.allowsPairing else {
+            return sendJSON(["state": "refused", "message": "\(AppIdentity.name) is not taking new browsers."], to: connection)
+        }
+        let name = WebStreamPairing.name(userAgent: request.headers["user-agent"], address: request.address)
+        guard let pending = pairing.begin(address: request.address, name: name) else {
+            return sendJSON(["state": "busy", "message": "Another browser is pairing. Try again in a few minutes."],
+                            to: connection)
+        }
+        wsLog.debug("pairing requested by \(name, privacy: .public)")
+        sendJSON(["state": "waiting", "id": pending.id, "code": pending.code], to: connection)
+        guard let requestCode else { return }
+        requestCode(request.address, name) { [weak self] code in
+            guard let self else { return }
+            let paired = self.pairing.answer(id: pending.id, code: code) { self.devices.add($0) }
+            wsLog.debug("pairing \(name, privacy: .public): \(paired ? "paired" : "refused", privacy: .public)")
+            if paired { self.onChange?() }
+        }
+    }
+
+    /// The header that gives a browser its device's token, for a year.
+    private func cookie(for device: WebStreamDevice, secure: Bool) -> String {
+        "Set-Cookie: \(Self.cookieName)=\(device.token); Path=/; Max-Age=31536000; HttpOnly; SameSite=Strict"
+            + (secure ? "; Secure" : "")
+    }
+
+    private func sendJSON(_ object: [String: String], headers: [String] = [], to connection: NWConnection) {
+        let body = (try? JSONSerialization.data(withJSONObject: object)) ?? Data("{}".utf8)
+        send(status: "200 OK", contentType: "application/json", headers: headers, body: body, to: connection)
     }
 
     /// Whether `given` is `token`, taking as long whatever the first difference.
@@ -532,8 +668,10 @@ final class WebStreamServer {
         onChange?()
     }
 
-    private func send(status: String, contentType: String = "text/plain", body: Data, to connection: NWConnection) {
+    private func send(status: String, contentType: String = "text/plain", headers: [String] = [], body: Data,
+                      to connection: NWConnection) {
         let head = "HTTP/1.1 \(status)\r\nContent-Type: \(contentType)\r\nContent-Length: \(body.count)\r\n" +
+                   headers.map { "\($0)\r\n" }.joined() +
                    "Cache-Control: no-store\r\nConnection: close\r\n\r\n"
         connection.send(content: Data(head.utf8) + body, completion: .contentProcessed { _ in connection.cancel() })
     }
@@ -1107,6 +1245,8 @@ enum WebStreamPage {
       #stats { margin-left: auto; opacity: .7; font-variant-numeric: tabular-nums; }
       #msg { position: fixed; inset: 0; display: grid; place-items: center; text-align: center; padding: 20px; }
       #msg[hidden] { display: none; }
+      #msg .code { font: 600 56px ui-monospace, Menlo, monospace; letter-spacing: 0.15em; margin: 12px 0; }
+      #msg .small { opacity: 0.7; font-size: 13px; }
       code { user-select: all; }
     </style>
     </head>
@@ -1141,7 +1281,7 @@ enum WebStreamPage {
 
       // Sound comes only when wanted: with it, each frame waits for the sound of its moment.
       function url() {
-        const q = new URLSearchParams({ token });
+        const q = new URLSearchParams(token ? { token } : {});
         if (app) q.set('app', app);
         q.set('profile', profile);
         q.set('bitrate', Math.round(bitrate * 1000));
@@ -1161,7 +1301,7 @@ enum WebStreamPage {
         video.disableRemotePlayback = true;
         video.src = URL.createObjectURL(source);
         source.addEventListener('sourceopen', open, { once: true });
-        history.replaceState(null, '', '?' + new URLSearchParams({ token, ...(app ? { app } : {}), profile, bitrate: Math.round(bitrate * 1000), buffer: Math.round(buffer * 1000), ...(lowlatency ? { lowlatency } : {}) }));
+        history.replaceState(null, '', '?' + new URLSearchParams({ ...(token ? { token } : {}), ...(app ? { app } : {}), profile, bitrate: Math.round(bitrate * 1000), buffer: Math.round(buffer * 1000), ...(lowlatency ? { lowlatency } : {}) }));
         // Making a display for the stream can take a while.
         $('msg').hidden = false; $('msg').textContent = 'Connecting…';
       }
@@ -1258,7 +1398,34 @@ enum WebStreamPage {
       let idle; function awake() { document.body.classList.remove('idle'); clearTimeout(idle); idle = setTimeout(() => document.body.classList.add('idle'), 3000); }
       ['mousemove', 'touchstart', 'keydown'].forEach(e => addEventListener(e, awake)); awake();
 
-      fetch('/apps.json?' + new URLSearchParams({ token })).then(r => r.json()).then(j => {
+      // A browser without a link pairs: it shows a code, which the user types on the Mac,
+      // and gets a cookie of its own once it is right.
+      function pair() {
+        $('msg').hidden = false; $('msg').textContent = 'Asking the Mac…';
+        fetch('/pair/begin', { cache: 'no-store' }).then(r => r.json()).then(j => {
+          if (j.state !== 'waiting') { $('msg').textContent = j.message || 'This browser cannot pair now.'; return; }
+          $('msg').textContent = '';
+          const box = document.createElement('div');
+          box.innerHTML = '<p>To watch, type this code on the Mac:</p><p class="code"></p><p class="small">It works for five minutes.</p>';
+          box.querySelector('.code').textContent = j.code;
+          $('msg').append(box);
+          const poll = () => fetch('/pair/wait?id=' + encodeURIComponent(j.id), { cache: 'no-store' }).then(r => r.json()).then(w => {
+            if (w.state === 'paired') { $('msg').hidden = true; return load(); }
+            if (w.state === 'waiting') return setTimeout(poll, 1000);
+            $('msg').textContent = w.state === 'declined' ? 'Not paired: the code was wrong, or the Mac said no. Reload to try again.'
+                                                          : 'The code ran out. Reload to try again.';
+          }).catch(() => setTimeout(poll, 2000));
+          poll();
+        }).catch(() => fail('Could not reach the host.'));
+      }
+
+      function load() {
+      fetch('/apps.json?' + new URLSearchParams(token ? { token } : {}), { cache: 'no-store' }).then(r => {
+        if (r.status === 401) { if (token) fail('This link no longer works. Ask for a new one.'); else pair(); return null; }
+        if (!r.ok) return r.text().then(t => { fail(t); return null; });
+        return r.json();
+      }).then(j => {
+        if (!j) return;
         info = j;
         for (const a of j.apps) { const o = document.createElement('option'); o.value = a.id; o.textContent = a.title; $('app').append(o); }
         if (!j.apps.length) { const o = document.createElement('option'); o.value = ''; o.textContent = 'New Display'; $('app').append(o); }
@@ -1270,6 +1437,8 @@ enum WebStreamPage {
         setBuffer(buffer ? +buffer / 1000 : (j.buffers[profile] || 0.05));
         start();
       }).catch(() => fail('Could not reach the host.'));
+      }
+      load();
     })();
     </script>
     </body>

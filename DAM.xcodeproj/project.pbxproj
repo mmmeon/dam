@@ -96,8 +96,10 @@
 		EE200B022F8D607C0090E796 /* MenuBarIconTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE200A022F8D607C0090E796 /* MenuBarIconTests.swift */; };
 		66F9582C81ED74C1C1531F5A /* MP4Fragmenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE0CD9E5791F871CE7094055 /* MP4Fragmenter.swift */; };
 		E6043C4BC52D9BAB1E864C77 /* WebStream.swift in Sources */ = {isa = PBXBuildFile; fileRef = A327655CF2C53297256286B4 /* WebStream.swift */; };
+		1C8B9F037DE70D78D298448D /* WebStreamAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = 372C7B8E893CD1AC0E6E4C5B /* WebStreamAccess.swift */; };
 		3AFBEAD2E1BBF03AFA1A8BEC /* MP4FragmenterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BA07475618CF8DB04DE3FB9 /* MP4FragmenterTests.swift */; };
 		F6E46A746FC7A24D2BD7EE7D /* WebStreamTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2056DD5F10F1AC3A231B9ACB /* WebStreamTests.swift */; };
+		36880DC40C690B498C12EE09 /* WebStreamAccessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93900D1C9CE4CC827B6B525C /* WebStreamAccessTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -203,8 +205,10 @@
 		EE200A022F8D607C0090E796 /* MenuBarIconTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarIconTests.swift; sourceTree = "<group>"; };
 		EE0CD9E5791F871CE7094055 /* MP4Fragmenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MP4Fragmenter.swift; sourceTree = "<group>"; };
 		A327655CF2C53297256286B4 /* WebStream.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebStream.swift; sourceTree = "<group>"; };
+		372C7B8E893CD1AC0E6E4C5B /* WebStreamAccess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebStreamAccess.swift; sourceTree = "<group>"; };
 		3BA07475618CF8DB04DE3FB9 /* MP4FragmenterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MP4FragmenterTests.swift; sourceTree = "<group>"; };
 		2056DD5F10F1AC3A231B9ACB /* WebStreamTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebStreamTests.swift; sourceTree = "<group>"; };
+		93900D1C9CE4CC827B6B525C /* WebStreamAccessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebStreamAccessTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -306,6 +310,7 @@
 				F90877A6A2E4EDCC6C0ECDBD /* MoonlightVideoEncoder.swift */,
 				A1159B5C56E5AEA19A1BF950 /* H264OneReference.swift */,
 				A327655CF2C53297256286B4 /* WebStream.swift */,
+				372C7B8E893CD1AC0E6E4C5B /* WebStreamAccess.swift */,
 				EE0CD9E5791F871CE7094055 /* MP4Fragmenter.swift */,
 				CC000B012F8D60780090E796 /* HUD.swift */,
 				EE200A012F8D60780090E796 /* MenuBarIcon.swift */,
@@ -361,6 +366,7 @@
 				E478FDA4DCA68FE2F15F7231 /* MoonlightVideoEncoderTests.swift */,
 				FA4BC78E149D0277EAA6B7E7 /* H264OneReferenceTests.swift */,
 				2056DD5F10F1AC3A231B9ACB /* WebStreamTests.swift */,
+				93900D1C9CE4CC827B6B525C /* WebStreamAccessTests.swift */,
 				3BA07475618CF8DB04DE3FB9 /* MP4FragmenterTests.swift */,
 			);
 			path = DAMTests;
@@ -536,6 +542,7 @@
 				B3179E05ECB1DAEEC490D1D6 /* MoonlightVideoEncoder.swift in Sources */,
 				2C9CE688FB1E9FA0E028656C /* H264OneReference.swift in Sources */,
 				E6043C4BC52D9BAB1E864C77 /* WebStream.swift in Sources */,
+				1C8B9F037DE70D78D298448D /* WebStreamAccess.swift in Sources */,
 				66F9582C81ED74C1C1531F5A /* MP4Fragmenter.swift in Sources */,
 				CC000C012F8D60780090E796 /* HUD.swift in Sources */,
 				EE200B012F8D60780090E796 /* MenuBarIcon.swift in Sources */,
@@ -580,6 +587,7 @@
 				580A6E0D6DE5B7F5E0FC5B7E /* MoonlightVideoEncoderTests.swift in Sources */,
 				2127EBAB29D0AC27EB2E9065 /* H264OneReferenceTests.swift in Sources */,
 				F6E46A746FC7A24D2BD7EE7D /* WebStreamTests.swift in Sources */,
+				36880DC40C690B498C12EE09 /* WebStreamAccessTests.swift in Sources */,
 				3AFBEAD2E1BBF03AFA1A8BEC /* MP4FragmenterTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

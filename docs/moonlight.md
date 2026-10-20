@@ -12,18 +12,38 @@ client's resolution and frame rate. DAM streams it as H.264 video with Reed-Solo
 and Opus audio. Cancelling from Moonlight removes the display; resuming keeps it,
 changed in place to the size the client asks for now.
 
-Apart from Moonlight, DAM also serves displays to browsers and media players, on HTTP
-port 47995. It is turned on and set up on its own: the Browser Stream menu and Settings ›
-Browser Stream, independent of Moonlight hosting and its settings.
+Apart from Moonlight, DAM also serves displays to browsers and media players, over HTTP
+on port 47995 and HTTPS on 47996. It is turned on and set up on its own: the Browser
+Stream menu and Settings › Browser Stream, independent of Moonlight hosting and its
+settings.
 
 - `/watch` plays the stream in a browser through Media Source Extensions.
 - `/stream.mp4` is an endless fragmented MP4 that mpv, ffplay and VLC play as is.
 - `/apps.json` lists the displays.
 
-Each needs the `token` in the link that Open in Browser and Copy Address give; without
-it, the reply is 403. The token is kept in `Application Support/DAM/Browser/token`.
-Settings › Browser Stream › Make a New Link replaces it and cuts off anyone watching with
-the old one. The stream itself still crosses the network unencrypted.
+Who may watch (`WebStreamAccess`):
+
+- **Devices.** Each has a token of its own, kept in `Application Support/DAM/Browser/
+  devices.json`, and can be forgotten on its own in Settings. A player gets a link
+  (`?token=`) from New Player Link…; Open in Browser uses a link named This Mac.
+  `/apps.json` and `/stream.mp4` answer 401 without a known token; the page itself is
+  open to anyone in reach.
+- **Pairing.** A browser without a link asks to pair: the page shows a four-digit code,
+  and DAM asks the user to type it. Right, the browser gets an HttpOnly cookie
+  (`dam_watch`, a year; Secure when paired over HTTPS). One code at a time, five minutes
+  each; a wrong code ends it. Pair with a QR Code… shows a code a phone scans instead:
+  a key in the address that works once, for five minutes. "Allow new browsers to pair"
+  turns both off.
+- **Reach.** This Mac Only, This Mac's Networks (the default: loopback, link-local, or a
+  subnet of the Mac's interfaces), or Anywhere. Out of reach gets a 403 for everything.
+- **HTTPS.** DAM makes a certificate authority of its own (20 years) and a server
+  certificate it signs for the Mac's `.local` name, host name, `localhost`, loopback and
+  IPv4 addresses (800 days, as Apple allows at most 825), made again when those change
+  or it nears its end. A device trusts the authority once: mpv with `--tls-ca-file`
+  (Export Certificate…), an iPhone or iPad by installing `http://<mac>.local:47995/ca.cer`
+  and turning on full trust for it. Without that, players that don't check certificates
+  (mpv, IINA, ffmpeg by default) still play over HTTPS, and VLC asks once.
+- The stream over HTTP crosses the network unencrypted, and with it the tokens.
 
 Three profiles (Interactive, Balanced, Viewing) set the defaults from Settings › Browser
 Stream, which also has its own Show the Pointer. Each client can override profile,
@@ -45,7 +65,7 @@ flowchart LR
     F --> G["7. Encode<br/>VideoToolbox H.264, Opus"]
     G --> H["8. Packetize + FEC<br/>Reed-Solomon parity, paced"]
     H --> I["To Moonlight<br/>UDP 47998 video, 48000 audio"]
-    G --> J["Browser or player, port 47995<br/>fragmented MP4: /watch, /stream.mp4"]
+    G --> J["Browser or player, HTTP 47995 / HTTPS 47996<br/>fragmented MP4: /watch, /stream.mp4"]
 ```
 
 ### Discovery and pairing
@@ -167,8 +187,8 @@ its own name and serial.
 
 ### Browser and player stream
 
-`WebStream`, `MP4Fragmenter`, TCP 47995 (`WebStreamServer`, its own listener): one MP4
-fragment per frame, H.264 plus AAC at 48 kHz.
+`WebStream`, `MP4Fragmenter`, TCP 47995 and 47996 (`WebStreamServer`, listeners of its
+own): one MP4 fragment per frame, H.264 plus AAC at 48 kHz.
 
 - Viewers of the same display with the same settings share one capture and one encoder.
 - A new viewer starts at a keyframe. A viewer more than 1 s behind skips ahead to the

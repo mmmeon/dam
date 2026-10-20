@@ -304,8 +304,8 @@ private func browserStreamItem(server: WebStreamServer) -> NSMenuItem {
                        "with the link Copy Address gives."
         submenu.addItem(open)
         let copy = NSMenuItem(title: "Copy Address", action: #selector(AppDelegate.copyWebStreamAddress(_:)), keyEquivalent: "")
-        copy.toolTip = "Copies the player page's link, with its token. Players like mpv and VLC take the stream " +
-                       "itself: the same link with stream.mp4 in place of watch."
+        copy.toolTip = "Copies \(server.watchURL.absoluteString). A browser that opens it pairs with a code typed " +
+                       "on this Mac. Players need a link of their own, from Browser Stream Settings."
         submenu.addItem(copy)
         let watching = server.viewerCount
         if watching > 0 { submenu.addItem(disabledItem(watching == 1 ? "1 watching" : "\(watching) watching")) }

@@ -69,6 +69,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if MoonlightHost.isEnabled { moonlightHost.start() }
         webStream.onChange = { [weak self] in self?.rebuild() }
+        webStream.requestCode = { [weak self] address, name, answer in
+            self?.promptForBrowserCode(name: name, answer: answer)
+        }
         webStream.makeDisplay = { [weak self] width, height, fps, done in
             guard let self else { return done(nil) }
             self.videoManager.createStreamingDisplay(
@@ -661,6 +664,30 @@ extension AppDelegate: NSMenuDelegate {
 
     /// Asks for the PIN Moonlight shows while pairing. The answer is nil when the user
     /// declines, or when the device gave up meanwhile.
+    /// Asks for the code a browser shows while pairing; nil when the user declines. The code
+    /// lasts five minutes, and so does the prompt.
+    private func promptForBrowserCode(name: String, answer: @escaping (String?) -> Void) {
+        RunLoop.main.perform(inModes: [.default]) {
+            let alert = NSAlert()
+            alert.messageText = "Let a browser watch?"
+            alert.informativeText = "\(name) wants to watch \(AppIdentity.name)'s streaming displays. " +
+                                    "Type the code it shows."
+            let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 120, height: 24))
+            field.placeholderString = "Code"
+            alert.accessoryView = field
+            alert.addButton(withTitle: "Allow")
+            alert.addButton(withTitle: "Cancel")
+            alert.window.initialFirstResponder = field
+            SpeechSynthesizer.shared.announce(Spoken.browserWantsToPair)
+            NSApp.activate(ignoringOtherApps: true)
+            let timeout = DispatchWorkItem { NSApp.abortModal() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + WebStreamPairing.lifetime, execute: timeout)
+            let response = alert.runModal()
+            timeout.cancel()
+            answer(response == .alertFirstButtonReturn ? field.stringValue : nil)
+        }
+    }
+
     private func promptForMoonlightPIN(address: String, answer: @escaping (String?) -> Void) {
         // From the run loop rather than the main queue: a modal prompt run inside a main
         // queue block would hold every other one, the network's and the display changes',

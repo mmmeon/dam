@@ -145,8 +145,13 @@ enum Spoken {
     static let browserStreamCouldNotStart = String(localized: "The browser stream could not start",
                                                    comment: "Browser stream failed with no reason")
 
+    static let browserWantsToPair = String(localized: "A browser wants to watch. Type the code it shows.",
+                                           comment: "Shown with the browser pairing prompt")
+
     static let moonlightWantsToPair = String(localized: "Moonlight wants to pair. Type the PIN it shows.",
                                              comment: "Shown with the pairing PIN prompt")
+
+    static let copiedLink = String(localized: "Copied the link", comment: "A player link for the browser stream was copied")
 
     static func copied(_ address: String) -> String {
         String(localized: "Copied \(address)", comment: "The player page address was copied")
