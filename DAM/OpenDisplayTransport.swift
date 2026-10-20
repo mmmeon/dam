@@ -47,7 +47,11 @@ final class OpenDisplayTCPChannel: OpenDisplayChannel {
     private var pending = 0
     private var closed = false
 
+    /// " at" the address dialed, for one not a Bonjour name; for the log.
+    let endpointDescription: String
+
     init(endpoint: NWEndpoint) {
+        if case .hostPort = endpoint { endpointDescription = " at \(endpoint)" } else { endpointDescription = "" }
         let tcp = NWProtocolTCP.Options()
         // Input events are small; held back to coalesce, they read as lag.
         tcp.noDelay = true
@@ -110,6 +114,12 @@ final class OpenDisplayTCPChannel: OpenDisplayChannel {
         closed = true
         lock.unlock()
         connection.cancel()
+    }
+
+    /// The address it reached, once it has: a Bonjour name resolved.
+    var reachedAddress: NWEndpoint? {
+        guard case .hostPort? = connection.currentPath?.remoteEndpoint else { return nil }
+        return connection.currentPath?.remoteEndpoint
     }
 
     /// What the connection tried, for the log: its path and the endpoint it reached.

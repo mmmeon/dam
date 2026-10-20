@@ -91,6 +91,9 @@ final class OpenDisplaySender {
     private var retryAt: [String: Date] = [:]
     private var failures: [String: Int] = [:]
     private var lastErrors: [String: String] = [:]
+    /// Where each receiver was last reached over Wi-Fi, to dial when its Bonjour name
+    /// doesn't resolve, as after a cable is pulled.
+    private var lastAddress: [String: NWEndpoint] = [:]
     /// Until when a receiver whose cable keeps failing is dialed over WiFi instead.
     private var preferWiFiUntil: [String: Date] = [:]
     private var dialTimer: Timer?
@@ -250,12 +253,14 @@ final class OpenDisplaySender {
                     }
                 }
             } else if let endpoint = wifi[key]?.endpoint {
-                channel = OpenDisplayTCPChannel(endpoint: endpoint)
+                // Every other dial after one fails goes to the address it was reached at last.
+                let address = (failures[key] ?? 0) % 2 == 1 ? lastAddress[key] : nil
+                channel = OpenDisplayTCPChannel(endpoint: address ?? endpoint)
             } else {
                 continue
             }
             let session = sessions[key] ?? makeSession(key: key)
-            odLog.debug("dialing \(self.name(of: key), privacy: .public) over \(channel.transport.rawValue, privacy: .public)")
+            odLog.debug("dialing \(self.name(of: key), privacy: .public) over \(channel.transport.rawValue, privacy: .public)\((channel as? OpenDisplayTCPChannel)?.endpointDescription ?? "", privacy: .public)")
             session.attach(channel)
         }
     }
@@ -268,7 +273,8 @@ final class OpenDisplaySender {
 
     // MARK: From sessions
 
-    fileprivate func sessionConnected(_ session: OpenDisplaySession) {
+    fileprivate func sessionConnected(_ session: OpenDisplaySession, over channel: OpenDisplayChannel) {
+        if let address = (channel as? OpenDisplayTCPChannel)?.reachedAddress { lastAddress[session.key] = address }
         failures[session.key] = nil
         retryAt[session.key] = nil
         lastErrors[session.key] = nil
@@ -408,7 +414,7 @@ final class OpenDisplaySession {
             self.lastHeard = Date()
             self.lostAt = nil
             odLog.debug("\(self.name, privacy: .public): connected over \(channel.transport.rawValue, privacy: .public)")
-            self.sender?.sessionConnected(self)
+            self.sender?.sessionConnected(self, over: channel)
         }
         channel.onReceive = { [weak self, weak channel] data in
             guard let self, let channel, self.link === channel else { return }
