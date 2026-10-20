@@ -268,50 +268,162 @@ final class WebStreamTests: XCTestCase {
 
     // MARK: - The host's routes
 
-    private func get(_ path: String, from host: MoonlightHost) throws -> (status: Int, body: Data) {
-        let url = URL(string: "http://127.0.0.1:\(host.httpPort.rawValue)\(path)")!
+    /// GETs without following redirects, trusting `authority` for HTTPS.
+    private final class Client: NSObject, URLSessionTaskDelegate {
+        var authority: Data?
+
+        func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                        newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+            completionHandler(nil)
+        }
+
+        func urlSession(_ session: URLSession, task: URLSessionTask, didReceive challenge: URLAuthenticationChallenge,
+                        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+            guard let trust = challenge.protectionSpace.serverTrust, let authority,
+                  let root = SecCertificateCreateWithData(nil, authority as CFData) else {
+                return completionHandler(.performDefaultHandling, nil)
+            }
+            SecTrustSetAnchorCertificates(trust, [root] as CFArray)
+            SecTrustSetAnchorCertificatesOnly(trust, true)
+            completionHandler(SecTrustEvaluateWithError(trust, nil) ? .useCredential : .cancelAuthenticationChallenge,
+                              URLCredential(trust: trust))
+        }
+    }
+
+    private let client = Client()
+    private lazy var session = URLSession(configuration: .ephemeral, delegate: client, delegateQueue: nil)
+
+    private func get(_ path: String, port: NWEndpoint.Port, secure: Bool = false, cookie: String? = nil)
+        throws -> (status: Int, body: Data, headers: [String: String]) {
+        var request = URLRequest(url: URL(string: "\(secure ? "https" : "http")://localhost:\(port.rawValue)\(path)")!)
+        request.httpShouldHandleCookies = false
+        if let cookie { request.setValue(cookie, forHTTPHeaderField: "Cookie") }
         let done = expectation(description: path)
-        var result: (Int, Data)?
-        URLSession.shared.dataTask(with: url) { data, response, _ in
-            result = ((response as? HTTPURLResponse)?.statusCode ?? 0, data ?? Data())
+        var result: (Int, Data, [String: String])?
+        session.dataTask(with: request) { data, response, _ in
+            let http = response as? HTTPURLResponse
+            result = (http?.statusCode ?? 0, data ?? Data(),
+                      (http?.allHeaderFields as? [String: String]) ?? [:])
             done.fulfill()
         }.resume()
         wait(for: [done], timeout: 10)
         return try XCTUnwrap(result)
     }
 
-    func testHostServesThePageAndTheDisplays() throws {
+    private func json(_ data: Data) throws -> [String: String] {
+        try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: String])
+    }
+
+    /// The stream is served on its own ports, with Moonlight hosting off, to devices it knows.
+    func testServesKnownDevicesOnItsOwnPorts() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let base = UInt16.random(in: 40000...59000)
+        let port = NWEndpoint.Port(rawValue: UInt16.random(in: 40000...48000) & ~1)!
+        let server = WebStreamServer(port: port, directory: directory)
+        defer { server.stop() }
+        server.apps = { [MoonlightApp(id: 1, title: "Streaming Display 1", displayID: 7)] }
+        // The prompt on the Mac, answered once the test has read the code, as the user would.
+        var prompt: ((String?) -> Void)?
+        server.requestCode = { _, _, answer in prompt = answer }
+        server.start()
+        let deadline = Date().addingTimeInterval(5)
+        while !server.isListening, server.lastError == nil, Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+        XCTAssertTrue(server.isListening, server.lastError ?? "")
+        func get(_ path: String, cookie: String? = nil) throws -> (status: Int, body: Data, headers: [String: String]) {
+            try self.get(path, port: port, cookie: cookie)
+        }
+
+        // The page is for anyone in reach; the displays and the stream only for devices it knows.
+        let page = try get("/watch")
+        XCTAssertEqual(page.status, 200)
+        let html = String(decoding: page.body, as: UTF8.self)
+        XCTAssertTrue(html.contains("<video"))
+        XCTAssertTrue(html.contains("ManagedMediaSource"), "iPhones have only the managed kind")
+        XCTAssertTrue(html.contains("/pair/begin"))
+        for path in ["/apps.json", "/stream.mp4", "/apps.json?token=0123"] {
+            XCTAssertEqual(try get(path).status, 401, path)
+        }
+        XCTAssertEqual(try get("/serverinfo").status, 404, "Moonlight's requests are not this server's")
+        XCTAssertEqual(server.watchURL.path, "/watch")
+        XCTAssertEqual(server.watchURL.port, Int(port.rawValue))
+
+        // A player's link.
+        let link = server.addLink(named: "mpv")
+        XCTAssertEqual(server.links(for: link).stream.query, "token=\(link.token)")
+        let apps = try get("/apps.json?token=\(link.token)")
+        XCTAssertEqual(apps.status, 200)
+        let listed = try XCTUnwrap(JSONSerialization.jsonObject(with: apps.body) as? [String: Any])
+        XCTAssertEqual((listed["apps"] as? [[String: Any]])?.first?["title"] as? String, "Streaming Display 1")
+        XCTAssertEqual(try get("/stream.mp4?app=9&token=\(link.token)").status, 404, "no such display")
+        XCTAssertEqual(server.localWatchURL.query, "token=\(server.devices.thisMac.token)")
+
+        // A browser pairs with a code typed on the Mac, and has a cookie of its own from then.
+        var begun = try json(try get("/pair/begin").body)
+        XCTAssertEqual(begun["state"], "waiting")
+        XCTAssertEqual(try json(try get("/pair/wait?id=\(begun["id"]!)").body)["state"], "waiting")
+        prompt?(begun["code"] == "0000" ? "1111" : "0000")
+        XCTAssertEqual(try json(try get("/pair/wait?id=\(begun["id"]!)").body)["state"], "declined")
+        begun = try json(try get("/pair/begin").body)
+        prompt?(begun["code"])
+        let waited = try get("/pair/wait?id=\(begun["id"]!)")
+        XCTAssertEqual(try json(waited.body)["state"], "paired")
+        let setCookie = try XCTUnwrap(waited.headers["Set-Cookie"])
+        XCTAssertTrue(setCookie.contains("HttpOnly"))
+        XCTAssertFalse(setCookie.contains("Secure"), "paired over HTTP")
+        let cookie = try XCTUnwrap(setCookie.components(separatedBy: ";").first)
+        XCTAssertEqual(try get("/apps.json", cookie: cookie).status, 200)
+        let browser = try XCTUnwrap(server.devices.all.first { $0.kind == .browser })
+
+        // A QR code pairs once.
+        let qr = try XCTUnwrap(URLComponents(url: server.makeQRLink(), resolvingAgainstBaseURL: false))
+        let scanned = try get("/watch?\(qr.query!)")
+        XCTAssertEqual(scanned.status, 303)
+        XCTAssertEqual(scanned.headers["Location"], "/watch")
+        XCTAssertNotNil(scanned.headers["Set-Cookie"])
+        XCTAssertEqual(try get("/watch?\(qr.query!)").status, 403, "once")
+
+        // Forgotten, a device is turned away.
+        server.forget(browser)
+        XCTAssertEqual(try get("/apps.json", cookie: cookie).status, 401)
+        server.forget(link)
+        XCTAssertEqual(try get("/apps.json?token=\(link.token)").status, 401)
+
+        // Pairing off: a browser is told so.
+        let allowed = WebStreamServer.allowsPairing
+        WebStreamServer.allowsPairing = false
+        XCTAssertEqual(try json(try get("/pair/begin").body)["state"], "refused")
+        WebStreamServer.allowsPairing = allowed
+
+        // HTTPS, trusting DAM's authority, which /ca.cer hands out.
+        let authority = try get("/ca.cer")
+        XCTAssertEqual(authority.status, 200)
+        XCTAssertEqual(authority.body, server.certificates?.authority)
+        client.authority = authority.body
+        let secure = try self.get("/apps.json?token=\(server.devices.thisMac.token)", port: server.securePort, secure: true)
+        XCTAssertEqual(secure.status, 200)
+
+        // Stopped, it answers nothing.
+        server.stop()
+        XCTAssertEqual(try get("/watch").status, 0)
+    }
+
+    /// Moonlight's HTTP port no longer serves the stream.
+    func testMoonlightsPortDoesNotServeTheStream() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let base = UInt16.random(in: 40000...48000)
         let host = MoonlightHost(httpPort: NWEndpoint.Port(rawValue: base)!, httpsPort: NWEndpoint.Port(rawValue: base + 1)!,
                                  rtspPort: NWEndpoint.Port(rawValue: base + 2)!, directory: directory, advertises: false)
         defer { host.stop() }
-        host.apps = [MoonlightApp(id: 1, title: "Streaming Display 1", displayID: 7)]
         host.start()
         let deadline = Date().addingTimeInterval(5)
         while !host.isListening, host.lastError == nil, Date() < deadline {
             RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         }
         XCTAssertTrue(host.isListening, host.lastError ?? "")
-
-        let page = try get("/watch", from: host)
-        XCTAssertEqual(page.status, 200)
-        let html = String(decoding: page.body, as: UTF8.self)
-        XCTAssertTrue(html.contains("<video"))
-        XCTAssertTrue(html.contains("ManagedMediaSource"), "iPhones have only the managed kind")
-        XCTAssertEqual(try get("/", from: host).body, page.body)
-
-        let apps = try get("/apps.json", from: host)
-        XCTAssertEqual(apps.status, 200)
-        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: apps.body) as? [String: Any])
-        XCTAssertEqual((json["apps"] as? [[String: Any]])?.first?["title"] as? String, "Streaming Display 1")
-        XCTAssertEqual(json["profile"] as? String, StreamProfile.preferred.rawValue)
-        XCTAssertEqual((json["bitrates"] as? [String: Int])?["viewing"], 40_000)
-
-        XCTAssertEqual(try get("/stream.mp4?app=9", from: host).status, 404, "no such display")
-        XCTAssertEqual(try get("/serverinfo", from: host).status, 200, "Moonlight's own requests still answered")
-        XCTAssertEqual(host.watchURL.path, "/watch")
-        XCTAssertEqual(host.watchURL.port, Int(base))
+        XCTAssertEqual(try get("/watch", port: host.httpPort).status, 404)
+        XCTAssertEqual(try get("/serverinfo", port: host.httpPort).status, 200)
     }
 }

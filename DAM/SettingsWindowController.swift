@@ -3,6 +3,8 @@
 //
 
 import AppKit
+import CoreImage
+import UniformTypeIdentifiers
 
 final class SettingsWindowController: NSWindowController {
 
@@ -18,6 +20,7 @@ final class SettingsWindowController: NSWindowController {
     private let sidecarManager: SidecarManager
     private let moonlightHost: MoonlightHost
     private let sessionCoordinator: RemoteSessionCoordinator?
+    private let webStream: WebStreamServer
 
     var onSave: ((HotkeyPreference) -> Void)?
     var onSaveAirPlayConnect: ((HotkeyPreference) -> Void)?
@@ -36,6 +39,8 @@ final class SettingsWindowController: NSWindowController {
     var onUseExternalSunshine: ((Bool) -> Void)?
     /// Called when a remote-session profile changes, so the watching follows it.
     var onSessionProfilesChanged: (() -> Void)?
+    /// Turns the browser stream on or off, as the menu does.
+    var onToggleWebStream: (() -> Void)?
 
     // Tab content views — built once, reused on every tab switch.
     private lazy var hotkeyContent:  NSView = buildHotkeysTab()
@@ -47,6 +52,9 @@ final class SettingsWindowController: NSWindowController {
     private lazy var sessionsContent: NSView = buildSessionsTab()
     /// What the Moonlight tab was built from, to tell when it is out of date.
     private var moonlightShown = MoonlightState(host: nil)
+    /// Rebuilt when the browser stream starts or stops.
+    private lazy var browserContent: NSView = buildBrowserTab()
+    private var browserShown = BrowserState(server: nil)
     private var selectedTab = TabID.general
 
     // MARK: - Toolbar identifiers
@@ -58,7 +66,8 @@ final class SettingsWindowController: NSWindowController {
         static let virtual = NSToolbarItem.Identifier("\(AppIdentity.shortID).settings.virtual")
         static let moonlight = NSToolbarItem.Identifier("\(AppIdentity.shortID).settings.moonlight")
         static let sessions = NSToolbarItem.Identifier("\(AppIdentity.shortID).settings.sessions")
-        static let all: [NSToolbarItem.Identifier] = [general, hotkeys, devices, virtual, moonlight, sessions]
+        static let browser = NSToolbarItem.Identifier("\(AppIdentity.shortID).settings.browser")
+        static let all: [NSToolbarItem.Identifier] = [general, hotkeys, devices, virtual, moonlight, browser, sessions]
     }
 
     // MARK: - Init
@@ -74,6 +83,7 @@ final class SettingsWindowController: NSWindowController {
          videoManager: VideoManager,
          sidecarManager: SidecarManager,
          moonlightHost: MoonlightHost,
+         webStream: WebStreamServer,
          sessionCoordinator: RemoteSessionCoordinator? = nil) {
         recorder              = KeyRecorderView(preference: current)
         recorderAirPlay       = KeyRecorderView(preference: currentAirPlayConnect)
@@ -87,6 +97,7 @@ final class SettingsWindowController: NSWindowController {
         self.sidecarManager   = sidecarManager
         self.moonlightHost    = moonlightHost
         self.sessionCoordinator = sessionCoordinator
+        self.webStream        = webStream
 
         let win = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 420, height: 280),
@@ -136,6 +147,8 @@ final class SettingsWindowController: NSWindowController {
             content = moonlightContent; title = "Moonlight"
         case TabID.sessions:
             content = sessionsContent; title = "Remote Sessions"
+        case TabID.browser:
+            content = browserContent; title = "Browser Stream"
         default:
             content = hotkeyContent;  title = "Hotkeys"
         }
@@ -443,10 +456,140 @@ final class SettingsWindowController: NSWindowController {
                      action: { MoonlightStream.adaptsBitrate = $0 }),
             checkbox(title: "Show the pointer",
                      isOn: MoonlightStream.showsPointer,
-                     help: "Draws the Mac's pointer into Moonlight and browser streams. Takes " +
-                           "effect from the next stream.",
+                     help: "Draws the Mac's pointer into Moonlight streams. Takes effect from the " +
+                           "next stream.",
                      action: { MoonlightStream.showsPointer = $0 }),
         ]
+
+        let encryption = ClosurePopup(onSelect: { raw in
+            guard let choice = raw.flatMap(MoonlightVideoEncryption.init(rawValue:)) else { return }
+            MoonlightStream.videoEncryption = choice
+        })
+        encryption.font = .systemFont(ofSize: NSFont.systemFontSize)
+        for option in MoonlightVideoEncryption.allCases {
+            let item = NSMenuItem(title: option.title, action: nil, keyEquivalent: "")
+            item.representedObject = option.rawValue
+            item.toolTip = option.summary
+            encryption.menu?.addItem(item)
+            if option == MoonlightStream.videoEncryption { encryption.select(item) }
+        }
+        encryption.toolTip = "When Moonlight's video is encrypted; the controls and sound always are. " +
+                             "Moonlight on a Mac, PC, iPhone or iPad takes it whenever it is offered. " +
+                             "Takes effect from the next launch."
+
+        let devices: [[NSView]] = host.clients.map { client in
+            let lowLatency = checkbox(title: "Low-latency encoding", isOn: client.lowLatency,
+                                      help: "Sends each frame the moment it is encoded, about a frame " +
+                                            "sooner. Takes effect from the next stream.",
+                                      action: { [weak host] in host?.setLowLatency($0, for: client) })
+            let input = checkbox(title: "Allow input", isOn: client.allowsInput,
+                                 help: "Lets the device use the Mac's pointer and keyboard on the display it " +
+                                       "streams. \(AppIdentity.name) also needs Accessibility access for it. " +
+                                       "Takes effect at once.",
+                                 action: { [weak host] allows in
+                                     host?.setAllowsInput(allows, for: client)
+                                     if allows { _ = VideoManager.hasAccessibilityAccess(prompting: true) }
+                                 })
+            let forget = ClosureButton(title: "Forget") { [weak self] _ in self?.onForgetMoonlightClient?(client) }
+            forget.bezelStyle  = .rounded
+            forget.controlSize = .small
+            forget.font        = .systemFont(ofSize: NSFont.smallSystemFontSize)
+            forget.toolTip     = "Unpairs \(client.name): it has to pair again to connect."
+            let name = rowLabel(client.name)
+            name.toolTip = "Paired \(client.paired.formatted(date: .abbreviated, time: .shortened))"
+            return [name, lowLatency, input, forget]
+        }
+        // A grid, so each device's controls line up whatever the length of its name.
+        let deviceGrid = BaselineRowGridView(views: devices)
+        deviceGrid.rowSpacing    = 6
+        deviceGrid.columnSpacing = 8
+        deviceGrid.rowAlignment  = .firstBaseline
+
+        return formTab([
+            ("Host:", [hostChoice]),
+            ("Hosting:", hosting),
+            ("Streams:", streams),
+            ("Encrypt Video:", [encryption]),
+            ("Paired Devices:", [devices.isEmpty ? placeholderLabel("None yet") : deviceGrid]),
+        ], leftAligned: true)
+    }
+
+    /// The browser stream: on or off, where from, pairing, the devices that may watch, how
+    /// streams are made, and its HTTPS certificate.
+    private func buildBrowserTab() -> NSView {
+        let server = webStream
+        browserShown = BrowserState(server: server)
+        var serving: [NSView] = []
+        weak var allowButton: NSButton?
+        let allow = checkbox(title: "Allow browsers to watch", isOn: server.isRunning,
+                             help: "Lets a paired browser, or a player with a link, play a streaming display: " +
+                                   "HTTP on port \(server.port.rawValue), HTTPS on \(server.securePort.rawValue). " +
+                                   "Apart from Moonlight.",
+                             action: { [weak self, weak server] _ in
+                                 self?.onToggleWebStream?()
+                                 allowButton?.state = server?.isRunning == true ? .on : .off
+                             })
+        allowButton = allow as? NSButton
+        serving.append(allow)
+        if let error = server.lastError { serving.append(placeholderLabel(error)) }
+
+        let reach = ClosurePopup(onSelect: { raw in
+            guard let choice = raw.flatMap(WebStreamReach.init(rawValue:)) else { return }
+            WebStreamReach.current = choice
+        })
+        reach.font = .systemFont(ofSize: NSFont.systemFontSize)
+        for option in WebStreamReach.allCases {
+            let item = NSMenuItem(title: option.title, action: nil, keyEquivalent: "")
+            item.representedObject = option.rawValue
+            item.toolTip = option.summary
+            reach.menu?.addItem(item)
+            if option == WebStreamReach.current { reach.select(item) }
+        }
+        reach.toolTip = "Where browsers and players may watch from, paired or not."
+
+        let allowPairing = checkbox(title: "Allow new browsers to pair", isOn: WebStreamServer.allowsPairing,
+                                    help: "A browser that opens the address shows a code; typed on this Mac, it lets " +
+                                          "that browser watch from then on. Unchecked, only paired browsers and links work.",
+                                    action: { WebStreamServer.allowsPairing = $0 })
+        let qr = ClosureButton(title: "Pair with a QR Code…") { [weak self] _ in self?.showPairingQRCode() }
+        qr.bezelStyle = .rounded
+        qr.toolTip = "Shows a QR code a phone or tablet scans to pair, with nothing to type. It works once, for five minutes."
+
+        let devices: [[NSView]] = server.devices.all.map { device in
+            let name = rowLabel(device.name)
+            name.toolTip = "\(device.kind == .link ? "Link" : "Paired") \(device.added.formatted(date: .abbreviated, time: .shortened))"
+            let kind = placeholderLabel(device.kind == .link ? "Link" : "Browser")
+            var row: [NSView] = [name, kind]
+            if device.kind == .link {
+                let copy = ClosureButton(title: "Copy Link") { [weak server] _ in
+                    guard let server else { return }
+                    let link = server.links(for: device).stream.absoluteString
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(link, forType: .string)
+                    SpeechSynthesizer.shared.announce(Spoken.copiedLink)
+                }
+                copy.toolTip = "Copies the stream's address for mpv, IINA or VLC. The same address with watch in " +
+                               "place of stream.mp4 opens the player page."
+                row.append(small(copy))
+            } else {
+                row.append(NSView())
+            }
+            let forget = ClosureButton(title: "Forget") { [weak server] _ in server?.forget(device) }
+            forget.toolTip = "\(device.name) can no longer watch; if it is watching, it is cut off."
+            row.append(small(forget))
+            return row
+        }
+        let deviceGrid = BaselineRowGridView(views: devices)
+        deviceGrid.rowSpacing    = 6
+        deviceGrid.columnSpacing = 8
+        deviceGrid.rowAlignment  = .firstBaseline
+        let newLink = ClosureButton(title: "New Player Link…") { [weak self] _ in self?.makePlayerLink() }
+        newLink.bezelStyle = .rounded
+        newLink.toolTip = "Makes a link for a player such as mpv, IINA or VLC, which can't pair, and copies it."
+
+        let pointer = checkbox(title: "Show the pointer", isOn: WebStreamServer.showsPointer,
+                               help: "Draws the Mac's pointer into browser streams. Takes effect from the next stream.",
+                               action: { WebStreamServer.showsPointer = $0 })
 
         let profile = ClosurePopup(onSelect: { [weak self] raw in
             guard let profile = raw.flatMap(StreamProfile.init(rawValue:)) else { return }
@@ -464,33 +607,99 @@ final class SettingsWindowController: NSWindowController {
         profile.toolTip = "The profile a browser or player gets unless its address asks for " +
                           "another. Hover over each for what it trades."
 
-        let devices: [[NSView]] = host.clients.map { client in
-            let lowLatency = checkbox(title: "Low-latency encoding", isOn: client.lowLatency,
-                                      help: "Sends each frame the moment it is encoded, about a frame " +
-                                            "sooner. Takes effect from the next stream.",
-                                      action: { [weak host] in host?.setLowLatency($0, for: client) })
-            let forget = ClosureButton(title: "Forget") { [weak self] _ in self?.onForgetMoonlightClient?(client) }
-            forget.bezelStyle  = .rounded
-            forget.controlSize = .small
-            forget.font        = .systemFont(ofSize: NSFont.smallSystemFontSize)
-            forget.toolTip     = "Unpairs \(client.name): it has to pair again to connect."
-            let name = rowLabel(client.name)
-            name.toolTip = "Paired \(client.paired.formatted(date: .abbreviated, time: .shortened))"
-            return [name, lowLatency, forget]
+        var https: [NSView] = [placeholderLabel(server.secureWatchURL.absoluteString)]
+        if let certificates = server.certificates {
+            let fingerprint = placeholderLabel("SHA-256 " + certificates.fingerprint.prefix(23) + "…")
+            fingerprint.toolTip = certificates.fingerprint
+            https.append(fingerprint)
         }
-        // A grid, so each device's controls line up whatever the length of its name.
-        let deviceGrid = BaselineRowGridView(views: devices)
-        deviceGrid.rowSpacing    = 6
-        deviceGrid.columnSpacing = 8
-        deviceGrid.rowAlignment  = .firstBaseline
+        let export = ClosureButton(title: "Export Certificate…") { [weak self] _ in self?.exportCertificate() }
+        export.bezelStyle = .rounded
+        export.toolTip = "Saves the certificate authority HTTPS is signed with, for mpv's --tls-ca-file or to trust. " +
+                         "An iPhone or iPad installs it from \(server.authorityURL.absoluteString)."
+        https.append(export)
 
         return formTab([
-            ("Host:", [hostChoice]),
-            ("Hosting:", hosting),
-            ("Streams:", streams),
-            ("Browser Profile:", [profile]),
-            ("Paired Devices:", [devices.isEmpty ? placeholderLabel("None yet") : deviceGrid]),
+            ("Serving:", serving),
+            ("Reach:", [reach]),
+            ("Pairing:", [allowPairing, qr]),
+            ("Devices:", [devices.isEmpty ? placeholderLabel("None yet") : deviceGrid, newLink]),
+            ("Streams:", [pointer]),
+            ("Profile:", [profile]),
+            ("HTTPS:", https),
         ], leftAligned: true)
+    }
+
+    private func small(_ button: NSButton) -> NSButton {
+        button.bezelStyle  = .rounded
+        button.controlSize = .small
+        button.font        = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        return button
+    }
+
+    /// Asks for a name, makes a link for a player, and copies its stream address.
+    private func makePlayerLink() {
+        let alert = NSAlert()
+        alert.messageText = "New player link"
+        alert.informativeText = "A name for the player or device it is for. The link is copied once made."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 220, height: 24))
+        field.placeholderString = "mpv on the living room Mac"
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Make Link")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let name = field.stringValue.trimmingCharacters(in: .whitespaces)
+        let device = webStream.addLink(named: name.isEmpty ? "Player" : name)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(webStream.links(for: device).stream.absoluteString, forType: .string)
+        SpeechSynthesizer.shared.announce(Spoken.copiedLink)
+    }
+
+    /// Shows a QR code that pairs whoever scans it, once, for five minutes.
+    private func showPairingQRCode() {
+        let link = webStream.makeQRLink()
+        let alert = NSAlert()
+        alert.messageText = "Scan to pair"
+        alert.informativeText = "Scan with the camera of the phone or tablet that is to watch. The code works " +
+                                "once, for five minutes."
+        if let image = Self.qrImage(link.absoluteString, size: 240) {
+            let view = NSImageView(frame: NSRect(x: 0, y: 0, width: 240, height: 240))
+            view.image = image
+            alert.accessoryView = view
+        }
+        alert.addButton(withTitle: "Done")
+        alert.runModal()
+    }
+
+    static func qrImage(_ text: String, size: CGFloat) -> NSImage? {
+        guard let filter = CIFilter(name: "CIQRCodeGenerator") else { return nil }
+        filter.setValue(Data(text.utf8), forKey: "inputMessage")
+        filter.setValue("M", forKey: "inputCorrectionLevel")
+        guard let output = filter.outputImage else { return nil }
+        let scale = size / output.extent.width
+        let scaled = output.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        let representation = NSCIImageRep(ciImage: scaled)
+        let image = NSImage(size: representation.size)
+        image.addRepresentation(representation)
+        return image
+    }
+
+    /// Saves the certificate authority as PEM.
+    private func exportCertificate() {
+        guard let certificates = webStream.certificates else { return }
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "\(AppIdentity.name) Browser Stream.pem"
+        panel.allowedContentTypes = [.init(filenameExtension: "pem") ?? .data]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        try? Data(certificates.authorityPEM.utf8).write(to: url, options: .atomic)
+    }
+
+    /// Rebuilds the Browser Stream tab if what it shows of the server has changed.
+    func browserStreamDidChange() {
+        guard BrowserState(server: webStream) != browserShown else { return }
+        browserContent = buildBrowserTab()
+        if selectedTab == TabID.browser { window?.contentView = browserContent }
     }
 
     /// What to set up in Sunshine for it to stream the displays DAM makes.
@@ -1056,15 +1265,21 @@ final class SettingsWindowController: NSWindowController {
 
     // MARK: - Present
 
-    /// Shows the window on the Remote Sessions tab.
     /// Builds the Remote Sessions tab again from the profiles, as when a session changed one.
     func reloadSessions() {
         sessionsContent = buildSessionsTab()
         if selectedTab == TabID.sessions { selectTab(TabID.sessions) }
     }
 
+    /// Shows the window on the Remote Sessions tab.
     func showSessions() {
         selectTab(TabID.sessions)
+        show()
+    }
+
+    /// Shows the window on the Browser Stream tab.
+    func showBrowserStream() {
+        selectTab(TabID.browser)
         show()
     }
 
@@ -1129,6 +1344,10 @@ extension SettingsWindowController: NSToolbarDelegate {
             item.label = "Remote Sessions"
             item.image = NSImage(systemSymbolName: "display.2",
                                  accessibilityDescription: "Remote Sessions")
+        case TabID.browser:
+            item.label = "Browser Stream"
+            item.image = NSImage(systemSymbolName: "globe",
+                                 accessibilityDescription: "Browser Stream")
         default:
             return nil
         }
@@ -1180,6 +1399,22 @@ private struct MoonlightState: Equatable {
         isRunning = host.isRunning
         lastError = host.lastError
         clients = host.clients.map(\.certificate)
+    }
+}
+
+/// What the Browser Stream tab shows of the server, to tell when it must be rebuilt.
+private struct BrowserState: Equatable {
+    var isRunning = false
+    var lastError: String?
+    var devices: [WebStreamDevice] = []
+    var hasCertificates = false
+
+    init(server: WebStreamServer?) {
+        guard let server else { return }
+        isRunning = server.isRunning
+        lastError = server.lastError
+        devices = server.devices.all
+        hasCertificates = server.certificates != nil
     }
 }
 

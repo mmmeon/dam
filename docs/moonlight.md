@@ -1,7 +1,7 @@
 # Moonlight and web streaming — implementation
 
-*As of 2026-10-14 (merged to `main` on 2026-10-13 in 3aa3588). H.264 only, no input
-control yet.*
+*As of 2026-10-14 (merged to `main` on 2026-10-13 in 3aa3588). H.264 only. Mouse,
+keyboard and text input since 2026-10-20; no controllers, touch or pen.*
 
 ## Summary
 
@@ -12,15 +12,43 @@ client's resolution and frame rate. DAM streams it as H.264 video with Reed-Solo
 and Opus audio. Cancelling from Moonlight removes the display; resuming keeps it,
 changed in place to the size the client asks for now.
 
-The same HTTP port (47989) also serves displays to browsers and media players:
+Apart from Moonlight, DAM also serves displays to browsers and media players, over HTTP
+on port 47995 and HTTPS on 47996. It is turned on and set up on its own: the Browser
+Stream menu and Settings › Browser Stream, independent of Moonlight hosting and its
+settings.
 
 - `/watch` plays the stream in a browser through Media Source Extensions.
 - `/stream.mp4` is an endless fragmented MP4 that mpv, ffplay and VLC play as is.
 - `/apps.json` lists the displays.
 
-Three profiles (Interactive, Balanced, Viewing) set the defaults from Settings ›
-Moonlight. Each client can override profile, bitrate, frame rate and size in the query
-string, and turn on low-latency encoding with `lowlatency=1`.
+Who may watch (`WebStreamAccess`):
+
+- **Devices.** Each has a token of its own, kept in `Application Support/DAM/Browser/
+  devices.json`, and can be forgotten on its own in Settings. A player gets a link
+  (`?token=`) from New Player Link…; Open in Browser uses a link named This Mac.
+  `/apps.json` and `/stream.mp4` answer 401 without a known token; the page itself is
+  open to anyone in reach.
+- **Pairing.** A browser without a link asks to pair: the page shows a four-digit code,
+  and DAM asks the user to type it. Right, the browser gets an HttpOnly cookie
+  (`dam_watch`, a year; Secure when paired over HTTPS). One code at a time, five minutes
+  each; a wrong code ends it. Pair with a QR Code… shows a code a phone scans instead:
+  a key in the address that works once, for five minutes. "Allow new browsers to pair"
+  turns both off.
+- **Reach.** This Mac Only, This Mac's Networks (the default: loopback, link-local, or a
+  subnet of the Mac's interfaces), or Anywhere. Out of reach gets a 403 for everything.
+- **HTTPS.** DAM makes a certificate authority of its own (20 years) and a server
+  certificate it signs for the Mac's `.local` name, host name, `localhost`, loopback and
+  IPv4 addresses (800 days, as Apple allows at most 825), made again when those change
+  or it nears its end. A device trusts the authority once: mpv with `--tls-ca-file`
+  (Export Certificate…), an iPhone or iPad by installing `http://<mac>.local:47995/ca.cer`
+  and turning on full trust for it. Without that, players that don't check certificates
+  (mpv, IINA, ffmpeg by default) still play over HTTPS, and VLC asks once.
+- The stream over HTTP crosses the network unencrypted, and with it the tokens.
+
+Three profiles (Interactive, Balanced, Viewing) set the defaults from Settings › Browser
+Stream, which also has its own Show the Pointer. Each client can override profile,
+bitrate, frame rate and size in the query string, and turn on low-latency encoding with
+`lowlatency=1`.
 
 ## How it works
 
@@ -37,7 +65,7 @@ flowchart LR
     F --> G["7. Encode<br/>VideoToolbox H.264, Opus"]
     G --> H["8. Packetize + FEC<br/>Reed-Solomon parity, paced"]
     H --> I["To Moonlight<br/>UDP 47998 video, 48000 audio"]
-    G --> J["Browser or player<br/>fragmented MP4: /watch, /stream.mp4"]
+    G --> J["Browser or player, HTTP 47995 / HTTPS 47996<br/>fragmented MP4: /watch, /stream.mp4"]
 ```
 
 ### Discovery and pairing
@@ -53,16 +81,74 @@ flowchart LR
   Application Support, readable only by the user. The TLS identity is built in memory,
   so the keychain isn't involved.
 
+### Several devices
+
+Each paired device has a session of its own, from /launch until /cancel, up to four at
+once (`MoonlightHost.maxSessions`). A fifth gets a 503.
+
+- Session *n* (0 to 3) has RTSP on TCP 48010 + *n*, given in /launch's `sessionUrl0`, and
+  its stream on UDP 47998–48000 + 100 × *n*, given in the SETUP replies. The first
+  session's are GameStream's, which port forwards are set up for.
+- `/serverinfo` and `/cancel` are the asking device's own: a device sees its own launch
+  as running and the host free otherwise, so Moonlight never asks it to quit another
+  device's app.
+- Each stream has its own encoder, bitrate, keyframes, FEC and encryption. Streams of one
+  display at one size, rate and pointer setting share one capture (`SharedScreenCapture`),
+  sound included; one that joins gets the last picture at once.
+- A display made for one device that another device streams too stays until both are
+  done.
+- The menu lists the devices streaming, each with End Stream.
+- On the test Mac (Intel Iris Plus 650), three 1080p60 encoders at once kept their
+  frames within 25 ms (p90); with four, the slowest tenth took 43–83 ms.
+
 ### RTSP and control
 
-`MoonlightRTSP`, TCP 48010:
+`MoonlightRTSP`, TCP 48010 (and one port on per further session):
 
-- DESCRIBE offers H.264 only. It supports encrypted control and audio, but not
-  encrypted video.
+- DESCRIBE offers H.264 only. It supports encrypted control and audio, and encrypted
+  video when Settings › Moonlight › Encrypt Video says so for the client's address: Off
+  the Local Network (the default, as Sunshine's), Always or Never. "Local" is loopback,
+  link-local, or a subnet of one of the Mac's interfaces. Nothing is required, so a client
+  without fast AES may leave video plain.
 - ANNOUNCE is parsed for size, fps, packet size, bitrate, minimum FEC and audio
-  settings. It is refused if the client asks for another codec or for encrypted video.
-- Control runs on UDP 47999 over vendored ENet 1.3.18, with AES-128-GCM messages. Only
-  keyframe requests, reference-frame invalidation and termination are handled.
+  settings. It is refused if the client asks for another codec, or for encrypted video
+  that wasn't offered.
+- Control runs on UDP 47999 over vendored ENet 1.3.18, with AES-128-GCM messages.
+  Keyframe requests, reference-frame invalidation, frame FEC status, input and
+  termination are handled; the rest (pings, loss stats) are dropped.
+
+### Input
+
+Moonlight sends input as control message 0x0206 (`MoonlightInput.swift`). With the
+whole control stream encrypted, the packets inside are plain, as moonlight-common-c
+sends them to a Sunshine host (DAM reports 7.1.431.-1). `MoonlightInputInjector` posts
+them as HID events, one injector per stream:
+
+- **Pointer:** absolute moves map from the client's picture onto the streamed display's
+  points, undoing a turned display's rotation and allowing for bars around a display of
+  another shape. Relative moves (Moonlight's captured mouse) carry on from where they put the
+  pointer while they follow closely, and from where it is after a tenth of a second
+  without one (it may have been moved at the Mac), kept on that display. Buttons carry a click count, and moves while a button is held
+  are drags.
+- **Scrolling:** whole wheel notches scroll a line each; finer amounts, from trackpads and
+  touch screens, scroll by pixels. Horizontal scrolling is a Sunshine extension clients
+  send DAM.
+- **Keys:** Windows virtual-key codes map to the Mac's at a US keyboard's places. Ctrl is
+  Control, Alt is Option and the Windows key is Command, so a PC's Ctrl+C is not ⌘C.
+  As on a Mac keyboard, modifiers go as flag changes with their side's flag, and the
+  arrows, the keys above them, the function keys and the keypad carry Fn and keypad
+  flags.
+  Text from a phone's keyboard is typed as it is, whatever the layout.
+- **Permission:** posting events needs Accessibility access. Without it the input is
+  dropped and the stream goes on as it would without input; streams don't ask for it, the
+  Allow Input setting does when turned on. Input starts within a second of access being
+  given. Each paired device has that setting, on by default, which takes effect at once.
+  Events are posted on a queue of their own, so they never hold up the control stream. Whatever a stream holds down is let
+  go when it ends or input is turned off.
+- **Not handled:** controllers (macOS has no way for an app to make a virtual gamepad
+  without a driver Apple must entitle), and touch and pen (DESCRIBE's feature flags stay
+  0, so clients send taps as mouse events). Every client streaming a display may move its
+  pointer; there is no arbitration.
 
 ### Video
 
@@ -70,7 +156,7 @@ flowchart LR
 `MoonlightFEC` → UDP 47998:
 
 - **Capture:** ScreenCaptureKit captures in 4:2:0 at the stream's size and rate, with a
-  queue depth of 6.
+  queue depth of 6, shared between streams that want the same.
 - **Encoding:** VideoToolbox hardware H.264 (High profile, CABAC, real time, no frame
   reordering, keyframes only on request).
 - **Nudge:** the encoder holds each frame until the next one arrives. So if no new frame
@@ -89,6 +175,10 @@ flowchart LR
   skips a frame before encoding it.
 - **FEC:** each frame is split into up to four blocks, each with 20% Reed-Solomon parity
   (nanors-compatible), or more if the client asks for it.
+- **Encryption:** when the client turned it on, each packet, data and parity alike, is
+  sealed after parity is worked out: AES-128-GCM under the launch's key, sent behind a
+  32-byte prefix of the nonce (a packet counter, three zeros and "V"), the frame index in
+  the clear, and the tag (`MoonlightVideoCrypto`).
 - **Still screen:** the last picture is resent every 0.5 s.
 - **Keyframe requests:** at most one keyframe per 0.25 s. A request is skipped while the
   keyframe asked for is still to be sent, or when it arrives less than a round trip (at
@@ -131,7 +221,8 @@ its own name and serial.
 
 ### Browser and player stream
 
-`WebStream`, `MP4Fragmenter`: one MP4 fragment per frame, H.264 plus AAC at 48 kHz.
+`WebStream`, `MP4Fragmenter`, TCP 47995 and 47996 (`WebStreamServer`, listeners of its
+own): one MP4 fragment per frame, H.264 plus AAC at 48 kHz.
 
 - Viewers of the same display with the same settings share one capture and one encoder.
 - A new viewer starts at a keyframe. A viewer more than 1 s behind skips ahead to the

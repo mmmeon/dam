@@ -20,7 +20,7 @@ struct MoonlightStreamConfig: Equatable {
     var bitrateKbps: Int
     /// 0 is H.264, the only codec offered.
     var videoFormat: Int
-    /// The x-ss-general.encryptionEnabled bits; 0x02 would be encrypted video.
+    /// The x-ss-general.encryptionEnabled bits; 0x02 is encrypted video.
     var encryptionEnabled: Int
     /// The fewest parity packets Moonlight asks for in each block.
     var minimumParity = 0
@@ -33,6 +33,9 @@ struct MoonlightStreamConfig: Equatable {
     /// Whether the encoder uses low-latency rate control; set from the device's setting,
     /// not from ANNOUNCE.
     var lowLatency = false
+
+    /// Whether the client turned on encrypted video, which it does only when it is offered.
+    var videoEncrypted: Bool { encryptionEnabled & MoonlightVideoCrypto.encryptionBit != 0 }
 
     /// The settings in an ANNOUNCE body, nil when one it needs is missing.
     static func parse(sdp: String) -> MoonlightStreamConfig? {
@@ -575,6 +578,60 @@ enum MoonlightControlCrypto {
         let type = UInt16(inner[0]) | UInt16(inner[1]) << 8
         let size = min(Int(inner[2]) | Int(inner[3]) << 8, inner.count - 4)
         return (type, Data(inner[4..<(4 + size)]))
+    }
+}
+
+/// Video packets sealed for a client that turned on encrypted video, as Sunshine sends them:
+/// a 12-byte nonce, the frame's index in the clear (so the client can drop late packets
+/// without opening them), the GCM tag, then the whole packet, RTP header and all, sealed
+/// with AES-128-GCM under the session key. Parity is worked out over the plain packets
+/// first; the client opens each packet before rebuilding lost ones.
+struct MoonlightVideoCrypto {
+    /// The x-ss-general.encryption* bit for video.
+    static let encryptionBit = 0x02
+    /// What sealing adds to each packet.
+    static let overhead = 32
+
+    private let key: SymmetricKey
+    /// Counts packets sealed; never repeats under the key.
+    private(set) var counter: UInt64 = 0
+
+    init(key: Data) {
+        self.key = SymmetricKey(data: key)
+    }
+
+    /// The nonce for packet `counter`: the counter, three zeros, then "V", which keeps it
+    /// apart from the control stream's nonces under the same key.
+    static func nonce(counter: UInt64) -> Data {
+        var bytes = Data()
+        bytes.append(littleEndian: counter)
+        bytes.append(contentsOf: [0, 0, 0, 0x56])
+        return bytes
+    }
+
+    /// `packet` sealed, or nil if it could not be.
+    mutating func seal(_ packet: Data) -> Data? {
+        let nonceData = Self.nonce(counter: counter)
+        counter &+= 1
+        guard packet.count >= 24, let nonce = try? AES.GCM.Nonce(data: nonceData),
+              let box = try? AES.GCM.seal(packet, using: key, nonce: nonce) else { return nil }
+        var sealed = Data(capacity: Self.overhead + packet.count)
+        sealed.append(nonceData)
+        // The video header's frame index, bytes 20 to 23, already little-endian.
+        let start = packet.startIndex
+        sealed.append(packet[(start + 20)..<(start + 24)])
+        sealed.append(box.tag)
+        sealed.append(box.ciphertext)
+        return sealed
+    }
+
+    /// The packet in `sealed`, nil when it does not open; as the client does.
+    static func open(_ sealed: Data, key: Data) -> Data? {
+        let bytes = [UInt8](sealed)
+        guard bytes.count > overhead, let nonce = try? AES.GCM.Nonce(data: Data(bytes[0..<12])),
+              let box = try? AES.GCM.SealedBox(nonce: nonce, ciphertext: Data(bytes[overhead...]),
+                                               tag: Data(bytes[16..<32])) else { return nil }
+        return try? AES.GCM.open(box, using: SymmetricKey(data: key))
     }
 }
 

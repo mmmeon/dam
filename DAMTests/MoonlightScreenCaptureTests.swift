@@ -133,4 +133,68 @@ final class MoonlightScreenCaptureTests: XCTestCase {
         XCTAssertTrue(pacer.allows(CMTime(value: 10, timescale: 1)))
         XCTAssertTrue(pacer.allows(CMTime(value: 1, timescale: 1)))
     }
+
+    // MARK: - Shared capture
+
+    /// Two streams of one display at one size share a capture; one that joins late gets
+    /// the last picture at once; the capture stops once both have left.
+    func testStreamsOfOneDisplayShareACapture() throws {
+        let makeCapture = SharedScreenCapture.makeCapture, startCapture = SharedScreenCapture.startCapture
+        defer { SharedScreenCapture.makeCapture = makeCapture; SharedScreenCapture.startCapture = startCapture }
+        var made: [SharedScreenCapture.Key] = []
+        var deliver: ((CVPixelBuffer, CMTime) -> Void)?
+        SharedScreenCapture.makeCapture = { key, frame in
+            made.append(key)
+            deliver = frame
+            return MoonlightScreenCapture(displayID: key.displayID, width: key.width, height: key.height, fps: key.fps, frame: frame)
+        }
+        SharedScreenCapture.startCapture = { _, done in done(nil) }
+        let key = SharedScreenCapture.Key(displayID: 9, width: 64, height: 64, fps: 60, showsCursor: true)
+        let before = SharedScreenCapture.count
+
+        var firstFrames = 0
+        let first = SharedScreenCapture.subscribe(key, frame: { _, _ in firstFrames += 1 }, audio: { _ in },
+                                                  started: { XCTAssertNil($0) })
+        var buffer: CVPixelBuffer?
+        CVPixelBufferCreate(nil, 64, 64, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, nil, &buffer)
+        deliver?(try XCTUnwrap(buffer), CMTime(value: 1, timescale: 60))
+        XCTAssertEqual(firstFrames, 1)
+
+        let joined = expectation(description: "the last picture")
+        let second = SharedScreenCapture.subscribe(key, frame: { _, time in
+            XCTAssertEqual(time, CMTime(value: 1, timescale: 60)); joined.fulfill()
+        }, audio: { _ in }, started: { XCTAssertNil($0) })
+        wait(for: [joined], timeout: 2)
+        XCTAssertEqual(made, [key], "one capture")
+        XCTAssertEqual(SharedScreenCapture.count, before + 1)
+
+        // Another size is another capture.
+        let other = SharedScreenCapture.subscribe(.init(displayID: 9, width: 32, height: 32, fps: 60, showsCursor: true),
+                                                  frame: { _, _ in }, audio: { _ in }, started: { _ in })
+        XCTAssertEqual(made.count, 2)
+        other.cancel()
+
+        first.cancel()
+        XCTAssertEqual(SharedScreenCapture.count, before + 1, "still one stream on it")
+        second.cancel()
+        XCTAssertEqual(SharedScreenCapture.count, before)
+        _ = SharedScreenCapture.subscribe(key, frame: { _, _ in }, audio: { _ in }, started: { _ in }).cancel()
+        XCTAssertEqual(made.count, 3, "started afresh")
+    }
+
+    func testACaptureThatCouldNotStartIsLetGo() {
+        let makeCapture = SharedScreenCapture.makeCapture, startCapture = SharedScreenCapture.startCapture
+        defer { SharedScreenCapture.makeCapture = makeCapture; SharedScreenCapture.startCapture = startCapture }
+        SharedScreenCapture.makeCapture = { key, frame in
+            MoonlightScreenCapture(displayID: key.displayID, width: key.width, height: key.height, fps: key.fps, frame: frame)
+        }
+        SharedScreenCapture.startCapture = { _, done in done(MoonlightCaptureError.noPermission) }
+        let before = SharedScreenCapture.count
+        var failed = false
+        let subscription = SharedScreenCapture.subscribe(.init(displayID: 8, width: 64, height: 64, fps: 60, showsCursor: false),
+                                                         frame: { _, _ in }, audio: { _ in }, started: { failed = $0 != nil })
+        XCTAssertTrue(failed)
+        XCTAssertEqual(SharedScreenCapture.count, before)
+        subscription.cancel()
+    }
 }

@@ -194,12 +194,17 @@ cmd_run() {
     # Whether any display mirrors another now.
     mirrored_now() { $displays list | awk '$11 != 0' | grep -q . }
 
+    # Streaming displays up before the run belong to other devices' streams; the run's is
+    # the first one that is not among them.
+    local others=" $($displays list | awk '$2 == "streaming" { print $1 }' | tr '\n' ' ')"
+    our_display() { $displays list | awk -v others="$others" '$2 == "streaming" && index(others, " " $1 " ") == 0' | head -1 }
+
     # The streaming display, once placed at the size asked for (in pixels; a HiDPI one shows
     # half) and nothing mirrors.
     wait_for_display() {
         local width=$(turned_width $1) line
         for i in {1..60}; do
-            line=$($displays streaming)
+            line=$(our_display)
             if [[ -n $line && $(print $line | cut -d' ' -f8) == $width ]] && ! mirrored_now; then
                 pause 3
                 return 0
@@ -226,7 +231,7 @@ cmd_run() {
     # display's code sits in a corner of the size it had.
     show_codes() {
         [[ -n $codes_pid ]] && kill $codes_pid 2>/dev/null
-        local streaming=$($displays streaming | cut -d' ' -f1) main=$($displays list | awk '$10 == 1 { print $1 }')
+        local streaming=$(our_display | cut -d' ' -f1) main=$($displays list | awk '$10 == 1 { print $1 }')
         $latency show $streaming $main --seconds 100000 > $out/codes.out 2>&1 & codes_pid=$!
     }
     # Moonlight's window in the main display's bottom-left corner, clear of its code in the
@@ -244,7 +249,7 @@ cmd_run() {
     local size=$resolution
 
     if [[ -n $media ]]; then
-        local d=($($displays streaming))
+        local d=($(our_display))
         iina_title=${media:t}
         $iina $media --mpv-loop-file=inf --mpv-volume=$(( sound ? 100 : 0 )) --separate-windows --no-stdin > $out/iina.out 2>&1 &!
         for i in {1..20}; do
@@ -266,7 +271,7 @@ cmd_run() {
                 say "a display started mirroring the streaming display; ending the stream"
                 return 1
             fi
-            local px=$($displays streaming | cut -d' ' -f8)
+            local px=$(our_display | cut -d' ' -f8)
             if [[ $px != $expect && $warned != $px ]]; then
                 say "the streaming display is $px pixels wide, not the stream's $expect"
                 warned=$px
@@ -282,7 +287,7 @@ cmd_run() {
         if (( measure )); then
             place_moonlight $size
             pause 1
-            local main=$($displays list | awk '$10 == 1 { print $1 }') streaming=$($displays streaming | cut -d' ' -f1)
+            local main=$($displays list | awk '$10 == 1 { print $1 }') streaming=$(our_display | cut -d' ' -f1)
             screencapture -x -v -V 10 $out/latency-$part.mov >/dev/null 2>&1
             $latency analyze $out/latency-$part.mov --reference $main > $out/latency-$part.txt 2>&1 &
             run_for $(( $1 - first - 10 > 0 ? $1 - first - 10 : 0 )) || return 1

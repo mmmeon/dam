@@ -137,6 +137,30 @@ enum MoonlightCrypto {
         return DER.sequence(tbs, algorithm, DER.bitString(try sign(tbs, with: key)))
     }
 
+    /// An X.509 v3 certificate for `key`'s public half, signed by `issuerKey` (`key` itself
+    /// when nil), from a day ago for `days`, with `extensions` as made by `DER.extension`.
+    static func certificate(key: SecKey, subject: String, issuer: String? = nil, issuerKey: SecKey? = nil,
+                            days: Int, extensions: [Data] = [], now: Date = Date()) throws -> Data {
+        guard let publicKey = SecKeyCopyPublicKey(key),
+              let publicKeyData = SecKeyCopyExternalRepresentation(publicKey, nil) as Data? else {
+            throw MoonlightCryptoError.badKey
+        }
+        let algorithm = DER.sequence(DER.oid(DER.sha256WithRSA), DER.null)
+        func name(_ commonName: String) -> Data {
+            DER.sequence(DER.set(DER.sequence(DER.oid(DER.commonName), DER.utf8String(commonName))))
+        }
+        var serial = Data((0..<16).map { _ in UInt8.random(in: 0...255) })
+        serial[0] &= 0x7F
+        var fields = DER.explicit(0, DER.integer(Data([2]))) + DER.integer(serial) + algorithm + name(issuer ?? subject)
+            + DER.sequence(DER.utcTime(now.addingTimeInterval(-24 * 3600)),
+                           DER.utcTime(now.addingTimeInterval(Double(days) * 24 * 3600)))
+            + name(subject)
+            + DER.sequence(DER.sequence(DER.oid(DER.rsaEncryption), DER.null), DER.bitString(publicKeyData))
+        if !extensions.isEmpty { fields += DER.explicit(3, DER.tlv(0x30, extensions.reduce(Data(), +))) }
+        let tbs = DER.tlv(0x30, fields)
+        return DER.sequence(tbs, algorithm, DER.bitString(try sign(tbs, with: issuerKey ?? key)))
+    }
+
     /// The signature a certificate carries, which pairing hashes in as the certificate's
     /// fingerprint: the contents of its last field, a BIT STRING, after the unused-bits byte.
     static func signature(ofCertificate der: Data) throws -> Data {
@@ -193,6 +217,33 @@ enum DER {
     static let rsaEncryption: [UInt8] = [0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01]
     static let commonName: [UInt8] = [0x55, 0x04, 0x03]
     static let null = Data([0x05, 0x00])
+    static let subjectAltName: [UInt8] = [0x55, 0x1D, 0x11]
+    static let basicConstraints: [UInt8] = [0x55, 0x1D, 0x13]
+    static let keyUsage: [UInt8] = [0x55, 0x1D, 0x0F]
+    static let extendedKeyUsage: [UInt8] = [0x55, 0x1D, 0x25]
+    static let serverAuth: [UInt8] = [0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01]
+
+    /// A certificate extension: its OID, whether it is critical, and its value's DER.
+    static func `extension`(_ oid: [UInt8], critical: Bool = false, _ value: Data) -> Data {
+        sequence(DER.oid(oid) + (critical ? Data([0x01, 0x01, 0xFF]) : Data()) + tlv(0x04, value))
+    }
+
+    /// A certificate authority's: may sign certificates, and nothing else.
+    static func authorityExtensions() -> [Data] {
+        [`extension`(basicConstraints, critical: true, sequence(Data([0x01, 0x01, 0xFF]))),
+         // keyCertSign and cRLSign: bits 5 and 6.
+         `extension`(keyUsage, critical: true, Data([0x03, 0x02, 0x01, 0x06]))]
+    }
+
+    /// A TLS server's, for these host names and addresses (4 or 16 bytes each).
+    static func serverExtensions(names: [String], addresses: [[UInt8]]) -> [Data] {
+        let alternatives = names.map { tlv(0x82, Data($0.utf8)) } + addresses.map { tlv(0x87, Data($0)) }
+        return [`extension`(basicConstraints, critical: true, sequence()),
+                // digitalSignature and keyEncipherment: bits 0 and 2.
+                `extension`(keyUsage, critical: true, Data([0x03, 0x02, 0x05, 0xA0])),
+                `extension`(extendedKeyUsage, sequence(oid(serverAuth))),
+                `extension`(subjectAltName, tlv(0x30, alternatives.reduce(Data(), +)))]
+    }
 
     static func tlv(_ tag: UInt8, _ content: Data) -> Data {
         Data([tag]) + length(content.count) + content

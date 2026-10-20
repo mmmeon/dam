@@ -1,0 +1,171 @@
+import XCTest
+import Carbon.HIToolbox
+import CryptoKit
+@testable import DAM
+
+final class MoonlightInputTests: XCTestCase {
+
+    /// A packet as moonlight-common-c lays it out: big-endian size, little-endian magic, body.
+    private func packet(_ magic: UInt32, _ body: [UInt8]) -> [UInt8] {
+        let size = UInt32(4 + body.count)
+        return [UInt8(size >> 24), UInt8(size >> 16 & 0xFF), UInt8(size >> 8 & 0xFF), UInt8(size & 0xFF),
+                UInt8(magic & 0xFF), UInt8(magic >> 8 & 0xFF), UInt8(magic >> 16 & 0xFF), UInt8(magic >> 24)] + body
+    }
+
+    // MARK: - Packets
+
+    func testReadsEachKindOfPacket() {
+        // flags 0, VK_A with Moonlight's 0x80 high byte, little-endian; shift held; zero
+        XCTAssertEqual(MoonlightInput.parse(Data(packet(0x03, [0, 0x41, 0x80, 0x01, 0, 0]))),
+                       [.key(code: 0x41, down: true, modifiers: MoonlightKeyModifiers.shift)])
+        XCTAssertEqual(MoonlightInput.parse(Data(packet(0x04, [0, 0x41, 0x80, 0, 0, 0]))),
+                       [.key(code: 0x41, down: false, modifiers: 0)])
+        // 300, 200 of 1280 × 720, big-endian, with the unused field
+        XCTAssertEqual(MoonlightInput.parse(Data(packet(0x05, [0x01, 0x2C, 0, 0xC8, 0, 0, 0x05, 0, 0x02, 0xD0]))),
+                       [.moveTo(x: 300, y: 200, width: 1280, height: 720)])
+        XCTAssertEqual(MoonlightInput.parse(Data(packet(0x07, [0xFF, 0xFE, 0, 3]))), [.move(dx: -2, dy: 3)])
+        XCTAssertEqual(MoonlightInput.parse(Data(packet(0x08, [3]))), [.button(3, down: true)])
+        XCTAssertEqual(MoonlightInput.parse(Data(packet(0x09, [1]))), [.button(1, down: false)])
+        // -120 twice, then zero
+        XCTAssertEqual(MoonlightInput.parse(Data(packet(0x0A, [0xFF, 0x88, 0xFF, 0x88, 0, 0]))), [.scroll(-120)])
+        XCTAssertEqual(MoonlightInput.parse(Data(packet(0x5500_0001, [0, 30]))), [.horizontalScroll(30)])
+        XCTAssertEqual(MoonlightInput.parse(Data(packet(0x17, Array("hé".utf8)))), [.text("hé")])
+        XCTAssertEqual(MoonlightInput.parse(Data(packet(0x0C, [0, 0x1A]))), [.other(0x0C)], "a controller's")
+    }
+
+    func testReadsSeveralPacketsAndStopsAtOneCutShort() {
+        let two = packet(0x07, [0, 1, 0, 2]) + packet(0x08, [1])
+        XCTAssertEqual(MoonlightInput.parse(Data(two)), [.move(dx: 1, dy: 2), .button(1, down: true)])
+        XCTAssertEqual(MoonlightInput.parse(Data(two.dropLast())), [.move(dx: 1, dy: 2)])
+        XCTAssertEqual(MoonlightInput.parse(Data(packet(0x05, [0, 1]))), [.other(0x05)], "too short to read")
+        XCTAssertEqual(MoonlightInput.parse(Data()), [])
+    }
+
+    func testInputComesInAControlMessage() throws {
+        let key = SymmetricKey(data: Data(repeating: 7, count: 16))
+        let payload = Data(packet(0x08, [1]))
+        let sealed = try MoonlightControlCrypto.seal(type: MoonlightInput.messageType, payload: payload, sequence: 9,
+                                                     key: key, direction: .clientToHost)
+        let opened = try XCTUnwrap(MoonlightControlCrypto.open(sealed, key: key, direction: .clientToHost))
+        XCTAssertEqual(opened.type, 0x0206)
+        XCTAssertEqual(MoonlightInput.parse(opened.payload), [.button(1, down: true)])
+    }
+
+    // MARK: - Keys
+
+    func testMapsWindowsKeysToTheMacs() {
+        XCTAssertEqual(MoonlightKeyMap.macKey(for: 0x41), CGKeyCode(kVK_ANSI_A))
+        XCTAssertEqual(MoonlightKeyMap.macKey(for: 0x5A), CGKeyCode(kVK_ANSI_Z))
+        XCTAssertEqual(MoonlightKeyMap.macKey(for: 0x30), CGKeyCode(kVK_ANSI_0))
+        XCTAssertEqual(MoonlightKeyMap.macKey(for: 0x39), CGKeyCode(kVK_ANSI_9))
+        XCTAssertEqual(MoonlightKeyMap.macKey(for: 0x70), CGKeyCode(kVK_F1))
+        XCTAssertEqual(MoonlightKeyMap.macKey(for: 0x83), CGKeyCode(kVK_F20))
+        XCTAssertEqual(MoonlightKeyMap.macKey(for: 0x69), CGKeyCode(kVK_ANSI_Keypad9))
+        XCTAssertEqual(MoonlightKeyMap.macKey(for: 0xBA), CGKeyCode(kVK_ANSI_Semicolon))
+        XCTAssertEqual(MoonlightKeyMap.macKey(for: 0xDE), CGKeyCode(kVK_ANSI_Quote))
+        XCTAssertEqual(MoonlightKeyMap.macKey(for: 0x08), CGKeyCode(kVK_Delete), "Backspace")
+        XCTAssertEqual(MoonlightKeyMap.macKey(for: 0x2E), CGKeyCode(kVK_ForwardDelete))
+        XCTAssertEqual(MoonlightKeyMap.macKey(for: 0x0D), CGKeyCode(kVK_Return))
+        XCTAssertEqual(MoonlightKeyMap.macKey(for: 0x0D, modifiers: MoonlightKeyModifiers.extended),
+                       CGKeyCode(kVK_ANSI_KeypadEnter))
+        XCTAssertNil(MoonlightKeyMap.macKey(for: 0x5D), "the menu key has none")
+    }
+
+    func testModifiersAreControlOptionAndCommand() {
+        XCTAssertEqual(MoonlightKeyMap.macKey(for: 0xA2), CGKeyCode(kVK_Control))
+        XCTAssertEqual(MoonlightKeyMap.macKey(for: 0xA3), CGKeyCode(kVK_RightControl))
+        XCTAssertEqual(MoonlightKeyMap.macKey(for: 0xA4), CGKeyCode(kVK_Option))
+        XCTAssertEqual(MoonlightKeyMap.macKey(for: 0xA5), CGKeyCode(kVK_RightOption))
+        XCTAssertEqual(MoonlightKeyMap.macKey(for: 0x5B), CGKeyCode(kVK_Command))
+        XCTAssertEqual(MoonlightKeyMap.macKey(for: 0xA1), CGKeyCode(kVK_RightShift))
+        XCTAssertEqual(MoonlightKeyMap.modifierFlags(of: CGKeyCode(kVK_RightCommand)),
+                       [.maskCommand, CGEventFlags(rawValue: 0x10)], "⌘ and its right-hand side")
+        XCTAssertEqual(MoonlightKeyMap.modifierFlags(of: CGKeyCode(kVK_Option)),
+                       [.maskAlternate, CGEventFlags(rawValue: 0x20)])
+        XCTAssertNil(MoonlightKeyMap.modifierFlags(of: CGKeyCode(kVK_ANSI_A)))
+    }
+
+    func testKeysCarryTheFlagsAMacKeyboardGivesThem() {
+        XCTAssertEqual(MoonlightKeyMap.keyFlags(of: CGKeyCode(kVK_LeftArrow)), [.maskSecondaryFn, .maskNumericPad])
+        XCTAssertEqual(MoonlightKeyMap.keyFlags(of: CGKeyCode(kVK_PageDown)), .maskSecondaryFn)
+        XCTAssertEqual(MoonlightKeyMap.keyFlags(of: CGKeyCode(kVK_F5)), .maskSecondaryFn)
+        XCTAssertEqual(MoonlightKeyMap.keyFlags(of: CGKeyCode(kVK_ANSI_Keypad5)), .maskNumericPad)
+        XCTAssertEqual(MoonlightKeyMap.keyFlags(of: CGKeyCode(kVK_ANSI_A)), [])
+    }
+
+    // MARK: - Pointer
+
+    private let display = CGRect(x: 1920, y: 0, width: 1280, height: 720)
+
+    private func point(_ x: Int, _ y: Int, of width: Int = 1280, _ height: Int = 720, stream: (Int, Int) = (1280, 720),
+                       on bounds: CGRect? = nil, turned rotation: DisplayRotation = .standard) -> CGPoint {
+        MoonlightPointerMapping.point(x: x, y: y, width: width, height: height, streamWidth: stream.0,
+                                      streamHeight: stream.1, bounds: bounds ?? display, rotation: rotation)
+    }
+
+    func testMapsAStreamPointOntoItsDisplay() {
+        XCTAssertEqual(point(0, 0), CGPoint(x: 1920, y: 0))
+        XCTAssertEqual(point(640, 360), CGPoint(x: 2560, y: 360))
+        XCTAssertEqual(point(1280, 720), CGPoint(x: 3199, y: 719), "kept on the display")
+        XCTAssertEqual(point(640, 360, of: 2560, 1440), CGPoint(x: 2240, y: 180), "the client's own picture size")
+    }
+
+    func testMapsAHiDPIStreamOntoTheDisplaysPoints() {
+        // A 2560 × 1440 stream from a display of half as many points.
+        XCTAssertEqual(point(1280, 720, of: 2560, 1440, stream: (2560, 1440)), CGPoint(x: 2560, y: 360))
+    }
+
+    func testUndoesTheDisplaysTurn() {
+        // A portrait display, 720 × 1280 points, streamed 1280 × 720 turned a quarter clockwise:
+        // the stream's top-left was the display's bottom-left.
+        let portrait = CGRect(x: 0, y: 0, width: 720, height: 1280)
+        XCTAssertEqual(point(0, 0, on: portrait, turned: .quarter), CGPoint(x: 0, y: 1279))
+        XCTAssertEqual(point(1280, 0, on: portrait, turned: .quarter), CGPoint(x: 0, y: 0))
+        XCTAssertEqual(point(0, 0, on: portrait, turned: .threeQuarters), CGPoint(x: 719, y: 0))
+        XCTAssertEqual(point(0, 0, turned: .half), CGPoint(x: 3199, y: 719))
+        XCTAssertEqual(point(320, 180, turned: .half), CGPoint(x: 1920 + 960, y: 540))
+    }
+
+    func testAllowsForBarsAroundADisplayOfAnotherShape() {
+        // A 4:3 display streamed 16:9: bars of 160 on each side of 960 × 720.
+        let square = CGRect(x: 0, y: 0, width: 1024, height: 768)
+        XCTAssertEqual(point(160, 0, on: square), CGPoint(x: 0, y: 0))
+        XCTAssertEqual(point(640, 360, on: square), CGPoint(x: 512, y: 384))
+        XCTAssertEqual(point(10, 360, on: square), CGPoint(x: 0, y: 384), "on a bar: the nearest edge")
+    }
+
+    func testRelativeMovesStartWhereThePointerIsOnceItHasSettled() {
+        let put = CGPoint(x: 10, y: 10), actual = CGPoint(x: 500, y: 300)
+        XCTAssertEqual(MoonlightPointerMapping.start(put: put, actual: actual, sinceLastMove: 0.01), put,
+                       "moves in a run: the last one may not have landed yet")
+        XCTAssertEqual(MoonlightPointerMapping.start(put: put, actual: actual, sinceLastMove: 0.5), actual,
+                       "moved at the Mac since")
+        XCTAssertEqual(MoonlightPointerMapping.start(put: nil, actual: actual, sinceLastMove: 0), actual)
+    }
+
+    // MARK: - Clicks and scrolling
+
+    func testCountsDoubleAndTripleClicks() {
+        var clicks = MoonlightClickCounter()
+        let at = CGPoint(x: 100, y: 100)
+        XCTAssertEqual(clicks.press(1, at: at, time: 10, interval: 0.5), 1)
+        XCTAssertEqual(clicks.release(1), 1)
+        XCTAssertEqual(clicks.press(1, at: CGPoint(x: 102, y: 99), time: 10.3, interval: 0.5), 2)
+        XCTAssertEqual(clicks.release(1), 2)
+        XCTAssertEqual(clicks.press(1, at: at, time: 10.6, interval: 0.5), 3)
+        XCTAssertEqual(clicks.press(1, at: at, time: 12, interval: 0.5), 1, "too late")
+        XCTAssertEqual(clicks.press(1, at: CGPoint(x: 120, y: 100), time: 12.1, interval: 0.5), 1, "too far")
+        XCTAssertEqual(clicks.press(3, at: CGPoint(x: 120, y: 100), time: 12.2, interval: 0.5), 1, "another button")
+    }
+
+    func testScrollsWholeNotchesByLinesAndPiecesByPixels() {
+        var scroll = MoonlightScrollAccumulator()
+        XCTAssertEqual(scroll.scroll(240)?.units, .line)
+        XCTAssertEqual(scroll.scroll(240)?.value, 2)
+        XCTAssertEqual(scroll.scroll(-120)?.value, -1)
+        XCTAssertNil(scroll.scroll(1), "less than a pixel, kept")
+        XCTAssertEqual(scroll.scroll(2)?.value, 1, "three pieces make a pixel")
+        XCTAssertEqual(scroll.scroll(30)?.units, .pixel)
+        XCTAssertNil(scroll.scroll(0))
+    }
+}

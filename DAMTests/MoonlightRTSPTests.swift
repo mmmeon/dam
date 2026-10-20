@@ -1,4 +1,5 @@
 import XCTest
+import Network
 @testable import DAM
 
 final class MoonlightRTSPTests: XCTestCase {
@@ -27,6 +28,61 @@ final class MoonlightRTSPTests: XCTestCase {
         XCTAssertFalse(body.contains("sprop-parameter-sets=AAAAAU"), "would choose HEVC")
         XCTAssertFalse(body.contains("AV1/90000"))
         XCTAssertFalse(body.contains("refPicInvalidation"))
+    }
+
+    func testEncryptedVideoIsOfferedOnlyWhenTheLaunchIsToHaveIt() {
+        var encrypting = launch
+        encrypting.offersEncryptedVideo = true
+        let reply = MoonlightRTSP.response(to: request("DESCRIBE", "rtsp://10.0.0.2:48010"), launch: encrypting,
+                                           announce: { _, _ in nil })
+        XCTAssertTrue(reply.contains("a=x-ss-general.encryptionSupported:7\r\n"), "control, video and audio")
+        XCTAssertTrue(reply.contains("a=x-ss-general.encryptionRequested:0\r\n"), "never required")
+
+        var started: MoonlightStreamConfig?
+        let sdp = "a=x-nv-video[0].clientViewportWd:1280 \r\na=x-nv-video[0].clientViewportHt:720 \r\n" +
+                  "a=x-nv-video[0].maxFPS:60 \r\na=x-nv-video[0].packetSize:1392 \r\n" +
+                  "a=x-nv-vqos[0].bw.maximumBitrateKbps:8000 \r\na=x-ss-general.encryptionEnabled:7 \r\n"
+        let announced = MoonlightRTSP.response(to: request("ANNOUNCE", "streamid=control/13/0", body: sdp),
+                                               launch: encrypting) { _, config in started = config; return nil }
+        XCTAssertTrue(announced.hasPrefix("RTSP/1.0 200 OK"), announced)
+        XCTAssertEqual(started?.videoEncrypted, true)
+    }
+
+    func testOnlyMacsOwnNetworksCountAsLocal() throws {
+        let home = LocalNetwork.Subnet(address: [192, 168, 1, 20], mask: [255, 255, 255, 0])
+        let v6 = LocalNetwork.Subnet(address: [0xFD, 0, 0, 0, 0, 0, 0, 1] + [UInt8](repeating: 0, count: 8),
+                                     mask: [UInt8](repeating: 0xFF, count: 8) + [UInt8](repeating: 0, count: 8))
+        func local(_ text: String) -> Bool {
+            LocalNetwork.contains(.hostPort(host: NWEndpoint.Host(text), port: 1), subnets: [home, v6])
+        }
+        XCTAssertTrue(local("192.168.1.77"))
+        XCTAssertTrue(local("::ffff:192.168.1.77"), "IPv4 written as IPv6")
+        XCTAssertFalse(local("192.168.2.77"), "another private network, as over a VPN")
+        XCTAssertFalse(local("8.8.8.8"))
+        XCTAssertFalse(local("100.101.102.103"), "Tailscale")
+        XCTAssertTrue(local("127.0.0.1"))
+        XCTAssertTrue(local("169.254.3.4"), "link-local, as over a cable")
+        XCTAssertTrue(local("::1"))
+        XCTAssertTrue(local("fe80::1"))
+        XCTAssertTrue(local("fd00:0:0:1::9"))
+        XCTAssertFalse(local("2001:db8::1"))
+        XCTAssertFalse(MoonlightVideoEncryption.offLocalNetwork.offers(to: .hostPort(host: "127.0.0.1", port: 1)))
+        XCTAssertTrue(MoonlightVideoEncryption.offLocalNetwork.offers(to: .hostPort(host: "8.8.8.8", port: 1)))
+        XCTAssertTrue(MoonlightVideoEncryption.always.offers(to: .hostPort(host: "127.0.0.1", port: 1)))
+        XCTAssertFalse(MoonlightVideoEncryption.never.offers(to: .hostPort(host: "8.8.8.8", port: 1)))
+        // The Mac's own interfaces are listed, loopback among them.
+        XCTAssertTrue(LocalNetwork.interfaceSubnets().contains { $0.address == [127, 0, 0, 1] })
+    }
+
+    func testEachSessionHasPortsOfItsOwn() {
+        var second = launch
+        second.slot = 1
+        func reply(_ stream: String) -> String {
+            MoonlightRTSP.response(to: request("SETUP", "streamid=\(stream)/0/0"), launch: second, announce: { _, _ in nil })
+        }
+        XCTAssertTrue(reply("audio").contains("Transport: server_port=48100\r\n"))
+        XCTAssertTrue(reply("video").contains("Transport: server_port=48098\r\n"))
+        XCTAssertTrue(reply("control").contains("Transport: server_port=48099\r\n"))
     }
 
     func testSetupGivesEachStreamItsPortAndTokens() {

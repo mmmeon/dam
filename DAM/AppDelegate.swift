@@ -12,6 +12,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let videoManager = VideoManager()
     private let sidecarManager = SidecarManager()
     private let moonlightHost = MoonlightHost()
+    /// The stream for browsers and players, apart from Moonlight.
+    private let webStream = WebStreamServer()
     /// The PIN prompt for Moonlight pairing, while it shows.
     private var moonlightPINAlert: NSAlert?
     private var sidecarAutoConnector: SidecarAutoConnector?
@@ -87,6 +89,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if MoonlightHost.isEnabled && !MoonlightHost.usesExternalSunshine { moonlightHost.start() }
         startRemoteSessions()
+        webStream.onChange = { [weak self] in self?.rebuild() }
+        webStream.requestCode = { [weak self] address, name, answer in
+            self?.promptForBrowserCode(name: name, answer: answer)
+        }
+        webStream.makeDisplay = { [weak self] width, height, fps, done in
+            guard let self else { return done(nil) }
+            self.videoManager.createStreamingDisplay(
+                mode: StreamingDisplayModes.forStream(width: width, height: height, fps: fps), completion: done)
+        }
+        webStream.removeDisplay = { [weak self] id in self?.videoManager.removeStreamingDisplay(id: id) }
+        webStream.resizeDisplay = { [weak self] id, width, height, fps, done in
+            guard let self else { return done(false) }
+            self.videoManager.resizeStreamingDisplay(
+                id: id, to: StreamingDisplayModes.forStream(width: width, height: height, fps: fps), completion: done)
+        }
+        if WebStreamServer.isEnabled { webStream.start() }
         AudioOutputPicker.shared.configure(audioManager: audioManager)
         MirrorPicker.shared.configure(videoManager: videoManager)
         MainDisplayPicker.shared.configure(videoManager: videoManager)
@@ -277,6 +295,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             videoManager.connectedDisplays.first { $0.cgDisplayID == streaming.id }
                 .map { MoonlightApp(id: streaming.index + 1, title: $0.label, displayID: streaming.id) }
         }
+        let apps = moonlightHost.apps
+        webStream.apps = { apps }
         let menu = NSMenu()
         menu.delegate = self
         fill(menu)
@@ -284,6 +304,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controlStrip.rebuild()
         iconAnimator.show(count: connectionCount)
         settingsWindow?.moonlightDidChange()
+        settingsWindow?.browserStreamDidChange()
     }
 
     /// Connections running through the app, shown by the menu bar icon's outflow: AirPlay
@@ -300,6 +321,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             video: videoManager,
             sidecar: sidecarManager,
             moonlight: moonlightHost,
+            webStream: webStream,
             sessions: sessionCoordinator?.sessions.values.sorted { $0.started < $1.started } ?? [],
             blackedOut: sessionCoordinator?.isBlackedOut ?? false,
             onRefresh: { [weak self] in self?.refreshAll(nil) }
@@ -583,6 +605,7 @@ extension AppDelegate: NSMenuDelegate {
             videoManager: videoManager,
             sidecarManager: sidecarManager,
             moonlightHost: moonlightHost,
+            webStream: webStream,
             sessionCoordinator: sessionCoordinator
         )
         wc.onSave = { [weak self] pref in
@@ -632,6 +655,7 @@ extension AppDelegate: NSMenuDelegate {
         wc.onForgetMoonlightClient = { [weak self] in self?.forget($0) }
         wc.onUseExternalSunshine = { [weak self] in self?.useExternalSunshine($0) }
         wc.onSessionProfilesChanged = { [weak self] in self?.sessionWatcher?.update() }
+        wc.onToggleWebStream = { [weak self] in self?.toggleWebStream(nil) }
         settingsWindow = wc
         wc.show()
     }
@@ -640,6 +664,12 @@ extension AppDelegate: NSMenuDelegate {
     @objc func openMoonlightSettings(_ sender: Any?) {
         openSettings(nil)
         settingsWindow?.showMoonlight()
+    }
+
+    /// Opens Settings on the Browser Stream tab.
+    @objc func openBrowserStreamSettings(_ sender: Any?) {
+        openSettings(nil)
+        settingsWindow?.showBrowserStream()
     }
 
     /// Opens the Arrange Displays window, one for the app's lifetime.
@@ -686,18 +716,41 @@ extension AppDelegate: NSMenuDelegate {
         rebuild()
     }
 
+    /// Turns the stream for browsers and players on or off.
+    @objc func toggleWebStream(_ sender: Any?) {
+        if webStream.isRunning {
+            WebStreamServer.isEnabled = false
+            webStream.stop()
+            SpeechSynthesizer.shared.announce(Spoken.browsersCanNoLongerWatch)
+        } else {
+            WebStreamServer.isEnabled = true
+            webStream.start()
+            MoonlightScreenCapture.requestPermission()
+            SpeechSynthesizer.shared.announce(webStream.isRunning ? Spoken.browsersCanWatch
+                                              : webStream.lastError ?? Spoken.browserStreamCouldNotStart)
+        }
+        rebuild()
+    }
+
     /// Opens the stream's player page in the browser.
     @objc func openWebStream(_ sender: NSMenuItem) {
         MoonlightScreenCapture.requestPermission()
-        NSWorkspace.shared.open(moonlightHost.localWatchURL)
+        NSWorkspace.shared.open(webStream.localWatchURL)
     }
 
     /// Puts the player page's address on the clipboard, for a browser on another device.
     @objc func copyWebStreamAddress(_ sender: NSMenuItem) {
-        let address = moonlightHost.watchURL.absoluteString
+        let address = webStream.watchURL.absoluteString
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(address, forType: .string)
         SpeechSynthesizer.shared.announce(Spoken.copied(address))
+    }
+
+    /// Ends one Moonlight device's stream; Moonlight shows that the host ended it.
+    @objc func endMoonlightStream(_ sender: NSMenuItem) {
+        guard let certificate = sender.representedObject as? Data else { return }
+        moonlightHost.endLaunch(of: certificate)
+        rebuild()
     }
 
     /// Unpairs a Moonlight device.
@@ -709,6 +762,30 @@ extension AppDelegate: NSMenuDelegate {
 
     /// Asks for the PIN Moonlight shows while pairing. The answer is nil when the user
     /// declines, or when the device gave up meanwhile.
+    /// Asks for the code a browser shows while pairing; nil when the user declines. The code
+    /// lasts five minutes, and so does the prompt.
+    private func promptForBrowserCode(name: String, answer: @escaping (String?) -> Void) {
+        RunLoop.main.perform(inModes: [.default]) {
+            let alert = NSAlert()
+            alert.messageText = "Let a browser watch?"
+            alert.informativeText = "\(name) wants to watch \(AppIdentity.name)'s streaming displays. " +
+                                    "Type the code it shows."
+            let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 120, height: 24))
+            field.placeholderString = "Code"
+            alert.accessoryView = field
+            alert.addButton(withTitle: "Allow")
+            alert.addButton(withTitle: "Cancel")
+            alert.window.initialFirstResponder = field
+            SpeechSynthesizer.shared.announce(Spoken.browserWantsToPair)
+            NSApp.activate(ignoringOtherApps: true)
+            let timeout = DispatchWorkItem { NSApp.abortModal() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + WebStreamPairing.lifetime, execute: timeout)
+            let response = alert.runModal()
+            timeout.cancel()
+            answer(response == .alertFirstButtonReturn ? field.stringValue : nil)
+        }
+    }
+
     private func promptForMoonlightPIN(address: String, answer: @escaping (String?) -> Void) {
         // From the run loop rather than the main queue: a modal prompt run inside a main
         // queue block would hold every other one, the network's and the display changes',

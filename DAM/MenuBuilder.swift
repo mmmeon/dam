@@ -8,6 +8,7 @@ func buildStatusMenu(audio: AudioManager,
                      video: VideoManager,
                      sidecar: SidecarManager,
                      moonlight: MoonlightHost,
+                     webStream: WebStreamServer,
                      sessions: [RemoteSessionCoordinator.Session] = [],
                      blackedOut: Bool = false,
                      onRefresh: @escaping () -> Void) -> NSMenu {
@@ -146,6 +147,7 @@ func buildStatusMenu(audio: AudioManager,
         : "There can be up to \(VideoManager.maxStreamingDisplays) streaming displays."
     menu.addItem(create)
     menu.addItem(moonlightItem(host: moonlight))
+    menu.addItem(browserStreamItem(server: webStream))
     for session in sessions { menu.addItem(remoteSessionItem(session)) }
     if blackedOut {
         let light = NSMenuItem(title: "Light This Mac's Screens", action: #selector(AppDelegate.liftBlackout(_:)),
@@ -300,24 +302,59 @@ private func moonlightItem(host: MoonlightHost) -> NSMenuItem {
     submenu.addItem(toggle)
     if let error = host.lastError { submenu.addItem(disabledItem(error)) }
     if host.isRunning {
-        submenu.addItem(.separator())
-        submenu.addItem(sectionHeader("Browser Stream"))
-        let open = NSMenuItem(title: "Open in Browser", action: #selector(AppDelegate.openWebStream(_:)), keyEquivalent: "")
-        open.toolTip = "Plays a streaming display in this Mac's browser, as any browser or player on the network can at " +
-                       host.watchURL.absoluteString
-        submenu.addItem(open)
-        let copy = NSMenuItem(title: "Copy Address", action: #selector(AppDelegate.copyWebStreamAddress(_:)), keyEquivalent: "")
-        copy.toolTip = "Copies \(host.watchURL.absoluteString). Players like mpv and VLC take the stream itself at " +
-                       "\(host.watchURL.deletingLastPathComponent().absoluteString)stream.mp4."
-        submenu.addItem(copy)
-        let watching = host.webStream.viewerCount
-        if watching > 0 { submenu.addItem(disabledItem(watching == 1 ? "1 watching" : "\(watching) watching")) }
+        let streaming = host.streamingClients
+        if !streaming.isEmpty {
+            submenu.addItem(.separator())
+            submenu.addItem(sectionHeader("Streaming"))
+            for client in streaming {
+                let end = NSMenuItem(title: "End Stream to \(client.name)",
+                                     action: #selector(AppDelegate.endMoonlightStream(_:)), keyEquivalent: "")
+                end.representedObject = client.certificate
+                end.toolTip = "Ends what \(client.name) launched, and removes the display made for it. " +
+                              "Other devices go on streaming."
+                submenu.addItem(end)
+            }
+        }
     }
     submenu.addItem(.separator())
     let settings = NSMenuItem(title: "Moonlight Settings…",
                               action: #selector(AppDelegate.openMoonlightSettings(_:)),
                               keyEquivalent: "")
     settings.toolTip = "Pairing, the paired devices, and how streams are made."
+    submenu.addItem(settings)
+    item.submenu = submenu
+    return item
+}
+
+/// The stream for browsers and players, on or off, its address; the rest is in Settings.
+private func browserStreamItem(server: WebStreamServer) -> NSMenuItem {
+    let item = NSMenuItem(title: "Browser Stream", action: nil, keyEquivalent: "")
+    item.state = server.isRunning ? .on : .off
+    let submenu = NSMenu()
+    let toggle = NSMenuItem(title: "Allow Browsers to Watch",
+                            action: #selector(AppDelegate.toggleWebStream(_:)), keyEquivalent: "")
+    toggle.state = server.isRunning ? .on : .off
+    toggle.toolTip = "Lets a browser or player given the link play a streaming display, on port " +
+                     "\(server.port.rawValue). Apart from Moonlight."
+    submenu.addItem(toggle)
+    if let error = server.lastError { submenu.addItem(disabledItem(error)) }
+    if server.isRunning {
+        submenu.addItem(.separator())
+        let open = NSMenuItem(title: "Open in Browser", action: #selector(AppDelegate.openWebStream(_:)), keyEquivalent: "")
+        open.toolTip = "Plays a streaming display in this Mac's browser, as any browser or player on the network can " +
+                       "with the link Copy Address gives."
+        submenu.addItem(open)
+        let copy = NSMenuItem(title: "Copy Address", action: #selector(AppDelegate.copyWebStreamAddress(_:)), keyEquivalent: "")
+        copy.toolTip = "Copies \(server.watchURL.absoluteString). A browser that opens it pairs with a code typed " +
+                       "on this Mac. Players need a link of their own, from Browser Stream Settings."
+        submenu.addItem(copy)
+        let watching = server.viewerCount
+        if watching > 0 { submenu.addItem(disabledItem(watching == 1 ? "1 watching" : "\(watching) watching")) }
+    }
+    submenu.addItem(.separator())
+    let settings = NSMenuItem(title: "Browser Stream Settings…",
+                              action: #selector(AppDelegate.openBrowserStreamSettings(_:)), keyEquivalent: "")
+    settings.toolTip = "The profile, the pointer, and the link."
     submenu.addItem(settings)
     item.submenu = submenu
     return item

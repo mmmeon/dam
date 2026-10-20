@@ -130,6 +130,43 @@ final class MoonlightProtocolTests: XCTestCase {
         XCTAssertNil(MoonlightControlCrypto.open(sealed, key: SymmetricKey(size: .bits128)))
     }
 
+    // MARK: - Encrypted video
+
+    func testEncryptedVideoIsBitTwoOfEncryptionEnabled() throws {
+        XCTAssertFalse(try XCTUnwrap(MoonlightStreamConfig.parse(sdp: announce)).videoEncrypted)
+        let asked = announce.replacingOccurrences(of: "encryptionEnabled:1", with: "encryptionEnabled:7")
+        XCTAssertTrue(try XCTUnwrap(MoonlightStreamConfig.parse(sdp: asked)).videoEncrypted)
+    }
+
+    func testVideoNonceIsTheCounterThenV() {
+        XCTAssertEqual([UInt8](MoonlightVideoCrypto.nonce(counter: 0x0807_0605_0403_0201)),
+                       [1, 2, 3, 4, 5, 6, 7, 8, 0, 0, 0, 0x56])
+        // Never one of the control stream's, under the same key.
+        XCTAssertNotEqual(MoonlightVideoCrypto.nonce(counter: 7).last, MoonlightControlCrypto.nonce(sequence: 7, direction: .hostToClient).last)
+    }
+
+    /// Each packet, data and parity alike, opens as moonlight-common-c opens it: the nonce
+    /// and tag from the 32-byte prefix, the frame index in the clear between them.
+    func testSealedVideoPacketsOpenToThePlainOnesWithTheFrameIndexInTheClear() throws {
+        let key = Data((0..<16).map { UInt8($0) })
+        var packetizer = MoonlightPacketizer(packetSize: 1392, fecPercentage: 20)
+        var crypto = MoonlightVideoCrypto(key: key)
+        _ = packetizer.blocks(for: Data(count: 100), isKeyFrame: true, timestamp: 0, latency: 0)
+        let blocks = try XCTUnwrap(packetizer.blocks(for: Data(count: 5000), isKeyFrame: false, timestamp: 9, latency: 0))
+        let plain = blocks.flatMap { $0.packets + MoonlightPacketizer.parity(for: $0) }
+        var nonces = Set<Data>()
+        for packet in plain {
+            let sealed = try XCTUnwrap(crypto.seal(packet))
+            XCTAssertEqual(sealed.count, packet.count + MoonlightVideoCrypto.overhead)
+            XCTAssertEqual(le32(sealed, 12), 2, "the second frame")
+            XCTAssertEqual(MoonlightVideoCrypto.open(sealed, key: key), packet)
+            XCTAssertNil(MoonlightVideoCrypto.open(sealed, key: Data(count: 16)))
+            nonces.insert(sealed.prefix(12))
+        }
+        XCTAssertEqual(nonces.count, plain.count, "no nonce twice")
+        XCTAssertEqual(crypto.counter, UInt64(plain.count))
+    }
+
     // MARK: - Keyframe requests
 
     func testABurstOfKeyFrameRequestsCostsAtMostTwoKeyFrames() {
