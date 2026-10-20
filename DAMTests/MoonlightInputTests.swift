@@ -78,9 +78,19 @@ final class MoonlightInputTests: XCTestCase {
         XCTAssertEqual(MoonlightKeyMap.macKey(for: 0xA5), CGKeyCode(kVK_RightOption))
         XCTAssertEqual(MoonlightKeyMap.macKey(for: 0x5B), CGKeyCode(kVK_Command))
         XCTAssertEqual(MoonlightKeyMap.macKey(for: 0xA1), CGKeyCode(kVK_RightShift))
-        XCTAssertEqual(MoonlightKeyMap.modifierFlag(of: CGKeyCode(kVK_RightCommand)), .maskCommand)
-        XCTAssertEqual(MoonlightKeyMap.modifierFlag(of: CGKeyCode(kVK_Option)), .maskAlternate)
-        XCTAssertNil(MoonlightKeyMap.modifierFlag(of: CGKeyCode(kVK_ANSI_A)))
+        XCTAssertEqual(MoonlightKeyMap.modifierFlags(of: CGKeyCode(kVK_RightCommand)),
+                       [.maskCommand, CGEventFlags(rawValue: 0x10)], "⌘ and its right-hand side")
+        XCTAssertEqual(MoonlightKeyMap.modifierFlags(of: CGKeyCode(kVK_Option)),
+                       [.maskAlternate, CGEventFlags(rawValue: 0x20)])
+        XCTAssertNil(MoonlightKeyMap.modifierFlags(of: CGKeyCode(kVK_ANSI_A)))
+    }
+
+    func testKeysCarryTheFlagsAMacKeyboardGivesThem() {
+        XCTAssertEqual(MoonlightKeyMap.keyFlags(of: CGKeyCode(kVK_LeftArrow)), [.maskSecondaryFn, .maskNumericPad])
+        XCTAssertEqual(MoonlightKeyMap.keyFlags(of: CGKeyCode(kVK_PageDown)), .maskSecondaryFn)
+        XCTAssertEqual(MoonlightKeyMap.keyFlags(of: CGKeyCode(kVK_F5)), .maskSecondaryFn)
+        XCTAssertEqual(MoonlightKeyMap.keyFlags(of: CGKeyCode(kVK_ANSI_Keypad5)), .maskNumericPad)
+        XCTAssertEqual(MoonlightKeyMap.keyFlags(of: CGKeyCode(kVK_ANSI_A)), [])
     }
 
     // MARK: - Pointer
@@ -122,6 +132,15 @@ final class MoonlightInputTests: XCTestCase {
         XCTAssertEqual(point(160, 0, on: square), CGPoint(x: 0, y: 0))
         XCTAssertEqual(point(640, 360, on: square), CGPoint(x: 512, y: 384))
         XCTAssertEqual(point(10, 360, on: square), CGPoint(x: 0, y: 384), "on a bar: the nearest edge")
+    }
+
+    func testRelativeMovesStartWhereThePointerIsOnceItHasSettled() {
+        let put = CGPoint(x: 10, y: 10), actual = CGPoint(x: 500, y: 300)
+        XCTAssertEqual(MoonlightPointerMapping.start(put: put, actual: actual, sinceLastMove: 0.01), put,
+                       "moves in a run: the last one may not have landed yet")
+        XCTAssertEqual(MoonlightPointerMapping.start(put: put, actual: actual, sinceLastMove: 0.5), actual,
+                       "moved at the Mac since")
+        XCTAssertEqual(MoonlightPointerMapping.start(put: nil, actual: actual, sinceLastMove: 0), actual)
     }
 
     // MARK: - Clicks and scrolling

@@ -27,8 +27,9 @@ final class MoonlightInputInjector {
     private var trusted = false
     /// When access was last found missing, so it is asked of macOS no more than once a second.
     private var checkedAccess: TimeInterval?
-    /// Where the pointer was put last; nil until it is.
+    /// Where the pointer was put last, and when; nil until it is.
     private var location: CGPoint?
+    private var movedAt: TimeInterval = 0
     private var heldButtons: Set<Int> = []
     private var heldKeys: Set<CGKeyCode> = []
     private var clicks = MoonlightClickCounter()
@@ -75,7 +76,7 @@ final class MoonlightInputInjector {
                 bounds: CGDisplayBounds(displayID), rotation: StreamRotations.shared.rotation(of: displayID))
             movePointer(to: point, dx: 0, dy: 0)
         case let .move(dx, dy):
-            let from = location ?? CGEvent(source: nil)?.location ?? .zero
+            let from = pointerLocation()
             let to = MoonlightPointerMapping.clamp(CGPoint(x: from.x + CGFloat(dx), y: from.y + CGFloat(dy)),
                                                    to: CGDisplayBounds(displayID))
             movePointer(to: to, dx: dx, dy: dy)
@@ -98,8 +99,16 @@ final class MoonlightInputInjector {
         }
     }
 
+    /// Where the pointer is, as far as this stream's input goes (see MoonlightPointerMapping.start).
+    private func pointerLocation() -> CGPoint {
+        let actual = CGEvent(source: nil)?.location ?? .zero
+        return MoonlightPointerMapping.start(put: location, actual: actual,
+                                             sinceLastMove: ProcessInfo.processInfo.systemUptime - movedAt)
+    }
+
     private func movePointer(to point: CGPoint, dx: Int, dy: Int) {
         location = point
+        movedAt = ProcessInfo.processInfo.systemUptime
         let (type, button): (CGEventType, CGMouseButton)
         if heldButtons.contains(1) {
             (type, button) = (.leftMouseDragged, .left)
@@ -120,7 +129,7 @@ final class MoonlightInputInjector {
 
     private func press(_ button: Int, down: Bool) {
         guard (1...5).contains(button), down != heldButtons.contains(button) else { return }
-        let point = location ?? CGEvent(source: nil)?.location ?? .zero
+        let point = pointerLocation()
         let type: CGEventType
         switch button {
         case 1: type = down ? .leftMouseDown : .leftMouseUp
@@ -150,10 +159,13 @@ final class MoonlightInputInjector {
         event.post(tap: .cghidEventTap)
     }
 
+    /// A modifier goes as a change of flags, as a keyboard's does; any other key as a key
+    /// down or up, with the flags of what is held and its own.
     private func pressKey(_ key: CGKeyCode, down: Bool) {
         if down { heldKeys.insert(key) } else { heldKeys.remove(key) }
         guard let event = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: down) else { return }
-        event.flags = modifierFlags
+        if MoonlightKeyMap.modifierFlags(of: key) != nil { event.type = .flagsChanged }
+        event.flags = modifierFlags.union(MoonlightKeyMap.keyFlags(of: key))
         event.post(tap: .cghidEventTap)
     }
 
@@ -174,7 +186,7 @@ final class MoonlightInputInjector {
     /// The modifiers the keys held down make.
     private var modifierFlags: CGEventFlags {
         heldKeys.reduce(into: CGEventFlags()) { flags, key in
-            if let flag = MoonlightKeyMap.modifierFlag(of: key) { flags.insert(flag) }
+            if let held = MoonlightKeyMap.modifierFlags(of: key) { flags.formUnion(held) }
         }
     }
 

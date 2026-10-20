@@ -126,14 +126,18 @@ them as HID events, one injector per stream:
 
 - **Pointer:** absolute moves map from the client's picture onto the streamed display's
   points, undoing a turned display's rotation and allowing for bars around a display of
-  another shape. Relative moves (Moonlight's captured mouse) move from where the pointer
-  is, kept on that display. Buttons carry a click count, and moves while a button is held
+  another shape. Relative moves (Moonlight's captured mouse) carry on from where they put the
+  pointer while they follow closely, and from where it is after a tenth of a second
+  without one (it may have been moved at the Mac), kept on that display. Buttons carry a click count, and moves while a button is held
   are drags.
 - **Scrolling:** whole wheel notches scroll a line each; finer amounts, from trackpads and
   touch screens, scroll by pixels. Horizontal scrolling is a Sunshine extension clients
   send DAM.
 - **Keys:** Windows virtual-key codes map to the Mac's at a US keyboard's places. Ctrl is
   Control, Alt is Option and the Windows key is Command, so a PC's Ctrl+C is not ⌘C.
+  As on a Mac keyboard, modifiers go as flag changes with their side's flag, and the
+  arrows, the keys above them, the function keys and the keypad carry Fn and keypad
+  flags.
   Text from a phone's keyboard is typed as it is, whatever the layout.
 - **Permission:** posting events needs Accessibility access. Without it the input is
   dropped and the stream goes on as it would without input; streams don't ask for it, the

@@ -135,16 +135,46 @@ enum MoonlightKeyMap {
         return table
     }()
 
-    /// The modifier a Mac key holds down, or nil for any other key.
-    static func modifierFlag(of key: CGKeyCode) -> CGEventFlags? {
+    /// The flags a Mac modifier key sets while held, the modifier's and its side's, as a
+    /// keyboard sets them; nil for any other key.
+    static func modifierFlags(of key: CGKeyCode) -> CGEventFlags? {
+        // NX_DEVICE…KEYMASK, from IOLLEvent.h.
+        func side(_ bits: UInt64) -> CGEventFlags { CGEventFlags(rawValue: bits) }
         switch Int(key) {
-        case kVK_Shift, kVK_RightShift: return .maskShift
-        case kVK_Control, kVK_RightControl: return .maskControl
-        case kVK_Option, kVK_RightOption: return .maskAlternate
-        case kVK_Command, kVK_RightCommand: return .maskCommand
-        default: return nil
+        case kVK_Shift:          return [.maskShift, side(0x02)]
+        case kVK_RightShift:     return [.maskShift, side(0x04)]
+        case kVK_Control:        return [.maskControl, side(0x01)]
+        case kVK_RightControl:   return [.maskControl, side(0x2000)]
+        case kVK_Option:         return [.maskAlternate, side(0x20)]
+        case kVK_RightOption:    return [.maskAlternate, side(0x40)]
+        case kVK_Command:        return [.maskCommand, side(0x08)]
+        case kVK_RightCommand:   return [.maskCommand, side(0x10)]
+        default:                 return nil
         }
     }
+
+    /// The flags a Mac keyboard sets on a key's own events whatever is held: Fn for the
+    /// arrows, the keys above them and the function keys, and the keypad's for the arrows
+    /// and the keypad.
+    static func keyFlags(of key: CGKeyCode) -> CGEventFlags {
+        var flags: CGEventFlags = []
+        if fnKeys.contains(Int(key)) { flags.insert(.maskSecondaryFn) }
+        if keypadKeys.contains(Int(key)) { flags.insert(.maskNumericPad) }
+        return flags
+    }
+
+    private static let arrows: Set<Int> = [kVK_LeftArrow, kVK_RightArrow, kVK_UpArrow, kVK_DownArrow]
+    private static let fnKeys: Set<Int> = arrows.union([
+        kVK_Home, kVK_End, kVK_PageUp, kVK_PageDown, kVK_ForwardDelete, kVK_Help,
+        kVK_F1, kVK_F2, kVK_F3, kVK_F4, kVK_F5, kVK_F6, kVK_F7, kVK_F8, kVK_F9, kVK_F10,
+        kVK_F11, kVK_F12, kVK_F13, kVK_F14, kVK_F15, kVK_F16, kVK_F17, kVK_F18, kVK_F19, kVK_F20,
+    ])
+    private static let keypadKeys: Set<Int> = arrows.union([
+        kVK_ANSI_Keypad0, kVK_ANSI_Keypad1, kVK_ANSI_Keypad2, kVK_ANSI_Keypad3, kVK_ANSI_Keypad4,
+        kVK_ANSI_Keypad5, kVK_ANSI_Keypad6, kVK_ANSI_Keypad7, kVK_ANSI_Keypad8, kVK_ANSI_Keypad9,
+        kVK_ANSI_KeypadDecimal, kVK_ANSI_KeypadMultiply, kVK_ANSI_KeypadPlus, kVK_ANSI_KeypadClear,
+        kVK_ANSI_KeypadDivide, kVK_ANSI_KeypadEnter, kVK_ANSI_KeypadMinus, kVK_ANSI_KeypadEquals,
+    ])
 }
 
 /// Where a point of the stream's picture lies on the display it shows.
@@ -175,6 +205,18 @@ enum MoonlightPointerMapping {
         let px = (du * frameWidth - left) / scale, py = (dv * frameHeight - top) / scale
         return CGPoint(x: bounds.minX + min(max(px, 0), bounds.width - 1),
                        y: bounds.minY + min(max(py, 0), bounds.height - 1))
+    }
+
+    /// How long after its last move the pointer is taken to be where macOS says it is,
+    /// rather than where it was put: posted moves take a moment to land.
+    static let settle: TimeInterval = 0.1
+
+    /// Where a relative move starts: where the pointer was put last, while moves follow
+    /// closely; otherwise where it is, so that a move after someone at the Mac moved it
+    /// carries on from there rather than jumping back.
+    static func start(put: CGPoint?, actual: CGPoint, sinceLastMove: TimeInterval) -> CGPoint {
+        guard let put, sinceLastMove < settle else { return actual }
+        return put
     }
 
     /// `point` kept on the display at `bounds`.
