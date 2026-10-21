@@ -292,11 +292,21 @@ final class ControlServer {
         clients[fd] = nil
     }
 
+    /// The most of a message an answer carries, as a message can repeat what was asked.
+    private static let maxMessage = 300
+
     private static func reply(_ response: ControlResponse, to fd: Int32) {
+        var response = response
+        if let message = response.message, message.count > maxMessage {
+            response.message = String(message.prefix(maxMessage)) + "…"
+        }
         var data = (try? JSONEncoder().encode(response)) ?? Data()
         data.append(UInt8(ascii: "\n"))
-        // Blocking for the write: answers are small, and the client is waiting for it.
+        // Blocking for the write: answers are small, and the client is waiting for it. But
+        // only for a moment, as this is the main thread and a client may never read.
         _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) & ~O_NONBLOCK)
+        var wait = timeval(tv_sec: 1, tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &wait, socklen_t(MemoryLayout<timeval>.size))
         data.withUnsafeBytes { raw in
             var offset = 0
             while offset < raw.count {

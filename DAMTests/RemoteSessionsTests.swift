@@ -572,6 +572,45 @@ final class RemoteSessionsTests: XCTestCase {
         XCTAssertThrowsError(try ControlServer(path: path) { _, _ in }.start())
     }
 
+    func testAClientThatDoesntReadCantHoldUpTheApp() throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("dam-\(UUID().uuidString.prefix(8)).sock").path
+        var took: TimeInterval?
+        let server = ControlServer(path: path) { _, reply in
+            let display = ControlResponse.Display(id: 1, name: String(repeating: "x", count: 1000), width: 1, height: 1,
+                                                  main: false, mirroring: false, streaming: false)
+            let start = Date()
+            reply(ControlResponse(ok: true, displays: Array(repeating: display, count: 1000)))
+            took = Date().timeIntervalSince(start)
+        }
+        try server.start()
+        defer { server.stop() }
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        defer { close(fd) }
+        XCTAssertTrue(ControlSocketPath.connect(fd, to: path))
+        let line = Data("{\"command\":\"display.list\"}\n".utf8)
+        XCTAssertEqual(line.withUnsafeBytes { write(fd, $0.baseAddress!, $0.count) }, line.count)
+        // Never read.
+        let deadline = Date().addingTimeInterval(10)
+        while took == nil, Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+        XCTAssertLessThan(took ?? 99, 5)
+    }
+
+    func testAnswersDontRepeatAWholeRequest() throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("dam-\(UUID().uuidString.prefix(8)).sock").path
+        let server = ControlServer(path: path) { request, reply in reply(.failure("Unknown command \(request.command).")) }
+        try server.start()
+        defer { server.stop() }
+        let answered = expectation(description: "answer")
+        var response: ControlResponse?
+        DispatchQueue.global().async {
+            response = ControlCLI.send(ControlRequest(command: String(repeating: "x", count: 50_000)), to: path, timeout: 5)
+            answered.fulfill()
+        }
+        wait(for: [answered], timeout: 6)
+        XCTAssertEqual(response?.ok, false)
+        XCTAssertLessThanOrEqual(response?.message?.count ?? .max, 301)
+    }
+
     func testNotRunningGivesNoAnswer() {
         XCTAssertNil(ControlCLI.send(ControlRequest(command: "status"), to: "/tmp/dam-nobody-\(UUID().uuidString.prefix(8)).sock"))
     }
