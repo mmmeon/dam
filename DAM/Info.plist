@@ -17,6 +17,7 @@
 	<array>
 		<string>_airplay._tcp</string>
 		<string>_nvstream._tcp</string>
+		<string>_opensidecar._tcp</string>
 	</array>
 </dict>
 </plist>

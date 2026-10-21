@@ -60,6 +60,14 @@ final class SidecarDisplayTests: XCTestCase {
         XCTAssertEqual(r.resolved, ["Living Room": 7])
     }
 
+    func testCachedIDNowOnAnotherKindOfDisplayIsDropped() {
+        // tv's display went away and WindowServer gave its ID to a streaming display.
+        let r = resolve(["Den", "tv"], screenNames: [4128835: "DAM Streaming"], cached: ["tv": 4128835],
+                        online: [4128835, 731413954], airPlay: [])
+        XCTAssertEqual(r.resolved, [:])
+        XCTAssertEqual(r.unmatched, [])
+    }
+
     func testAirPlayDisplayNamedDifferentlyFromBonjourIsMatched() {
         // macOS names the screen otherwise than the receiver advertises itself.
         let r = resolve(["Living Room"], screenNames: [1: "Built-in", 7: "Samsung 4K TV"],

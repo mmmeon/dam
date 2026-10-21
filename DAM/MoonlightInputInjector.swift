@@ -53,6 +53,16 @@ final class MoonlightInputInjector {
         }
     }
 
+    /// Scrolls by `dx`, `dy` pixels, the content moving with positive values to the right
+    /// and down, as a trackpad does with natural scrolling.
+    func scrollPixels(dx: Int32, dy: Int32) {
+        guard dx != 0 || dy != 0 else { return }
+        queue.async { [self] in
+            guard !closed, hasAccess() else { return }
+            scroll(units: .pixel, vertical: dy, horizontal: dx)
+        }
+    }
+
     /// Lets go of every button and key still held, so none stays down once input stops.
     func releaseAll() {
         queue.async { [self] in releaseHeld() }

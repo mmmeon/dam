@@ -5,6 +5,8 @@ import CoreGraphics
 /// Stands in for the displays and sound outputs, recording what the coordinator asks.
 private final class FakeSessionDisplays: SessionDisplays {
     var made: [(mode: StreamingDisplayModes.Mode, identity: VideoManager.StreamingIdentity)] = []
+    /// Those of `made` asked to be main as they were placed.
+    var madeMain: [VideoManager.StreamingIdentity] = []
     var removed: [CGDirectDisplayID] = []
     var placed: [(CGDirectDisplayID, SessionProfile.Placement)] = []
     var outputUID: String? = "speakers"
@@ -15,9 +17,10 @@ private final class FakeSessionDisplays: SessionDisplays {
     /// Displays asked for and not yet made; nil makes them at once.
     var pendingMakes: [() -> Void]?
 
-    func makeDisplay(_ mode: StreamingDisplayModes.Mode, identity: VideoManager.StreamingIdentity,
+    func makeDisplay(_ mode: StreamingDisplayModes.Mode, identity: VideoManager.StreamingIdentity, main: Bool,
                      completion: @escaping (CGDirectDisplayID?) -> Void) {
         made.append((mode, identity))
+        if main { madeMain.append(identity) }
         let id = nextID
         if let id { modes[id] = mode }
         if pendingMakes != nil { pendingMakes?.append { completion(id) } } else { completion(id) }
@@ -123,10 +126,11 @@ final class RemoteSessionsTests: XCTestCase {
         XCTAssertNil(profile.audioOutputUID)
     }
 
-    func testParsecDefaultsToMain() {
+    func testParsecAndRustDeskDefaultToMain() {
         let c = coordinator(FakeSessionDisplays())
         XCTAssertEqual(c.profile(for: "parsec").placement, .main)
-        XCTAssertEqual(c.profile(for: "rustdesk").placement, .extend)
+        XCTAssertEqual(c.profile(for: "rustdesk").placement, .main)
+        XCTAssertEqual(c.profile(for: "screensharing").placement, .extend)
     }
 
     func testProfilesRoundTripThroughTheFile() throws {
@@ -178,10 +182,19 @@ final class RemoteSessionsTests: XCTestCase {
         XCTAssertTrue(c.sessions.isEmpty)
     }
 
-    func testExtendNeedsNoPlacing() {
+    func testMainIsAskedForWithTheDisplay() {
         let fake = FakeSessionDisplays()
         let c = coordinator(fake)
         _ = start(c, SessionRequest(app: "rustdesk"))
+        XCTAssertEqual(fake.madeMain.count, 1)
+        _ = start(c, SessionRequest(app: "screensharing"))
+        XCTAssertEqual(fake.madeMain.count, 1)
+    }
+
+    func testExtendNeedsNoPlacing() {
+        let fake = FakeSessionDisplays()
+        let c = coordinator(fake)
+        _ = start(c, SessionRequest(app: "screensharing"))
         XCTAssertTrue(fake.placed.isEmpty)
         XCTAssertEqual(fake.made.count, 1)
     }
@@ -519,6 +532,31 @@ final class RemoteSessionsTests: XCTestCase {
         XCTAssertNil(SessionLogLines.rustDesk("[2026-10-16 13:42:12.553353 -04:00] INFO [src/common.rs:2213] Connection secured"))
     }
 
+    func testRustDeskTerminalsMakeNoSession() {
+        let lines = SessionLogLines.RustDeskConnections()
+        // As RustDesk 1.5.0 wrote them on 2026-10-20: a desktop, then a terminal.
+        XCTAssertNil(lines.parse("[2026-10-20 15:26:04.995863 -04:00] DEBUG [src/server/connection.rs:1498] #1951 Connection opened from 10.10.1.123:36321."))
+        XCTAssertEqual(lines.parse("[2026-10-20 15:26:05.005147 -04:00] INFO [src/platform/mod.rs:112] new wakelock, require display on: true"),
+                       .opened(key: "1951", client: "10.10.1.123"))
+        XCTAssertNil(lines.parse("[2026-10-20 15:26:05.011789 -04:00] INFO [src/server/connection.rs:4857] Option update: OptionMessage { image_quality: NotSet }"))
+        XCTAssertEqual(lines.parse("[2026-10-20 15:27:12.557025 -04:00] INFO [src/server/connection.rs:5249] #1951 Connection closed: Peer close"),
+                       .closed(key: "1951"))
+        XCTAssertNil(lines.parse("[2026-10-20 15:27:22.031451 -04:00] DEBUG [src/server/connection.rs:1498] #1952 Connection opened from 10.10.1.123:40321."))
+        XCTAssertNil(lines.parse("[2026-10-20 15:27:22.041027 -04:00] INFO [src/platform/mod.rs:112] new wakelock, require display on: false"))
+        XCTAssertNil(lines.parse("[2026-10-20 15:27:22.047539 -04:00] INFO [src/server/terminal_service.rs:180] Creating new terminal service: ts_1 (persistent: false)"))
+        XCTAssertNil(lines.parse("[2026-10-20 15:27:22.100000 -04:00] INFO [src/server/connection.rs:4857] Option update: OptionMessage { image_quality: NotSet }"))
+        // Its close is passed on; the detector ignores a close of what it never saw open.
+        XCTAssertEqual(lines.parse("#1952 Connection closed: Peer close"), .closed(key: "1952"))
+
+        // A second desktop, which logs no new wakelock, by its options; one held when the next
+        // opens counts as a desktop.
+        XCTAssertNil(lines.parse("#3 Connection opened from 10.0.0.3:1."))
+        XCTAssertEqual(lines.parse("Option update: OptionMessage { image_quality: NotSet }"), .opened(key: "3", client: "10.0.0.3"))
+        XCTAssertNil(lines.parse("#4 Connection opened from 10.0.0.4:1."))
+        XCTAssertEqual(lines.parse("#5 Connection opened from 10.0.0.5:1."), .opened(key: "4", client: "10.0.0.4"))
+        XCTAssertEqual(lines.parse("video_service.rs:485] #displays=2, current=0, origin: (0, 0)"), .opened(key: "5", client: "10.0.0.5"))
+    }
+
     func testParsecLines() {
         XCTAssertEqual(SessionLogLines.parsec("[I 2026-10-18 12:00:00] friend#1234 connected."),
                        .opened(key: "friend#1234", client: "friend"))
@@ -541,6 +579,23 @@ final class RemoteSessionsTests: XCTestCase {
         detector.handle("#3 Connection opened from 10.0.0.3:1.")
         detector.stop()
         XCTAssertEqual(events.last, .closed(key: "3"))
+    }
+
+    func testLogDetectorEndsWhatARestartLeftOpen() {
+        let detector = LogSessionDetector(app: "rustdesk", url: URL(fileURLWithPath: "/nonexistent"),
+                                          parse: SessionLogLines.rustDesk, restarted: SessionLogLines.rustDeskRestarted)
+        var events: [SessionEvent] = []
+        detector.onEvent = { events.append($0) }
+        // As seen 2026-10-20: RustDesk started again mid-session, and #1541's close never came.
+        detector.handle("[2026-10-20 14:22:28.506591 -04:00] DEBUG [src/server/connection.rs:1498] #1541 Connection opened from 10.10.1.123:41257.")
+        detector.handle("[2026-10-20 14:27:41.999746 -04:00] INFO [src/server.rs:744] try start server")
+        detector.handle("[2026-10-20 14:27:44.498728 -04:00] DEBUG [src/server/connection.rs:1498] #1948 Connection opened from 10.10.1.123:41839.")
+        detector.handle("[2026-10-20 14:35:21.288666 -04:00] INFO [src/server/connection.rs:5249] #1948 Connection closed: Peer close")
+        XCTAssertEqual(events, [.opened(key: "1541", client: "10.10.1.123"), .closed(key: "1541"),
+                                .opened(key: "1948", client: "10.10.1.123"), .closed(key: "1948")])
+        XCTAssertTrue(LogSessionDetector.stillOpen(in: ["#1 Connection opened from 10.0.0.1:1.", "try start server"],
+                                                   parse: SessionLogLines.rustDesk,
+                                                   restarted: SessionLogLines.rustDeskRestarted).isEmpty)
     }
 
     func testProcessDetectorWaitsBeforeEnding() {
@@ -863,5 +918,95 @@ final class RemoteSessionsTests: XCTestCase {
     func testBlackoutOption() throws {
         XCTAssertEqual(try ControlCLI.request(from: ["session", "start", "--app", "x", "--blackout", "yes"], environment: [:]).blackout, true)
         XCTAssertThrowsError(try ControlCLI.request(from: ["session", "start", "--app", "x", "--blackout", "maybe"], environment: [:]))
+    }
+
+    // MARK: - Added apps
+
+    func testAddedAppLogLines() throws {
+        let parse = try XCTUnwrap(SessionLogLines.custom(opened: #"#(?<id>\d+) Connection opened from (?<client>[\d.]+)"#,
+                                                          closed: #"#(?<id>\d+) Connection closed"#))
+        XCTAssertEqual(parse("12:00 #7 Connection opened from 10.0.0.2:4000"), .opened(key: "7", client: "10.0.0.2"))
+        XCTAssertEqual(parse("12:05 #7 Connection closed: reset"), .closed(key: "7"))
+        XCTAssertNil(parse("12:05 something else"))
+        // Without an id in both, one session runs from the first open to the next close.
+        let plain = try XCTUnwrap(SessionLogLines.custom(opened: "client joined", closed: "client left"))
+        XCTAssertEqual(plain("a client joined"), .opened(key: "", client: nil))
+        XCTAssertEqual(plain("a client left"), .closed(key: ""))
+        XCTAssertNil(SessionLogLines.custom(opened: "(", closed: "left"))
+        XCTAssertNil(SessionLogLines.custom(opened: "joined", closed: ""))
+    }
+
+    func testAddedAppIDs() {
+        XCTAssertEqual(RemoteSessionApp.id(forName: "Jump Desktop", taken: []), "jump-desktop")
+        XCTAssertEqual(RemoteSessionApp.id(forName: "Jump Desktop", taken: ["jump-desktop"]), "jump-desktop-2")
+        XCTAssertEqual(RemoteSessionApp.id(forName: "Parsec", taken: []), "parsec-2")
+        XCTAssertEqual(RemoteSessionApp.id(forName: "!!", taken: []), "app")
+    }
+
+    func testAddingAndRemovingAnApp() {
+        let fake = FakeSessionDisplays()
+        let c = coordinator(fake)
+        let app = c.addApp(named: "Jump Desktop", kind: .display)
+        XCTAssertEqual(c.addedApps, [app])
+        XCTAssertEqual(RemoteSessionApp.name(of: app), "Jump Desktop")
+        XCTAssertEqual(c.profile(for: app).display, .adopt)
+        XCTAssertEqual(c.profile(for: app).detection?.problem(adoptName: nil), "Give part of its display's name.")
+        fake.others = ["Jump Desktop Display": 200]
+        var mine = c.profile(for: app)
+        mine.adoptName = "Jump"
+        c.setProfile(mine, for: app)
+        XCTAssertEqual(start(c, SessionRequest(app: app)), .success(SessionStart(displayID: 200)))
+        c.removeApp(app)
+        XCTAssertNil(c.sessions[app])
+        XCTAssertTrue(c.addedApps.isEmpty)
+        XCTAssertEqual(RemoteSessionApp.name(of: app), app)
+        // A known app isn't removed.
+        c.removeApp("rustdesk")
+    }
+
+    func testAddedProfileRoundTrips() throws {
+        var profile = SessionProfile()
+        profile.name = "Mine"
+        var detection = SessionDetection()
+        detection.logPath = "~/x.log"
+        detection.opened = "in"
+        detection.closed = "out"
+        profile.detection = detection
+        let decoded = try JSONDecoder().decode(SessionProfile.self, from: JSONEncoder().encode(profile))
+        XCTAssertEqual(decoded, profile)
+        XCTAssertNil(try JSONDecoder().decode(SessionProfile.self, from: Data("{}".utf8)).detection)
+    }
+
+    func testWatcherRemakesAnAddedAppsDetector() {
+        final class FakeDetector: SessionDetector {
+            let app: String
+            var onEvent: ((SessionEvent) -> Void)?
+            var running = false
+            init(app: String) { self.app = app }
+            func start() { running = true }
+            func stop() { running = false }
+        }
+        let c = coordinator(FakeSessionDisplays())
+        let app = c.addApp(named: "Mine", kind: .process)
+        var made: [FakeDetector] = []
+        let watcher = SessionWatcher(coordinator: c) { name in
+            guard name == app else { return nil }
+            let d = FakeDetector(app: name)
+            made.append(d)
+            return d
+        }
+        watcher.update()
+        XCTAssertEqual(made.count, 1)
+        var profile = c.profile(for: app)
+        profile.detection?.processName = "minehost"
+        c.setProfile(profile, for: app)
+        watcher.update()
+        XCTAssertEqual(made.count, 2)
+        XCTAssertEqual(made[0].running, false)
+        XCTAssertEqual(made[1].running, true)
+        c.removeApp(app)
+        watcher.update()
+        XCTAssertEqual(made[1].running, false)
+        XCTAssertNil(watcher.detectors[app])
     }
 }

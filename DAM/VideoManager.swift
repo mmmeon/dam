@@ -400,8 +400,10 @@ final class VideoManager: ObservableObject {
     ///  1. An NSScreen name equal to the Bonjour name, or to it with " (AirPlay)" after it as
     ///     macOS 27 names them — extend mode and software mirroring. A hardware mirror slave
     ///     leaves NSScreen, so `systemNames` (MonitorPanel's names) stand in for it there.
-    ///  2. The ID cached from an earlier match, still online and not matched by name to
-    ///     another receiver — a hardware mirror slave MonitorPanel couldn't name.
+    ///  2. The ID cached from an earlier match, still online, still an AirPlay display and
+    ///     not matched by name to another receiver — a hardware mirror slave MonitorPanel
+    ///     couldn't name. WindowServer reuses IDs: once the receiver is gone, a streaming
+    ///     display can come up under its old one.
     ///  3. A display reporting AirPlay's vendor and model (`airPlayIDs`), when only one name
     ///     is left: with several, the order says nothing about which is which. Unnamed ones
     ///     go first; a named one is one whose screen name differs from the Bonjour name.
@@ -423,7 +425,8 @@ final class VideoManager: ObservableObject {
         }
         var unresolved: [String] = []
         for name in discovered where resolved[name] == nil {
-            if let cgID = cached[name], onlineSet.contains(cgID), !resolved.values.contains(cgID) {
+            if let cgID = cached[name], onlineSet.contains(cgID), airPlayIDs.contains(cgID),
+               !resolved.values.contains(cgID) {
                 resolved[name] = cgID
             } else {
                 unresolved.append(name)

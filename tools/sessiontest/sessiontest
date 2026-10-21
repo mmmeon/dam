@@ -408,7 +408,7 @@ log_case() {
 
 case_rustdesk() {
     log_case rustdesk \
-        "[2026-10-19 09:00:00.000000 -04:00] DEBUG [src/server/connection.rs:1498] #9001 Connection opened from 10.99.0.1:40000." \
+        "[2026-10-19 09:00:00.000000 -04:00] DEBUG [src/server/connection.rs:1498] #9001 Connection opened from 10.99.0.1:40000."$'\n'"[2026-10-19 09:00:00.010000 -04:00] INFO [src/platform/mod.rs:112] new wakelock, require display on: true" \
         "[2026-10-19 09:00:30.000000 -04:00] INFO [src/server/connection.rs:5249] #9001 Connection closed: Peer close" \
         "[2026-10-19 08:59:00.000000 -04:00] INFO [src/server/connection.rs:5249] #9000 Connection closed: Peer close"
 }

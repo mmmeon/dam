@@ -114,7 +114,7 @@ The same requests work as URLs, for example
 
 | App | Signal | Seen working |
 |---|---|---|
-| RustDesk | `#N Connection opened from IP:port.` / `#N Connection closed` in `~/Library/Logs/RustDesk/RustDesk_rCURRENT.log` | Lines from real sessions parsed; a live session is still to be tried |
+| RustDesk | `#N Connection opened from IP:port.` / `#N Connection closed` in `~/Library/Logs/RustDesk/RustDesk_rCURRENT.log` | Seen live 2026-10-19 and 2026-10-20 |
 | Parsec | `user#id connected.` / `disconnected.` in `~/.parsec/log.txt` | Yes, 2026-10-19: display made 2 s after `connected.`, removed in the same ms as `disconnected.` |
 | Screen Sharing | `screensharingd` running; it runs only while someone is connected. The session ends 5 s after it exits. | No (Screen Sharing is off here) |
 | Chrome Remote Desktop | `Client connected:` / `Client disconnected:` in `/var/log/org.chromium.chromoting.log` | No (not installed) |
@@ -131,6 +131,29 @@ root's processes (`screensharingd`), and names are cut to 16 characters.
 - **Main or mirror placement:** a streaming display DAM has just placed is held in place
   for 5 s. Making it main or mirrored inside that time now updates the layout being held,
   so the hold no longer undoes it.
+- **RustDesk** (1.5.0) streams display 0, the main one, from the connect (`#displays=2,
+  current=0`), so its profile defaults to Main as Parsec's does; the client can still switch
+  displays in its toolbar. On 2026-10-20 RustDesk started its server again mid-session (a new
+  log file, beginning `try start server`) without logging the open connection's close, so the
+  session outlived the disconnect. That line, or RustDesk quitting, now ends every connection.
+  RustDesk's terminal (and, presumably, its file transfer) is a connection too, with the same
+  `Connection opened` line. Desktops are told apart by the lines that follow within ~10 ms:
+  `new wakelock, require display on: true` (first connection only), `Option update:
+  OptionMessage` and video capture starting; a terminal logs `require display on: false` and
+  `terminal_service.rs` lines and makes no session.
+  Tried 2026-10-20 toward streaming an extended display, neither works: RustDesk follows main
+  (handing main back to the Lenovo mid-session moved it back to the Lenovo within a second),
+  and a display picked in the client's toolbar (`current=1`) went back to display 0 at the
+  next display change, 3.5 s later. DAM learns of a session only once it is open and its
+  display takes ~3 s, so it is always too late for the app's own choice: Main it is, for
+  RustDesk and Parsec. A display kept for as long as the app runs would work for Parsec
+  (`host_output`), but the user ruled it out.
+- **A display commit that changes nothing takes 10 s to return** (`CGCompleteDisplayConfiguration`,
+  on any thread, seen 2026-10-20). WindowServer often lays a new display out as DAM would
+  place it, from a layout it saved for the set, so placing it changed nothing and the
+  session waited ~13 s for its display. Placing now skips a commit with nothing to change,
+  and makes the display main in that same commit when the profile says Main: 2.6–3.8 s
+  from asking to placed, where it was 13 s.
 - **Parsec** streams the main display, and follows it when another display is made main
   during the session. Extending leaves the client on the Mac's own screen, so Parsec's
   profile defaults to Main. On this Intel Mac, Parsec's hardware H.265 encoder fails to start

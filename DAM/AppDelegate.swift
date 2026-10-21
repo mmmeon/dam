@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let moonlightHost = MoonlightHost()
     /// The stream for browsers and players, apart from Moonlight.
     private let webStream = WebStreamServer()
+    private let openDisplay = OpenDisplaySender()
     /// The PIN prompt for Moonlight pairing, while it shows.
     private var moonlightPINAlert: NSAlert?
     private var sidecarAutoConnector: SidecarAutoConnector?
@@ -105,6 +106,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 id: id, to: StreamingDisplayModes.forStream(width: width, height: height, fps: fps), completion: done)
         }
         if WebStreamServer.isEnabled { webStream.start() }
+        openDisplay.onChange = { [weak self] in self?.settingsWindow?.openDisplayDidChange() }
+        openDisplay.makeDisplay = { [weak self] mode, identity, done in
+            guard let self else { return done(nil) }
+            self.videoManager.createStreamingDisplay(mode: mode, identity: identity, completion: done)
+        }
+        openDisplay.removeDisplay = { [weak self] id in self?.videoManager.removeStreamingDisplay(id: id) }
+        openDisplay.resizeDisplay = { [weak self] id, mode, done in
+            guard let self else { return done(false) }
+            self.videoManager.resizeStreamingDisplay(id: id, to: mode, completion: done)
+        }
+        if OpenDisplaySender.isEnabled { openDisplay.start() }
         AudioOutputPicker.shared.configure(audioManager: audioManager)
         MirrorPicker.shared.configure(videoManager: videoManager)
         MainDisplayPicker.shared.configure(videoManager: videoManager)
@@ -305,6 +317,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         iconAnimator.show(count: connectionCount)
         settingsWindow?.moonlightDidChange()
         settingsWindow?.browserStreamDidChange()
+        settingsWindow?.openDisplayDidChange()
+        settingsWindow?.sessionsDidChange()
     }
 
     /// Connections running through the app, shown by the menu bar icon's outflow: AirPlay
@@ -606,6 +620,7 @@ extension AppDelegate: NSMenuDelegate {
             sidecarManager: sidecarManager,
             moonlightHost: moonlightHost,
             webStream: webStream,
+            openDisplay: openDisplay,
             sessionCoordinator: sessionCoordinator
         )
         wc.onSave = { [weak self] pref in

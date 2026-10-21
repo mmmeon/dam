@@ -51,6 +51,46 @@ enum SessionLogLines {
         return nil
     }
 
+    /// RustDesk's desktop connections, told apart from its terminals (and other connections
+    /// with no screen) by the lines that follow `Connection opened` within a few milliseconds.
+    /// A desktop's: `new wakelock, require display on: true` (logged only for the first
+    /// connection), `Option update: OptionMessage { … }` and video capture starting
+    /// (`video_service.rs:485] #displays=2, current=0, …`). A terminal's: `require display on:
+    /// false` and `terminal_service.rs` lines. Holds an opened connection until one comes; one
+    /// still held when the next opens counts as a desktop.
+    final class RustDeskConnections {
+        private var pending: SessionEvent?
+
+        func parse(_ line: String) -> SessionEvent? {
+            if let event = SessionLogLines.rustDesk(line) {
+                switch event {
+                case .opened:
+                    let earlier = pending
+                    pending = event
+                    return earlier
+                case .closed(let key):
+                    if case .opened(key, _, _)? = pending { pending = nil }
+                    return event
+                }
+            }
+            guard let held = pending else { return nil }
+            if line.contains("require display on: false") || line.contains("terminal_service.rs") {
+                pending = nil
+                return nil
+            }
+            if line.contains("require display on: true") || line.contains("Option update: OptionMessage")
+                || (line.contains("video_service.rs") && line.contains("#displays=")) {
+                pending = nil
+                return held
+            }
+            return nil
+        }
+    }
+
+    /// RustDesk starting its server afresh, `… INFO [src/server.rs:744] try start server`, after
+    /// which no earlier connection is left, though their closes went unlogged.
+    static func rustDeskRestarted(_ line: String) -> Bool { line.contains("try start server") }
+
     /// Parsec: `<user>#<id> connected.` and `<user>#<id> disconnected.`, its guest's name and number.
     static func parsec(_ line: String) -> SessionEvent? {
         if let m = captures(#"(\S+#\d+) disconnected\."#, in: line) { return .closed(key: m[0]) }
@@ -83,6 +123,32 @@ enum SessionLogLines {
         }
         if let m = captures(#"capture ended: session (\S.*)$"#, in: line) { return .closed(key: m[0]) }
         return nil
+    }
+
+    /// An added app's lines, by the regular expressions `opened` and `closed`, or nil when
+    /// either isn't one. A group named `id` in both pairs a close with its open, so
+    /// connections can overlap; without, a session lasts from the first line matching `opened`
+    /// to the next matching `closed`. A group named `client` in `opened` names the client.
+    static func custom(opened: String, closed: String) -> ((String) -> SessionEvent?)? {
+        guard !opened.isEmpty, !closed.isEmpty,
+              let open = try? NSRegularExpression(pattern: opened),
+              let close = try? NSRegularExpression(pattern: closed) else { return nil }
+        let paired = opened.contains("(?<id>") && closed.contains("(?<id>")
+        let named = opened.contains("(?<client>")
+        func group(_ name: String, of match: NSTextCheckingResult, in line: String) -> String? {
+            Range(match.range(withName: name), in: line).map { String(line[$0]) }
+        }
+        return { line in
+            let range = NSRange(line.startIndex..., in: line)
+            if let m = close.firstMatch(in: line, range: range) {
+                return .closed(key: paired ? group("id", of: m, in: line) ?? "" : "")
+            }
+            if let m = open.firstMatch(in: line, range: range) {
+                let client = named ? group("client", of: m, in: line).flatMap { $0.isEmpty ? nil : $0 } : nil
+                return .opened(key: paired ? group("id", of: m, in: line) ?? "" : "", client: client)
+            }
+            return nil
+        }
     }
 
     /// The groups `pattern` captures in `line`, or nil when it doesn't match.
@@ -198,24 +264,28 @@ final class LogSessionDetector: SessionDetector {
     /// Whether the app runs, for one that can quit without logging the close. With it, a
     /// connection the log's end shows open when DAM starts watching counts while the app runs.
     private let isRunning: (() -> Bool)?
+    /// Whether a line says the app started again, which ends every connection open.
+    private let restarted: ((String) -> Bool)?
     private var follower: LogFollower?
     private var timer: Timer?
     private var wasRunning = false
     /// The connections open, so a close of one opened before DAM looked is ignored.
     private(set) var open: Set<String> = []
 
-    init(app: String, url: URL, parse: @escaping (String) -> SessionEvent?, isRunning: (() -> Bool)? = nil) {
+    init(app: String, url: URL, parse: @escaping (String) -> SessionEvent?, isRunning: (() -> Bool)? = nil,
+         restarted: ((String) -> Bool)? = nil) {
         self.app = app
         self.url = url
         self.parse = parse
         self.isRunning = isRunning
+        self.restarted = restarted
     }
 
     func start() {
         guard follower == nil else { return }
         detLog.debug("\(self.app): following \(self.url.path)")
         if let isRunning, isRunning() {
-            for event in Self.stillOpen(in: Self.lastLines(of: url), parse: parse) { report(event) }
+            for event in Self.stillOpen(in: Self.lastLines(of: url), parse: parse, restarted: restarted) { report(event) }
         }
         let follower = LogFollower(url: url) { [weak self] in self?.handle($0) }
         follower.start()
@@ -254,7 +324,12 @@ final class LogSessionDetector: SessionDetector {
     }
 
     func handle(_ line: String) {
-        if let event = parse(line) { report(event) }
+        if let restarted, restarted(line) {
+            if !open.isEmpty { detLog.debug("\(self.app): restarted") }
+            closeAll()
+        } else if let event = parse(line) {
+            report(event)
+        }
     }
 
     private func report(_ event: SessionEvent) {
@@ -271,9 +346,12 @@ final class LogSessionDetector: SessionDetector {
 
 extension LogSessionDetector {
     /// The connections `lines` leave open, each as it was last opened, in the order opened.
-    static func stillOpen(in lines: [String], parse: (String) -> SessionEvent?) -> [SessionEvent] {
+    static func stillOpen(in lines: [String], parse: (String) -> SessionEvent?,
+                          restarted: ((String) -> Bool)? = nil) -> [SessionEvent] {
         var open: [(key: String, event: SessionEvent)] = []
-        for event in lines.compactMap(parse) {
+        for line in lines {
+            if let restarted, restarted(line) { open.removeAll(); continue }
+            guard let event = parse(line) else { continue }
             switch event {
             case .opened(let key, _, _):
                 if let i = open.firstIndex(where: { $0.key == key }) { open[i].event = event } else { open.append((key, event)) }
@@ -437,11 +515,18 @@ enum SessionDetectors {
         return URL(fileURLWithPath: path)
     }
 
-    static func make(for app: String) -> SessionDetector? {
+    /// The detector for `app`; for an app added in Settings, as its `profile` says.
+    static func make(for app: String, profile: SessionProfile? = nil) -> SessionDetector? {
+        if let profile, let detection = profile.detection {
+            return make(added: app, detection, adoptName: profile.adoptName)
+        }
         switch app {
         case "rustdesk":
             let url = logURL(for: app, standard: home.appendingPathComponent("Library/Logs/RustDesk/RustDesk_rCURRENT.log"))
-            return LogSessionDetector(app: app, url: url, parse: SessionLogLines.rustDesk)
+            // A restart or quit ends connections without logging their closes.
+            return LogSessionDetector(app: app, url: url, parse: SessionLogLines.RustDeskConnections().parse,
+                                      isRunning: { RunningProcesses.isRunning("RustDesk") },
+                                      restarted: SessionLogLines.rustDeskRestarted)
         case "parsec":
             let url = logURL(for: app, standard: home.appendingPathComponent(".parsec/log.txt"))
             return LogSessionDetector(app: app, url: url, parse: SessionLogLines.parsec)
@@ -463,6 +548,20 @@ enum SessionDetectors {
             return DisplaySessionDetector(app: app, name: adoptName, displays: displayNames)
         default:
             return nil
+        }
+    }
+
+    /// The detector for an app added in Settings, or nil while it isn't set up.
+    static func make(added app: String, _ detection: SessionDetection, adoptName: String?) -> SessionDetector? {
+        guard detection.problem(adoptName: adoptName) == nil else { return nil }
+        switch detection.kind {
+        case .log:
+            guard let parse = SessionLogLines.custom(opened: detection.opened, closed: detection.closed) else { return nil }
+            return LogSessionDetector(app: app, url: logURL(for: app, standard: detection.logURL), parse: parse)
+        case .process:
+            return ProcessSessionDetector(app: app, processName: detection.processName)
+        case .display:
+            return DisplaySessionDetector(app: app, name: { adoptName }, displays: displayNames)
         }
     }
 
@@ -503,25 +602,38 @@ final class SessionWatcher {
     private let coordinator: RemoteSessionCoordinator
     private let make: (String) -> SessionDetector?
     private(set) var detectors: [String: SessionDetector] = [:]
+    /// What each added app's detector was made from, to make it again when that changes.
+    private var madeFrom: [String: SessionProfile] = [:]
     /// Called with what to announce when a watched session starts or ends.
     var announce: ((String) -> Void)?
 
-    init(coordinator: RemoteSessionCoordinator, make: @escaping (String) -> SessionDetector? = SessionDetectors.make) {
+    init(coordinator: RemoteSessionCoordinator, make: ((String) -> SessionDetector?)? = nil) {
         self.coordinator = coordinator
-        self.make = make
+        self.make = make ?? { [unowned coordinator] app in
+            SessionDetectors.make(for: app, profile: coordinator.profile(for: app))
+        }
     }
 
     /// Starts and stops detectors to match the profiles.
     func update() {
-        for app in SessionDetectors.watchable {
+        let added = Set(coordinator.addedApps)
+        for app in SessionDetectors.watchable.union(added).union(detectors.keys) {
             let profile = coordinator.profile(for: app)
-            let wanted = profile.enabled && profile.watch
+            let wanted = profile.enabled && profile.watch && (SessionDetectors.watchable.contains(app) || added.contains(app))
+            // An added app's detector is made again once what it watches changes.
+            if added.contains(app), let made = madeFrom[app],
+               made.detection != profile.detection || made.adoptName != profile.adoptName,
+               let detector = detectors.removeValue(forKey: app) {
+                detector.stop()
+            }
             if wanted, detectors[app] == nil, let detector = make(app) {
+                if added.contains(app) { madeFrom[app] = profile }
                 detector.onEvent = { [weak self] in self?.handle($0, of: app) }
                 detectors[app] = detector
                 detector.start()
             } else if !wanted, let detector = detectors.removeValue(forKey: app) {
                 detector.stop()
+                madeFrom[app] = nil
             }
         }
     }

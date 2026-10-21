@@ -21,6 +21,7 @@ final class SettingsWindowController: NSWindowController {
     private let moonlightHost: MoonlightHost
     private let sessionCoordinator: RemoteSessionCoordinator?
     private let webStream: WebStreamServer
+    private let openDisplay: OpenDisplaySender?
 
     var onSave: ((HotkeyPreference) -> Void)?
     var onSaveAirPlayConnect: ((HotkeyPreference) -> Void)?
@@ -55,7 +56,24 @@ final class SettingsWindowController: NSWindowController {
     /// Rebuilt when the browser stream starts or stops.
     private lazy var browserContent: NSView = buildBrowserTab()
     private var browserShown = BrowserState(server: nil)
+    /// Rebuilt when the receivers found or their sessions change.
+    private lazy var openDisplayContent: NSView = buildOpenDisplayTab()
+    private var openDisplayShown: [OpenDisplaySender.Receiver] = []
+    private var openDisplayRunning = false
+    /// The Streaming tab, holding the Moonlight, Browser Stream and Remote Sessions pages.
+    private lazy var streamingContent = StreamingTabView(titles: TabID.streamingPages.map(Self.title)) {
+        [weak self] index in self?.selectTab(TabID.streamingPages[index])
+    }
+    /// The page or tab shown; a Streaming page stands for the Streaming tab.
     private var selectedTab = TabID.general
+    /// The app whose page the Remote Sessions page shows, or nil for the list of apps.
+    private var sessionsApp: String?
+    /// What the Remote Sessions page was built showing of each app, to tell when it is out of date.
+    private var sessionsShown: [String: String] = [:]
+    /// The app's row atop its page, to show its status as it changes.
+    private weak var sessionSummary: ListRowView?
+    /// The Streaming page last shown, which the Streaming tab opens on.
+    private var streamingPage = TabID.moonlight
 
     // MARK: - Toolbar identifiers
 
@@ -67,7 +85,12 @@ final class SettingsWindowController: NSWindowController {
         static let moonlight = NSToolbarItem.Identifier("\(AppIdentity.shortID).settings.moonlight")
         static let sessions = NSToolbarItem.Identifier("\(AppIdentity.shortID).settings.sessions")
         static let browser = NSToolbarItem.Identifier("\(AppIdentity.shortID).settings.browser")
-        static let all: [NSToolbarItem.Identifier] = [general, hotkeys, devices, virtual, moonlight, browser, sessions]
+        static let opendisplay = NSToolbarItem.Identifier("\(AppIdentity.shortID).settings.opendisplay")
+        static let streaming = NSToolbarItem.Identifier("\(AppIdentity.shortID).settings.streaming")
+        /// The toolbar's tabs.
+        static let all: [NSToolbarItem.Identifier] = [general, hotkeys, devices, virtual, streaming]
+        /// The Streaming tab's pages, in the order its bar shows them.
+        static let streamingPages: [NSToolbarItem.Identifier] = [moonlight, browser, opendisplay, sessions]
     }
 
     // MARK: - Init
@@ -84,6 +107,7 @@ final class SettingsWindowController: NSWindowController {
          sidecarManager: SidecarManager,
          moonlightHost: MoonlightHost,
          webStream: WebStreamServer,
+         openDisplay: OpenDisplaySender? = nil,
          sessionCoordinator: RemoteSessionCoordinator? = nil) {
         recorder              = KeyRecorderView(preference: current)
         recorderAirPlay       = KeyRecorderView(preference: currentAirPlayConnect)
@@ -98,10 +122,11 @@ final class SettingsWindowController: NSWindowController {
         self.moonlightHost    = moonlightHost
         self.sessionCoordinator = sessionCoordinator
         self.webStream        = webStream
+        self.openDisplay      = openDisplay
 
         let win = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 420, height: 280),
-            styleMask: [.titled, .closable, .resizable],
+            styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
         )
@@ -127,61 +152,88 @@ final class SettingsWindowController: NSWindowController {
         win.toolbar      = toolbar
         win.toolbarStyle = .preference   // centres items, Xcode-style
 
+        fixWidth()
         selectTab(TabID.general)
-        fitWindow()
     }
 
     // MARK: - Tab switching
 
-    private func selectTab(_ id: NSToolbarItem.Identifier) {
-        let content: NSView
-        let title: String
+    private static func title(_ id: NSToolbarItem.Identifier) -> String {
         switch id {
-        case TabID.general:
-            content = generalContent; title = "General"
-        case TabID.devices:
-            content = devicesContent; title = "Devices"
-        case TabID.virtual:
-            content = virtualContent; title = "Virtual Display"
-        case TabID.moonlight:
-            content = moonlightContent; title = "Moonlight"
-        case TabID.sessions:
-            content = sessionsContent; title = "Remote Sessions"
-        case TabID.browser:
-            content = browserContent; title = "Browser Stream"
-        default:
-            content = hotkeyContent;  title = "Hotkeys"
+        case TabID.general:   return "General"
+        case TabID.devices:   return "Devices"
+        case TabID.virtual:   return "Virtual Display"
+        case TabID.moonlight: return "Moonlight"
+        case TabID.sessions:  return "Remote Sessions"
+        case TabID.browser:   return "Browser Stream"
+        case TabID.opendisplay: return "OpenDisplay"
+        case TabID.streaming: return "Streaming"
+        default:              return "Hotkeys"
         }
-        selectedTab                             = id
-        window?.contentView                     = content
-        window?.toolbar?.selectedItemIdentifier = id
-        window?.title                           = title
     }
 
-    /// Wide enough for the toolbar's six items.
+    /// Shows a tab, or a Streaming page within the Streaming tab.
+    private func selectTab(_ id: NSToolbarItem.Identifier) {
+        let id = id == TabID.streaming ? streamingPage : id
+        let page: NSView
+        switch id {
+        case TabID.general:   page = generalContent
+        case TabID.devices:   page = devicesContent
+        case TabID.virtual:   page = virtualContent
+        case TabID.moonlight: page = moonlightContent
+        case TabID.sessions:  page = sessionsContent
+        case TabID.browser:   page = browserContent
+        case TabID.opendisplay: page = openDisplayContent
+        default:              page = hotkeyContent
+        }
+        var tab = id, content = page, above: CGFloat = 0
+        if let index = TabID.streamingPages.firstIndex(of: id) {
+            streamingContent.show(page, at: index)
+            streamingPage = id
+            tab     = TabID.streaming
+            content = streamingContent
+            above   = streamingContent.barHeight
+        }
+        selectedTab = id
+        if window?.contentView !== content { window?.contentView = content }
+        window?.toolbar?.selectedItemIdentifier = tab
+        window?.title                           = Self.title(tab)
+        fitHeight(to: page, above: above)
+    }
+
+    /// Wide enough for the toolbar's items and the Streaming tab's bar.
     private static let minContentWidth: CGFloat = 520
 
-    /// The least height the window can be made, below which a tab scrolls.
-    private static let minContentHeight: CGFloat = 200
+    /// The window's content width, the same on every tab.
+    private var contentWidth = minContentWidth
 
-    /// Sizes the window once to fit the largest tab, so switching tabs leaves it as it is:
-    /// a smaller tab leaves space below, and a tab taller than the screen scrolls. The
-    /// window stays resizable down to what the widest tab needs.
-    private func fitWindow() {
-        guard let win = window else { return }
-        let stacks = [generalContent, hotkeyContent, devicesContent, virtualContent, moonlightContent, sessionsContent]
-            .compactMap { ($0 as? NSScrollView)?.documentView }
-        stacks.forEach { $0.layoutSubtreeIfNeeded() }
-        var height = stacks.map(\.fittingSize.height).max() ?? 0
+    /// Sets the width once, to fit the widest tab, so switching tabs never changes it.
+    private func fixWidth() {
+        var pages = [generalContent, hotkeyContent, devicesContent, virtualContent, moonlightContent,
+                     sessionsContent, browserContent]
+        // An app's page, which the Remote Sessions page opens to.
+        if let coordinator = sessionCoordinator { pages.append(buildSessionApp("rustdesk", coordinator: coordinator)) }
+        // A stack is as wide as its window; what is in it has its own width.
+        let widths = pages.compactMap { ($0 as? NSScrollView)?.documentView as? NSStackView }.map { stack in
+            stack.layoutSubtreeIfNeeded()
+            return (stack.arrangedSubviews.map(\.fittingSize.width).max() ?? 0) + stack.edgeInsets.left + stack.edgeInsets.right
+        }
+        contentWidth = max(Self.minContentWidth, widths.max() ?? 0)
+    }
+
+    /// Makes the window as tall as the tab's content, and `above` it, keeping its top where
+    /// it is. A tab taller than the screen stops at the screen's height and scrolls.
+    private func fitHeight(to content: NSView, above: CGFloat = 0) {
+        guard let win = window, let stack = (content as? NSScrollView)?.documentView else { return }
+        stack.layoutSubtreeIfNeeded()
+        var height = stack.fittingSize.height + above
         if let screen = win.screen ?? NSScreen.main {
             let chrome = win.frame.height - win.contentLayoutRect.height
             height = min(height, screen.visibleFrame.height - chrome - 40)
         }
-        let width = max(Self.minContentWidth, stacks.map(\.fittingSize.width).max() ?? 0)
-        win.contentMinSize = NSSize(width: width, height: min(height, Self.minContentHeight))
-        var frame = win.frameRect(forContentRect: NSRect(x: 0, y: 0, width: width, height: height))
+        var frame = win.frameRect(forContentRect: NSRect(x: 0, y: 0, width: contentWidth, height: height))
         frame.origin = NSPoint(x: win.frame.minX, y: win.frame.maxY - frame.height)
-        win.setFrame(frame, display: true)
+        win.setFrame(frame, display: true, animate: win.isVisible)
     }
 
     @objc private func toolbarItemTapped(_ item: NSToolbarItem) {
@@ -630,6 +682,85 @@ final class SettingsWindowController: NSWindowController {
         ], leftAligned: true)
     }
 
+    private func buildOpenDisplayTab() -> NSView {
+        guard let sender = openDisplay else { return formTab([]) }
+        openDisplayShown = sender.receivers
+        openDisplayRunning = sender.isRunning
+        let send = checkbox(title: "Send to OpenDisplay receivers", isOn: OpenDisplaySender.isEnabled,
+                            help: "Streams a display of its own to each receiver turned on below: the OpenDisplay " +
+                                  "app on an iPhone, iPad or Mac, over Wi-Fi or a USB cable. The display is made " +
+                                  "at the size the receiver asks for before any video goes out.",
+                            action: { [weak self, weak sender] on in
+                                OpenDisplaySender.isEnabled = on
+                                if on { sender?.start() } else { sender?.stop() }
+                                self?.openDisplayDidChange()
+                            })
+        let rows: [[NSView]] = openDisplayShown.map { receiver in
+            let toggle = ClosureButton(title: receiver.name) { [weak sender] on in
+                sender?.setOn(on, key: receiver.key)
+            }
+            toggle.setButtonType(.switch)
+            toggle.state = receiver.isOn ? .on : .off
+            toggle.toolTip = receiver.key.hasPrefix("usb:") ? "On a cable; its ID comes with its first connection."
+                                                            : "Receiver ID \(receiver.key)"
+            let via = placeholderLabel(receiver.transports.map(\.rawValue).joined(separator: ", "))
+            let status = placeholderLabel(receiver.status)
+            var row: [NSView] = [toggle, via, status]
+            if receiver.transports.isEmpty {
+                let forget = ClosureButton(title: "Forget") { [weak sender] _ in sender?.forget(key: receiver.key) }
+                forget.toolTip = "Takes \(receiver.name) off the list until it is found again."
+                row.append(small(forget))
+            } else {
+                row.append(NSView())
+            }
+            return row
+        }
+        let grid = BaselineRowGridView(views: rows)
+        grid.rowSpacing    = 6
+        grid.columnSpacing = 8
+        grid.rowAlignment  = .firstBaseline
+        let receivers: NSView = rows.isEmpty
+            ? placeholderLabel(sender.isRunning ? "None found. Open OpenDisplay on the device." : "Turn sending on to look for them.")
+            : grid
+        let bitrate = ClosurePopup(onSelect: { [weak sender] value in
+            guard let kbps = value.flatMap(Int.init) else { return }
+            sender?.setBitrate(kbps: kbps)
+        })
+        bitrate.controlSize = .small
+        bitrate.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        var choices = OpenDisplaySender.bitrateChoices
+        if !choices.contains(OpenDisplaySender.bitrateKbps) { choices = (choices + [OpenDisplaySender.bitrateKbps]).sorted() }
+        for kbps in choices {
+            let item = NSMenuItem(title: Self.mbitText(kbps), action: nil, keyEquivalent: "")
+            item.representedObject = String(kbps)
+            bitrate.menu?.addItem(item)
+            if kbps == OpenDisplaySender.bitrateKbps { bitrate.select(item) }
+        }
+        bitrate.toolTip = "The video's bitrate to each receiver. Higher is sharper in motion, and needs " +
+                          "more of the Wi-Fi; a cable has room for any of them. Takes effect at once."
+        return formTab([
+            ("Sending:", [send]),
+            ("Bitrate:", [bitrate]),
+            ("Receivers:", [receivers,
+                            smallNote("A receiver takes the newest sender, so DAM dials only those turned on. " +
+                                      "Turning one on takes it from the OpenDisplay Mac app if that is streaming to it.")]),
+        ], leftAligned: true)
+    }
+
+    /// "20 Mbit/s", or "12.5 Mbit/s" for a rate set outside Settings.
+    private static func mbitText(_ kbps: Int) -> String {
+        let mbit = Double(kbps) / 1000
+        return (mbit == mbit.rounded() ? String(Int(mbit)) : String(format: "%.1f", mbit)) + " Mbit/s"
+    }
+
+    /// Rebuilds the OpenDisplay page if what it shows of the receivers has changed.
+    func openDisplayDidChange() {
+        guard let sender = openDisplay,
+              sender.receivers != openDisplayShown || sender.isRunning != openDisplayRunning else { return }
+        openDisplayContent = buildOpenDisplayTab()
+        if selectedTab == TabID.opendisplay { selectTab(TabID.opendisplay) }
+    }
+
     private func small(_ button: NSButton) -> NSButton {
         button.bezelStyle  = .rounded
         button.controlSize = .small
@@ -699,7 +830,7 @@ final class SettingsWindowController: NSWindowController {
     func browserStreamDidChange() {
         guard BrowserState(server: webStream) != browserShown else { return }
         browserContent = buildBrowserTab()
-        if selectedTab == TabID.browser { window?.contentView = browserContent }
+        if selectedTab == TabID.browser { selectTab(TabID.browser) }
     }
 
     /// What to set up in Sunshine for it to stream the displays DAM makes.
@@ -728,62 +859,210 @@ final class SettingsWindowController: NSWindowController {
     }
 
     /// What DAM does while each app's session is on.
+    /// The Remote Sessions page: the list of apps, or, once one is clicked, that app's page.
     private func buildSessionsTab() -> NSView {
         guard let coordinator = sessionCoordinator else { return formTab([]) }
-        let apps = ["sunshine", "rustdesk", "parsec", "screensharing", "chromeremotedesktop", "teamviewer", "opendisplay", "display"]
-        var groups: [(label: String, controls: [NSView])] = apps.map { app in
-            (label: "\(RemoteSessionApp.name(of: app)):", controls: sessionControls(for: app, coordinator: coordinator))
-        }
-        groups.append((label: "Changes:", controls: [
-            smallNote("What is changed through \(AppIdentity.name) during a session (where its display is, its " +
-                      "size, the sound output, the blackout) is kept for the app's next session, and the Mac still " +
-                      "goes back as it was when the session ends. A setting picked here is locked against those " +
-                      "changes; click its lock to let it follow them again."),
-        ]))
-        let command = Bundle.main.executablePath ?? AppIdentity.name
-        groups.append((label: "Command Line:", controls: [
-            selectableLabel("\(command) session start --app NAME"),
-            smallNote("Starts a session for any app, from its own scripts; `session end --app NAME` ends it. " +
-                      "Run with `help` for the rest."),
-        ]))
-        return formTab(groups, leftAligned: true)
+        if let app = sessionsApp { return buildSessionApp(app, coordinator: coordinator) }
+        return buildSessionsList(coordinator: coordinator)
     }
 
-    private func sessionControls(for app: String, coordinator: RemoteSessionCoordinator) -> [NSView] {
+    /// The apps DAM knows, then those added, as in System Settings' Network pane.
+    private func sessionApps(_ coordinator: RemoteSessionCoordinator) -> [String] {
+        RemoteSessionApp.known.map(\.id) + coordinator.addedApps
+    }
+
+    private func buildSessionsList(coordinator: RemoteSessionCoordinator) -> NSView {
+        let list = GroupedListView(rows: sessionApps(coordinator).map { app in
+            let status = sessionStatus(app, coordinator)
+            return ListRowView(icon: sessionIcon(app, coordinator), title: RemoteSessionApp.name(of: app),
+                               status: status.text, dot: status.color) { [weak self] in self?.openSessionApp(app) }
+        })
+        let add = ClosureButton(title: "Add App…") { [weak self] _ in self?.addSessionApp() }
+        add.bezelStyle = .rounded
+        add.toolTip = "Adds a streaming app DAM doesn't know, told by its log, a process or a display it makes."
+        let addRow = NSStackView(views: [NSView(), add])
+        addRow.orientation = .horizontal
+        let changes = smallNote("What is changed through \(AppIdentity.name) during a session (where its display " +
+                                "is, its size, the sound output, the blackout) is kept for the app's next session, " +
+                                "and the Mac still goes back as it was when the session ends. A setting picked in an " +
+                                "app's page is locked against those changes; click its lock to let it follow them again.")
+        return scrollingPage([list, addRow, changes], leftAligned: true, filling: [list, addRow, changes])
+    }
+
+    /// What an app's row says of it, and the colour of its dot.
+    private func sessionStatus(_ app: String, _ coordinator: RemoteSessionCoordinator) -> (text: String, color: NSColor) {
+        let profile = coordinator.profile(for: app)
+        if let session = coordinator.sessions[app] {
+            return ("Session on" + (session.client.map { " with \($0)" } ?? ""), .systemGreen)
+        }
+        if app == "sunshine" {
+            return profile.enabled ? ("Started by Sunshine's prep commands", .systemBlue) : ("Off", .systemGray)
+        }
+        guard profile.enabled, profile.watch else { return ("Off", .systemGray) }
+        if let detection = profile.detection {
+            if detection.problem(adoptName: profile.adoptName) != nil { return ("Not set up", .systemOrange) }
+            if detection.kind == .log, !FileManager.default.fileExists(atPath: detection.logURL.path) {
+                return ("No log file yet", .systemOrange)
+            }
+        } else if app == "display", profile.adoptName?.isEmpty ?? true {
+            return ("Not set up", .systemOrange)
+        } else if !SessionDetectors.isInstalled(app) {
+            return ("Not installed", .systemGray)
+        }
+        return ("Watching for sessions", .systemBlue)
+    }
+
+    /// The app's own icon when it is on this Mac, else a symbol for it.
+    private func sessionIcon(_ app: String, _ coordinator: RemoteSessionCoordinator) -> NSImage? {
+        let paths = ["sunshine": "/Applications/Sunshine.app", "rustdesk": "/Applications/RustDesk.app",
+                     "parsec": "/Applications/Parsec.app",
+                     "screensharing": "/System/Library/CoreServices/Applications/Screen Sharing.app",
+                     "teamviewer": "/Applications/TeamViewer.app", "opendisplay": "/Applications/OpenDisplay.app"]
+        if let path = paths[app], FileManager.default.fileExists(atPath: path) {
+            return NSWorkspace.shared.icon(forFile: path)
+        }
+        let symbol: String
+        switch coordinator.profile(for: app).detection?.kind {
+        case .log?: symbol = "doc.text"
+        case .process?: symbol = "gearshape.2"
+        case .display?: symbol = "display"
+        case nil:
+            symbol = ["sunshine": "sun.max", "chromeremotedesktop": "globe", "display": "rectangle.on.rectangle"][app]
+                ?? "dot.radiowaves.left.and.right"
+        }
+        return NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+    }
+
+    private func openSessionApp(_ app: String?) {
+        sessionsApp = app
+        reloadSessions()
+    }
+
+    private func addSessionApp() {
+        guard let coordinator = sessionCoordinator else { return }
+        let alert = NSAlert()
+        alert.messageText = "Add an app"
+        alert.informativeText = "\(AppIdentity.name) starts a session for it when it sees one start, and puts " +
+                                "the Mac back when it ends. Its page then says how to tell."
+        let field = NSTextField(frame: NSRect(x: 0, y: 30, width: 240, height: 24))
+        field.placeholderString = "Its name, e.g. Jump Desktop"
+        let kinds: [(String, SessionDetection.Kind)] = [("By its log file", .log), ("By a process it runs", .process),
+                                                        ("By a display it makes", .display)]
+        let kind = NSPopUpButton(frame: NSRect(x: -2, y: 0, width: 244, height: 26), pullsDown: false)
+        kind.addItems(withTitles: kinds.map(\.0))
+        let accessory = NSView(frame: NSRect(x: 0, y: 0, width: 240, height: 56))
+        accessory.addSubview(field)
+        accessory.addSubview(kind)
+        alert.accessoryView = accessory
+        alert.addButton(withTitle: "Add")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let name = field.stringValue.trimmingCharacters(in: .whitespaces)
+        let app = coordinator.addApp(named: name.isEmpty ? "New App" : name, kind: kinds[kind.indexOfSelectedItem].1)
+        onSessionProfilesChanged?()
+        openSessionApp(app)
+    }
+
+    private func deleteSessionApp(_ app: String) {
+        guard let coordinator = sessionCoordinator else { return }
+        let alert = NSAlert()
+        alert.messageText = "Delete \(RemoteSessionApp.name(of: app))?"
+        alert.informativeText = "\(AppIdentity.name) stops watching for its sessions, and ends the one on, if any."
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons[0].hasDestructiveAction = true
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        coordinator.removeApp(app)
+        onSessionProfilesChanged?()
+        openSessionApp(nil)
+    }
+
+    /// One app's page, like a service's in System Settings' Network pane: a way back, the app
+    /// and how it is, and its settings.
+    private func buildSessionApp(_ app: String, coordinator: RemoteSessionCoordinator) -> NSView {
+        let name = RemoteSessionApp.name(of: app)
+        let back = ClosureButton(title: "") { [weak self] _ in self?.openSessionApp(nil) }
+        back.isBordered = false
+        back.image = NSImage(systemSymbolName: "chevron.left", accessibilityDescription: "Back")
+        back.imagePosition = .imageOnly
+        back.toolTip = "Back to the apps"
+        let title = NSTextField(labelWithString: name)
+        title.font = .boldSystemFont(ofSize: 15)
+        let header = NSStackView(views: [back, title])
+        header.orientation = .horizontal
+        header.spacing = 6
+
+        let status = sessionStatus(app, coordinator)
+        let row = ListRowView(icon: sessionIcon(app, coordinator), title: name,
+                              status: status.text, dot: status.color, onClick: nil)
+        sessionSummary = row
+        let summary = GroupedListView(rows: [row])
+        let form = RoundedBoxView(formGrid(sessionGroups(for: app, coordinator: coordinator)), centered: false)
+        var views: [NSView] = [header, summary, form]
+        if coordinator.profile(for: app).isAdded {
+            let delete = ClosureButton(title: "Delete App…") { [weak self] _ in self?.deleteSessionApp(app) }
+            delete.bezelStyle = .rounded
+            views.append(delete)
+        }
+        return scrollingPage(views, leftAligned: true, filling: [summary, form])
+    }
+
+    /// An app's settings: how its sessions start, then what DAM does during them.
+    private func sessionGroups(for app: String, coordinator: RemoteSessionCoordinator) -> [(label: String, controls: [NSView])] {
         var profile = coordinator.profile(for: app)
         let save: (SessionProfile) -> Void = { [weak self] new in
             profile = new
             coordinator.setProfile(new, for: app)
             self?.onSessionProfilesChanged?()
+            // The page stays, for the next field; only its status changes.
+            guard let self else { return }
+            let status = self.sessionStatus(app, coordinator)
+            self.sessionSummary?.show(status: status.text, dot: status.color)
+            self.sessionsShown = self.sessionStatuses()
         }
-        var controls: [NSView] = []
+        var groups: [(label: String, controls: [NSView])] = []
         let name = RemoteSessionApp.name(of: app)
+        if profile.isAdded {
+            let field = ClosureTextField(text: profile.name ?? "", placeholder: "Its name") { [weak self] text in
+                guard !text.isEmpty, text != profile.name else { return }
+                profile.name = text
+                save(profile)
+                self?.reloadSessions()
+            }
+            field.widthAnchor.constraint(equalToConstant: 200).isActive = true
+            groups.append(("Name:", [field]))
+        }
         if app == "display" {
-            controls.append(checkbox(title: "Watch for a display another app makes", isOn: profile.watch,
-                                     help: "For apps that make a display of their own for each session, such as " +
-                                           "Jump Desktop, Splashtop or Duet: a session lasts while " +
-                                           "a display with this name is online.",
-                                     action: { profile.watch = $0; save(profile) }))
+            let watch = checkbox(title: "Watch for a display another app makes", isOn: profile.watch,
+                                 help: "For apps that make a display of their own for each session, such as " +
+                                       "Jump Desktop, Splashtop or Duet: a session lasts while " +
+                                       "a display with this name is online.",
+                                 action: { profile.watch = $0; save(profile) })
             let field = ClosureTextField(text: profile.adoptName ?? "", placeholder: "Part of its name, e.g. Jump") {
                 profile.adoptName = $0.isEmpty ? nil : $0
                 save(profile)
             }
             field.widthAnchor.constraint(equalToConstant: 200).isActive = true
-            controls.append(field)
-        } else if SessionDetectors.watchable.contains(app) {
-            let installed = SessionDetectors.isInstalled(app)
-            controls.append(checkbox(title: "Watch for \(name) sessions" + (installed ? "" : " (not installed)"),
-                                     isOn: profile.watch,
-                                     help: "Starts a session when someone connects through \(name), and ends it " +
-                                           "when the last one leaves.",
-                                     action: { profile.watch = $0; save(profile) }))
+            groups.append(("Sessions:", [watch, field]))
+        } else if profile.isAdded || SessionDetectors.watchable.contains(app) {
+            let installed = profile.isAdded || SessionDetectors.isInstalled(app)
+            groups.append(("Sessions:", [checkbox(title: "Watch for \(name) sessions" + (installed ? "" : " (not installed)"),
+                                                  isOn: profile.watch,
+                                                  help: "Starts a session when someone connects through \(name), and ends it " +
+                                                        "when the last one leaves.",
+                                                  action: { profile.watch = $0; save(profile) })]))
         } else {
-            controls.append(checkbox(title: "Start sessions from Sunshine's prep commands", isOn: profile.enabled,
-                                     help: "Unchecked, the prep commands are turned away and Sunshine streams " +
-                                           "the displays as they are.",
-                                     action: { profile.enabled = $0; save(profile) }))
+            groups.append(("Sessions:", [checkbox(title: "Start sessions from Sunshine's prep commands", isOn: profile.enabled,
+                                                  help: "Unchecked, the prep commands are turned away and Sunshine streams " +
+                                                        "the displays as they are.",
+                                                  action: { profile.enabled = $0; save(profile) })]))
+        }
+        if profile.detection != nil {
+            groups += detectionGroups(for: app, profile: { profile }, save: { profile = $0; save($0) })
         }
 
+        var controls: [NSView] = []
         // A setting picked here is locked: a session's changes leave it. Open, it follows them.
         var locks: [SessionProfile.Setting: NSButton] = [:]
         for setting in SessionProfile.Setting.allCases {
@@ -802,7 +1081,8 @@ final class SettingsWindowController: NSWindowController {
         let displayOptions = app == "display"
             ? [("Its display", SessionProfile.DisplayChoice.adopt.rawValue)]
             : [("Make a display", SessionProfile.DisplayChoice.create.rawValue),
-               ("Use \(name)'s display", SessionProfile.DisplayChoice.adopt.rawValue),
+               // Not by the app's name, which would make the pop-up, and the window, as wide as it.
+               ("Use the app's display", SessionProfile.DisplayChoice.adopt.rawValue),
                ("Leave the displays", SessionProfile.DisplayChoice.none.rawValue)]
         let display = popup(displayOptions, selected: profile.display.rawValue) { raw in
             profile.display = raw.flatMap(SessionProfile.DisplayChoice.init(rawValue:)) ?? .create
@@ -861,7 +1141,150 @@ final class SettingsWindowController: NSWindowController {
                                        "they are. The menu lights them again." +
                                        (ownPrivacy.map { " Leave it off if \($0) is on: the two would fight." } ?? ""),
                                  action: { profile.blackout = $0; pick(.blackout); save(profile) }), locks[.blackout]!))
-        return controls
+        let command = Bundle.main.executablePath ?? AppIdentity.name
+        groups.append(("Display:", [controls[0]]))
+        groups.append(("Sound:", [controls[1]]))
+        groups.append(("Privacy:", [controls[2]]))
+        groups.append(("Command Line:", [
+            selectableLabel("\(command) session start --app \(app)"),
+            smallNote("Starts a session from the app's own scripts; `session end --app \(app)` ends it. " +
+                      "Run with `help` for the rest."),
+        ]))
+        return groups
+    }
+
+    /// How an added app's sessions are told: by its log, a process, or a display it makes.
+    private func detectionGroups(for app: String, profile: @escaping () -> SessionProfile,
+                                 save: @escaping (SessionProfile) -> Void) -> [(label: String, controls: [NSView])] {
+        guard var detection = profile().detection else { return [] }
+        let problem = NSTextField(wrappingLabelWithString: "")
+        problem.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        problem.textColor = .systemOrange
+        problem.preferredMaxLayoutWidth = 360
+        let tried = NSTextField(wrappingLabelWithString: "")
+        tried.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        tried.textColor = .secondaryLabelColor
+        tried.preferredMaxLayoutWidth = 360
+        var line = ""
+        let refresh = { [weak problem, weak tried] in
+            let message = detection.problem(adoptName: profile().adoptName)
+            problem?.stringValue = message ?? ""
+            problem?.isHidden = message == nil
+            tried?.stringValue = line.isEmpty ? "Says what the patterns make of a line pasted here."
+                : Self.describe(line, opened: detection.opened, closed: detection.closed)
+        }
+        let store = { (edit: (inout SessionDetection) -> Void) in
+            edit(&detection)
+            var next = profile()
+            next.detection = detection
+            save(next)
+            refresh()
+        }
+
+        let kinds: [(String, String?)] = [("Its log file", SessionDetection.Kind.log.rawValue),
+                                          ("A process it runs", SessionDetection.Kind.process.rawValue),
+                                          ("A display it makes", SessionDetection.Kind.display.rawValue)]
+        let kind = popup(kinds, selected: detection.kind.rawValue) { [weak self] raw in
+            guard let kind = raw.flatMap(SessionDetection.Kind.init(rawValue:)), kind != detection.kind else { return }
+            store { $0.kind = kind }
+            if kind == .display {
+                var next = profile()
+                next.display = .adopt
+                save(next)
+            }
+            self?.reloadSessions()
+        }
+        kind.toolTip = "What tells \(AppIdentity.name) a session started and ended."
+        var groups: [(label: String, controls: [NSView])] = [("Told By:", [kind])]
+
+        switch detection.kind {
+        case .log:
+            let path = ClosureTextField(text: detection.logPath, placeholder: "~/Library/Logs/App/app.log") { text in
+                store { $0.logPath = text }
+            }
+            path.widthAnchor.constraint(equalToConstant: 260).isActive = true
+            let choose = ClosureButton(title: "Choose…") { [weak self, weak path] _ in
+                guard let url = self?.chooseLogFile(current: detection.logURL) else { return }
+                let text = (url.path as NSString).abbreviatingWithTildeInPath
+                path?.stringValue = text
+                store { $0.logPath = text }
+            }
+            choose.bezelStyle = .rounded
+            let fileRow = BaselineRowGridView(views: [[path, choose]])
+            fileRow.columnSpacing = 8
+            fileRow.rowAlignment = .firstBaseline
+            let opened = ClosureTextField(text: detection.opened, placeholder: #"#(?<id>\d+) Connection opened from (?<client>[\d.]+)"#) {
+                text in store { $0.opened = text }
+            }
+            let closed = ClosureTextField(text: detection.closed, placeholder: #"#(?<id>\d+) Connection closed"#) {
+                text in store { $0.closed = text }
+            }
+            for field in [opened, closed] {
+                field.font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+                field.widthAnchor.constraint(equalToConstant: 340).isActive = true
+            }
+            let tryField = ClosureTextField(text: "", placeholder: "Paste a line from the log") { _ in }
+            tryField.onChange = { line = $0; refresh() }
+            tryField.font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+            tryField.widthAnchor.constraint(equalToConstant: 340).isActive = true
+            groups.append(("Log File:", [fileRow, smallNote("New lines are read as they come; the file can be " +
+                                                             "moved aside and started again, as logs are.")]))
+            groups.append(("Opened:", [opened]))
+            groups.append(("Closed:", [closed, smallNote(
+                "Regular expressions, matched anywhere in a line. A line matching Opened starts a connection, one " +
+                "matching Closed ends it. Name a group id in both, as (?<id>\\d+), for connections that overlap, " +
+                "and one client in Opened to name the display after the client.")]))
+            groups.append(("Try a Line:", [tryField, tried]))
+        case .process:
+            let process = ClosureTextField(text: detection.processName, placeholder: "e.g. screensharingd") { text in
+                store { $0.processName = text }
+            }
+            process.widthAnchor.constraint(equalToConstant: 200).isActive = true
+            groups.append(("Process:", [process, smallNote(
+                "A session lasts while a process with this name runs, as Activity Monitor shows it; it ends a " +
+                "few seconds after the process goes. Names are matched to their first 16 characters.")]))
+        case .display:
+            let field = ClosureTextField(text: profile().adoptName ?? "", placeholder: "Part of its name, e.g. Jump") { text in
+                var next = profile()
+                next.adoptName = text.isEmpty ? nil : text
+                save(next)
+                refresh()
+            }
+            field.widthAnchor.constraint(equalToConstant: 200).isActive = true
+            groups.append(("Display Name:", [field, smallNote(
+                "A session lasts while a display whose name has this in it is online, as the app's own display " +
+                "for the session.")]))
+        }
+        groups[groups.count - 1].controls += [problem]
+        refresh()
+        return groups
+    }
+
+    /// What an added app's patterns make of `line`.
+    private static func describe(_ line: String, opened: String, closed: String) -> String {
+        guard let parse = SessionLogLines.custom(opened: opened, closed: closed) else {
+            return "Give both patterns first."
+        }
+        switch parse(line) {
+        case .opened(let key, let client, _)?:
+            return "Opens a connection" + (key.isEmpty ? "" : " (\(key))") + (client.map { " from \($0)" } ?? "") + "."
+        case .closed(let key)?:
+            return "Closes " + (key.isEmpty ? "the connection." : "connection \(key).")
+        case nil:
+            return "Matches neither pattern."
+        }
+    }
+
+    private func chooseLogFile(current: URL) -> URL? {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.showsHiddenFiles = true
+        panel.message = "Choose the app's log file."
+        panel.directoryURL = FileManager.default.fileExists(atPath: current.deletingLastPathComponent().path)
+            ? current.deletingLastPathComponent()
+            : FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs")
+        return panel.runModal() == .OK ? panel.url : nil
     }
 
     /// A lock beside a session setting: closed while the setting is kept as picked here,
@@ -921,14 +1344,14 @@ final class SettingsWindowController: NSWindowController {
     /// Rebuilds the Moonlight tab, as when the host changes.
     func rebuildMoonlightTab() {
         moonlightContent = buildMoonlightTab()
-        if selectedTab == TabID.moonlight { window?.contentView = moonlightContent }
+        if selectedTab == TabID.moonlight { selectTab(TabID.moonlight) }
     }
 
     /// Rebuilds the Moonlight tab if what it shows of the host has changed.
     func moonlightDidChange() {
         guard MoonlightState(host: moonlightHost) != moonlightShown else { return }
         moonlightContent = buildMoonlightTab()
-        if selectedTab == TabID.moonlight { window?.contentView = moonlightContent }
+        if selectedTab == TabID.moonlight { selectTab(TabID.moonlight) }
     }
 
     // MARK: - Actions
@@ -991,12 +1414,18 @@ final class SettingsWindowController: NSWindowController {
 
     private static let formInsets = NSEdgeInsets(top: 16, left: 20, bottom: 16, right: 20)
 
-    /// A scrolling tab holding one form. Each group is a label and the controls listed
-    /// under it, one per row; the label sits on the group's first row.
-    /// Rows line up on their text's baseline, or, `centered`, on their middle, for controls
-    /// with no text of their own to line up (the hotkey recorders).
+    /// A scrolling tab holding one form (see formGrid).
     private func formTab(_ groups: [(label: String, controls: [NSView])], leftAligned: Bool = false,
                          centered: Bool = false) -> NSView {
+        let box = RoundedBoxView(formGrid(groups, centered: centered), centered: !leftAligned)
+        return scrollingPage([box], leftAligned: true, filling: [box])
+    }
+
+    /// One form: each group is a label and the controls listed under it, one per row; the
+    /// label sits on the group's first row. Rows line up on their text's baseline, or,
+    /// `centered`, on their middle, for controls with no text of their own to line up (the
+    /// hotkey recorders).
+    private func formGrid(_ groups: [(label: String, controls: [NSView])], centered: Bool = false) -> NSGridView {
         let grid = NSGridView()
         grid.rowSpacing    = 6
         grid.columnSpacing = 8
@@ -1004,9 +1433,9 @@ final class SettingsWindowController: NSWindowController {
         for (g, group) in groups.enumerated() {
             for (i, control) in group.controls.enumerated() {
                 let label = i == 0 ? formLabel(group.label) : NSGridCell.emptyContentView
-                // The grid stretches a cell's view to the column's width; wrapped, a pop-up or
-                // a grid keeps its own. The rest look the same stretched.
-                let keepsWidth = control is NSPopUpButton || control is NSGridView
+                // The grid stretches a cell's view to the column's width; wrapped, a pop-up, a
+                // grid or a field of a set width keeps its own. The rest look the same stretched.
+                let keepsWidth = control is NSPopUpButton || control is NSGridView || control is ClosureTextField
                 let row = grid.addRow(with: [label, keepsWidth ? NaturalWidthView(control) : control])
                 row.cell(at: 1).xPlacement = .leading
                 if centered { row.yPlacement = .center }
@@ -1024,14 +1453,24 @@ final class SettingsWindowController: NSWindowController {
         narrowest.priority = NSLayoutConstraint.Priority(500)
         narrowest.isActive = true
 
+        return grid
+    }
+
+    /// A scrolling tab holding `views` one under another; those in `filling` take its width.
+    private func scrollingPage(_ views: [NSView], leftAligned: Bool = false, filling: [NSView] = []) -> NSView {
         let scrollView = makeScrollView()
         let stack = SettingsStack()
         stack.orientation = .vertical
         stack.alignment   = leftAligned ? .leading : .centerX
+        stack.spacing     = 12
         stack.edgeInsets  = Self.formInsets
         stack.translatesAutoresizingMaskIntoConstraints = false
         scrollView.documentView = stack
-        stack.addArrangedSubview(grid)
+        for view in views { stack.addArrangedSubview(view) }
+        for view in filling {
+            view.widthAnchor.constraint(equalTo: stack.widthAnchor,
+                                        constant: -Self.formInsets.left - Self.formInsets.right).isActive = true
+        }
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor),
             stack.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor),
@@ -1267,12 +1706,27 @@ final class SettingsWindowController: NSWindowController {
 
     /// Builds the Remote Sessions tab again from the profiles, as when a session changed one.
     func reloadSessions() {
+        if let app = sessionsApp, let coordinator = sessionCoordinator,
+           !sessionApps(coordinator).contains(app) { sessionsApp = nil }
+        sessionsShown = sessionStatuses()
         sessionsContent = buildSessionsTab()
         if selectedTab == TabID.sessions { selectTab(TabID.sessions) }
     }
 
-    /// Shows the window on the Remote Sessions tab.
+    /// Rebuilds the Remote Sessions page if what it shows of the apps has changed, as when
+    /// a session starts or ends.
+    func sessionsDidChange() {
+        if sessionStatuses() != sessionsShown { reloadSessions() }
+    }
+
+    private func sessionStatuses() -> [String: String] {
+        guard let coordinator = sessionCoordinator else { return [:] }
+        return Dictionary(uniqueKeysWithValues: sessionApps(coordinator).map { ($0, sessionStatus($0, coordinator).text) })
+    }
+
+    /// Shows the window on the Remote Sessions tab, at its list of apps.
     func showSessions() {
+        if sessionsApp != nil { openSessionApp(nil) }
         selectTab(TabID.sessions)
         show()
     }
@@ -1336,22 +1790,265 @@ extension SettingsWindowController: NSToolbarDelegate {
             item.label = "Virtual Display"
             item.image = NSImage(systemSymbolName: "rectangle.dashed",
                                  accessibilityDescription: "Virtual Display")
-        case TabID.moonlight:
-            item.label = "Moonlight"
-            item.image = NSImage(systemSymbolName: "moon.stars",
-                                 accessibilityDescription: "Moonlight")
-        case TabID.sessions:
-            item.label = "Remote Sessions"
-            item.image = NSImage(systemSymbolName: "display.2",
-                                 accessibilityDescription: "Remote Sessions")
-        case TabID.browser:
-            item.label = "Browser Stream"
-            item.image = NSImage(systemSymbolName: "globe",
-                                 accessibilityDescription: "Browser Stream")
+        case TabID.streaming:
+            item.label = "Streaming"
+            item.image = NSImage(systemSymbolName: "dot.radiowaves.left.and.right",
+                                 accessibilityDescription: "Streaming")
         default:
             return nil
         }
         return item
+    }
+}
+
+// MARK: - StreamingTabView
+
+/// The Streaming tab: a bar choosing a service, over that service's page.
+private final class StreamingTabView: NSView {
+    private let bar: NSSegmentedControl
+    private let onSelect: (Int) -> Void
+    private var page: NSView?
+    private static let barInsets = NSEdgeInsets(top: 12, left: 0, bottom: 4, right: 0)
+
+    /// Calls `onSelect` with the index of the service chosen in the bar.
+    init(titles: [String], onSelect: @escaping (Int) -> Void) {
+        self.onSelect = onSelect
+        bar = NSSegmentedControl(labels: titles, trackingMode: .selectOne, target: nil, action: nil)
+        super.init(frame: .zero)
+        bar.target = self
+        bar.action = #selector(barChanged)
+        bar.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(bar)
+        NSLayoutConstraint.activate([
+            bar.topAnchor.constraint(equalTo: topAnchor, constant: Self.barInsets.top),
+            bar.centerXAnchor.constraint(equalTo: centerXAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    /// The height the bar takes above a page.
+    var barHeight: CGFloat {
+        Self.barInsets.top + bar.fittingSize.height + Self.barInsets.bottom
+    }
+
+    /// Shows a page below the bar, and selects its service there.
+    func show(_ newPage: NSView, at index: Int) {
+        bar.selectedSegment = index
+        guard newPage !== page else { return }
+        page?.removeFromSuperview()
+        page = newPage
+        newPage.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(newPage)
+        NSLayoutConstraint.activate([
+            newPage.topAnchor.constraint(equalTo: bar.bottomAnchor, constant: Self.barInsets.bottom),
+            newPage.leadingAnchor.constraint(equalTo: leadingAnchor),
+            newPage.trailingAnchor.constraint(equalTo: trailingAnchor),
+            newPage.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+
+    @objc private func barChanged() { onSelect(bar.selectedSegment) }
+}
+
+// MARK: - GroupedListView
+
+/// Rows in a rounded box, divided by lines, as lists are in System Settings.
+private final class GroupedListView: NSView {
+    init(rows: [NSView]) {
+        super.init(frame: .zero)
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 0
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        for (i, row) in rows.enumerated() {
+            if i > 0 {
+                let line = NSBox()
+                line.boxType = .separator
+                stack.addArrangedSubview(line)
+                // Under the text, past the icon.
+                line.leadingAnchor.constraint(equalTo: stack.leadingAnchor, constant: ListRowView.textInset).isActive = true
+                line.trailingAnchor.constraint(equalTo: stack.trailingAnchor, constant: -10).isActive = true
+            }
+            stack.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        }
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            stack.topAnchor.constraint(equalTo: topAnchor),
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func draw(_ dirtyRect: NSRect) { RoundedBoxView.drawBox(in: bounds) }
+}
+
+// MARK: - RoundedBoxView
+
+/// A view in a rounded box with a border, as the lists and forms are in System Settings.
+private final class RoundedBoxView: NSView {
+    private static let insets = NSEdgeInsets(top: 14, left: 14, bottom: 14, right: 14)
+
+    /// Holds `content` at the box's leading edge, or, `centered`, in its middle.
+    init(_ content: NSView, centered: Bool) {
+        super.init(frame: .zero)
+        content.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(content)
+        let i = Self.insets
+        NSLayoutConstraint.activate([
+            content.topAnchor.constraint(equalTo: topAnchor, constant: i.top),
+            content.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -i.bottom),
+            content.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: i.left),
+            content.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -i.right),
+            centered ? content.centerXAnchor.constraint(equalTo: centerXAnchor)
+                     : content.leadingAnchor.constraint(equalTo: leadingAnchor, constant: i.left),
+        ])
+        // As narrow as what it holds, so the page keeps to its natural width.
+        let hug = widthAnchor.constraint(equalTo: content.widthAnchor, constant: i.left + i.right)
+        hug.priority = NSLayoutConstraint.Priority(NSLayoutConstraint.Priority.defaultLow.rawValue - 2)
+        hug.isActive = true
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func draw(_ dirtyRect: NSRect) { Self.drawBox(in: bounds) }
+
+    static func drawBox(in bounds: NSRect) {
+        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 8, yRadius: 8)
+        // Barely off the window's background, as in System Settings.
+        NSColor.labelColor.withAlphaComponent(0.04).setFill()
+        path.fill()
+        NSColor.separatorColor.setStroke()
+        path.stroke()
+    }
+}
+
+// MARK: - ListRowView
+
+/// A row of a GroupedListView: an icon, a name with a status under it after a coloured dot,
+/// and, when it opens something, a chevron; clicking it calls `onClick`.
+private final class ListRowView: NSView {
+    /// Where the text starts, past the icon.
+    static let textInset: CGFloat = 52
+
+    private let onClick: (() -> Void)?
+    private var pressed = false { didSet { needsDisplay = true } }
+    private let title: String
+    private let light: DotView
+    private let state: NSTextField
+
+    init(icon: NSImage?, title: String, status: String, dot: NSColor, onClick: (() -> Void)?) {
+        self.onClick = onClick
+        self.title = title
+        light = DotView(color: dot)
+        state = NSTextField(labelWithString: status)
+        super.init(frame: .zero)
+        let image = NSImageView()
+        image.image = icon
+        image.imageScaling = .scaleProportionallyUpOrDown
+        image.symbolConfiguration = .init(pointSize: 18, weight: .regular)
+        image.contentTintColor = .secondaryLabelColor
+        let name = NSTextField(labelWithString: title)
+        name.font = .systemFont(ofSize: NSFont.systemFontSize)
+        state.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        state.textColor = .secondaryLabelColor
+        state.lineBreakMode = .byTruncatingTail
+        state.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let statusRow = NSStackView(views: [light, state])
+        statusRow.spacing = 4
+        let text = NSStackView(views: [name, statusRow])
+        text.orientation = .vertical
+        text.alignment = .leading
+        text.spacing = 1
+        for view in [image, text] as [NSView] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(view)
+        }
+        NSLayoutConstraint.activate([
+            image.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            image.centerYAnchor.constraint(equalTo: centerYAnchor),
+            image.widthAnchor.constraint(equalToConstant: 32),
+            image.heightAnchor.constraint(equalToConstant: 32),
+            text.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Self.textInset),
+            text.topAnchor.constraint(equalTo: topAnchor, constant: 9),
+            text.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -9),
+        ])
+        if onClick != nil {
+            let chevron = NSImageView(image: NSImage(systemSymbolName: "chevron.right", accessibilityDescription: nil) ?? NSImage())
+            chevron.contentTintColor = .tertiaryLabelColor
+            chevron.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(chevron)
+            NSLayoutConstraint.activate([
+                chevron.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+                chevron.centerYAnchor.constraint(equalTo: centerYAnchor),
+                text.trailingAnchor.constraint(lessThanOrEqualTo: chevron.leadingAnchor, constant: -8),
+            ])
+        } else {
+            text.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -12).isActive = true
+        }
+        setAccessibilityElement(true)
+        setAccessibilityRole(onClick == nil ? .group : .button)
+        setAccessibilityLabel("\(title), \(status)")
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    /// Shows another status, as when what it says of has changed.
+    func show(status: String, dot: NSColor) {
+        state.stringValue = status
+        light.color = dot
+        setAccessibilityLabel("\(title), \(status)")
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard pressed else { return }
+        NSColor.quaternaryLabelColor.setFill()
+        bounds.fill()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if onClick != nil { pressed = true }
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard onClick != nil else { return }
+        pressed = bounds.contains(convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard pressed else { return }
+        pressed = false
+        onClick?()
+    }
+
+    override func accessibilityPerformPress() -> Bool {
+        onClick?()
+        return onClick != nil
+    }
+}
+
+/// A small filled circle, as by a service's status in System Settings.
+private final class DotView: NSView {
+    var color: NSColor { didSet { needsDisplay = true } }
+
+    init(color: NSColor) {
+        self.color = color
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        widthAnchor.constraint(equalToConstant: 7).isActive = true
+        heightAnchor.constraint(equalToConstant: 7).isActive = true
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func draw(_ dirtyRect: NSRect) {
+        color.setFill()
+        NSBezierPath(ovalIn: bounds).fill()
     }
 }
 
@@ -1378,6 +2075,13 @@ private final class NaturalWidthView: NSView {
         let hug = widthAnchor.constraint(equalTo: content.widthAnchor)
         hug.priority = NSLayoutConstraint.Priority(NSLayoutConstraint.Priority.defaultLow.rawValue - 1)
         hug.isActive = true
+        // A grid has no width of its own to hug: this keeps it to its cells', over the hug
+        // above, which would otherwise stretch it once its holder is stretched.
+        if content is NSGridView {
+            let narrowest = content.widthAnchor.constraint(equalToConstant: 0)
+            narrowest.priority = .defaultLow
+            narrowest.isActive = true
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
@@ -1476,8 +2180,15 @@ private final class ClosureTextField: NSTextField, NSTextFieldDelegate {
 
     required init?(coder: NSCoder) { fatalError() }
 
+    /// Called with the text as it is typed.
+    var onChange: ((String) -> Void)?
+
     func controlTextDidEndEditing(_ obj: Notification) {
         handler(stringValue.trimmingCharacters(in: .whitespaces))
+    }
+
+    func controlTextDidChange(_ obj: Notification) {
+        onChange?(stringValue)
     }
 }
 

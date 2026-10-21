@@ -16,7 +16,8 @@ import os.log
 private let rsLog = Logger(subsystem: AppIdentity.bundleID, category: "RemoteSessions")
 
 /// The apps DAM knows sessions of, by the ID they are asked for by (`--app`). Others can be
-/// asked for too; they get the default profile and are shown by their ID.
+/// asked for too; they get the default profile and are shown by their ID, or by the name
+/// they were added under in Settings.
 enum RemoteSessionApp {
     static let known: [(id: String, name: String)] = [
         ("sunshine", "Sunshine"),
@@ -29,7 +30,71 @@ enum RemoteSessionApp {
         ("display", "Another App's Display")
     ]
 
-    static func name(of id: String) -> String { known.first { $0.id == id }?.name ?? id }
+    /// The names of the apps added in Settings, by ID; kept by the coordinator.
+    static var added: [String: String] = [:]
+
+    static func name(of id: String) -> String { known.first { $0.id == id }?.name ?? added[id] ?? id }
+
+    /// An ID for an app added as `name`, other than `taken`: "Jump Desktop" gives "jump-desktop".
+    static func id(forName name: String, taken: Set<String>) -> String {
+        let words = name.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }
+        let base = words.isEmpty ? "app" : words.joined(separator: "-")
+        let used = taken.union(known.map(\.id))
+        var id = base
+        var n = 2
+        while used.contains(id) { id = "\(base)-\(n)"; n += 1 }
+        return id
+    }
+}
+
+/// How DAM tells when an app added in Settings starts and ends a session.
+struct SessionDetection: Codable, Equatable {
+    enum Kind: String, Codable, CaseIterable {
+        /// Lines in its log: one matching `opened` starts a connection, one matching `closed` ends it.
+        case log
+        /// A process that runs only while someone is connected.
+        case process
+        /// A display it makes for each session, by part of its name (the profile's `adoptName`).
+        case display
+    }
+
+    var kind: Kind = .log
+    var logPath = ""
+    /// Regular expressions; see SessionLogLines.custom.
+    var opened = ""
+    var closed = ""
+    var processName = ""
+
+    init(kind: Kind = .log) { self.kind = kind }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try c.decodeIfPresent(Kind.self, forKey: .kind) ?? .log
+        logPath = try c.decodeIfPresent(String.self, forKey: .logPath) ?? ""
+        opened = try c.decodeIfPresent(String.self, forKey: .opened) ?? ""
+        closed = try c.decodeIfPresent(String.self, forKey: .closed) ?? ""
+        processName = try c.decodeIfPresent(String.self, forKey: .processName) ?? ""
+    }
+
+    /// The log's file, with `~` for the home folder.
+    var logURL: URL { URL(fileURLWithPath: (logPath as NSString).expandingTildeInPath) }
+
+    /// What is missing or wrong for DAM to watch, or nil when it can; `adoptName` is the
+    /// profile's, for `.display`.
+    func problem(adoptName: String?) -> String? {
+        switch kind {
+        case .log:
+            if logPath.isEmpty { return "Choose its log file." }
+            if opened.isEmpty || closed.isEmpty { return "Give the lines that open and close a connection." }
+            if (try? NSRegularExpression(pattern: opened)) == nil { return "The opened pattern isn't a valid regular expression." }
+            if (try? NSRegularExpression(pattern: closed)) == nil { return "The closed pattern isn't a valid regular expression." }
+        case .process:
+            if processName.isEmpty { return "Give the process's name." }
+        case .display:
+            if adoptName?.isEmpty ?? true { return "Give part of its display's name." }
+        }
+        return nil
+    }
 }
 
 /// What DAM does while a session of one app is on.
@@ -79,6 +144,9 @@ struct SessionProfile: Codable, Equatable {
     /// The settings picked in Settings. A change made through DAM during a session is kept
     /// for the next session in the others, and leaves these as they are.
     var locked: Set<Setting> = []
+    /// For an app added in Settings: its name, and how its sessions are told.
+    var name: String?
+    var detection: SessionDetection?
 
     init() {}
 
@@ -96,7 +164,12 @@ struct SessionProfile: Codable, Equatable {
         adoptName = try c.decodeIfPresent(String.self, forKey: .adoptName)
         blackout = try c.decodeIfPresent(Bool.self, forKey: .blackout) ?? false
         locked = try c.decodeIfPresent(Set<Setting>.self, forKey: .locked) ?? []
+        name = try c.decodeIfPresent(String.self, forKey: .name)
+        detection = try c.decodeIfPresent(SessionDetection.self, forKey: .detection)
     }
+
+    /// Whether the app was added in Settings.
+    var isAdded: Bool { detection != nil }
 
     /// The mode to make the display in, for a client that asked for `width` × `height` at
     /// `fps`, any of which may be unknown.
@@ -203,8 +276,9 @@ struct SessionStart: Equatable {
 
 /// What the coordinator changes the Mac through, so it can be tested without displays.
 protocol SessionDisplays: AnyObject {
-    /// Makes a streaming display; `completion` gets its ID once it is placed, or nil.
-    func makeDisplay(_ mode: StreamingDisplayModes.Mode, identity: VideoManager.StreamingIdentity,
+    /// Makes a streaming display, main already when `main`; `completion` gets its ID once it
+    /// is placed, or nil.
+    func makeDisplay(_ mode: StreamingDisplayModes.Mode, identity: VideoManager.StreamingIdentity, main: Bool,
                      completion: @escaping (CGDirectDisplayID?) -> Void)
     func removeDisplay(_ id: CGDirectDisplayID)
     /// The display online whose name contains `name`, ignoring case, other than DAM's own.
@@ -288,6 +362,7 @@ final class RemoteSessionCoordinator {
         self.profilesURL = profilesURL
         self.defaults = defaults
         profiles = profilesURL.map(SessionProfiles.load(from:)) ?? [:]
+        noteAddedNames()
         // A session was on when DAM last quit; its display went with it, the output didn't.
         if let uid = outputBeforeSessions ?? outputToRestore {
             rsLog.debug("putting back the output from before the last session")
@@ -302,14 +377,47 @@ final class RemoteSessionCoordinator {
         var profile = SessionProfile()
         // Another app's display is there to be placed, not made.
         if app == "display" || app == "opendisplay" { profile.display = .adopt }
-        // Parsec streams the main display, whichever that is when the display is placed.
-        if app == "parsec" { profile.placement = .main }
+        // Parsec and RustDesk stream the main display, whichever that is when the display is placed.
+        if app == "parsec" || app == "rustdesk" { profile.placement = .main }
         return profile
     }
 
     func setProfile(_ profile: SessionProfile, for app: String) {
         profiles[app] = profile
+        noteAddedNames()
         if let profilesURL { SessionProfiles.save(profiles, to: profilesURL) }
+    }
+
+    /// The apps added in Settings, by name.
+    var addedApps: [String] {
+        profiles.filter(\.value.isAdded).sorted {
+            ($0.value.name ?? $0.key).localizedStandardCompare($1.value.name ?? $1.key) == .orderedAscending
+        }.map(\.key)
+    }
+
+    /// Adds an app named `name` whose sessions are told as `kind` says, and returns its ID.
+    func addApp(named name: String, kind: SessionDetection.Kind = .log) -> String {
+        let id = RemoteSessionApp.id(forName: name, taken: Set(profiles.keys))
+        var profile = SessionProfile()
+        profile.name = name
+        profile.detection = SessionDetection(kind: kind)
+        profile.watch = true
+        if kind == .display { profile.display = .adopt }
+        setProfile(profile, for: id)
+        return id
+    }
+
+    /// Removes an app added in Settings, ending its session if one is on.
+    func removeApp(_ app: String) {
+        guard profiles[app]?.isAdded == true else { return }
+        if sessions[app] != nil { end(app: app, all: true) }
+        profiles[app] = nil
+        noteAddedNames()
+        if let profilesURL { SessionProfiles.save(profiles, to: profilesURL) }
+    }
+
+    private func noteAddedNames() {
+        RemoteSessionApp.added = profiles.filter(\.value.isAdded).mapValues { $0.name ?? "" }.filter { !$0.value.isEmpty }
     }
 
     /// Starts a session of `request.app`, or joins the one on; `completion` runs once its
@@ -345,7 +453,9 @@ final class RemoteSessionCoordinator {
             switchOutput(app, profile: profile, start: SessionStart())
         case .create:
             let mode = profile.mode(clientWidth: request.width, clientHeight: request.height, clientFPS: request.fps)
-            displays.makeDisplay(mode, identity: request.identity) { [weak self] id in
+            // Main in the commit that places it: one commit fewer, each of which can take
+            // seconds while the app is already capturing the main display.
+            displays.makeDisplay(mode, identity: request.identity, main: profile.placement == .main) { [weak self] id in
                 guard let self else { return }
                 guard let id else {
                     rsLog.error("\(app): no display")
@@ -541,9 +651,9 @@ final class LiveSessionDisplays: SessionDisplays {
         self.audio = audio
     }
 
-    func makeDisplay(_ mode: StreamingDisplayModes.Mode, identity: VideoManager.StreamingIdentity,
+    func makeDisplay(_ mode: StreamingDisplayModes.Mode, identity: VideoManager.StreamingIdentity, main: Bool,
                      completion: @escaping (CGDirectDisplayID?) -> Void) {
-        video.createStreamingDisplay(mode: mode, identity: identity, completion: completion)
+        video.createStreamingDisplay(mode: mode, identity: identity, main: main, completion: completion)
     }
 
     func removeDisplay(_ id: CGDirectDisplayID) { video.removeStreamingDisplay(id: id) }
