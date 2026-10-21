@@ -229,6 +229,48 @@ final class StreamingDisplayTests: XCTestCase {
         XCTAssertEqual(release(masters: [2: 11], mirroredByChoice: [11]), [])
     }
 
+    /// The Lenovo (1) main with the iPad's display (11) and Moonlight's (10) right of it, before
+    /// the TV came.
+    private let settled: [CGDirectDisplayID: CGRect] = [
+        1: CGRect(x: 0, y: 0, width: 1920, height: 1080),
+        11: CGRect(x: 1920, y: 0, width: 1024, height: 768),
+        10: CGRect(x: 2944, y: 0, width: 1920, height: 1080),
+    ]
+
+    func testStreamingDisplaysGoBackWhereTheyWereOnceTheTVLeaves() {
+        // As seen: after the TV left, Moonlight's display took the iPad's place, and the iPad's
+        // went left of the Lenovo.
+        let now: [CGDirectDisplayID: CGRect] = [
+            1: CGRect(x: 0, y: 0, width: 1920, height: 1080),
+            10: CGRect(x: 1920, y: 0, width: 1920, height: 1080),
+            11: CGRect(x: -1024, y: 533, width: 1024, height: 768),
+        ]
+        let moves = VideoManager.originsBack(before: settled, now: now, streaming: [10, 11], mirroring: [], main: 1)
+        XCTAssertEqual(moves, [10: CGPoint(x: 2944, y: 0), 11: CGPoint(x: 1920, y: 0)])
+    }
+
+    func testStreamingDisplaysFollowTheMainDisplayWhenItMoved() {
+        var now = settled
+        now[1] = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        now[2] = CGRect(x: -1920, y: 0, width: 1920, height: 1080)  // the TV, left of it
+        XCTAssertEqual(VideoManager.originsBack(before: settled, now: now, streaming: [10, 11], mirroring: [], main: 1), [:])
+        // Main went to the TV, which the Lenovo mirrors: placed by the Lenovo, as before.
+        now = [2: CGRect(x: 0, y: 0, width: 1920, height: 1080), 1: CGRect(x: 0, y: 0, width: 1920, height: 1080),
+               10: CGRect(x: 1920, y: 0, width: 1920, height: 1080), 11: CGRect(x: 3840, y: 0, width: 1024, height: 768)]
+        XCTAssertEqual(VideoManager.originsBack(before: settled, now: now, streaming: [10, 11], mirroring: [1], main: 2), [:],
+                       "no display both settled and fixed now, but the TV, which was not there")
+    }
+
+    func testNoMoveThatWouldOverlapAnotherDisplay() {
+        let now: [CGDirectDisplayID: CGRect] = [
+            1: CGRect(x: 0, y: 0, width: 1920, height: 1080),
+            2: CGRect(x: 1920, y: 0, width: 1920, height: 1080),  // the TV, where the iPad's was
+            10: CGRect(x: 3840, y: 0, width: 1920, height: 1080),
+            11: CGRect(x: -1024, y: 0, width: 1024, height: 768),
+        ]
+        XCTAssertEqual(VideoManager.originsBack(before: settled, now: now, streaming: [10, 11], mirroring: [], main: 1), [:])
+    }
+
     func testMirrorsWithoutStreamingDisplaysAndAnchorSetsAreLeftAlone() {
         XCTAssertEqual(release(masters: [2: 1]), [])
         XCTAssertEqual(release(masters: [10: 20], anchorManaged: [10, 20]), [])

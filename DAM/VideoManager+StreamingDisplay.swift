@@ -221,13 +221,65 @@ extension VideoManager {
     /// Notes a display DAM didn't make joining or leaving (a TV connected or disconnected):
     /// WindowServer then lays the new set out from a layout it saved for it, mirrors included,
     /// over the next seconds, or hands a mirror set the leaver was in to another of its members;
-    /// an anchor made for a newcomer keeps a layout for its first 30.
+    /// an anchor made for a newcomer keeps a layout for its first 30. While the set is settled,
+    /// notes where each display is.
     func noteDisplaySetChanged() {
-        let online = Set(DisplayArrangement.onlineDisplayIDs())
+        // DAM's own come and go through it, which lays them out.
+        let online = Set(DisplayArrangement.onlineDisplayIDs().filter { CGDisplayVendorNumber($0) != Self.anchorVendorID })
         defer { onlineAtLastMerge = online }
-        guard let before = onlineAtLastMerge,
-              !online.symmetricDifference(before).subtracting(streamingDisplayIDs).isEmpty else { return }
+        guard let before = onlineAtLastMerge, online != before else {
+            onlineAtLastMerge = online
+            return noteSettledFrames()
+        }
         displaySetChangedUntil = Date().addingTimeInterval(45)
+    }
+
+    /// Notes where each display is while the set is settled, once a change of DAM's own (a
+    /// streaming display being placed, say) has landed: until then they are on the way.
+    private func noteSettledFrames() {
+        guard displaySetChangedUntil <= Date() else { return }
+        guard !displayChangeInFlight else {
+            guard !settledFramesPending else { return }
+            settledFramesPending = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                self?.settledFramesPending = false
+                self?.noteSettledFrames()
+            }
+            return
+        }
+        let all = DisplayArrangement.onlineDisplayIDs()
+        // Not if one came or went meanwhile: the next re-read sees to that.
+        guard Set(all.filter { CGDisplayVendorNumber($0) != Self.anchorVendorID }) == onlineAtLastMerge else { return }
+        framesBeforeSetChange = Dictionary(uniqueKeysWithValues: all.map { ($0, CGDisplayBounds($0)) })
+    }
+
+    /// Where to move each of `streaming` so it is where it was in `before` beside the others,
+    /// going by `main` (or another display neither streaming nor mirroring, in both): none
+    /// that mirrors, and nothing when a move would overlap another display.
+    static func originsBack(before: [CGDirectDisplayID: CGRect], now: [CGDirectDisplayID: CGRect],
+                            streaming: Set<CGDirectDisplayID>, mirroring: Set<CGDirectDisplayID>,
+                            main: CGDirectDisplayID) -> [CGDirectDisplayID: CGPoint] {
+        let fixed = { (id: CGDirectDisplayID) in !streaming.contains(id) && !mirroring.contains(id) }
+        guard let reference = ([main] + now.keys.sorted()).first(where: { fixed($0) && before[$0] != nil }),
+              let then = before[reference], let present = now[reference] else { return [:] }
+        let dx = present.minX - then.minX, dy = present.minY - then.minY
+        var moves: [CGDirectDisplayID: CGPoint] = [:]
+        for id in streaming where !mirroring.contains(id) {
+            guard let old = before[id], let current = now[id] else { continue }
+            let target = CGPoint(x: old.minX + dx, y: old.minY + dy)
+            if target != current.origin { moves[id] = target }
+        }
+        guard !moves.isEmpty else { return [:] }
+        let frames = now.filter { !mirroring.contains($0.key) }.map { id, frame in
+            moves[id].map { CGRect(origin: $0, size: frame.size) } ?? frame
+        }
+        for (i, a) in frames.enumerated() {
+            for b in frames[(i + 1)...] {
+                let overlap = a.intersection(b)
+                if !overlap.isNull, overlap.width > 0, overlap.height > 0 { return [:] }
+            }
+        }
+        return moves
     }
 
     /// The displays to give their own desktop again: each of `streaming` mirroring a display
@@ -249,9 +301,10 @@ extension VideoManager {
     /// Undoes what WindowServer does to the streaming displays while laying out a set a display
     /// joined or left, from a layout it saved for it: frees those it put in a mirror set (one
     /// mirroring another can't be captured, so its stream stops, and one mirrored takes the
-    /// others' screens, main with them) and gives each the mode it was made in or set to (a
-    /// HiDPI one, say, for a stream of its pixel size). Only then, so a change made in System
-    /// Settings later stays; a mirror the user made through DAM stays too.
+    /// others' screens, main with them), gives each the mode it was made in or set to (a
+    /// HiDPI one, say, for a stream of its pixel size) and puts it back where it was. Only
+    /// then, so a change made in System Settings later stays; a mirror the user made through
+    /// DAM stays too.
     func keepStreamingDisplaysAsMade() {
         guard displaySetChangedUntil > Date(), !streamingDisplays.isEmpty else { return }
         guard !displayChangeInFlight else {
@@ -281,14 +334,26 @@ extension VideoManager {
             else { return nil }
             return (id, wanted)
         }
-        guard !free.isEmpty || !modes.isEmpty else { return }
-        sdLog.debug("the display set changed; freeing \(free) from mirrors, modes back on \(modes.map(\.0))")
+        // Where they were, once main is off them (`keepStreamingDisplayOffMain` hands it back)
+        // and none is freed: WindowServer moves them about a display that came or went.
+        let online = DisplayArrangement.onlineDisplayIDs()
+        let mainID = CGMainDisplayID()
+        let origins = !free.isEmpty || (streaming.contains(mainID) && !streamingDisplayIsMainByChoice) ? [:]
+            : Self.originsBack(before: framesBeforeSetChange,
+                               now: Dictionary(uniqueKeysWithValues: online.map { ($0, CGDisplayBounds($0)) }),
+                               streaming: streaming, mirroring: Set(online.filter { CGDisplayMirrorsDisplay($0) != 0 }),
+                               main: mainID)
+        guard !free.isEmpty || !modes.isEmpty || !origins.isEmpty else { return }
+        sdLog.debug("the display set changed; freeing \(free) from mirrors, modes back on \(modes.map(\.0)), moving \(Array(origins.keys))")
         // So no layout DAM puts back (an anchor's, the streaming one) mirrors them again.
         if !free.isEmpty { keepUserMirror(free, on: 0) }
         streamingMirrorReleaseInFlight = true
         commitDisplayChange({ cfg in
             for id in free { CGConfigureDisplayMirrorOfDisplay(cfg, id, CGDirectDisplayID(0)) }
             for (id, mode) in modes { CGConfigureDisplayWithDisplayMode(cfg, id, mode, nil) }
+            for (id, origin) in origins {
+                CGConfigureDisplayOrigin(cfg, id, Int32(origin.x.rounded()), Int32(origin.y.rounded()))
+            }
         }) { [weak self] _ in self?.streamingMirrorReleaseInFlight = false }
     }
 
