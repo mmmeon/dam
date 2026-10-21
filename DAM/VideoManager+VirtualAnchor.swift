@@ -101,17 +101,25 @@ struct DisplayArrangement {
     /// Returns whether anything was out of place.
     @discardableResult
     func restore(in cfg: CGDisplayConfigRef, excluding excluded: Set<CGDirectDisplayID>) -> Bool {
-        let online = Set(Self.onlineDisplayIDs())
-        var changed = false
-        for (id, master) in mirrorMasters
-        where online.contains(id) && !excluded.contains(id) && !excluded.contains(master) {
-            if CGDisplayMirrorsDisplay(id) != master {
-                vdLog.debug("restore: display \(id) mirror master \(CGDisplayMirrorsDisplay(id)) → \(master)")
-                CGConfigureDisplayMirrorOfDisplay(cfg, id, master)
-                changed = true
-            }
+        let changes = mirrorChanges(online: Set(Self.onlineDisplayIDs()), excluding: excluded,
+                                    mirrorOf: { CGDisplayMirrorsDisplay($0) })
+        for (id, master) in changes {
+            vdLog.debug("restore: display \(id) mirror master \(CGDisplayMirrorsDisplay(id)) → \(master)")
+            CGConfigureDisplayMirrorOfDisplay(cfg, id, master)
         }
-        return restoreOrigins(in: cfg, excluding: excluded) || changed
+        return restoreOrigins(in: cfg, excluding: excluded) || !changes.isEmpty
+    }
+
+    /// The mirror master each of the `online` displays, mirroring as `mirrorOf` says, is to be
+    /// given to mirror as captured: none in `excluded` or captured mirroring one of them, and
+    /// none whose captured master has gone: its ID can come back for another display, and a
+    /// gone one can fail the whole transaction.
+    func mirrorChanges(online: Set<CGDirectDisplayID>, excluding excluded: Set<CGDirectDisplayID>,
+                       mirrorOf: (CGDirectDisplayID) -> CGDirectDisplayID) -> [CGDirectDisplayID: CGDirectDisplayID] {
+        mirrorMasters.filter { id, master in
+            online.contains(id) && !excluded.contains(id) && !excluded.contains(master)
+                && (master == 0 || online.contains(master)) && mirrorOf(id) != master
+        }
     }
 
     /// Whether `a` and `b` show the same: the same size, pixels and rate. Not by their IDs: a

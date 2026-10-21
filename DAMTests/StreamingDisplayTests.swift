@@ -128,6 +128,14 @@ final class StreamingDisplayTests: XCTestCase {
         XCTAssertEqual(arrangement.makingMain(2).origins, [1: CGPoint(x: -1440, y: 0), 2: .zero])
     }
 
+    func testArrangementPutsBackOnlyMirrorsOntoMastersStillOnline() {
+        let arrangement = DisplayArrangement(origins: [1: .zero], mirrorMasters: [1: 0, 2: 1, 3: 9, 4: 0, 5: 1])
+        // 2 and 3 have since been extended, 4 mirrored onto 1; 9 has gone; 5 is left out.
+        let live: [CGDirectDisplayID: CGDirectDisplayID] = [1: 0, 2: 0, 3: 0, 4: 1, 5: 0]
+        let changes = arrangement.mirrorChanges(online: [1, 2, 3, 4, 5], excluding: [5], mirrorOf: { live[$0] ?? 0 })
+        XCTAssertEqual(changes, [2: 1, 4: 0])
+    }
+
     // MARK: - Main display
 
     func testHandsMainBackToTheDisplayThatHadIt() {
