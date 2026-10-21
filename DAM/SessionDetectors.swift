@@ -252,15 +252,18 @@ final class LogFollower {
                 self.readNew()
             }
         }
+        // A source's descriptor is closed only once it has been cancelled, or a new file
+        // given the same descriptor could leave the next source dead.
+        source.setCancelHandler { try? handle.close() }
         source.resume()
         self.source = source
         if !fromEnd { readNew() }
     }
 
     private func close() {
+        // The file is closed by its source's cancel handler.
         source?.cancel()
         source = nil
-        try? handle?.close()
         handle = nil
         partial.removeAll()
     }
