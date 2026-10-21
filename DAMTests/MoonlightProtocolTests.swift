@@ -412,4 +412,17 @@ final class MoonlightProtocolTests: XCTestCase {
             XCTAssertNil(governor.second())
         }
     }
+
+    func testReadsIntegersBackFromASliceOfData() {
+        var data = Data([0xEE, 0xEE])
+        data.append(littleEndian: UInt16(0x1234))
+        data.append(bigEndian: UInt32(0xDEAD_BEEF))
+        data.append(bigEndian: Int16(-2))
+        // Its indices start at 2, not 0.
+        let slice = data[2...]
+        XCTAssertEqual(slice.read(littleEndian: UInt16.self, at: 0), 0x1234)
+        XCTAssertEqual(slice.read(bigEndian: UInt32.self, at: 2), 0xDEAD_BEEF)
+        XCTAssertEqual(slice.read(bigEndian: Int16.self, at: 6), -2)
+        XCTAssertEqual([UInt8](slice).read(littleEndian: UInt32.self, at: 2), 0xEFBE_ADDE)
+    }
 }

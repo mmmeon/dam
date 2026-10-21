@@ -40,11 +40,10 @@ enum MoonlightInput: Equatable {
         var events: [MoonlightInput] = []
         var at = 0
         while at + 8 <= bytes.count {
-            let size = Int(bytes[at]) << 24 | Int(bytes[at + 1]) << 16 | Int(bytes[at + 2]) << 8 | Int(bytes[at + 3])
+            let size = Int(bytes.read(bigEndian: UInt32.self, at: at))
             let end = at + 4 + size
             guard size >= 4, end <= bytes.count else { break }
-            let magic = UInt32(bytes[at + 4]) | UInt32(bytes[at + 5]) << 8 | UInt32(bytes[at + 6]) << 16
-                      | UInt32(bytes[at + 7]) << 24
+            let magic = bytes.read(littleEndian: UInt32.self, at: at + 4)
             let body = Array(bytes[(at + 8)..<end])
             events.append(event(magic: magic, body: body) ?? .other(magic))
             at = end
@@ -53,7 +52,7 @@ enum MoonlightInput: Equatable {
     }
 
     private static func event(magic: UInt32, body: [UInt8]) -> MoonlightInput? {
-        func i16(_ at: Int) -> Int { Int(Int16(bitPattern: UInt16(body[at]) << 8 | UInt16(body[at + 1]))) }
+        func i16(_ at: Int) -> Int { Int(body.read(bigEndian: Int16.self, at: at)) }
         switch magic {
         case 0x03, 0x04:
             // flags, key code (little-endian, 0x80 in its high byte), modifiers, zero

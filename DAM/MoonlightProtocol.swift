@@ -324,10 +324,9 @@ struct MoonlightFrameFecStatus: Equatable {
     }
 
     init?(payload: Data) {
-        let bytes = [UInt8](payload)
-        guard bytes.count >= 21 else { return nil }
-        func u16(_ at: Int) -> Int { Int(bytes[at]) << 8 | Int(bytes[at + 1]) }
-        frameIndex = UInt32(bytes[0]) << 24 | UInt32(bytes[1]) << 16 | UInt32(bytes[2]) << 8 | UInt32(bytes[3])
+        guard payload.count >= 21 else { return nil }
+        func u16(_ at: Int) -> Int { Int(payload.read(bigEndian: UInt16.self, at: at)) }
+        frameIndex = payload.read(bigEndian: UInt32.self, at: 0)
         dataPackets = u16(10)
         parityPackets = u16(12)
         receivedData = u16(14)
@@ -577,17 +576,17 @@ enum MoonlightControlCrypto {
     static func open(_ packet: Data, key: SymmetricKey,
                      direction: Direction = .clientToHost) -> (type: UInt16, payload: Data)? {
         let bytes = [UInt8](packet)
-        guard bytes.count >= 28, UInt16(bytes[0]) | UInt16(bytes[1]) << 8 == 0x0001 else { return nil }
-        let length = Int(bytes[2]) | Int(bytes[3]) << 8
+        guard bytes.count >= 28, bytes.read(littleEndian: UInt16.self, at: 0) == 0x0001 else { return nil }
+        let length = Int(bytes.read(littleEndian: UInt16.self, at: 2))
         guard length >= 24, bytes.count >= length + 4 else { return nil }
-        let sequence = UInt32(bytes[4]) | UInt32(bytes[5]) << 8 | UInt32(bytes[6]) << 16 | UInt32(bytes[7]) << 24
+        let sequence = bytes.read(littleEndian: UInt32.self, at: 4)
         guard let nonce = try? AES.GCM.Nonce(data: nonce(sequence: sequence, direction: direction)),
               let box = try? AES.GCM.SealedBox(nonce: nonce, ciphertext: Data(bytes[24..<(length + 4)]),
                                                tag: Data(bytes[8..<24])),
               let plain = try? AES.GCM.open(box, using: key), plain.count >= 4 else { return nil }
         let inner = [UInt8](plain)
-        let type = UInt16(inner[0]) | UInt16(inner[1]) << 8
-        let size = min(Int(inner[2]) | Int(inner[3]) << 8, inner.count - 4)
+        let type = inner.read(littleEndian: UInt16.self, at: 0)
+        let size = min(Int(inner.read(littleEndian: UInt16.self, at: 2)), inner.count - 4)
         return (type, Data(inner[4..<(4 + size)]))
     }
 }
@@ -653,5 +652,26 @@ extension Data {
 
     mutating func append<T: FixedWidthInteger>(bigEndian value: T) {
         Swift.withUnsafeBytes(of: value.bigEndian) { append(contentsOf: $0) }
+    }
+}
+
+/// Reading back what those write, from bytes counted from the start of the collection,
+/// so a slice of Data, whose indices go on from where it was cut, reads the same.
+extension Collection where Element == UInt8, Index == Int {
+    /// The `T` whose bytes begin `offset` bytes in, least significant first; they must be there.
+    func read<T: FixedWidthInteger>(littleEndian _: T.Type, at offset: Int) -> T {
+        integer(at: offset, bigEndian: false)
+    }
+
+    /// The `T` whose bytes begin `offset` bytes in, most significant first; they must be there.
+    func read<T: FixedWidthInteger>(bigEndian _: T.Type, at offset: Int) -> T {
+        integer(at: offset, bigEndian: true)
+    }
+
+    private func integer<T: FixedWidthInteger>(at offset: Int, bigEndian: Bool) -> T {
+        let start = startIndex + offset
+        let bytes = self[start..<(start + MemoryLayout<T>.size)]
+        let ordered = bigEndian ? Array(bytes) : bytes.reversed()
+        return T(truncatingIfNeeded: ordered.reduce(UInt64(0)) { $0 << 8 | UInt64($1) })
     }
 }
