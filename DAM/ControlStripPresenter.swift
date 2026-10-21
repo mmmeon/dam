@@ -142,20 +142,28 @@ final class ControlStripPresenter: NSObject {
         }
         SpeechSynthesizer.shared.onDisplayTextChanged = { [weak self] in
             DispatchQueue.main.async {
-                let text = SpeechSynthesizer.shared.displayText
-                // On screen, without taking focus.
-                CaptionHUD.shared.show(Feedback.screen ? text : nil,
-                                       spoken: SpeechSynthesizer.shared.spokenLength)
+                Self.showCaptionOnScreen()
                 guard Feedback.touchBar else { return }
-                // Bring the app to the foreground so NSApp.touchBar is visible.
-                // Only activate on the leading edge (text just appeared); on clear
-                // we leave focus wherever it ended up.
-                if text != nil {
-                    NSApp.activate(ignoringOtherApps: true)
-                }
                 self?.rebuild()
             }
         }
+        // The Touch Bar stops showing a caption when another app comes forward; the screen
+        // takes it over.
+        NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification,
+                                               object: nil, queue: .main) { _ in
+            if SpeechSynthesizer.shared.displayText != nil && !Feedback.screen { Self.showCaptionOnScreen() }
+        }
+    }
+
+    /// Shows the caption on screen, without taking focus, when screen feedback is on or the
+    /// Touch Bar can't show it. The app's Touch Bar shows only while the app is active, and a
+    /// caption doesn't activate it: most come from something no one pressed a key for (a
+    /// session starting, a stream ending), and focus taken then would take the user's typing.
+    private static func showCaptionOnScreen() {
+        let onTouchBar = Feedback.touchBar && NSApp.isActive
+        let text = SpeechSynthesizer.shared.displayText
+        CaptionHUD.shared.show(Feedback.screen || !onTouchBar ? text : nil,
+                               spoken: SpeechSynthesizer.shared.spokenLength)
     }
 
     /// The caption to show on the Touch Bar, unless Touch Bar feedback is off.
