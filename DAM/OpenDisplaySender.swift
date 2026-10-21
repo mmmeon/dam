@@ -32,6 +32,7 @@ final class OpenDisplaySender {
     private static let usbIDsKey = "\(AppIdentity.shortID).opendisplay.usbIDs"
     private static let bonjourIDsKey = "\(AppIdentity.shortID).opendisplay.bonjourIDs"
     private static let bitrateKey = "\(AppIdentity.shortID).opendisplay.bitrateKbps"
+    private static let pointerUDPKey = "\(AppIdentity.shortID).opendisplay.pointerUDP"
 
     /// Whether DAM sends to receivers at all.
     static var isEnabled: Bool {
@@ -42,6 +43,12 @@ final class OpenDisplaySender {
     static var bitrateKbps: Int {
         let set = UserDefaults.dam.integer(forKey: bitrateKey)
         return set > 0 ? set : 20_000
+    }
+
+    /// Whether the pointer may go over UDP where a receiver offers it; on unless set off,
+    /// for comparing the two.
+    static var pointerOverUDP: Bool {
+        UserDefaults.dam.object(forKey: pointerUDPKey) as? Bool ?? true
     }
 
     /// The receivers turned on, by key.
@@ -776,11 +783,15 @@ final class OpenDisplaySession {
     /// stops with nil; a cable can't carry UDP, and a port that never acknowledged isn't
     /// tried again on the same connection.
     private func offerCursorUDP(_ port: UInt16?) {
-        guard let port, let tcp = link as? OpenDisplayTCPChannel,
+        guard let port, OpenDisplaySender.pointerOverUDP, let tcp = link as? OpenDisplayTCPChannel,
               case let .hostPort(host, _)? = tcp.reachedAddress else { return closeCursorUDP() }
         guard port != cursorUDPPort else { return }
         closeCursorUDP()
-        let udp = NWConnection(host: host, port: NWEndpoint.Port(rawValue: port)!, using: .udp)
+        let parameters = NWParameters.udp
+        // Ahead of the video on Wi-Fi, which goes as interactive video; left as best effort,
+        // the pointer waits behind it.
+        parameters.serviceClass = .interactiveVoice
+        let udp = NWConnection(host: host, port: NWEndpoint.Port(rawValue: port)!, using: parameters)
         udp.start(queue: .main)
         cursorUDP = udp
         cursorUDPPort = port
