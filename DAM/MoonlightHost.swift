@@ -186,6 +186,12 @@ final class MoonlightHost {
             self.certificate = certificate
             self.launch = launch
         }
+
+        /// Stops its stream, if one is running.
+        func endStream() {
+            stream?.stop()
+            stream = nil
+        }
     }
 
     private var sessions: [Session] = []
@@ -196,7 +202,7 @@ final class MoonlightHost {
 
     /// The paired devices with a launch, oldest first.
     var streamingClients: [MoonlightClient] {
-        sessions.compactMap { session in clients.first { $0.certificate == session.certificate } }
+        sessions.compactMap { client(for: $0.certificate) }
     }
 
     /// The RTSP port of session `slot`.
@@ -204,6 +210,15 @@ final class MoonlightHost {
 
     private func session(for certificate: Data?) -> Session? {
         sessions.first { $0.certificate == certificate }
+    }
+
+    /// The paired device with `certificate`, if there is one.
+    private func client(for certificate: Data?) -> MoonlightClient? {
+        clientIndex(for: certificate).map { clients[$0] }
+    }
+
+    private func clientIndex(for certificate: Data?) -> Int? {
+        clients.firstIndex { $0.certificate == certificate }
     }
 
     // MARK: - Starting and stopping
@@ -319,7 +334,7 @@ final class MoonlightHost {
 
     /// Sets whether `client`'s streams use low-latency rate control, from its next stream on.
     func setLowLatency(_ lowLatency: Bool, for client: MoonlightClient) {
-        guard let index = clients.firstIndex(where: { $0.certificate == client.certificate }) else { return }
+        guard let index = clientIndex(for: client.certificate) else { return }
         clients[index].lowLatency = lowLatency
         saveClients()
         onChange?()
@@ -327,7 +342,7 @@ final class MoonlightHost {
 
     /// Sets whether `client`'s mouse, keyboard and text reach the Mac, its stream's at once.
     func setAllowsInput(_ allowsInput: Bool, for client: MoonlightClient) {
-        guard let index = clients.firstIndex(where: { $0.certificate == client.certificate }) else { return }
+        guard let index = clientIndex(for: client.certificate) else { return }
         clients[index].allowsInput = allowsInput
         session(for: client.certificate)?.stream?.allowsInput = allowsInput
         saveClients()
@@ -421,7 +436,7 @@ final class MoonlightHost {
         mlLog.debug("\(secure ? "https" : "http", privacy: .public) \(request.path, privacy: .public)")
         // Over HTTPS, only paired devices. Moonlight takes a 401 to mean unpaired and asks
         // again over HTTP.
-        if secure && !clients.contains(where: { $0.certificate == certificate }) {
+        if secure && client(for: certificate) == nil {
             return reply(Self.xml(status: 401, message: "The client is not authorized. Certificate verification failed."),
                          to: connection)
         }
@@ -506,13 +521,13 @@ final class MoonlightHost {
         let current = session(for: certificate)?.launch
         let appID = request.query["appid"].flatMap(Int.init) ?? current?.appID ?? Self.newDisplayAppID
         let address = Self.address(connection.currentPath?.localEndpoint)
-        let client = connection.currentPath?.remoteEndpoint ?? connection.endpoint
-        let lowLatency = clients.first { $0.certificate == certificate }?.lowLatency ?? true
+        let peer = connection.currentPath?.remoteEndpoint ?? connection.endpoint
+        let lowLatency = client(for: certificate)?.lowLatency ?? true
         let encryption = MoonlightStream.videoEncryption
         let answer = { [weak self] (launch: MoonlightLaunch) in
             guard let self else { return }
             // Hosting stopped, or the device was unpaired, while a display was made for it.
-            guard self.isRunning, self.clients.contains(where: { $0.certificate == certificate }) else {
+            guard self.isRunning, self.client(for: certificate) != nil else {
                 if launch.ownsDisplay, !self.sessions.contains(where: { $0.launch.displayID == launch.displayID }) {
                     self.removeDisplay?(launch.displayID)
                 }
@@ -520,12 +535,11 @@ final class MoonlightHost {
             }
             var launch = launch
             launch.lowLatency = lowLatency
-            launch.offersEncryptedVideo = encryption.offers(to: client)
+            launch.offersEncryptedVideo = encryption.offers(to: peer)
             launch.requiresEncryptedVideo = encryption == .always
-            launch.clientAddress = Self.address(client)
+            launch.clientAddress = Self.address(peer)
             if let session = self.session(for: certificate) {
-                session.stream?.stop()
-                session.stream = nil
+                session.endStream()
                 // Another launch of the device's, answered first, may have made a display.
                 if session.launch.displayID != launch.displayID { self.letGo(of: session.launch, by: session) }
                 launch.slot = session.launch.slot
@@ -601,8 +615,7 @@ final class MoonlightHost {
     func endLaunch(of certificate: Data) {
         guard let index = sessions.firstIndex(where: { $0.certificate == certificate }) else { return }
         let session = sessions.remove(at: index)
-        session.stream?.stop()
-        session.stream = nil
+        session.endStream()
         letGo(of: session.launch, by: session)
     }
 
@@ -622,8 +635,7 @@ final class MoonlightHost {
     private func startStream(_ launch: MoonlightLaunch, _ config: MoonlightStreamConfig) -> String? {
         guard let session = sessions.first(where: { $0.launch.sessionID == launch.sessionID }) else { return "No launch" }
         guard !session.launch.announced else { return "Already started" }
-        session.stream?.stop()
-        session.stream = nil
+        session.endStream()
         var config = config
         config.lowLatency = launch.lowLatency
         do {
@@ -631,7 +643,7 @@ final class MoonlightHost {
                                              keyID: launch.keyID, pingPayload: launch.pingPayload,
                                              connectData: launch.connectData, clientAddress: launch.clientAddress,
                                              ports: launch.ports,
-                                             allowsInput: clients.first { $0.certificate == session.certificate }?.allowsInput ?? true)
+                                             allowsInput: client(for: session.certificate)?.allowsInput ?? true)
             stream.onEnd = { [weak self, weak session, weak stream] reason in
                 guard let self, let session, let stream, session.stream === stream else { return }
                 session.stream = nil
@@ -648,9 +660,7 @@ final class MoonlightHost {
     }
 
     private func endStream(of certificate: Data) {
-        guard let session = session(for: certificate) else { return }
-        session.stream?.stop()
-        session.stream = nil
+        session(for: certificate)?.endStream()
     }
 
     private func currentPairing() throws -> MoonlightPairing {
