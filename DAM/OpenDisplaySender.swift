@@ -231,13 +231,11 @@ final class OpenDisplaySender {
         }
         if known != bonjourIDs {
             bonjourIDs = known
-            // A receiver turned on by its name is the same one by its ID.
-            var on = turnedOn
-            for (name, id) in known where on.remove("bonjour:\(name)") != nil { on.insert(id) }
-            if on != turnedOn { turnedOn = on }
-            // And its session goes with it, as when a hello gives the ID, or the next dial
-            // would make it a second one.
             for (name, id) in known {
+                // A receiver known by its name is the same one by its ID.
+                rekey(from: "bonjour:\(name)", to: id)
+                // And its session goes with it, as when a hello gives the ID, or the next dial
+                // would make it a second one.
                 guard let session = sessions.removeValue(forKey: "bonjour:\(name)") else { continue }
                 if sessions[id] == nil {
                     session.rekey(id, name: name)
@@ -348,18 +346,35 @@ final class OpenDisplaySender {
         } else {
             return
         }
-        var on = turnedOn
-        if on.remove(session.key) != nil { on.insert(id) }
-        turnedOn = on
-        var saved = names
-        if saved[id] == nil { saved[id] = wifi[id]?.name ?? saved[session.key] }
-        saved[session.key] = nil
-        names = saved
+        rekey(from: session.key, to: id)
         sessions[session.key] = nil
         sessions[id]?.end(reason: "the same receiver came over USB")
         session.rekey(id, name: name(of: id))
         sessions[id] = session
         onChange?()
+    }
+
+    /// Moves what is kept of the receiver keyed `old` to `new`, its ID once known: whether it
+    /// is on, its name, and how dials to it went, as the last address reached. Its session is
+    /// the caller's to move.
+    private func rekey(from old: String, to new: String) {
+        var on = turnedOn
+        if on.remove(old) != nil {
+            on.insert(new)
+            turnedOn = on
+        }
+        var saved = names
+        if saved[new] == nil { saved[new] = wifi[new]?.name ?? saved[old] }
+        saved[old] = nil
+        if saved != names { names = saved }
+        func move<Value>(_ values: inout [String: Value]) {
+            if let value = values.removeValue(forKey: old) { values[new] = value }
+        }
+        move(&retryAt)
+        move(&failures)
+        move(&lastErrors)
+        move(&lastAddress)
+        move(&preferWiFiUntil)
     }
 
     /// Ends the session whose display `id` went without it asking, as when removed from the
