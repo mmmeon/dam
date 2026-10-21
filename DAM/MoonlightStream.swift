@@ -865,7 +865,8 @@ final class MoonlightStream {
         }
     }
 
-    /// Stops everything; Moonlight is told the host ended the stream.
+    /// Stops everything; Moonlight is told the host ended the stream. From any thread, more
+    /// than once: what it lets go is taken under the lock, so each goes once.
     func stop() {
         lock.lock()
         ended = true
@@ -874,6 +875,10 @@ final class MoonlightStream {
         repeater?.cancel()
         repeater = nil
         encoder = nil
+        let activity = self.activity
+        self.activity = nil
+        let timers = [statsTimer, bitrateTimer]
+        (statsTimer, bitrateTimer) = (nil, nil)
         lock.unlock()
         capture?.cancel()
         input.close()
@@ -881,11 +886,7 @@ final class MoonlightStream {
         video.stop()
         audio.stop()
         if let activity { ProcessInfo.processInfo.endActivity(activity) }
-        activity = nil
-        statsTimer?.cancel()
-        statsTimer = nil
-        bitrateTimer?.cancel()
-        bitrateTimer = nil
+        timers.forEach { $0?.cancel() }
     }
 
     /// Each second, sets the encoder's bitrate from the client's losses (see
