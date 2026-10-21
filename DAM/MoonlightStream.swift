@@ -164,6 +164,22 @@ final class MoonlightUDPSocket {
         closed = true
         Darwin.close(descriptor)
     }
+
+    /// Takes the client's pings (see MoonlightVideoSender.isPing) on a thread of its own,
+    /// named `name`, handing `ping` where each came from, until `isRunning` turns false;
+    /// then closes the socket.
+    func listenForPings(named name: String, payload: Data, client: in_addr?, while isRunning: @escaping () -> Bool,
+                        ping: @escaping (sockaddr_in) -> Void) {
+        Thread.detachNewThread { [self] in
+            Thread.current.name = name
+            while isRunning() {
+                guard let (data, from) = receive(timeout: 0.25) else { continue }
+                guard MoonlightVideoSender.isPing(data, from: from, payload: payload, client: client) else { continue }
+                ping(from)
+            }
+            close()
+        }
+    }
 }
 
 // MARK: - Video
@@ -323,21 +339,15 @@ final class MoonlightVideoSender {
     }
 
     func startListening() {
-        Thread.detachNewThread { [self] in
-            Thread.current.name = "Moonlight video pings"
-            while isRunning {
-                guard let (data, from) = socket.receive(timeout: 0.25) else { continue }
-                guard Self.isPing(data, from: from, payload: pingPayload, client: client) else { continue }
-                lock.lock()
-                let first = peer == nil
-                peer = from
-                lock.unlock()
-                if first {
-                    msLog.debug("video ping from \(Self.describe(from), privacy: .public)")
-                    onFirstPing?()
-                }
-            }
-            socket.close()
+        socket.listenForPings(named: "Moonlight video pings", payload: pingPayload, client: client,
+                              while: { self.isRunning }) { [self] from in
+            lock.lock()
+            let first = peer == nil
+            peer = from
+            lock.unlock()
+            guard first else { return }
+            msLog.debug("video ping from \(Self.describe(from), privacy: .public)")
+            onFirstPing?()
         }
     }
 
@@ -489,21 +499,15 @@ final class MoonlightAudioSender {
     }
 
     func startListening() {
-        Thread.detachNewThread { [self] in
-            Thread.current.name = "Moonlight audio pings"
-            while isRunning {
-                guard let (data, from) = socket.receive(timeout: 0.25) else { continue }
-                guard MoonlightVideoSender.isPing(data, from: from, payload: pingPayload, client: client) else { continue }
-                lock.lock()
-                let first = peer == nil
-                peer = from
-                lock.unlock()
-                if first {
-                    msLog.debug("audio ping from \(MoonlightVideoSender.describe(from), privacy: .public)")
-                    queue.async { self.startPacing() }
-                }
-            }
-            socket.close()
+        socket.listenForPings(named: "Moonlight audio pings", payload: pingPayload, client: client,
+                              while: { self.isRunning }) { [self] from in
+            lock.lock()
+            let first = peer == nil
+            peer = from
+            lock.unlock()
+            guard first else { return }
+            msLog.debug("audio ping from \(MoonlightVideoSender.describe(from), privacy: .public)")
+            queue.async { self.startPacing() }
         }
     }
 
@@ -755,7 +759,8 @@ final class MoonlightStream {
         set { UserDefaults.dam.set(newValue, forKey: adaptsBitrateKey) }
     }
 
-    /// Whether streams, Moonlight's and the browser's, show the pointer; from the next stream.
+    /// Whether Moonlight's streams show the pointer; from the next stream. The browser's
+    /// have their own setting (WebStreamServer.showsPointer).
     static var showsPointer: Bool {
         get { UserDefaults.dam.object(forKey: showsPointerKey) as? Bool ?? true }
         set { UserDefaults.dam.set(newValue, forKey: showsPointerKey) }
