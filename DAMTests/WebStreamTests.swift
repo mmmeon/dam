@@ -356,6 +356,22 @@ final class WebStreamTests: XCTestCase {
         viewer.close()
     }
 
+    /// Forgetting a device cuts off its viewers alone.
+    func testCuttingADeviceLeavesOtherViewersWatching() throws {
+        let (phone, laptop) = (try Loopback(), try Loopback())
+        let session = try WebStreamSession(key: .init(displayID: 1, profile: .interactive, bitrateKbps: 10_000, fps: 30,
+                                                      width: 640, height: 360, lowLatency: false))
+        defer { session.stop() }
+        XCTAssertTrue(session.add(WebStreamViewer(connection: try XCTUnwrap(phone.server), maxInFlight: 1 << 20,
+                                                  device: "phone")))
+        XCTAssertTrue(session.add(WebStreamViewer(connection: try XCTUnwrap(laptop.server), maxInFlight: 1 << 20,
+                                                  device: "laptop")))
+        session.cut(device: "phone")
+        XCTAssertEqual(session.viewerCount, 1)
+        session.cut(device: "tablet")
+        XCTAssertEqual(session.viewerCount, 1)
+    }
+
     // MARK: - The host's routes
 
     /// GETs without following redirects, trusting `authority` for HTTPS.

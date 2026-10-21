@@ -130,6 +130,8 @@ struct WebStreamRequest: Equatable {
     /// Whether the encoder uses low-latency rate control, a frame sooner (see
     /// MoonlightVideoEncoder). Not with the Viewing profile, whose frames come out of order.
     var lowLatency = false
+    /// The id of the device asking, whose viewers forgetting it cuts off; not from the query.
+    var device: String?
 
     static func == (a: WebStreamRequest, b: WebStreamRequest) -> Bool {
         a.app == b.app && a.profile == b.profile && a.bitrateKbps == b.bitrateKbps && a.fps == b.fps
@@ -442,10 +444,13 @@ final class WebStreamServer {
         return device
     }
 
-    /// Forgets a device: its link or cookie stops working, and if it is watching, it is cut off.
+    /// Forgets a device: its link or cookie stops working, and if it is watching, it is cut
+    /// off; other viewers watch on.
     func forget(_ device: WebStreamDevice) {
         devices.remove(id: device.id)
-        stopAll()
+        for session in sessions.values { session.cut(device: device.id) }
+        for (request, connection) in waitingForDisplay where request.device == device.id { connection.cancel() }
+        waitingForDisplay.removeAll { $0.0.device == device.id }
         onChange?()
     }
 
@@ -502,7 +507,8 @@ final class WebStreamServer {
             }
             sendJSON(["state": pending.declined ? "declined" : "waiting"], to: connection)
         case "/apps.json", "/stream.mp4":
-            guard (devices.device(token: request.query["token"]) ?? devices.device(token: request.cookie(Self.cookieName))) != nil
+            guard let device = devices.device(token: request.query["token"])
+                               ?? devices.device(token: request.cookie(Self.cookieName))
             else {
                 return send(status: "401 Unauthorized", body: Data("Pair this browser, or use a link from \(AppIdentity.name).\n".utf8),
                             to: connection)
@@ -510,7 +516,9 @@ final class WebStreamServer {
             if request.path == "/apps.json" {
                 send(status: "200 OK", contentType: "application/json", body: appsJSON(), to: connection)
             } else {
-                serve(WebStreamRequest.parse(request.query, preferred: preferredProfile()), on: connection)
+                var stream = WebStreamRequest.parse(request.query, preferred: preferredProfile())
+                stream.device = device.id
+                serve(stream, on: connection)
             }
         default:
             send(status: "404 Not Found", body: Data(), to: connection)
@@ -578,6 +586,8 @@ final class WebStreamServer {
     }
 
     private func serve(_ request: WebStreamRequest, on connection: NWConnection) {
+        // Forgotten while it waited for a display.
+        if let device = request.device, !devices.all.contains(where: { $0.id == device }) { return connection.cancel() }
         let apps = self.apps()
         let displayID: CGDirectDisplayID
         if let app = request.app {
@@ -644,7 +654,7 @@ final class WebStreamServer {
                                        lowLatency: request.lowLatency)
         let viewer = WebStreamViewer(connection: connection,
                                      maxInFlight: request.profile.maxInFlight(bitrateKbps: request.bitrateKbps),
-                                     audio: request.audio)
+                                     audio: request.audio, device: request.device)
         // A session that has just ended, and is still to be let go here, takes no one.
         if let running = sessions[key], running.add(viewer) { return }
         let session: WebStreamSession
@@ -894,6 +904,14 @@ final class WebStreamSession {
             self.lock.unlock()
             if stillEmpty { self.end("last viewer left") }
         }
+    }
+
+    /// Closes the connections of `device`'s viewers; the session ends as when they leave.
+    func cut(device: String) {
+        lock.lock()
+        let leaving = viewers.filter { $0.device == device }
+        lock.unlock()
+        leaving.forEach { $0.close() }
     }
 
     /// Stops capturing and closes every viewer's connection.
@@ -1215,6 +1233,8 @@ final class WebStreamViewer {
     private let patience: TimeInterval
     /// Whether the viewer takes the sound track.
     let audio: Bool
+    /// The id of the device watching.
+    let device: String?
     private let lock = NSLock()
     private var inFlight = 0
     private var closed = false
@@ -1230,10 +1250,12 @@ final class WebStreamViewer {
         set { lock.lock(); closeHandler = newValue; lock.unlock() }
     }
 
-    init(connection: NWConnection, maxInFlight: Int, audio: Bool = true, patience: TimeInterval = 10) {
+    init(connection: NWConnection, maxInFlight: Int, audio: Bool = true, device: String? = nil,
+         patience: TimeInterval = 10) {
         self.connection = connection
         self.maxInFlight = max(maxInFlight, 256 * 1024)
         self.audio = audio
+        self.device = device
         self.patience = patience
     }
 
