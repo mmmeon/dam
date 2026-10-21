@@ -130,7 +130,7 @@ enum MoonlightCrypto {
             DER.integer(serial),
             algorithm,
             name,
-            DER.sequence(DER.utcTime(now.addingTimeInterval(-24 * 3600)), DER.utcTime(notAfter)),
+            DER.sequence(DER.time(now.addingTimeInterval(-24 * 3600)), DER.time(notAfter)),
             name,
             DER.sequence(DER.sequence(DER.oid(DER.rsaEncryption), DER.null), DER.bitString(publicKeyData))
         )
@@ -152,8 +152,8 @@ enum MoonlightCrypto {
         var serial = Data((0..<16).map { _ in UInt8.random(in: 0...255) })
         serial[0] &= 0x7F
         var fields = DER.explicit(0, DER.integer(Data([2]))) + DER.integer(serial) + algorithm + name(issuer ?? subject)
-            + DER.sequence(DER.utcTime(now.addingTimeInterval(-24 * 3600)),
-                           DER.utcTime(now.addingTimeInterval(Double(days) * 24 * 3600)))
+            + DER.sequence(DER.time(now.addingTimeInterval(-24 * 3600)),
+                           DER.time(now.addingTimeInterval(Double(days) * 24 * 3600)))
             + name(subject)
             + DER.sequence(DER.sequence(DER.oid(DER.rsaEncryption), DER.null), DER.bitString(publicKeyData))
         if !extensions.isEmpty { fields += DER.explicit(3, DER.tlv(0x30, extensions.reduce(Data(), +))) }
@@ -289,12 +289,18 @@ enum DER {
             || bytes[serial.content.lowerBound + 1] & 0x80 != 0
     }
 
-    static func utcTime(_ date: Date) -> Data {
+    /// A validity time as X.509 has it: UTCTime, with two digits of year, through 2049, and
+    /// GeneralizedTime from 2050, which UTCTime would read as 1950.
+    static func time(_ date: Date) -> Data {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let utc = (1950...2049).contains(calendar.component(.year, from: date))
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(identifier: "UTC")
-        formatter.dateFormat = "yyMMddHHmmss'Z'"
-        return tlv(0x17, Data(formatter.string(from: date).utf8))
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.dateFormat = utc ? "yyMMddHHmmss'Z'" : "yyyyMMddHHmmss'Z'"
+        return tlv(utc ? 0x17 : 0x18, Data(formatter.string(from: date).utf8))
     }
 
     /// The element at `offset`: its tag, the range of its contents, and where the next begins.

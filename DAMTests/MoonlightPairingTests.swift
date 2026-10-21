@@ -176,6 +176,23 @@ final class MoonlightPairingTests: XCTestCase {
         XCTAssertTrue(DER.hasMinimalSerial(try Party.make("p").certificate))
     }
 
+    func testValidityPast2049IsAGeneralizedTime() throws {
+        func date(_ text: String) -> Date { ISO8601DateFormatter().date(from: text)! }
+        XCTAssertEqual(DER.time(date("2049-12-31T23:59:59Z")), DER.tlv(0x17, Data("491231235959Z".utf8)))
+        XCTAssertEqual(DER.time(date("2050-01-01T00:00:00Z")), DER.tlv(0x18, Data("20500101000000Z".utf8)))
+
+        // A certificate made in 2035 for 20 years ends in 2055, not 1955.
+        let key = try MoonlightCrypto.generatePrivateKey()
+        let made = date("2035-06-01T00:00:00Z")
+        let der = try MoonlightCrypto.certificate(key: key, subject: "p", days: 20 * 365, now: made)
+        let certificate = try XCTUnwrap(SecCertificateCreateWithData(nil, der as CFData))
+        let values = try XCTUnwrap(SecCertificateCopyValues(certificate, [kSecOIDX509V1ValidityNotAfter] as CFArray, nil)
+                                       as? [CFString: [CFString: Any]])
+        let notAfter = try XCTUnwrap(values[kSecOIDX509V1ValidityNotAfter]?[kSecPropertyKeyValue] as? NSNumber)
+        XCTAssertEqual(Date(timeIntervalSinceReferenceDate: notAfter.doubleValue).timeIntervalSince(made),
+                       Double(20 * 365 * 24 * 3600), accuracy: 1)
+    }
+
     func testXMLEscapesText() {
         XCTAssertEqual(MoonlightHost.escape("A & <B>"), "A &amp; &lt;B&gt;")
         XCTAssertTrue(MoonlightHost.xml(["paired": "1"]).contains("<root status_code=\"200\"><paired>1</paired></root>"))
