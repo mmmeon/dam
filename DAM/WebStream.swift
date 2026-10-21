@@ -88,6 +88,15 @@ enum StreamProfile: String, CaseIterable {
         return settings
     }
 
+    /// Bytes a viewer may have unsent before it counts as behind: a second of the stream, or
+    /// all the encoder may put out over its rate limit's window when that is more, so a
+    /// scene change bursting to its limit leaves no one behind. At most 64 MB.
+    func maxInFlight(bitrateKbps: Int) -> Int {
+        let settings = encoderSettings(width: 0, height: 0, fps: 0, bitrateKbps: bitrateKbps)
+        let seconds = max(1, settings.rateLimitMultiple * settings.rateLimitWindow)
+        return min(Int(Double(bitrateKbps * 125) * seconds), 64 << 20)
+    }
+
     private static let preferredKey = "\(AppIdentity.shortID).stream.profile"
 
     /// The profile streams get unless they ask for one; chosen in the menu.
@@ -121,6 +130,8 @@ struct WebStreamRequest: Equatable {
     /// Whether the encoder uses low-latency rate control, a frame sooner (see
     /// MoonlightVideoEncoder). Not with the Viewing profile, whose frames come out of order.
     var lowLatency = false
+    /// The id of the device asking, whose viewers forgetting it cuts off; not from the query.
+    var device: String?
 
     static func == (a: WebStreamRequest, b: WebStreamRequest) -> Bool {
         a.app == b.app && a.profile == b.profile && a.bitrateKbps == b.bitrateKbps && a.fps == b.fps
@@ -137,13 +148,14 @@ struct WebStreamRequest: Equatable {
                                        bitrateKbps: profile.defaultBitrateKbps)
         if let bitrate = query["bitrate"].flatMap(Int.init) { request.bitrateKbps = min(max(bitrate, 1000), 150_000) }
         if let fps = query["fps"].flatMap(Int.init) { request.fps = min(max(fps, 5), 120) }
+        // Sides checked one at a time: any number may come, and a product could overflow.
         if let width = query["width"].flatMap(Int.init), let height = query["height"].flatMap(Int.init),
-           width >= 160, height >= 90, width * height <= maxPixels {
+           width >= 160, height >= 90, width <= maxPixels / height {
             request.width = width & ~1
             request.height = height & ~1
         }
         let mode = (query["mode"] ?? "").split(separator: "x").compactMap { Int($0) }
-        if mode.count == 3, mode[0] >= 640, mode[1] >= 360, mode[0] * mode[1] <= maxPixels, mode[2] >= 30 {
+        if mode.count == 3, mode[0] >= 640, mode[1] >= 360, mode[0] <= maxPixels / mode[1], mode[2] >= 30 {
             request.newDisplay = (mode[0], mode[1], min(mode[2], 120))
         }
         switch query["orientation"]?.lowercased() {
@@ -393,10 +405,13 @@ final class WebStreamServer {
         return device
     }
 
-    /// Forgets a device: its link or cookie stops working, and if it is watching, it is cut off.
+    /// Forgets a device: its link or cookie stops working, and if it is watching, it is cut
+    /// off; other viewers watch on.
     func forget(_ device: WebStreamDevice) {
         devices.remove(id: device.id)
-        stopAll()
+        for session in sessions.values { session.cut(device: device.id) }
+        for (request, connection) in waitingForDisplay where request.device == device.id { connection.cancel() }
+        waitingForDisplay.removeAll { $0.0.device == device.id }
         onChange?()
     }
 
@@ -453,7 +468,8 @@ final class WebStreamServer {
             }
             sendJSON(["state": pending.declined ? "declined" : "waiting"], to: connection)
         case "/apps.json", "/stream.mp4":
-            guard (devices.device(token: request.query["token"]) ?? devices.device(token: request.cookie(Self.cookieName))) != nil
+            guard let device = devices.device(token: request.query["token"])
+                               ?? devices.device(token: request.cookie(Self.cookieName))
             else {
                 return send(status: "401 Unauthorized", body: Data("Pair this browser, or use a link from \(AppIdentity.name).\n".utf8),
                             to: connection)
@@ -461,7 +477,9 @@ final class WebStreamServer {
             if request.path == "/apps.json" {
                 send(status: "200 OK", contentType: "application/json", body: appsJSON(), to: connection)
             } else {
-                serve(WebStreamRequest.parse(request.query, preferred: preferredProfile()), on: connection)
+                var stream = WebStreamRequest.parse(request.query, preferred: preferredProfile())
+                stream.device = device.id
+                serve(stream, on: connection)
             }
         default:
             send(status: "404 Not Found", body: Data(), to: connection)
@@ -529,6 +547,8 @@ final class WebStreamServer {
     }
 
     private func serve(_ request: WebStreamRequest, on connection: NWConnection) {
+        // Forgotten while it waited for a display.
+        if let device = request.device, !devices.all.contains(where: { $0.id == device }) { return connection.cancel() }
         let apps = self.apps()
         let displayID: CGDirectDisplayID
         if let app = request.app {
@@ -593,7 +613,9 @@ final class WebStreamServer {
         let key = WebStreamSession.Key(displayID: displayID, profile: request.profile, bitrateKbps: request.bitrateKbps,
                                        fps: size.fps, width: size.width, height: size.height,
                                        lowLatency: request.lowLatency)
-        let viewer = WebStreamViewer(connection: connection, maxInFlight: request.bitrateKbps * 125, audio: request.audio)
+        let viewer = WebStreamViewer(connection: connection,
+                                     maxInFlight: request.profile.maxInFlight(bitrateKbps: request.bitrateKbps),
+                                     audio: request.audio, device: request.device)
         // A session that has just ended, and is still to be let go here, takes no one.
         if let running = sessions[key], running.add(viewer) { return }
         let session: WebStreamSession
@@ -703,7 +725,8 @@ final class WebStreamSession {
     /// Fills the grid's empty slots. It, `silenceTimer`, `statsTimer` and `activity` are
     /// under `lock`.
     private var repeater: DispatchSourceTimer?
-    private var keyFrames = MoonlightKeyFrameThrottle()
+    /// On `queue`.
+    private lazy var keyFrames = MoonlightKeyFrameRequester(retryingOn: queue)
     private var activity: NSObjectProtocol?
     private var statsTimer: DispatchSourceTimer?
     private let stats = MoonlightStreamStats()
@@ -791,6 +814,15 @@ final class WebStreamSession {
             guard let error else { return }
             self?.end("capture: \(error.localizedDescription)")
         }
+        // Capture can start and still send nothing; end then rather than leave the page
+        // connecting, and the Mac kept awake, for ever. Allows for capture restarting replayd.
+        queue.asyncAfter(deadline: .now() + 5 + MoonlightScreenCapture.answerTimeout + 1) { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            let captured = self.lastFrame != nil
+            self.lock.unlock()
+            if !captured { self.end("capture did not start") }
+        }
         wsLog.debug("session \(self.key.width)×\(self.key.height)@\(self.key.fps) \(self.key.profile.rawValue, privacy: .public) \(self.key.bitrateKbps) kbps from display \(self.key.displayID)")
     }
 
@@ -831,6 +863,14 @@ final class WebStreamSession {
             self.lock.unlock()
             if stillEmpty { self.end("last viewer left") }
         }
+    }
+
+    /// Closes the connections of `device`'s viewers; the session ends as when they leave.
+    func cut(device: String) {
+        lock.lock()
+        let leaving = viewers.filter { $0.device == device }
+        lock.unlock()
+        leaving.forEach { $0.close() }
     }
 
     /// Stops capturing and closes every viewer's connection.
@@ -933,37 +973,29 @@ final class WebStreamSession {
             case .waitingForKeyFrame, .catchingUp: waiting = true
             }
         }
+        // Those who asked for it have it: a request held for later now asks for no other.
+        if frame.isKeyFrame { keyFrames.keyFrameSent() }
         if waiting { requestKeyFrame() }
         stats.video(packets: 1, bytes: fragment.count, refused: 0, keyFrame: frame.isKeyFrame)
     }
 
-    /// The next frame as a keyframe, from the last picture at once if the screen is still.
+    /// The next frame as a keyframe, from the last picture at once if the screen is still;
+    /// on `queue` (see MoonlightKeyFrameRequester).
     private func requestKeyFrame() {
-        lock.lock()
-        let decision = keyFrames.request(at: DispatchTime.now().uptimeNanoseconds)
-        switch decision {
-        case .now:
-            break
-        case .later(let wait):
-            lock.unlock()
-            queue.asyncAfter(deadline: .now() + .nanoseconds(Int(wait))) { [weak self] in
-                self?.requestKeyFrame()
+        keyFrames.request { [weak self] in
+            guard let self else { return (nil, nil) }
+            self.lock.lock()
+            let encoder = self.encoder
+            let last = self.lastFrame
+            self.lock.unlock()
+            self.stats.keyFrameRequested()
+            // A still screen gets its keyframe from the last picture at once; a moving one
+            // from its next frame.
+            guard let last, DispatchTime.now().uptimeNanoseconds - last.at > self.interval * 3 / 2 else {
+                return (encoder, nil)
             }
-            return
-        case .alreadyDue:
-            lock.unlock()
-            return
-        }
-        let encoder = self.encoder
-        let last = lastFrame
-        lock.unlock()
-        stats.keyFrameRequested()
-        encoder?.requestKeyFrame()
-        // A still screen gets its keyframe from the last picture at once; a moving one
-        // from its next frame.
-        if let last, DispatchTime.now().uptimeNanoseconds - last.at > interval * 3 / 2 {
             let now = CMClockGetTime(CMClockGetHostTimeClock())
-            encoder?.encode(last.buffer, at: grid.nextSlot(before: now) ?? grid.snap(now))
+            return (encoder, (last.buffer, self.grid.nextSlot(before: now) ?? self.grid.snap(now)))
         }
     }
 
@@ -1160,6 +1192,8 @@ final class WebStreamViewer {
     private let patience: TimeInterval
     /// Whether the viewer takes the sound track.
     let audio: Bool
+    /// The id of the device watching.
+    let device: String?
     private let lock = NSLock()
     private var inFlight = 0
     private var closed = false
@@ -1175,10 +1209,12 @@ final class WebStreamViewer {
         set { lock.lock(); closeHandler = newValue; lock.unlock() }
     }
 
-    init(connection: NWConnection, maxInFlight: Int, audio: Bool = true, patience: TimeInterval = 10) {
+    init(connection: NWConnection, maxInFlight: Int, audio: Bool = true, device: String? = nil,
+         patience: TimeInterval = 10) {
         self.connection = connection
         self.maxInFlight = max(maxInFlight, 256 * 1024)
         self.audio = audio
+        self.device = device
         self.patience = patience
     }
 
@@ -1351,10 +1387,10 @@ enum WebStreamPage {
       function start() {
         stop();
         queue = []; bytes = 0; held = true; stalls = 0; cutOff = false;
-        source = new MS();
+        const ms = source = new MS();
         video.disableRemotePlayback = true;
-        video.src = URL.createObjectURL(source);
-        source.addEventListener('sourceopen', open, { once: true });
+        video.src = URL.createObjectURL(ms);
+        ms.addEventListener('sourceopen', () => open(ms), { once: true });
         history.replaceState(null, '', '?' + new URLSearchParams({ ...(token ? { token } : {}), ...(app ? { app } : {}), profile, bitrate: Math.round(bitrate * 1000), buffer: Math.round(buffer * 1000), ...(lowlatency ? { lowlatency } : {}) }));
         // Making a display for the stream can take a while.
         $('msg').hidden = false; $('msg').textContent = 'Connecting…';
@@ -1367,18 +1403,24 @@ enum WebStreamPage {
         source = null;
       }
 
-      async function open() {
-        if (source.duration !== Infinity) try { source.duration = Infinity; } catch (e) {}
-        abort = new AbortController();
+      // Each stream has its own controller: one replaced by a restart (a turn, a new
+      // setting) was stopped on purpose, and leaves the stream that took its place alone.
+      async function open(ms) {
+        if (ms !== source) return;
+        const ctl = new AbortController();
+        abort = ctl;
+        const gone = () => ctl.signal.aborted || ms !== source;
+        if (ms.duration !== Infinity) try { ms.duration = Infinity; } catch (e) {}
         let response;
         try {
-          response = await fetch(url(), { signal: abort.signal, cache: 'no-store' });
-        } catch (e) { return fail('Could not reach the stream.'); }
-        if (!response.ok) return fail(await response.text());
+          response = await fetch(url(), { signal: ctl.signal, cache: 'no-store' });
+        } catch (e) { if (!gone()) fail('Could not reach the stream.'); return; }
+        if (gone()) return;
+        if (!response.ok) { const text = await response.text().catch(() => ''); if (!gone()) fail(text); return; }
         const codecs = response.headers.get('X-Codecs') || 'avc1.640028,mp4a.40.2';
         const mime = 'video/mp4; codecs="' + codecs + '"';
         if (!MS.isTypeSupported(mime)) return fail('This browser cannot decode ' + codecs + '.');
-        sb = source.addSourceBuffer(mime);
+        sb = ms.addSourceBuffer(mime);
         sb.mode = 'segments';
         sb.addEventListener('updateend', pump);
         sb.addEventListener('updateend', follow);
@@ -1386,6 +1428,7 @@ enum WebStreamPage {
         try {
           for (;;) {
             const { value, done } = await reader.read();
+            if (gone()) return;
             if (done) break;
             $('msg').hidden = true;
             queue.push(value); bytes += value.length;
@@ -1393,7 +1436,7 @@ enum WebStreamPage {
           }
           cutOff = true;
           fail('The stream ended.');
-        } catch (e) { if (!abort || !abort.signal.aborted) { cutOff = true; fail('The stream broke off.'); } }
+        } catch (e) { if (!gone()) { cutOff = true; fail('The stream broke off.'); } }
       }
 
       function pump() {

@@ -437,7 +437,7 @@ final class OpenDisplaySession {
     private var encoder: MoonlightVideoEncoder?
     private var sendLink: OpenDisplayChannel?
     private var needsKeyFrame = true
-    private var keyFrames = MoonlightKeyFrameThrottle()
+    private let keyFrames = MoonlightKeyFrameRequester(retryingOn: .main)
     private var lastFrame: (buffer: CVPixelBuffer, time: CMTime)?
     private var netDrops = 0
     private var captured = 0
@@ -805,25 +805,19 @@ final class OpenDisplaySession {
 
     /// The next frame as a keyframe, from the last picture at once, as a still screen sends none.
     private func requestKeyFrame() {
-        lock.lock()
-        let decision = keyFrames.request(at: DispatchTime.now().uptimeNanoseconds)
-        let encoder = self.encoder
-        let last = lastFrame
-        lock.unlock()
-        switch decision {
-        case .now:
-            encoder?.requestKeyFrame()
-            if let last { encoder?.encode(last.buffer, at: last.time) }
-        case .later(let wait):
-            DispatchQueue.main.asyncAfter(deadline: .now() + .nanoseconds(Int(wait))) { [weak self] in self?.requestKeyFrame() }
-        case .alreadyDue:
-            break
+        keyFrames.request { [weak self] in
+            guard let self else { return (nil, nil) }
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            return (self.encoder, self.lastFrame)
         }
     }
 
     /// Sends an encoded frame, unless the connection is backed up: then frames wait for a
     /// keyframe once it has drained. On the encoder's thread.
     private func took(_ frame: MoonlightVideoEncoder.Frame) {
+        // Sent or left out, it answers the requests so far: one left out asks again once drained.
+        if frame.isKeyFrame { keyFrames.keyFrameSent() }
         lock.lock()
         guard let link = sendLink else { lock.unlock(); return }
         if needsKeyFrame && !frame.isKeyFrame {

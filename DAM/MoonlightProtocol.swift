@@ -243,6 +243,12 @@ struct MoonlightKeyFrameThrottle {
         due = false
         return .now
     }
+
+    /// The request held for later was answered otherwise: the next within the interval is
+    /// held again rather than taken as due already.
+    mutating func forgetDue() {
+        due = false
+    }
 }
 
 /// Moonlight's keyframe requests, less those a keyframe already on its way answers. While
@@ -251,7 +257,8 @@ struct MoonlightKeyFrameThrottle {
 /// link stays in a run of keyframes and never recovers. A request is covered while the
 /// keyframe asked for is still to be sent, and when it arrives less than a round trip after
 /// one finished going out, as the client sent it before it had that keyframe. A client that
-/// then lost the keyframe asks again with the next frame it gets, and is answered.
+/// then lost the keyframe asks again with the next frame it gets, and is answered. A request
+/// held for later is answered by any keyframe that goes out before it is made again.
 struct MoonlightKeyFrameRequests {
     enum Decision: Equatable {
         case now
@@ -275,6 +282,8 @@ struct MoonlightKeyFrameRequests {
     private var asked: UInt64?
     /// When the last keyframe finished going out.
     private var sent: UInt64?
+    /// When the latest request held for later came, until one is made.
+    private var held: UInt64?
 
     init(interval: UInt64 = 250_000_000) {
         throttle = MoonlightKeyFrameThrottle(interval: interval)
@@ -288,12 +297,26 @@ struct MoonlightKeyFrameRequests {
         switch throttle.request(at: now) {
         case .now:
             asked = now
+            held = nil
             return .now
         case .later(let wait):
+            held = now
             return .later(wait)
         case .alreadyDue:
+            held = now
             return .alreadyDue
         }
+    }
+
+    /// A request held for later, made again at `now` as `.later` said: covered when a
+    /// keyframe went out after the latest one held came, as that answers them all.
+    mutating func retry(at now: UInt64, roundTrip: UInt64?) -> Decision {
+        if let held, let sent, sent >= held {
+            self.held = nil
+            throttle.forgetDue()
+            return .covered
+        }
+        return request(at: now, roundTrip: roundTrip)
     }
 
     /// A keyframe finished going out at `now`, asked for or not.

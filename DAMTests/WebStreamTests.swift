@@ -55,6 +55,25 @@ final class WebStreamTests: XCTestCase {
         XCTAssertNil(WebStreamRequest.parse(["width": "8000", "height": "6000"], preferred: .interactive).width)
     }
 
+    func testRequestWithHugeSizesIsRefusedRatherThanOverflowing() {
+        let huge = String(Int.max / 2)
+        let request = WebStreamRequest.parse(["width": huge, "height": huge, "mode": "\(huge)x\(huge)x60"],
+                                             preferred: .interactive)
+        XCTAssertNil(request.width)
+        XCTAssertTrue(request.newDisplay == (1920, 1080, 60))
+        XCTAssertNil(WebStreamRequest.parse(["width": "1280", "height": huge], preferred: .interactive).width)
+        let exact = WebStreamRequest.parse(["width": "2560", "height": "1600", "mode": "2560x1600x60"], preferred: .interactive)
+        XCTAssertEqual(exact.width, 2560, "the most pixels still fit")
+        XCTAssertTrue(exact.newDisplay == (2560, 1600, 60))
+    }
+
+    func testAViewerMayHoldAsMuchAsTheEncoderBursts() {
+        XCTAssertEqual(StreamProfile.interactive.maxInFlight(bitrateKbps: 20_000), 2_500_000, "a second of the stream")
+        XCTAssertEqual(StreamProfile.balanced.maxInFlight(bitrateKbps: 30_000), 7_500_000, "twice the rate for a second")
+        XCTAssertEqual(StreamProfile.viewing.maxInFlight(bitrateKbps: 40_000), 30_000_000, "three times for two seconds")
+        XCTAssertEqual(StreamProfile.viewing.maxInFlight(bitrateKbps: 150_000), 64 << 20)
+    }
+
     func testProfilesSetTheEncoderApart() {
         let interactive = StreamProfile.interactive.encoderSettings(width: 1920, height: 1080, fps: 60, bitrateKbps: 20_000)
         XCTAssertFalse(interactive.reordering)
@@ -335,6 +354,22 @@ final class WebStreamTests: XCTestCase {
         XCTAssertFalse(session.add(viewer))
         XCTAssertEqual(session.viewerCount, 0)
         viewer.close()
+    }
+
+    /// Forgetting a device cuts off its viewers alone.
+    func testCuttingADeviceLeavesOtherViewersWatching() throws {
+        let (phone, laptop) = (try Loopback(), try Loopback())
+        let session = try WebStreamSession(key: .init(displayID: 1, profile: .interactive, bitrateKbps: 10_000, fps: 30,
+                                                      width: 640, height: 360, lowLatency: false))
+        defer { session.stop() }
+        XCTAssertTrue(session.add(WebStreamViewer(connection: try XCTUnwrap(phone.server), maxInFlight: 1 << 20,
+                                                  device: "phone")))
+        XCTAssertTrue(session.add(WebStreamViewer(connection: try XCTUnwrap(laptop.server), maxInFlight: 1 << 20,
+                                                  device: "laptop")))
+        session.cut(device: "phone")
+        XCTAssertEqual(session.viewerCount, 1)
+        session.cut(device: "tablet")
+        XCTAssertEqual(session.viewerCount, 1)
     }
 
     // MARK: - The host's routes

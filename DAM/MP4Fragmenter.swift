@@ -234,7 +234,13 @@ final class MP4Fragmenter {
         box(type, Data([version, UInt8(flags >> 16 & 0xFF), UInt8(flags >> 8 & 0xFF), UInt8(flags & 0xFF)]) + body)
     }
 
-    static func u16(_ value: UInt16) -> Data { Data([UInt8(value >> 8), UInt8(value & 0xFF)]) }
-    static func u32(_ value: UInt32) -> Data { Data((0..<4).map { UInt8(value >> (24 - 8 * $0) & 0xFF) }) }
-    static func u64(_ value: UInt64) -> Data { Data((0..<8).map { UInt8(value >> (56 - 8 * $0) & 0xFF) }) }
+    static func u16(_ value: UInt16) -> Data { bigEndian(value) }
+    static func u32(_ value: UInt32) -> Data { bigEndian(value) }
+    static func u64(_ value: UInt64) -> Data { bigEndian(value) }
+
+    private static func bigEndian<T: FixedWidthInteger>(_ value: T) -> Data {
+        var data = Data()
+        data.append(bigEndian: value)
+        return data
+    }
 }
