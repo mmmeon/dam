@@ -20,6 +20,8 @@ final class SettingsWindowController: NSWindowController {
 
     /// Called when a shortcut is recorded or reset, to store and register it.
     var onSave: ((HotkeyAction, HotkeyPreference) -> Void)?
+    /// Whether an action's shortcut is registered, which it isn't while another app has its keys.
+    var isRegistered: ((HotkeyAction) -> Bool)?
     /// Called whenever a visibility checkbox is toggled so the menu/Touch Bar rebuild.
     var onRebuild: (() -> Void)?
     /// Turns Moonlight hosting on or off, as the menu does.
@@ -1365,12 +1367,14 @@ final class SettingsWindowController: NSWindowController {
         save(pref, for: action)
     }
 
-    /// Marks each shortcut set to the same keys as another, as only one of them can work.
+    /// Marks each shortcut set to the same keys as another, as only one of them can work, and
+    /// each that another app has, which then doesn't work.
     private func markClashes() {
         let actions = HotkeyAction.allCases
         let clashes = HotkeyPreference.clashes(among: actions.compactMap { recorders[$0]?.preference })
         for (action, others) in zip(actions, clashes) {
             recorders[action]?.clash = others.isEmpty ? nil : others.map { actions[$0].title }.joined(separator: ", ")
+            recorders[action]?.isTakenElsewhere = others.isEmpty && isRegistered?(action) == false
         }
     }
 
@@ -1736,6 +1740,8 @@ final class SettingsWindowController: NSWindowController {
     func show() {
         // The Screen Mirroring item may have been changed in Control Center meanwhile.
         devicesDidChange()
+        // So may which shortcuts another app has.
+        markClashes()
         showWindow(nil)
         window?.center()
         NSApp.activate(ignoringOtherApps: true)

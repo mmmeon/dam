@@ -608,6 +608,7 @@ extension AppDelegate: NSMenuDelegate {
             action.shortcut = pref
             self?.rebind(action, to: pref)
         }
+        wc.isRegistered = { [weak self] in self?.hotkeys[$0]?.isRegistered ?? true }
         wc.onRebuild = { [weak self] in self?.rebuild() }
         wc.onToggleMoonlight = { [weak self] in self?.toggleMoonlightHost(nil) }
         wc.onForgetMoonlightClient = { [weak self] in self?.forget($0) }

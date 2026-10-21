@@ -162,6 +162,9 @@
 /* Arrange preview: the first value is the display being moved, the second the display it is placed next to */
 "%@ below %@" = "%@ below %@";
 
+/* Tooltip of a shortcut field whose keys another app has registered */
+"Another app uses this shortcut." = "Another app uses this shortcut.";
+
 /* Debug menu */
 "Checking Screen Mirroring" = "Checking Screen Mirroring";
 
