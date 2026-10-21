@@ -57,6 +57,18 @@ enum LocalNetwork {
         return subnets.contains { $0.contains(bytes) }
     }
 
+    /// The Mac's own addresses, written as `MoonlightHost.address(_:)` writes them.
+    static func ownAddresses(subnets: [Subnet] = interfaceSubnets()) -> Set<String> {
+        Set(subnets.compactMap { subnet -> String? in
+            var bytes = subnet.address
+            // A link-local IPv6 address comes with its interface's index in its third and fourth bytes.
+            if bytes.count == 16, bytes[0] == 0xFE, bytes[1] & 0xC0 == 0x80 { bytes[2] = 0; bytes[3] = 0 }
+            let host: NWEndpoint.Host? = bytes.count == 4 ? IPv4Address(Data(bytes)).map { .ipv4($0) }
+                : IPv6Address(Data(bytes)).map { .ipv6($0) }
+            return host.map { MoonlightHost.address(.hostPort(host: $0, port: .any)) }
+        })
+    }
+
     /// The subnets of the interfaces that are up.
     static func interfaceSubnets() -> [Subnet] {
         var first: UnsafeMutablePointer<ifaddrs>?
