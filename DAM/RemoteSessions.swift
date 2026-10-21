@@ -714,12 +714,14 @@ final class LiveSessionDisplays: SessionDisplays {
     }
 
     /// Mirrored when every display it can be mirrored on mirrors it, main when it is main;
-    /// for a streaming display, only when that was done through DAM, not by WindowServer
-    /// applying a layout it saved.
+    /// mirrored only when that was done through DAM, not by WindowServer applying a layout
+    /// it saved, and for a streaming display main the same way.
     func placement(of id: CGDirectDisplayID) -> SessionProfile.Placement? {
         guard let display = video.allConnectedDisplays.first(where: { $0.cgDisplayID == id }) else { return nil }
         let targets = video.mirrorTargets(for: display).map(\.cgDisplayID).filter { $0 != 0 }
-        let mirroredByChoice = !display.isStreaming || video.streamingDisplaysMirroredByChoice.contains(id)
+        // An anchored iPad is mirrored through its anchor.
+        let mirroredByChoice = ([id] + (video.anchorID(driving: id).map { [$0] } ?? []))
+            .contains(where: video.displaysMirroredByChoice.contains)
         if mirroredByChoice, !targets.isEmpty, targets.allSatisfy({ video.userMirrorMaster(of: $0) == id }) {
             return .mirror
         }

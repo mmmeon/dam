@@ -448,7 +448,7 @@ extension VideoManager {
             streamingDisplayIsMainByChoice = false
         }
         // Its ID can come back for another display.
-        streamingDisplaysMirroredByChoice.remove(last.id)
+        displaysMirroredByChoice.remove(last.id)
         streamingDisplaysMirroringByChoice.remove(last.id)
         // Dropping the last reference removes the display. While the set settles without
         // it, each change puts the resolutions and positions back if WindowServer's saved
@@ -637,7 +637,7 @@ extension VideoManager {
     private func streamingDisplayEnded(index: Int) {
         guard let i = streamingDisplays.firstIndex(where: { $0.index == index }) else { return }
         sdLog.debug("terminationHandler: streaming display \(index) ended")
-        streamingDisplaysMirroredByChoice.remove(streamingDisplays[i].id)
+        displaysMirroredByChoice.remove(streamingDisplays[i].id)
         streamingDisplaysMirroringByChoice.remove(streamingDisplays[i].id)
         streamingDisplays.remove(at: i)
         if streamingDisplays.isEmpty {

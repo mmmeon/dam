@@ -258,6 +258,7 @@ final class MoonlightKeyFrameRequester {
         lock.unlock()
     }
 
+    @discardableResult
     private func handle(roundTrip: UInt64?, retry: Bool, source: @escaping Source) -> MoonlightKeyFrameRequests.Decision {
         let now = DispatchTime.now().uptimeNanoseconds
         lock.lock()

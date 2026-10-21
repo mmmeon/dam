@@ -243,10 +243,10 @@ final class SidecarDisplayTests: XCTestCase {
                                                                    serial: 4, start: StreamingDisplayModes.start,
                                                                    id: 42)]
         manager.keepUserMirror([2], on: 42)
-        XCTAssertEqual(manager.streamingDisplaysMirroredByChoice, [42])
+        XCTAssertEqual(manager.displaysMirroredByChoice, [42])
         // Nothing online mirrors it once 2 is extended again.
         manager.keepUserMirror([2], on: 0)
-        XCTAssertTrue(manager.streamingDisplaysMirroredByChoice.isEmpty)
+        XCTAssertTrue(manager.displaysMirroredByChoice.isEmpty)
 
         // Set to mirror another display, which a resize keeps.
         manager.keepUserMirror([42, 2], on: 1)

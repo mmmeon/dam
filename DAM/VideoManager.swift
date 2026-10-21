@@ -211,9 +211,9 @@ final class VideoManager: ObservableObject {
     var streamingArrangement: DisplayArrangement?
     /// Whether the user made a streaming display main, which DAM then leaves it.
     var streamingDisplayIsMainByChoice = false
-    /// The streaming displays the others were mirrored onto through DAM, not by WindowServer
-    /// applying a layout it saved for them.
-    var streamingDisplaysMirroredByChoice: Set<CGDirectDisplayID> = []
+    /// The displays the others were mirrored onto through DAM, not by WindowServer applying
+    /// a layout it saved for them (or by System Settings).
+    var displaysMirroredByChoice: Set<CGDirectDisplayID> = []
     /// The streaming displays set to mirror another display through DAM, which a resize keeps.
     var streamingDisplaysMirroringByChoice: Set<CGDirectDisplayID> = []
     /// Whether a change of main or of positions leaves `streamingArrangement` as it is, so
@@ -725,10 +725,10 @@ final class VideoManager: ObservableObject {
     /// Keeps a mirror change the user makes, `ids` mirroring `master` (0: each its own
     /// desktop), in the layouts DAM puts back, or they would undo it: the one kept after a
     /// streaming display came and the one each anchor restores. None of `ids` is an
-    /// anchor's set slave any more; one that is to be is added after. A streaming display
-    /// counts as mirrored by choice while a display mirrors it through DAM.
+    /// anchor's set slave any more; one that is to be is added after. A display counts as
+    /// mirrored by choice while a display mirrors it through DAM.
     func keepUserMirror(_ ids: [CGDirectDisplayID], on master: CGDirectDisplayID) {
-        if streamingDisplayIDs.contains(master) { streamingDisplaysMirroredByChoice.insert(master) }
+        if master != 0 { displaysMirroredByChoice.insert(master) }
         let moving = Set(ids)
         if master != 0 {
             streamingDisplaysMirroringByChoice.formUnion(moving.intersection(streamingDisplayIDs))
@@ -737,7 +737,7 @@ final class VideoManager: ObservableObject {
         }
         // The others only while a display not among `ids` still mirrors them.
         let online = DisplayArrangement.onlineDisplayIDs()
-        streamingDisplaysMirroredByChoice = streamingDisplaysMirroredByChoice.filter { id in
+        displaysMirroredByChoice = displaysMirroredByChoice.filter { id in
             id == master || online.contains { !moving.contains($0) && $0 != id && CGDisplayMirrorsDisplay($0) == id }
         }
         for name in anchorSetSlaves.keys { anchorSetSlaves[name]?.subtract(ids) }
