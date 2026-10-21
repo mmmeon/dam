@@ -93,7 +93,10 @@ setting to allow it from localhost only.
 
 Settings › Moonlight › "Encrypt video": **Off the local network** (default, as Sunshine),
 **Always**, **Never**. "Off the local network" means a peer outside the Mac's own subnets
-and not link-local; USB links (`docs/usb.md`) count as local.
+and not link-local; USB links (`docs/usb.md`) count as local. Off the local network
+offers it, as Sunshine's opportunistic mode; Always also asks for it in DESCRIBE
+(`encryptionRequested:2`) and refuses an ANNOUNCE that leaves video plain, as Sunshine's
+mandatory mode.
 
 ## 3. Several Moonlight clients at once
 

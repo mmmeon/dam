@@ -4,14 +4,18 @@ import Network
 
 final class MoonlightRTSPTests: XCTestCase {
 
-    private let launch = MoonlightLaunch(appID: 1, displayID: 0, key: Data(count: 16))
+    private let launch: MoonlightLaunch = {
+        var launch = MoonlightLaunch(appID: 1, displayID: 0, key: Data(count: 16))
+        launch.clientAddress = "10.0.0.2"
+        return launch
+    }()
 
     private func request(_ method: String, _ target: String, headers: [String: String] = [:], body: String = "") -> MoonlightRTSP.Request {
         MoonlightRTSP.Request(method: method, target: target, headers: headers.merging(["CSeq": "3"]) { $1 }, body: body)
     }
 
     private func respond(_ request: MoonlightRTSP.Request, announce: @escaping (MoonlightLaunch, MoonlightStreamConfig) -> String? = { _, _ in nil }) -> String {
-        MoonlightRTSP.response(to: request, launch: launch, announce: announce)
+        MoonlightRTSP.response(to: request, from: "10.0.0.2", launch: launch, announce: announce)
     }
 
     func testEveryReplyStartsWithRTSP10AndEchoesTheSequence() {
@@ -33,7 +37,7 @@ final class MoonlightRTSPTests: XCTestCase {
     func testEncryptedVideoIsOfferedOnlyWhenTheLaunchIsToHaveIt() {
         var encrypting = launch
         encrypting.offersEncryptedVideo = true
-        let reply = MoonlightRTSP.response(to: request("DESCRIBE", "rtsp://10.0.0.2:48010"), launch: encrypting,
+        let reply = MoonlightRTSP.response(to: request("DESCRIBE", "rtsp://10.0.0.2:48010"), from: "10.0.0.2", launch: encrypting,
                                            announce: { _, _ in nil })
         XCTAssertTrue(reply.contains("a=x-ss-general.encryptionSupported:7\r\n"), "control, video and audio")
         XCTAssertTrue(reply.contains("a=x-ss-general.encryptionRequested:0\r\n"), "never required")
@@ -43,7 +47,7 @@ final class MoonlightRTSPTests: XCTestCase {
                   "a=x-nv-video[0].maxFPS:60 \r\na=x-nv-video[0].packetSize:1392 \r\n" +
                   "a=x-nv-vqos[0].bw.maximumBitrateKbps:8000 \r\na=x-ss-general.encryptionEnabled:7 \r\n"
         let announced = MoonlightRTSP.response(to: request("ANNOUNCE", "streamid=control/13/0", body: sdp),
-                                               launch: encrypting) { _, config in started = config; return nil }
+                                               from: "10.0.0.2", launch: encrypting) { _, config in started = config; return nil }
         XCTAssertTrue(announced.hasPrefix("RTSP/1.0 200 OK"), announced)
         XCTAssertEqual(started?.videoEncrypted, true)
     }
@@ -78,7 +82,8 @@ final class MoonlightRTSPTests: XCTestCase {
         var second = launch
         second.slot = 1
         func reply(_ stream: String) -> String {
-            MoonlightRTSP.response(to: request("SETUP", "streamid=\(stream)/0/0"), launch: second, announce: { _, _ in nil })
+            MoonlightRTSP.response(to: request("SETUP", "streamid=\(stream)/0/0"), from: "10.0.0.2", launch: second,
+                                   announce: { _, _ in nil })
         }
         XCTAssertTrue(reply("audio").contains("Transport: server_port=48100\r\n"))
         XCTAssertTrue(reply("video").contains("Transport: server_port=48098\r\n"))
@@ -110,16 +115,85 @@ final class MoonlightRTSPTests: XCTestCase {
     }
 
     func testRefusesAHandshakeWithoutALaunch() {
-        XCTAssertTrue(MoonlightRTSP.response(to: request("OPTIONS", "/"), launch: nil, announce: { _, _ in nil })
+        XCTAssertTrue(MoonlightRTSP.response(to: request("OPTIONS", "/"), from: "10.0.0.2", launch: nil, announce: { _, _ in nil })
             .hasPrefix("RTSP/1.0 503"))
     }
 
     func testParsesARequestOnlyOnceItsBodyHasCome() throws {
         let head = "ANNOUNCE streamid=control/13/0 RTSP/1.0\r\nCSeq: 6\r\nContent-length: 5\r\n\r\n"
-        XCTAssertNil(MoonlightRTSP.parse(Data((head + "abc").utf8)))
+        XCTAssertNil(try MoonlightRTSP.parse(Data((head + "abc").utf8)))
         let request = try XCTUnwrap(MoonlightRTSP.parse(Data((head + "abcde").utf8)))
         XCTAssertEqual(request.method, "ANNOUNCE")
         XCTAssertEqual(request.headers["CSeq"], "6")
         XCTAssertEqual(request.body, "abcde")
     }
+
+    func testRefusesARequestThatCanNeverBeRead() {
+        let negative = "ANNOUNCE streamid=control/13/0 RTSP/1.0\r\nCSeq: 6\r\nContent-Length: -1\r\n\r\nabc"
+        XCTAssertThrowsError(try MoonlightRTSP.parse(Data(negative.utf8)))
+        XCTAssertThrowsError(try MoonlightRTSP.parse(Data("NONSENSE\r\n\r\n".utf8)))
+    }
+
+    func testAnswersOnlyTheDeviceThatLaunched() {
+        for method in ["OPTIONS", "DESCRIBE", "SETUP", "ANNOUNCE", "PLAY"] {
+            let reply = MoonlightRTSP.response(to: request(method, "streamid=video/0/0"), from: "10.0.0.3", launch: launch,
+                                               announce: { _, _ in XCTFail("announced"); return nil })
+            XCTAssertTrue(reply.hasPrefix("RTSP/1.0 403"), "\(method): \(reply)")
+            XCTAssertFalse(reply.contains(launch.pingPayload))
+        }
+        var unknown = launch
+        unknown.clientAddress = ""
+        XCTAssertTrue(MoonlightRTSP.response(to: request("SETUP", "streamid=video/0/0"), from: "", launch: unknown,
+                                             announce: { _, _ in nil }).hasPrefix("RTSP/1.0 403"))
+    }
+
+    func testALaunchIsAnnouncedOnce() {
+        var started = launch
+        started.announced = true
+        let reply = MoonlightRTSP.response(to: request("ANNOUNCE", "streamid=control/13/0", body: sdp), from: "10.0.0.2",
+                                           launch: started, announce: { _, _ in XCTFail("announced again"); return nil })
+        XCTAssertTrue(reply.hasPrefix("RTSP/1.0 455"), reply)
+    }
+
+    func testVideoThatMustBeEncryptedIsAskedForAndPlainIsRefused() {
+        var always = launch
+        always.offersEncryptedVideo = true
+        always.requiresEncryptedVideo = true
+        let describe = MoonlightRTSP.response(to: request("DESCRIBE", "rtsp://10.0.0.2:48010"), from: "10.0.0.2",
+                                              launch: always, announce: { _, _ in nil })
+        XCTAssertTrue(describe.contains("a=x-ss-general.encryptionSupported:7\r\n"))
+        XCTAssertTrue(describe.contains("a=x-ss-general.encryptionRequested:2\r\n"))
+        let plain = MoonlightRTSP.response(to: request("ANNOUNCE", "streamid=control/13/0", body: sdp + "a=x-ss-general.encryptionEnabled:5 \r\n"),
+                                           from: "10.0.0.2", launch: always,
+                                           announce: { _, _ in XCTFail("plain video started"); return nil })
+        XCTAssertTrue(plain.hasPrefix("RTSP/1.0 400"), plain)
+        let sealed = MoonlightRTSP.response(to: request("ANNOUNCE", "streamid=control/13/0", body: sdp + "a=x-ss-general.encryptionEnabled:7 \r\n"),
+                                            from: "10.0.0.2", launch: always, announce: { _, _ in nil })
+        XCTAssertTrue(sealed.hasPrefix("RTSP/1.0 200 OK"), sealed)
+    }
+
+    func testABarePingIsTakenOnlyFromTheDeviceThatLaunched() throws {
+        func from(_ text: String) -> sockaddr_in {
+            var address = sockaddr_in()
+            address.sin_family = sa_family_t(AF_INET)
+            address.sin_addr = MoonlightVideoSender.ipv4(text)!
+            return address
+        }
+        let payload = Data(launch.pingPayload.utf8)
+        let client = MoonlightVideoSender.ipv4("10.0.0.2")
+        var tagged = payload
+        tagged.append(contentsOf: [0, 0, 0, 1])
+        XCTAssertTrue(MoonlightVideoSender.isPing(tagged, from: from("10.0.0.9"), payload: payload, client: client),
+                      "the payload is the proof, wherever it comes from")
+        XCTAssertTrue(MoonlightVideoSender.isPing(Data("PING".utf8), from: from("10.0.0.2"), payload: payload, client: client))
+        XCTAssertFalse(MoonlightVideoSender.isPing(Data("PING".utf8), from: from("10.0.0.9"), payload: payload, client: client))
+        XCTAssertFalse(MoonlightVideoSender.isPing(Data("PING".utf8), from: from("10.0.0.2"), payload: payload, client: nil))
+        XCTAssertFalse(MoonlightVideoSender.isPing(Data("PONG".utf8), from: from("10.0.0.2"), payload: payload, client: client))
+        XCTAssertFalse(MoonlightVideoSender.isPing(payload.prefix(8), from: from("10.0.0.2"), payload: payload, client: client))
+        XCTAssertNil(MoonlightVideoSender.ipv4("fe80::1"))
+    }
+
+    private let sdp = "a=x-nv-video[0].clientViewportWd:1280 \r\na=x-nv-video[0].clientViewportHt:720 \r\n" +
+                      "a=x-nv-video[0].maxFPS:60 \r\na=x-nv-video[0].packetSize:1392 \r\n" +
+                      "a=x-nv-vqos[0].bw.maximumBitrateKbps:8000 \r\n"
 }

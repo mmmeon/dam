@@ -37,7 +37,16 @@ struct MoonlightStreamConfig: Equatable {
     /// Whether the client turned on encrypted video, which it does only when it is offered.
     var videoEncrypted: Bool { encryptionEnabled & MoonlightVideoCrypto.encryptionBit != 0 }
 
-    /// The settings in an ANNOUNCE body, nil when one it needs is missing.
+    /// The sizes, rates and packet sizes a stream may have; Moonlight's own settings are
+    /// well within them. A packet stays one UDP datagram, sealed or not.
+    static let sizes = 1...8192
+    static let rates = 1...480
+    static let packetSizes = 33...(65507 - MoonlightPacketizer.rtpHeaderSize - MoonlightVideoCrypto.overhead)
+    static let maxBitrateKbps = 1_000_000
+
+    /// The settings in an ANNOUNCE body, nil when one it needs is missing or out of range.
+    /// A bitrate above the most is taken as the most, and an audio packet duration other
+    /// than 5 or 10 ms as 5.
     static func parse(sdp: String) -> MoonlightStreamConfig? {
         var attributes: [String: String] = [:]
         for line in sdp.split(whereSeparator: \.isNewline) where line.hasPrefix("a=") {
@@ -49,12 +58,14 @@ struct MoonlightStreamConfig: Equatable {
         guard let width = int("x-nv-video[0].clientViewportWd"), let height = int("x-nv-video[0].clientViewportHt"),
               let fps = int("x-nv-video[0].maxFPS"), let packetSize = int("x-nv-video[0].packetSize"),
               let bitrate = int("x-nv-vqos[0].bw.maximumBitrateKbps"),
-              width > 0, height > 0, fps > 0, packetSize > 32 else { return nil }
+              sizes.contains(width), sizes.contains(height), rates.contains(fps),
+              packetSizes.contains(packetSize), bitrate > 0 else { return nil }
         return MoonlightStreamConfig(width: width, height: height, fps: fps, packetSize: packetSize,
-                                     bitrateKbps: bitrate, videoFormat: int("x-nv-vqos[0].bitStreamFormat") ?? 0,
+                                     bitrateKbps: min(bitrate, maxBitrateKbps),
+                                     videoFormat: int("x-nv-vqos[0].bitStreamFormat") ?? 0,
                                      encryptionEnabled: int("x-ss-general.encryptionEnabled") ?? 0,
                                      minimumParity: int("x-nv-vqos[0].fec.minRequiredFecPackets") ?? 0,
-                                     audioPacketDuration: int("x-nv-aqos.packetDuration") ?? 5,
+                                     audioPacketDuration: int("x-nv-aqos.packetDuration") == 10 ? 10 : 5,
                                      // Asked for either way: the legacy flag 0x20, or the newer bit 0x04.
                                      audioEncrypted: (int("x-nv-general.featureFlags") ?? 0) & 0x20 != 0
                                          || (int("x-ss-general.encryptionEnabled") ?? 0) & 0x04 != 0)

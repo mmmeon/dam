@@ -218,6 +218,8 @@ final class MoonlightStreamStats {
 final class MoonlightVideoSender {
     private let socket: MoonlightUDPSocket
     private let pingPayload: Data
+    /// The launching device's address, the only one a bare "PING" is taken from.
+    private let client: in_addr?
     private let lock = NSLock()
     private var peer: sockaddr_in?
     private var running = true
@@ -246,9 +248,10 @@ final class MoonlightVideoSender {
     static let fecPercentage = 20
 
     /// `key` seals every packet, for a client that turned on encrypted video.
-    init(port: UInt16, pingPayload: String, packetSize: Int, minimumParity: Int, bitrateKbps: Int,
+    init(port: UInt16, pingPayload: String, client: String, packetSize: Int, minimumParity: Int, bitrateKbps: Int,
          key: Data? = nil) throws {
         socket = try MoonlightUDPSocket(port: port)
+        self.client = Self.ipv4(client)
         // Six times the stream's rate, within 60 to 400 Mbit/s: a typical frame in a fraction
         // of a frame's time, a keyframe spread over a few frames'.
         let rate = Double(min(max(bitrateKbps * 6, 60_000), 400_000)) * 1000
@@ -269,8 +272,7 @@ final class MoonlightVideoSender {
             Thread.current.name = "Moonlight video pings"
             while isRunning {
                 guard let (data, from) = socket.receive(timeout: 0.25) else { continue }
-                // A 16-byte payload and a counter, or "PING" from a client without one.
-                guard data.prefix(16) == pingPayload || data == Data("PING".utf8) else { continue }
+                guard Self.isPing(data, from: from, payload: pingPayload, client: client) else { continue }
                 lock.lock()
                 let first = peer == nil
                 peer = from
@@ -363,6 +365,20 @@ final class MoonlightVideoSender {
         if frame.isKeyFrame { onKeyFrameSent?() }
     }
 
+    /// Whether `data` from `from` is the client's ping, which sets where the stream goes: the
+    /// launch's 16-byte payload (then a counter), from wherever it comes, or a bare "PING"
+    /// from a client without one, taken only from the address that launched, as Sunshine does.
+    static func isPing(_ data: Data, from: sockaddr_in, payload: Data, client: in_addr?) -> Bool {
+        if !payload.isEmpty, data.prefix(payload.count) == payload { return true }
+        return data == Data("PING".utf8) && client?.s_addr == from.sin_addr.s_addr
+    }
+
+    /// An IPv4 address in text, nil for any other.
+    static func ipv4(_ text: String) -> in_addr? {
+        var address = in_addr()
+        return inet_pton(AF_INET, text, &address) == 1 ? address : nil
+    }
+
     static func describe(_ address: sockaddr_in) -> String {
         var addr = address.sin_addr
         var text = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
@@ -384,6 +400,8 @@ final class MoonlightAudioSender {
     let queue = DispatchQueue(label: "\(AppIdentity.bundleID).moonlight.audio", qos: .userInteractive)
     private let socket: MoonlightUDPSocket
     private let pingPayload: Data
+    /// The launching device's address, the only one a bare "PING" is taken from.
+    private let client: in_addr?
     private let lock = NSLock()
     private var peer: sockaddr_in?
     private var running = true
@@ -397,9 +415,10 @@ final class MoonlightAudioSender {
     private var pacer: DispatchSourceTimer?
     private let stats: MoonlightStreamStats
 
-    init(port: UInt16, pingPayload: String, config: MoonlightStreamConfig, key: Data, keyID: UInt32,
+    init(port: UInt16, pingPayload: String, client: String, config: MoonlightStreamConfig, key: Data, keyID: UInt32,
          stats: MoonlightStreamStats) throws {
         socket = try MoonlightUDPSocket(port: port)
+        self.client = MoonlightVideoSender.ipv4(client)
         self.stats = stats
         self.pingPayload = Data(pingPayload.utf8)
         packetDuration = config.audioPacketDuration
@@ -419,7 +438,7 @@ final class MoonlightAudioSender {
             Thread.current.name = "Moonlight audio pings"
             while isRunning {
                 guard let (data, from) = socket.receive(timeout: 0.25) else { continue }
-                guard data.prefix(16) == pingPayload || data == Data("PING".utf8) else { continue }
+                guard MoonlightVideoSender.isPing(data, from: from, payload: pingPayload, client: client) else { continue }
                 lock.lock()
                 let first = peer == nil
                 peer = from
@@ -714,16 +733,18 @@ final class MoonlightStream {
     private var statsTimer: DispatchSourceTimer?
 
     init(config: MoonlightStreamConfig, displayID: CGDirectDisplayID, key: Data, keyID: UInt32,
-         pingPayload: String, connectData: UInt32, ports: Ports = Ports(slot: 0), allowsInput: Bool = true) throws {
+         pingPayload: String, connectData: UInt32, clientAddress: String, ports: Ports = Ports(slot: 0),
+         allowsInput: Bool = true) throws {
         self.config = config
         self.displayID = displayID
         inputAllowed = allowsInput
         input = MoonlightInputInjector(displayID: displayID, streamWidth: config.width, streamHeight: config.height)
-        video = try MoonlightVideoSender(port: ports.video, pingPayload: pingPayload, packetSize: config.packetSize,
-                                         minimumParity: config.minimumParity, bitrateKbps: config.bitrateKbps,
+        video = try MoonlightVideoSender(port: ports.video, pingPayload: pingPayload, client: clientAddress,
+                                         packetSize: config.packetSize, minimumParity: config.minimumParity,
+                                         bitrateKbps: config.bitrateKbps,
                                          key: config.videoEncrypted ? key : nil)
         control = try MoonlightControlServer(port: ports.control, key: key, connectData: connectData)
-        audio = try MoonlightAudioSender(port: ports.audio, pingPayload: pingPayload, config: config,
+        audio = try MoonlightAudioSender(port: ports.audio, pingPayload: pingPayload, client: clientAddress, config: config,
                                          key: key, keyID: keyID, stats: video.stats)
     }
 

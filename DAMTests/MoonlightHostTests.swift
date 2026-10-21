@@ -77,8 +77,12 @@ final class MoonlightHostTests: XCTestCase {
     /// The body of the response to a GET for `target`.
     private func get(_ target: String, secure: Bool = false, identity: SecIdentity? = nil,
                      timeout: TimeInterval = 10) throws -> String {
-        let connection = open(target, secure: secure, identity: identity)
-        let done = expectation(description: target)
+        try body(of: open(target, secure: secure, identity: identity), timeout: timeout)
+    }
+
+    /// The body of the response on `connection`, read to its end.
+    private func body(of connection: NWConnection, timeout: TimeInterval = 10) throws -> String {
+        let done = expectation(description: "response")
         var response = Data()
         func read() {
             connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { data, _, isComplete, error in
@@ -392,6 +396,98 @@ final class MoonlightHostTests: XCTestCase {
         XCTAssertTrue(host.launches.isEmpty)
     }
 
+    func testTwoLaunchesAtOnceLeaveNoDisplayBehind() throws {
+        var removed: [CGDirectDisplayID] = []
+        var made = 0
+        host.requestPIN = { _, answer in answer("1234") }
+        host.makeDisplay = { _, _, _, done in
+            made += 1
+            let id = CGDirectDisplayID(89 + made)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5 * Double(made)) { done(id) }
+        }
+        host.removeDisplay = { removed.append($0) }
+        startHost()
+        let client = try Client.make()
+        XCTAssertTrue(try pair(client, pin: "1234"))
+        func launch() -> NWConnection {
+            let key = MoonlightCrypto.hex(MoonlightPairing.randomBytes(16))
+            return open("/launch?appid=\(MoonlightHost.newDisplayAppID)&mode=1920x1080x60&rikey=\(key)&rikeyid=1",
+                        secure: true, identity: client.identity)
+        }
+        let first = launch(), second = launch()
+        XCTAssertEqual(field("gamesession", in: try body(of: first)), "1")
+        XCTAssertEqual(field("gamesession", in: try body(of: second)), "1")
+        XCTAssertEqual(made, 2)
+        XCTAssertEqual(host.launches.map(\.displayID), [91])
+        XCTAssertEqual(removed, [90], "the display of the launch replaced")
+    }
+
+    /// A display that is ready only after hosting stopped, or the device was unpaired, goes
+    /// again, and no launch is left.
+    func testALaunchOutlivingTheHostOrThePairingLeavesNothing() throws {
+        var removed: [CGDirectDisplayID] = []
+        var asked: XCTestExpectation?
+        host.requestPIN = { _, answer in answer("1234") }
+        host.makeDisplay = { _, _, _, done in
+            asked?.fulfill()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { done(96) }
+        }
+        host.removeDisplay = { removed.append($0) }
+        startHost()
+        for ending in ["unpaired", "stopped"] {
+            let client = try Client.make()
+            XCTAssertTrue(try pair(client, pin: "1234"))
+            asked = expectation(description: "display asked for")
+            let key = MoonlightCrypto.hex(MoonlightPairing.randomBytes(16))
+            let connection = open("/launch?appid=\(MoonlightHost.newDisplayAppID)&mode=1920x1080x60&rikey=\(key)&rikeyid=1",
+                                  secure: true, identity: client.identity)
+            wait(for: [asked!], timeout: 5)
+            if ending == "unpaired" {
+                host.forget(try XCTUnwrap(host.clients.first { $0.certificate == client.certificate }))
+            } else {
+                host.stop()
+            }
+            RunLoop.main.run(until: Date().addingTimeInterval(1))
+            connection.cancel()
+            XCTAssertTrue(host.launches.isEmpty, ending)
+            XCTAssertEqual(removed, [96], ending)
+            removed = []
+        }
+    }
+
+    func testConnectionsAreCappedAndMustAskInTime() throws {
+        host = MoonlightHost(httpPort: host.httpPort, httpsPort: host.httpsPort, rtspPort: host.rtspPort, directory: directory,
+                             advertises: false, limits: MoonlightConnectionLimits(maxPerAddress: 2, deadline: 1))
+        startHost()
+        func idle() -> NWConnection {
+            let connection = NWConnection(host: "127.0.0.1", port: host.httpPort, using: .tcp)
+            connection.start(queue: .global())
+            return connection
+        }
+        /// How long until the host closes `connection`.
+        func closing(_ connection: NWConnection) -> TimeInterval {
+            let start = Date()
+            let closed = expectation(description: "closed")
+            func read() {
+                connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { _, _, isComplete, error in
+                    if isComplete || error != nil { closed.fulfill() } else { read() }
+                }
+            }
+            read()
+            wait(for: [closed], timeout: 5)
+            connection.cancel()
+            return Date().timeIntervalSince(start)
+        }
+        let waiting = [idle(), idle()]
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        XCTAssertLessThan(closing(idle()), 0.5, "a third from the same address is turned away")
+        for connection in waiting {
+            XCTAssertLessThan(closing(connection), 2, "closed for asking nothing")
+        }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        XCTAssertEqual(status(try get("/serverinfo")), "200", "served again once they have gone")
+    }
+
     // MARK: - Several devices
 
     private func launchNewDisplay(_ client: Client, mode: String = "1920x1080x60") throws -> String {
@@ -498,6 +594,9 @@ final class MoonlightHostTests: XCTestCase {
             let announce = rtsp("ANNOUNCE streamid=control/13/0 RTSP/1.0\r\nCSeq: 6\r\n\(common)" +
                                 "Content-length: \(sdp.utf8.count)\r\n\r\n\(sdp)", slot: slot)
             XCTAssertTrue(announce.hasPrefix("RTSP/1.0 200 OK"), announce)
+            XCTAssertTrue(rtsp("ANNOUNCE streamid=control/13/0 RTSP/1.0\r\nCSeq: 7\r\n\(common)" +
+                               "Content-length: \(sdp.utf8.count)\r\n\r\n\(sdp)", slot: slot).hasPrefix("RTSP/1.0 455"),
+                          "a launch's stream starts once")
             let enet = try XCTUnwrap(enet_host_create(nil, 1, 48, 0, 0))
             var address = ENetAddress(host: 0, port: port)
             enet_address_set_host_ip(&address, "127.0.0.1")
@@ -516,12 +615,46 @@ final class MoonlightHostTests: XCTestCase {
         XCTAssertEqual(host.launches.count, 2)
     }
 
+    /// Another device can't shake hands on a launch; the device that launched can start its
+    /// stream once, and again after a resume, which is a launch of its own with a new key.
+    func testOnlyTheLaunchingDeviceShakesHandsAndAResumeStreamsAgain() throws {
+        host.requestPIN = { _, answer in answer("1234") }
+        host.makeDisplay = { _, _, _, done in done(81) }
+        startHost()
+        let client = try Client.make()
+        XCTAssertTrue(try pair(client, pin: "1234"))
+        XCTAssertEqual(field("gamesession", in: try launchNewDisplay(client)), "1")
+        let common = "X-GS-ClientVersion: 14\r\nHost: 127.0.0.1\r\n"
+        // From another of the Mac's own addresses, as another device's would be.
+        if let other = LocalNetwork.interfaceSubnets().first(where: { $0.address.count == 4 && ![127, 169].contains($0.address[0]) }) {
+            let reply = rtsp("SETUP streamid=video/0/0 RTSP/1.0\r\nCSeq: 4\r\n\(common)\r\n",
+                             to: other.address.map(String.init).joined(separator: "."))
+            XCTAssertTrue(reply.hasPrefix("RTSP/1.0 403"), reply)
+            XCTAssertNil(header("X-SS-Ping-Payload", in: reply))
+        }
+        let sdp = "v=0\r\na=x-ss-general.encryptionEnabled:1 \r\na=x-nv-video[0].clientViewportWd:1280 \r\n" +
+                  "a=x-nv-video[0].clientViewportHt:720 \r\na=x-nv-video[0].maxFPS:60 \r\n" +
+                  "a=x-nv-video[0].packetSize:1392 \r\na=x-nv-vqos[0].bw.maximumBitrateKbps:8000 \r\n"
+        func announce() -> String {
+            rtsp("ANNOUNCE streamid=control/13/0 RTSP/1.0\r\nCSeq: 6\r\n\(common)Content-length: \(sdp.utf8.count)\r\n\r\n\(sdp)")
+        }
+        XCTAssertTrue(announce().hasPrefix("RTSP/1.0 200 OK"))
+        XCTAssertTrue(announce().hasPrefix("RTSP/1.0 455"), "not again under the same key")
+        let key = MoonlightCrypto.hex(MoonlightPairing.randomBytes(16))
+        XCTAssertEqual(field("resume", in: try get("/resume?appid=\(MoonlightHost.newDisplayAppID)&mode=1920x1080x60&rikey=\(key)&rikeyid=2",
+                                                   secure: true, identity: client.identity)), "1")
+        // The last stream's ports close within a quarter second.
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        let resumed = announce()
+        XCTAssertTrue(resumed.hasPrefix("RTSP/1.0 200 OK"), resumed)
+    }
+
     // MARK: - Streaming, end to end
 
     /// Sends `text` as one RTSP request on a connection of its own and reads to the end, as
     /// Moonlight does.
-    private func rtsp(_ text: String, slot: Int = 0) -> String {
-        let connection = NWConnection(host: "127.0.0.1", port: host.rtspPort(slot: slot), using: .tcp)
+    private func rtsp(_ text: String, slot: Int = 0, to address: String = "127.0.0.1") -> String {
+        let connection = NWConnection(host: NWEndpoint.Host(address), port: host.rtspPort(slot: slot), using: .tcp)
         connection.start(queue: .global())
         connection.send(content: Data(text.utf8), completion: .idempotent)
         let done = expectation(description: "rtsp")

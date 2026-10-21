@@ -80,6 +80,9 @@ flowchart LR
 - The host key, its self-signed certificate and the paired-client list are stored in
   Application Support, readable only by the user. The TLS identity is built in memory,
   so the keychain isn't involved.
+- HTTP, HTTPS and RTSP together take at most 64 connections at once, 16 from one
+  address (`MoonlightConnectionLimits`). One whose request hasn't all come within 10 s
+  is closed; answering may take longer, as while the user types a PIN.
 
 ### Several devices
 
@@ -108,11 +111,19 @@ once (`MoonlightHost.maxSessions`). A fifth gets a 503.
 - DESCRIBE offers H.264 only. It supports encrypted control and audio, and encrypted
   video when Settings › Moonlight › Encrypt Video says so for the client's address: Off
   the Local Network (the default, as Sunshine's), Always or Never. "Local" is loopback,
-  link-local, or a subnet of one of the Mac's interfaces. Nothing is required, so a client
-  without fast AES may leave video plain.
+  link-local, or a subnet of one of the Mac's interfaces. Only Always requires it
+  (`encryptionRequested`); otherwise a client without fast AES may leave video plain.
+- Only the address that made the /launch or /resume is answered; any other gets a 403,
+  as SETUP hands out the stream's tokens.
 - ANNOUNCE is parsed for size, fps, packet size, bitrate, minimum FEC and audio
-  settings. It is refused if the client asks for another codec, or for encrypted video
-  that wasn't offered.
+  settings. It is refused if the client asks for another codec, for encrypted video
+  that wasn't offered, for plain video under Always, or for values no client sends
+  (sizes beyond 8192, rates beyond 480, packets beyond one datagram); a bitrate over
+  1 Gbit/s is taken as 1 Gbit/s. A launch is announced once: another ANNOUNCE would
+  start video again under the same key and counter, so it gets a 455, and a stream that
+  starts again comes with a /resume and a new key.
+- Video and audio go wherever the ping with the launch's payload last came from. A bare
+  "PING", from clients without the payload, counts only from the launching address.
 - Control runs on UDP 47999 over vendored ENet 1.3.18, with AES-128-GCM messages.
   Keyframe requests, reference-frame invalidation, frame FEC status, input and
   termination are handled; the rest (pings, loss stats) are dropped.
