@@ -128,6 +128,27 @@ final class StreamingDisplayTests: XCTestCase {
         XCTAssertEqual(arrangement.makingMain(2).origins, [1: CGPoint(x: -1440, y: 0), 2: .zero])
     }
 
+    func testOnlyAModeADisplayCanBeMadeInIsValid() {
+        XCTAssertTrue(StreamingDisplayModes.start.isValid)
+        XCTAssertTrue(StreamingDisplayModes.forStream(width: 7680, height: 4320, fps: 120).isValid)
+        XCTAssertFalse(StreamingDisplayModes.Mode(width: -1920, height: 1080, refreshRate: 60).isValid)
+        XCTAssertFalse(StreamingDisplayModes.Mode(width: 1920, height: 0, refreshRate: 60).isValid)
+        XCTAssertFalse(StreamingDisplayModes.Mode(width: 1920, height: 1080, refreshRate: 0).isValid)
+        XCTAssertFalse(StreamingDisplayModes.Mode(width: 1920, height: 1080, refreshRate: 100_000).isValid)
+        XCTAssertFalse(StreamingDisplayModes.Mode(width: 5000, height: 2000, refreshRate: 60, hiDPI: true).isValid)
+        // Asked without working out its pixels, which would overflow.
+        XCTAssertFalse(StreamingDisplayModes.Mode(width: .max, height: 1080, refreshRate: 60, hiDPI: true).isValid)
+        XCTAssertFalse(StreamingDisplayModes.forStream(width: .max, height: 1080, fps: 60).isValid)
+    }
+
+    func testAnInvalidModeMakesNoDisplay() {
+        let manager = VideoManager()
+        var result: CGDirectDisplayID?? = .none
+        manager.createStreamingDisplay(mode: .init(width: -5, height: 1080, refreshRate: 60)) { result = $0 }
+        XCTAssertEqual(result, .some(nil))
+        XCTAssertTrue(manager.streamingDisplays.isEmpty)
+    }
+
     func testArrangementPutsBackOnlyMirrorsOntoMastersStillOnline() {
         let arrangement = DisplayArrangement(origins: [1: .zero], mirrorMasters: [1: 0, 2: 1, 3: 9, 4: 0, 5: 1])
         // 2 and 3 have since been extended, 4 mirrored onto 1; 9 has gone; 5 is left out.

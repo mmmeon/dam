@@ -25,6 +25,11 @@ enum StreamingDisplayModes {
     ]
     static let refreshRates = [60, 30, 120]
 
+    /// The most pixels a streaming display is made with on either side (8K), and its highest
+    /// rate, whatever a stream asks for.
+    static let largestSide = 8192
+    static let highestRefreshRate = 480
+
     /// A mode a streaming display comes up in.
     struct Mode: Equatable {
         var width: Int
@@ -38,6 +43,14 @@ enum StreamingDisplayModes {
 
         /// Taller than wide.
         var isPortrait: Bool { height > width }
+
+        /// Whether a display can be made in it: every side from 1 to `largestSide` pixels, the
+        /// rate from 1 to `highestRefreshRate`. Asked before anything is worked out from it.
+        var isValid: Bool {
+            let side = 1...StreamingDisplayModes.largestSide
+            return side.contains(width) && side.contains(height) && side.contains(pixelWidth)
+                && side.contains(pixelHeight) && (1...StreamingDisplayModes.highestRefreshRate).contains(refreshRate)
+        }
 
         /// The same mode turned by `rotation`: on its side, its width and height trade places.
         func rotated(_ rotation: DisplayRotation) -> Mode {
@@ -361,7 +374,8 @@ extension VideoManager {
                                      identity: StreamingIdentity?, main: Bool,
                                      completion: ((CGDirectDisplayID?) -> Void)?) {
         let used = Set(streamingDisplays.map(\.index))
-        guard let index = (0..<Self.maxStreamingDisplays).first(where: { !used.contains($0) }) else {
+        guard mode.isValid, let index = (0..<Self.maxStreamingDisplays).first(where: { !used.contains($0) }) else {
+            if !mode.isValid { sdLog.error("add: no display can be made at \(mode.width)×\(mode.height)@\(mode.refreshRate)") }
             completion?(nil)
             return
         }
@@ -500,7 +514,7 @@ extension VideoManager {
     /// WindowServer lists it, putting the others back as they were.
     private func resizeStreamingDisplay(id: CGDirectDisplayID, mode: StreamingDisplayModes.Mode,
                                         completion: @escaping (Bool) -> Void) {
-        guard id != 0, let i = streamingDisplays.firstIndex(where: { $0.id == id }),
+        guard id != 0, mode.isValid, let i = streamingDisplays.firstIndex(where: { $0.id == id }),
               let vd = streamingDisplays[i].display as? CGVirtualDisplay,
               mode.pixelWidth <= Int(vd.maxPixelsWide), mode.pixelHeight <= Int(vd.maxPixelsHigh) else {
             return completion(false)
