@@ -289,8 +289,8 @@ final class SettingsWindowController: NSWindowController {
             ("Pickers:", [
                 checkbox(title: "Open on the current choice",
                          isOn: VisibilityPreferences.pickerStartsOnCurrent,
-                         help: "The audio, mirror and main display pickers open on what is " +
-                               "current. Unchecked, they open on the next choice, so a single " +
+                         help: "The audio, mirror, main display, resolution and rotation pickers " +
+                               "open on what is current. Unchecked, they open on the next choice, so a single " +
                                "press followed by the pause moves on.",
                          action: { VisibilityPreferences.pickerStartsOnCurrent = $0 }),
                 pickDelayRow(),

@@ -12,6 +12,11 @@
 import AppKit
 import Carbon.HIToolbox
 
+extension HUDHint {
+    /// What a picker's hint says while it is open.
+    static let picking = HUDHint(leading: "Hotkey for next, or press a number", trailing: "Esc to cancel")
+}
+
 final class ChoicePicker: NSObject {
 
     /// Where a picker opens for the choice that is current now: on it, or on the one after
@@ -19,6 +24,17 @@ final class ChoicePicker: NSObject {
     static func startCursor(current: Int, count: Int) -> Int {
         guard count > 0 else { return 0 }
         return VisibilityPreferences.pickerStartsOnCurrent ? current : (current + 1) % count
+    }
+
+    /// The display under the pointer, for a picker that changes it; nil when there is none,
+    /// or, announced, when it mirrors an iPad's anchor, whose settings it follows.
+    static func displayUnderPointer(in vm: VideoManager) -> DisplayInfo? {
+        guard let display = vm.displayUnderPointer() else { return nil }
+        if let master = vm.anchoredMaster(of: display) {
+            SpeechSynthesizer.shared.announce(Spoken.follows(display.label, master.label))
+            return nil
+        }
+        return display
     }
 
     private let idPrefix: String
@@ -48,7 +64,7 @@ final class ChoicePicker: NSObject {
     private var globalMonitor: Any?
 
     /// `idPrefix` keeps the Touch Bar item identifiers of one picker apart from another's.
-    init(idPrefix: String, pickingHint: HUDHint, pickedHint: @escaping (String) -> HUDHint) {
+    init(idPrefix: String, pickingHint: HUDHint = .picking, pickedHint: @escaping (String) -> HUDHint) {
         self.idPrefix    = idPrefix
         self.pickingHint = pickingHint
         self.pickedHint  = pickedHint
@@ -56,7 +72,7 @@ final class ChoicePicker: NSObject {
     }
 
     /// Whether a hotkey press should move the cursor rather than open the picker anew.
-    var isCycling: Bool { isOpen && !isFinishing }
+    private var isCycling: Bool { isOpen && !isFinishing }
 
     // MARK: - Showing
 
@@ -85,10 +101,16 @@ final class ChoicePicker: NSObject {
         restartPickTimer()
     }
 
-    /// Moves the cursor to the next choice, wrapping round.
-    func advance() {
-        guard isCycling else { return }
+    /// For a hotkey press: moves the cursor to the next choice, wrapping round, when the
+    /// picker is open and returns true; else closes what is left of it (a pick fading out)
+    /// and returns false, for the owner to open it anew.
+    func advanceIfOpen() -> Bool {
+        guard isCycling else {
+            close()
+            return false
+        }
         move(to: (cursor + 1) % choices.count)
+        return true
     }
 
     private var content: HUDContentView? { panel?.contentView as? HUDContentView }
@@ -265,8 +287,17 @@ extension ChoicePicker: NSTouchBarDelegate {
 
 #if DEBUG
 extension ChoicePicker {
+    /// Opens the picker on `samples`, steps the cursor once, then lets it pick after the
+    /// pause, silently, changing nothing.
+    func playPreview(_ samples: [String]) {
+        open(choices: samples, cursor: 1, preview: true) { _ in }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+            self?.previewMove(to: 2)
+        }
+    }
+
     /// Steps a preview's cursor, as a hotkey press would, unless the preview has ended.
-    func previewMove(to index: Int) {
+    private func previewMove(to index: Int) {
         guard isPreview, isCycling else { return }
         move(to: index)
     }
