@@ -156,6 +156,8 @@ final class ControlServer {
         listenFD = fd
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: .main)
         source.setEventHandler { [weak self] in self?.accept() }
+        // A source's descriptor is closed only once it has been cancelled.
+        source.setCancelHandler { close(fd) }
         source.resume()
         acceptSource = source
         csLog.debug("listening on \(self.path)")
@@ -164,13 +166,9 @@ final class ControlServer {
     func stop() {
         acceptSource?.cancel()
         acceptSource = nil
-        for (fd, client) in clients {
-            client.source.cancel()
-            close(fd)
-        }
+        clients.values.forEach { $0.source.cancel() }
         clients.removeAll()
         if listenFD >= 0 {
-            close(listenFD)
             listenFD = -1
             unlink(path)
         }
@@ -192,6 +190,7 @@ final class ControlServer {
             setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
             let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: .main)
             source.setEventHandler { [weak self] in self?.read(fd) }
+            source.setCancelHandler { close(fd) }
             clients[fd] = (source, Data())
             source.resume()
         }
@@ -209,21 +208,23 @@ final class ControlServer {
             if data.count > Self.maxRequest { drop(fd) }
             return
         }
-        // One request a connection: stop reading, answer, close.
+        // One request a connection: stop reading, answer on a descriptor of the answer's
+        // own (the source's goes with it), close.
+        let answer = dup(fd)
         clients[fd]?.source.cancel()
         clients[fd] = nil
+        guard answer >= 0 else { return }
         let line = data[data.startIndex..<newline]
         guard let request = try? JSONDecoder().decode(ControlRequest.self, from: line) else {
-            return Self.reply(.failure("That request couldn't be read."), to: fd)
+            return Self.reply(.failure("That request couldn't be read."), to: answer)
         }
         csLog.debug("request: \(request.command)")
-        handler(request) { Self.reply($0, to: fd) }
+        handler(request) { Self.reply($0, to: answer) }
     }
 
     private func drop(_ fd: Int32) {
         clients[fd]?.source.cancel()
         clients[fd] = nil
-        close(fd)
     }
 
     private static func reply(_ response: ControlResponse, to fd: Int32) {

@@ -35,6 +35,32 @@ final class MoonlightProtocolTests: XCTestCase {
         XCTAssertNil(MoonlightStreamConfig.parse(sdp: announce.replacingOccurrences(of: "clientViewportWd", with: "x")))
     }
 
+    /// Values that would overflow or trap further on are refused, or brought into range.
+    func testRefusesOrBoundsSettingsNoClientWouldAnnounce() throws {
+        func parse(_ attribute: String, _ value: String) -> MoonlightStreamConfig? {
+            let line = announce.components(separatedBy: "\n").first { $0.hasPrefix("a=\(attribute):") }
+            return MoonlightStreamConfig.parse(sdp: line.map { announce.replacingOccurrences(of: $0, with: "a=\(attribute):\(value) \r") }
+                                                    ?? announce + "a=\(attribute):\(value) \r\n")
+        }
+        for (attribute, value) in [("x-nv-video[0].clientViewportWd", "0"), ("x-nv-video[0].clientViewportHt", "-1"),
+                                   ("x-nv-video[0].clientViewportWd", "100000"), ("x-nv-video[0].maxFPS", "0"),
+                                   ("x-nv-video[0].maxFPS", "\(Int.max)"), ("x-nv-video[0].packetSize", "32"),
+                                   ("x-nv-video[0].packetSize", "65552"), ("x-nv-vqos[0].bw.maximumBitrateKbps", "-5"),
+                                   ("x-nv-vqos[0].bw.maximumBitrateKbps", "0")] {
+            XCTAssertNil(parse(attribute, value), "\(attribute) \(value)")
+        }
+        XCTAssertEqual(parse("x-nv-vqos[0].bw.maximumBitrateKbps", "\(Int.max / 2)")?.bitrateKbps, 1_000_000)
+        XCTAssertEqual(parse("x-nv-video[0].packetSize", "1024")?.packetSize, 1024)
+        XCTAssertEqual(parse("x-nv-video[0].maxFPS", "120")?.fps, 120)
+        XCTAssertEqual(parse("x-nv-aqos.packetDuration", "10")?.audioPacketDuration, 10)
+        for duration in ["-5", "0", "7", "100000"] {
+            XCTAssertEqual(parse("x-nv-aqos.packetDuration", duration)?.audioPacketDuration, 5, duration)
+        }
+        // The largest packet still makes frames whose last-packet length fits its field.
+        var packetizer = MoonlightPacketizer(packetSize: MoonlightStreamConfig.packetSizes.upperBound)
+        XCTAssertNotNil(packetizer.packets(for: Data(count: 70_000), isKeyFrame: true, timestamp: 0, latency: 0))
+    }
+
     // MARK: - Video packets
 
     private func le32(_ packet: Data, _ offset: Int) -> UInt32 {

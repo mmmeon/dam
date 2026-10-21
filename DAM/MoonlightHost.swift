@@ -141,15 +141,20 @@ final class MoonlightHost {
     let directory: URL
     /// Whether it advertises itself over Bonjour.
     let advertises: Bool
+    /// How many connections may be open, and how long each may take to ask, across all ports.
+    private let limits: MoonlightConnectionLimits
 
     /// GameStream's ports by default, which Moonlight tries first.
     init(httpPort: NWEndpoint.Port = 47989, httpsPort: NWEndpoint.Port = 47984, rtspPort: NWEndpoint.Port = 48010,
-         directory: URL = MoonlightHost.defaultDirectory, advertises: Bool = true) {
+         directory: URL = MoonlightHost.defaultDirectory, advertises: Bool = true,
+         limits: MoonlightConnectionLimits = MoonlightConnectionLimits()) {
         self.httpPort = httpPort
         self.httpsPort = httpsPort
         self.rtspPort = rtspPort
         self.directory = directory
         self.advertises = advertises
+        self.limits = limits
+        rtsps = (0..<Self.maxSessions).map { _ in MoonlightRTSP(limits: limits) }
     }
 
     private var identity: (key: SecKey, certificate: Data, secIdentity: SecIdentity)?
@@ -169,7 +174,7 @@ final class MoonlightHost {
     private var waitingForPIN: NWConnection?
     /// One handshake server per session, each on a port of its own: RTSP carries no token
     /// before SETUP to tell sessions apart by.
-    private let rtsps = (0..<MoonlightHost.maxSessions).map { _ in MoonlightRTSP() }
+    private let rtsps: [MoonlightRTSP]
 
     /// One device's launch, from /launch or /resume until /cancel, and its stream.
     private final class Session {
@@ -346,6 +351,7 @@ final class MoonlightHost {
     }
 
     private func accept(_ connection: NWConnection, secure: Bool) {
+        guard limits.admit(connection) else { return }
         connections[ObjectIdentifier(connection)] = connection
         connection.stateUpdateHandler = { [weak self, weak connection] state in
             guard let self, let connection else { return }
@@ -356,6 +362,7 @@ final class MoonlightHost {
                 connection.cancel()
             case .cancelled:
                 self.connections[ObjectIdentifier(connection)] = nil
+                self.limits.closed(connection)
                 if self.waitingForPIN === connection { self.abandonPairing() }
             default:
                 break
@@ -369,6 +376,7 @@ final class MoonlightHost {
             guard let self else { return }
             let buffer = buffer + (data ?? Data())
             if let end = buffer.range(of: Data("\r\n\r\n".utf8)) {
+                self.limits.received(connection)
                 let head = String(decoding: buffer[..<end.lowerBound], as: UTF8.self)
                 guard let request = Self.parse(head) else { return self.send(status: "400 Bad Request", to: connection) }
                 let certificate = secure ? Self.peerCertificate(of: connection) : nil
@@ -398,7 +406,8 @@ final class MoonlightHost {
         return leaf
     }
 
-    private static func address(_ endpoint: NWEndpoint?) -> String {
+    /// The IP address of `endpoint`, IPv4 written as IPv6 as plain IPv4, without a zone.
+    static func address(_ endpoint: NWEndpoint?) -> String {
         guard case .hostPort(let host, _) = endpoint else { return "" }
         var text = "\(host)"
         if let percent = text.firstIndex(of: "%") { text = String(text[..<percent]) }
@@ -497,16 +506,28 @@ final class MoonlightHost {
         let current = session(for: certificate)?.launch
         let appID = request.query["appid"].flatMap(Int.init) ?? current?.appID ?? Self.newDisplayAppID
         let address = Self.address(connection.currentPath?.localEndpoint)
+        let client = connection.currentPath?.remoteEndpoint ?? connection.endpoint
         let lowLatency = clients.first { $0.certificate == certificate }?.lowLatency ?? true
-        let encrypts = MoonlightStream.videoEncryption.offers(to: connection.currentPath?.remoteEndpoint ?? connection.endpoint)
+        let encryption = MoonlightStream.videoEncryption
         let answer = { [weak self] (launch: MoonlightLaunch) in
             guard let self else { return }
+            // Hosting stopped, or the device was unpaired, while a display was made for it.
+            guard self.isRunning, self.clients.contains(where: { $0.certificate == certificate }) else {
+                if launch.ownsDisplay, !self.sessions.contains(where: { $0.launch.displayID == launch.displayID }) {
+                    self.removeDisplay?(launch.displayID)
+                }
+                return self.reply(Self.xml(status: 503, message: "\(AppIdentity.name) is not hosting."), to: connection)
+            }
             var launch = launch
             launch.lowLatency = lowLatency
-            launch.offersEncryptedVideo = encrypts
+            launch.offersEncryptedVideo = encryption.offers(to: client)
+            launch.requiresEncryptedVideo = encryption == .always
+            launch.clientAddress = Self.address(client)
             if let session = self.session(for: certificate) {
                 session.stream?.stop()
                 session.stream = nil
+                // Another launch of the device's, answered first, may have made a display.
+                if session.launch.displayID != launch.displayID { self.letGo(of: session.launch, by: session) }
                 launch.slot = session.launch.slot
                 session.launch = launch
             } else {
@@ -526,7 +547,9 @@ final class MoonlightHost {
                                  resume ? "resume" : "gamesession": "1"]), to: connection)
         }
         let mode = (request.query["mode"] ?? "").split(separator: "x").compactMap { Int($0) }
-        let size = mode.count == 3 && mode[0] > 0 && mode[1] > 0 ? (mode[0], mode[1], max(mode[2], 30)) : nil
+        let sizes = MoonlightStreamConfig.sizes
+        let size = mode.count == 3 && sizes.contains(mode[0]) && sizes.contains(mode[1])
+            ? (mode[0], mode[1], min(max(mode[2], 30), MoonlightStreamConfig.rates.upperBound)) : nil
         let makeNew = { [weak self] in
             guard let self else { return }
             self.endLaunch(of: certificate)
@@ -552,9 +575,14 @@ final class MoonlightHost {
               DisplayArrangement.onlineDisplayIDs().contains(current.displayID) else { return makeNew() }
         mlLog.debug("\(resume ? "resume" : "launch", privacy: .public) on display \(current.displayID)")
         let reuse = { [weak self] in
+            guard let self else { return }
+            // Ended while the display changed size, and the display with it.
+            guard let session = self.session(for: certificate) else {
+                return self.reply(Self.xml(status: 503, message: "The stream ended."), to: connection)
+            }
             // Owned by now, should another device's launch have handed it on.
-            let owns = self?.session(for: certificate)?.launch.ownsDisplay ?? current.ownsDisplay
-            answer(MoonlightLaunch(appID: appID, displayID: current.displayID, key: key, keyID: keyID, ownsDisplay: owns))
+            answer(MoonlightLaunch(appID: appID, displayID: current.displayID, key: key, keyID: keyID,
+                                   ownsDisplay: session.launch.ownsDisplay))
         }
         // A display another device is streaming keeps its size.
         let shared = sessions.contains { $0.certificate != certificate && $0.launch.displayID == current.displayID }
@@ -575,11 +603,17 @@ final class MoonlightHost {
         let session = sessions.remove(at: index)
         session.stream?.stop()
         session.stream = nil
-        guard session.launch.ownsDisplay else { return }
-        if let heir = sessions.first(where: { $0.launch.displayID == session.launch.displayID }) {
+        letGo(of: session.launch, by: session)
+    }
+
+    /// Lets go of the display `launch` was made for, as `session` no longer streams it:
+    /// another device streaming it has it next, or it is removed.
+    private func letGo(of launch: MoonlightLaunch, by session: Session) {
+        guard launch.ownsDisplay else { return }
+        if let heir = sessions.first(where: { $0 !== session && $0.launch.displayID == launch.displayID }) {
             heir.launch.ownsDisplay = true
         } else {
-            removeDisplay?(session.launch.displayID)
+            removeDisplay?(launch.displayID)
         }
     }
 
@@ -587,6 +621,7 @@ final class MoonlightHost {
     /// not, or nil.
     private func startStream(_ launch: MoonlightLaunch, _ config: MoonlightStreamConfig) -> String? {
         guard let session = sessions.first(where: { $0.launch.sessionID == launch.sessionID }) else { return "No launch" }
+        guard !session.launch.announced else { return "Already started" }
         session.stream?.stop()
         session.stream = nil
         var config = config
@@ -594,7 +629,8 @@ final class MoonlightHost {
         do {
             let stream = try MoonlightStream(config: config, displayID: launch.displayID, key: launch.key,
                                              keyID: launch.keyID, pingPayload: launch.pingPayload,
-                                             connectData: launch.connectData, ports: launch.ports,
+                                             connectData: launch.connectData, clientAddress: launch.clientAddress,
+                                             ports: launch.ports,
                                              allowsInput: clients.first { $0.certificate == session.certificate }?.allowsInput ?? true)
             stream.onEnd = { [weak self, weak session, weak stream] reason in
                 guard let self, let session, let stream, session.stream === stream else { return }
@@ -603,6 +639,7 @@ final class MoonlightHost {
                 self.onChange?()
             }
             session.stream = stream
+            session.launch.announced = true
             stream.start()
             return nil
         } catch {
@@ -836,5 +873,54 @@ final class MoonlightHost {
                                                 attributes: [.posixPermissions: 0o700])
         try data.write(to: url, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    }
+}
+
+/// Keeps the host's TCP connections few and short: at most `maxTotal` open at once and
+/// `maxPerAddress` from one address, each closed unless its whole request has come within
+/// `deadline`. Only the wait for the request is timed; answering may take longer, as while
+/// the user types a PIN or a display is made. Used on the main queue.
+final class MoonlightConnectionLimits {
+    let maxTotal: Int
+    let maxPerAddress: Int
+    let deadline: TimeInterval
+    /// Each open connection's address, and which of them have yet to ask.
+    private var open: [ObjectIdentifier: String] = [:]
+    private var waiting: Set<ObjectIdentifier> = []
+
+    init(maxTotal: Int = 64, maxPerAddress: Int = 16, deadline: TimeInterval = 10) {
+        self.maxTotal = maxTotal
+        self.maxPerAddress = maxPerAddress
+        self.deadline = deadline
+    }
+
+    /// Whether `connection` may be served; it is cancelled if not. One that may counts
+    /// until `closed`.
+    func admit(_ connection: NWConnection) -> Bool {
+        let address = MoonlightHost.address(connection.endpoint)
+        guard open.count < maxTotal, open.values.filter({ $0 == address }).count < maxPerAddress else {
+            mlLog.error("connection from \(address, privacy: .public) refused: too many open")
+            connection.cancel()
+            return false
+        }
+        let id = ObjectIdentifier(connection)
+        open[id] = address
+        waiting.insert(id)
+        DispatchQueue.main.asyncAfter(deadline: .now() + deadline) { [weak self, weak connection] in
+            guard let self, let connection, self.waiting.contains(ObjectIdentifier(connection)) else { return }
+            mlLog.debug("connection from \(address, privacy: .public) closed: no request in time")
+            connection.cancel()
+        }
+        return true
+    }
+
+    /// `connection`'s request has come.
+    func received(_ connection: NWConnection) {
+        waiting.remove(ObjectIdentifier(connection))
+    }
+
+    func closed(_ connection: NWConnection) {
+        open[ObjectIdentifier(connection)] = nil
+        waiting.remove(ObjectIdentifier(connection))
     }
 }
