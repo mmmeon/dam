@@ -166,6 +166,58 @@ final class SidecarDisplayTests: XCTestCase {
         XCTAssertFalse(manager.allAirPlayDevices.contains { $0.cgDisplayID == online[0] })
     }
 
+    // MARK: - Anchor state
+
+    func testForgettingAnAnchorClearsWhatIsKeptForIt() {
+        let manager = VideoManager()
+        let vd = NSObject()
+        manager.virtualAnchorStore = ["iPad": vd, "TV": NSObject()]
+        manager.virtualAnchorCGIDs = ["iPad": 9, "TV": 8]
+        manager.virtualAnchorTargets = ["iPad": 3, "TV": 4]
+        manager.virtualAnchorArrangements = ["iPad": DisplayArrangement(origins: [1: .zero], mirrorMasters: [1: 0])]
+        manager.virtualAnchorModes = ["iPad": VideoManager.virtualMode(width: 1280, height: 720, refreshRate: 60)]
+        manager.virtualAnchorSettleDeadlines = ["iPad": Date()]
+        manager.anchorSetSlaves = ["iPad": [5], "TV": [6]]
+        manager.anchorPendingSlaves = ["iPad": [7]]
+        manager.sidecarNativeModes = [3: VideoManager.virtualMode(width: 1180, height: 820, refreshRate: 60)]
+
+        XCTAssertTrue(manager.forgetAnchor("iPad") === vd)
+        XCTAssertEqual(Array(manager.virtualAnchorStore.keys), ["TV"])
+        XCTAssertEqual(manager.virtualAnchorCGIDs, ["TV": 8])
+        XCTAssertEqual(manager.virtualAnchorTargets, ["TV": 4])
+        XCTAssertTrue(manager.virtualAnchorArrangements.isEmpty)
+        XCTAssertTrue(manager.virtualAnchorModes.isEmpty)
+        XCTAssertTrue(manager.virtualAnchorSettleDeadlines.isEmpty)
+        XCTAssertEqual(manager.anchorSetSlaves, ["TV": [6]])
+        XCTAssertTrue(manager.anchorPendingSlaves.isEmpty)
+        XCTAssertTrue(manager.sidecarNativeModes.isEmpty)
+    }
+
+    func testAMirrorChangeIsKeptInEveryAnchorsArrangement() {
+        let manager = VideoManager()
+        let captured = DisplayArrangement(origins: [1: .zero, 2: CGPoint(x: 1440, y: 0)], mirrorMasters: [1: 0, 2: 0])
+        manager.virtualAnchorArrangements = ["iPad": captured, "TV": captured.mirroring([2], on: 1)]
+        manager.anchorSetSlaves = ["iPad": [2, 5]]
+        manager.streamingSettle = (captured, Date.distantFuture)
+
+        manager.keepUserMirror([2], on: 1)
+        XCTAssertEqual(manager.virtualAnchorArrangements["iPad"]?.mirrorMasters, [1: 0, 2: 1])
+        XCTAssertEqual(manager.streamingSettle?.arrangement.mirrorMasters, [1: 0, 2: 1])
+        XCTAssertEqual(manager.anchorSetSlaves, ["iPad": [5]])
+
+        manager.keepUserMirror([2], on: 0)
+        XCTAssertEqual(manager.virtualAnchorArrangements["TV"]?.mirrorMasters, [1: 0, 2: 0])
+        XCTAssertEqual(manager.virtualAnchorArrangements["TV"]?.origins, captured.origins)
+    }
+
+    func testOnlyTheStandInAnAttemptMadeIsReleased() {
+        let manager = VideoManager()
+        let later = NSObject()
+        manager.bootstrapDisplay = later
+        manager.releaseBootstrapDisplay(NSObject())
+        XCTAssertTrue(manager.bootstrapDisplay === later)
+    }
+
     // MARK: - SidecarCore device identifiers
 
     /// Stands in for a SidecarCore device, whose identifier is an NSUUID.

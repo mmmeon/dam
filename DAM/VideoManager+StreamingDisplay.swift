@@ -507,10 +507,18 @@ extension VideoManager {
             sdLog.error("resize: applySettings failed")
             return completion(false)
         }
-        streamingDisplays[i].start = mode
+        // The layout kept after the last change holds its old size, which a reassert before
+        // the switch would put back.
+        streamingSettle?.arrangement.modes[id] = nil
         streamingChangeInFlight = true
         let before = activeStreamingSettle ?? DisplayArrangement.current()
-        switchStreamingDisplay(id, to: mode, before: before, attempt: 0, completion: completion)
+        switchStreamingDisplay(id, to: mode, before: before, attempt: 0) { [weak self] done in
+            // Only once it runs it: a rotation that failed goes back to the old one.
+            if done, let i = self?.streamingDisplays.firstIndex(where: { $0.id == id }) {
+                self?.streamingDisplays[i].start = mode
+            }
+            completion(done)
+        }
     }
 
     /// Turns streaming display `id` to `rotation`: resizes it to its mode turned the new way,
@@ -539,15 +547,15 @@ extension VideoManager {
     }
 
     /// Switches `id` to `mode` once WindowServer lists it, which takes a moment after a new
-    /// mode list; gives up after two seconds.
+    /// mode list; gives up after two seconds. `completion` runs before the next change starts.
     private func switchStreamingDisplay(_ id: CGDirectDisplayID, to mode: StreamingDisplayModes.Mode,
                                         before: DisplayArrangement, attempt: Int,
                                         completion: @escaping (Bool) -> Void) {
         guard let target = Self.displayMode(mode, of: id) else {
             guard attempt < 20, DisplayArrangement.onlineDisplayIDs().contains(id) else {
                 sdLog.error("resize: \(mode.width)×\(mode.height) never listed")
-                finishStreamingChange()
-                return completion(false)
+                completion(false)
+                return finishStreamingChange()
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
                 self?.switchStreamingDisplay(id, to: mode, before: before, attempt: attempt + 1, completion: completion)
@@ -556,28 +564,37 @@ extension VideoManager {
         }
         var config: CGDisplayConfigRef?
         guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else {
-            finishStreamingChange()
-            return completion(false)
+            completion(false)
+            return finishStreamingChange()
         }
         // WindowServer may mirror, move or resize the others for the new size.
-        CGConfigureDisplayMirrorOfDisplay(cfg, id, CGDirectDisplayID(0))
-        before.restore(in: cfg, excluding: [id])
-        before.restoreModes(in: cfg, excluding: [id])
-        CGConfigureDisplayWithDisplayMode(cfg, id, target, nil)
+        let mirrored = CGDisplayMirrorsDisplay(id) != 0
+        if mirrored { CGConfigureDisplayMirrorOfDisplay(cfg, id, CGDirectDisplayID(0)) }
+        let moved = before.restore(in: cfg, excluding: [id])
+        let othersResized = before.restoreModes(in: cfg, excluding: [id])
+        let switching = !(CGDisplayCopyDisplayMode(id).map { DisplayArrangement.sameMode($0, target) } ?? false)
+        if switching { CGConfigureDisplayWithDisplayMode(cfg, id, target, nil) }
         let origin = before.origins[id] ?? CGDisplayBounds(id).origin
         let resized = before.excluding(id).adding(id, origin: origin, mode: target)
+        let settle = { [weak self] (done: Bool) in
+            guard let self else { return completion(false) }
+            self.streamingSettle = (resized, Date().addingTimeInterval(5))
+            self.reassertStreamingLayout()
+            self.mergeDevices()
+            completion(done)
+            self.finishStreamingChange()
+        }
+        guard mirrored || moved || othersResized || switching else {
+            // A commit that changes nothing takes 10 s to return.
+            sdLog.debug("resize: already in \(mode.width)×\(mode.height)")
+            CGCancelDisplayConfiguration(cfg)
+            return settle(true)
+        }
         // For the session, as placing one is.
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        DispatchQueue.global(qos: .userInitiated).async {
             let err = CGCompleteDisplayConfiguration(cfg, .forSession)
             sdLog.debug("resize: CompleteDisplayConfiguration err=\(err.rawValue)")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                guard let self else { return completion(false) }
-                self.streamingSettle = (resized, Date().addingTimeInterval(5))
-                self.reassertStreamingLayout()
-                self.mergeDevices()
-                completion(err == .success)
-                self.finishStreamingChange()
-            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { settle(err == .success) }
         }
     }
 

@@ -813,8 +813,7 @@ final class ControlStripPresenter: NSObject {
             vm.setMode(mode, for: display.cgDisplayID)
             return 0
         }
-        vm.disableVirtualAnchor(for: display)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+        vm.disableVirtualAnchor(for: display) {
             vm.setMode(mode, for: display.cgDisplayID)
         }
         return 0.8
