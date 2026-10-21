@@ -157,6 +157,17 @@ final class StreamingDisplayTests: XCTestCase {
         XCTAssertEqual(changes, [2: 1, 4: 0])
     }
 
+    func testArrangementMovesOnlyDisplaysShowingTheirOwnDesktop() {
+        let arrangement = DisplayArrangement(origins: [1: .zero, 2: CGPoint(x: 1440, y: 0), 3: CGPoint(x: -1920, y: 0),
+                                                       4: CGPoint(x: 0, y: 900), 5: CGPoint(x: 0, y: -900)],
+                                             mirrorMasters: [1: 0, 2: 0, 3: 0, 4: 0, 5: 1])
+        // All moved since; 3 has been mirrored onto 1, 4 is left out, 5 was a mirror slave.
+        let live: [CGDirectDisplayID: CGDirectDisplayID] = [3: 1, 5: 1]
+        let changes = arrangement.originChanges(online: [1, 2, 3, 4, 5], excluding: [4], mirrorOf: { live[$0] ?? 0 },
+                                                originOf: { _ in CGPoint(x: 5000, y: 0) })
+        XCTAssertEqual(changes, [1: .zero, 2: CGPoint(x: 1440, y: 0)])
+    }
+
     // MARK: - Main display
 
     func testHandsMainBackToTheDisplayThatHadIt() {

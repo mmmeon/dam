@@ -116,17 +116,24 @@ struct DisplayArrangement {
     }
 
     /// Queues changes on `cfg` returning every still-online display — other than those in
-    /// `excluded`, or mirroring one of them — to its captured mirror state and position.
-    /// Returns whether anything was out of place.
+    /// `excluded`, or mirroring one of them — to its captured position and, with `mirrors`, its
+    /// captured mirror state. Without, mirroring is left as it is, but for `freeing`, displays
+    /// to take out of the set they are in (with `mirrors`, as captured if they were). A display
+    /// left mirroring is not moved. Returns whether anything was out of place.
     @discardableResult
-    func restore(in cfg: CGDisplayConfigRef, excluding excluded: Set<CGDirectDisplayID>) -> Bool {
-        let changes = mirrorChanges(online: Set(Self.onlineDisplayIDs()), excluding: excluded,
-                                    mirrorOf: { CGDisplayMirrorsDisplay($0) })
+    func restore(in cfg: CGDisplayConfigRef, excluding excluded: Set<CGDirectDisplayID>,
+                 mirrors: Bool = true, freeing: Set<CGDirectDisplayID> = []) -> Bool {
+        let online = Set(Self.onlineDisplayIDs())
+        var changes = mirrors ? mirrorChanges(online: online, excluding: excluded, mirrorOf: { CGDisplayMirrorsDisplay($0) }) : [:]
+        for id in freeing where online.contains(id) && changes[id] == nil && CGDisplayMirrorsDisplay(id) != 0 {
+            changes[id] = 0
+        }
         for (id, master) in changes {
             vdLog.debug("restore: display \(id) mirror master \(CGDisplayMirrorsDisplay(id)) → \(master)")
             CGConfigureDisplayMirrorOfDisplay(cfg, id, master)
         }
-        return restoreOrigins(in: cfg, excluding: excluded) || !changes.isEmpty
+        let moved = restoreOrigins(in: cfg, excluding: excluded, mirrorOf: { changes[$0] ?? CGDisplayMirrorsDisplay($0) })
+        return moved || !changes.isEmpty
     }
 
     /// The mirror master each of the `online` displays, mirroring as `mirrorOf` says, is to be
@@ -181,19 +188,30 @@ struct DisplayArrangement {
 
     /// Queues changes on `cfg` returning every still-online display that showed its own
     /// desktop — other than those in `excluded` — to its captured position. Returns whether
-    /// any display was out of place.
+    /// any display was out of place. `mirrorOf` says what each display mirrors once `cfg` is
+    /// committed; one mirroring then is not moved.
     @discardableResult
-    func restoreOrigins(in cfg: CGDisplayConfigRef, excluding excluded: Set<CGDirectDisplayID>) -> Bool {
-        let online = Set(Self.onlineDisplayIDs())
-        var moved = false
-        for (id, origin) in origins
-        where online.contains(id) && !excluded.contains(id) && mirrorMasters[id] == 0
-            && CGDisplayBounds(id).origin != origin {
+    func restoreOrigins(in cfg: CGDisplayConfigRef, excluding excluded: Set<CGDirectDisplayID>,
+                        mirrorOf: (CGDirectDisplayID) -> CGDirectDisplayID = { CGDisplayMirrorsDisplay($0) }) -> Bool {
+        let changes = originChanges(online: Set(Self.onlineDisplayIDs()), excluding: excluded,
+                                    mirrorOf: mirrorOf, originOf: { CGDisplayBounds($0).origin })
+        for (id, origin) in changes {
             vdLog.debug("restore: display \(id) origin \(CGDisplayBounds(id).origin.debugDescription) → \(origin.debugDescription)")
             CGConfigureDisplayOrigin(cfg, id, Int32(origin.x), Int32(origin.y))
-            moved = true
         }
-        return moved
+        return !changes.isEmpty
+    }
+
+    /// The captured origin each of the `online` displays sitting elsewhere (by `originOf`) is to
+    /// be given: those captured showing their own desktop that still do (by `mirrorOf`), and not
+    /// in `excluded`. A display that mirrors another sits where its master does.
+    func originChanges(online: Set<CGDirectDisplayID>, excluding excluded: Set<CGDirectDisplayID>,
+                       mirrorOf: (CGDirectDisplayID) -> CGDirectDisplayID,
+                       originOf: (CGDirectDisplayID) -> CGPoint) -> [CGDirectDisplayID: CGPoint] {
+        origins.filter { id, origin in
+            online.contains(id) && !excluded.contains(id) && mirrorMasters[id] == 0 && mirrorOf(id) == 0
+                && originOf(id) != origin
+        }
     }
 
     /// Puts the captured resolutions back after the display set has changed, for as long as
@@ -752,6 +770,7 @@ extension VideoManager {
         let arrangement = virtualAnchorArrangements[display.name]
         let setSlaves   = anchorSetSlaves[display.name] ?? []
         let changesBegun = displayChangesBegun
+        let settling = anchorSettling(display.name)
         // Keep the virtual display alive until the mirror is torn down: destroying the master
         // first leaves its slaves orphaned and lets WindowServer pick a new layout.
         let vd = forgetAnchor(display.name)
@@ -765,36 +784,58 @@ extension VideoManager {
             return
         }
         let online = Set(DisplayArrangement.onlineDisplayIDs())
+        var changed = false
         if airPlayCGID != 0 {
-            CGConfigureDisplayMirrorOfDisplay(cfg, airPlayCGID, CGDirectDisplayID(0))
             // The displays the user set to mirror the iPad go on mirroring it, without the anchor.
             for id in setSlaves where online.contains(id) && id != airPlayCGID {
                 CGConfigureDisplayMirrorOfDisplay(cfg, id, airPlayCGID)
+                changed = true
             }
         }
-        arrangement?.restore(in: cfg, excluding: Set([anchorID]).union(setSlaves))
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        // Its display, and any other WindowServer put in its set, leave it; mirroring as before
+        // the anchor came only while it settles (see anchorSettling(_:)).
+        let freed = Set(online.filter { anchorID != 0 && CGDisplayMirrorsDisplay($0) == anchorID && !setSlaves.contains($0) })
+            .union(airPlayCGID != 0 ? [airPlayCGID] : [])
+        let restored = (arrangement ?? DisplayArrangement(origins: [:], mirrorMasters: [:]))
+            .restore(in: cfg, excluding: Set([anchorID]).union(setSlaves), mirrors: settling, freeing: freed)
+        // Once the set has settled without the anchor, put the positions back if WindowServer's
+        // saved layout for that set moved them; not over a change made since, as when the
+        // release was the first step of a mirror.
+        let settle = { [weak self] in
+            withExtendedLifetime(vd) {}
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                self?.mergeDevices()
+                completion?()
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                guard let self, self.displayChangesBegun == changesBegun, !self.displayChangeInFlight else {
+                    vdLog.debug("disableVirtualAnchor: another change came since; positions left to it")
+                    return
+                }
+                arrangement?.reapplyOriginsPermanently()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.mergeDevices() }
+            }
+        }
+        guard changed || restored else {
+            // A commit that changes nothing takes 10 s to return.
+            vdLog.debug("disableVirtualAnchor: nothing to tear down")
+            CGCancelDisplayConfiguration(cfg)
+            return settle()
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
             let err = CGCompleteDisplayConfiguration(cfg, .forAppOnly)
             vdLog.debug("disableVirtualAnchor: teardown complete err=\(err.rawValue)")
-            DispatchQueue.main.async {
-                withExtendedLifetime(vd) {}
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                    self?.mergeDevices()
-                    completion?()
-                }
-                // Once the set has settled without the anchor, put the positions back if
-                // WindowServer's saved layout for that set moved them; not over a change made
-                // since, as when the release was the first step of a mirror.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-                    guard let self, self.displayChangesBegun == changesBegun, !self.displayChangeInFlight else {
-                        vdLog.debug("disableVirtualAnchor: another change came since; positions left to it")
-                        return
-                    }
-                    arrangement?.reapplyOriginsPermanently()
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.mergeDevices() }
-                }
-            }
+            DispatchQueue.main.async(execute: settle)
         }
+    }
+
+    /// Whether the anchor filed under `name` is still settling (see anchorSettleWindow). Until
+    /// then the mirroring its coming disturbed is put back with the rest of the layout
+    /// captured before it; after, a mirror made or undone meanwhile, by WindowServer or in
+    /// System Settings, is no longer DAM's to undo: only displays pulled into the anchor's own
+    /// set are let go.
+    func anchorSettling(_ name: String) -> Bool {
+        (virtualAnchorSettleDeadlines[name] ?? .distantPast) > Date()
     }
 
     // MARK: - Sidecar
@@ -1281,8 +1322,9 @@ extension VideoManager {
     /// by CoreGraphics for the synthetic UUID is cosmetic; the APIs still work.
     ///
     /// Every display in the anchor's mirror set follows the mode change, so any display other
-    /// than `slaveID` that ended up mirroring the anchor is first returned to its captured
-    /// arrangement (or extended, if there's none) in the same transaction.
+    /// than `slaveID` that ended up mirroring the anchor is first let go in the same
+    /// transaction: while the anchor settles, back to its captured arrangement (or extended, if
+    /// there's none), and extended after (see anchorSettling(_:)).
     private func setModeOnVirtualAnchor(_ mode: DisplayMode, anchorID: CGDirectDisplayID,
                                         name: String, slaveID: CGDirectDisplayID) {
         guard anchorID != 0, let cgMode = anchorDisplayMode(mode, anchorID: anchorID) else { return }
@@ -1299,16 +1341,14 @@ extension VideoManager {
         let strays = DisplayArrangement.onlineDisplayIDs().filter {
             $0 != slaveID && CGDisplayMirrorsDisplay($0) == anchorID && !setSlaves.contains($0)
         }
-        for id in strays {
-            vdLog.debug("setModeOnVirtualAnchor: releasing display \(id) from the anchor's mirror set")
-            CGConfigureDisplayMirrorOfDisplay(cfg, id, CGDirectDisplayID(0))
-        }
+        if !strays.isEmpty { vdLog.debug("setModeOnVirtualAnchor: releasing displays \(strays) from the anchor's mirror set") }
         // Not the displays the user set to mirror the iPad: the arrangement is from before.
-        let restored = virtualAnchorArrangements[name]?
-            .restore(in: cfg, excluding: Set([anchorID, slaveID]).union(setSlaves)) ?? false
+        let restored = (virtualAnchorArrangements[name] ?? DisplayArrangement(origins: [:], mirrorMasters: [:]))
+            .restore(in: cfg, excluding: Set([anchorID, slaveID]).union(setSlaves),
+                     mirrors: anchorSettling(name), freeing: Set(strays))
         let switching = !(CGDisplayCopyDisplayMode(anchorID).map { DisplayArrangement.sameMode($0, cgMode) } ?? false)
         if switching { CGConfigureDisplayWithDisplayMode(cfg, anchorID, cgMode, nil) }
-        guard switching || restored || !strays.isEmpty else {
+        guard switching || restored else {
             // A commit that changes nothing takes 10 s to return.
             vdLog.debug("setModeOnVirtualAnchor: already in place")
             CGCancelDisplayConfiguration(cfg)
