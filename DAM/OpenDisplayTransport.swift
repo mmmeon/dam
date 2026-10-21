@@ -22,6 +22,8 @@ protocol OpenDisplayChannel: AnyObject {
     var onClose: ((String) -> Void)? { get set }
     /// Bytes handed to `send` and not yet written out.
     var pendingBytes: Int { get }
+    /// Sends not yet written out.
+    var pendingSends: Int { get }
     var transport: OpenDisplayTransport { get }
     func start()
     func send(_ data: Data)
@@ -45,6 +47,7 @@ final class OpenDisplayTCPChannel: OpenDisplayChannel {
     private let connection: NWConnection
     private let lock = NSLock()
     private var pending = 0
+    private var sends = 0
     private var closed = false
 
     /// " at" the address dialed, for one not a Bonjour name; for the log.
@@ -67,6 +70,11 @@ final class OpenDisplayTCPChannel: OpenDisplayChannel {
     var pendingBytes: Int {
         lock.lock(); defer { lock.unlock() }
         return pending
+    }
+
+    var pendingSends: Int {
+        lock.lock(); defer { lock.unlock() }
+        return sends
     }
 
     func start() {
@@ -103,11 +111,13 @@ final class OpenDisplayTCPChannel: OpenDisplayChannel {
         lock.lock()
         guard !closed else { lock.unlock(); return }
         pending += data.count
+        sends += 1
         lock.unlock()
         connection.send(content: data, completion: .contentProcessed { [weak self] _ in
             guard let self else { return }
             self.lock.lock()
             self.pending -= data.count
+            self.sends -= 1
             self.lock.unlock()
         })
     }
@@ -161,6 +171,7 @@ final class OpenDisplaySocketChannel: OpenDisplayChannel {
     private let writes = DispatchQueue(label: "\(AppIdentity.bundleID).opendisplay.write", qos: .userInteractive)
     private let lock = NSLock()
     private var pending = 0
+    private var sends = 0
     private var closed = false
 
     init(connect: @escaping (@escaping (Result<Int32, Error>) -> Void) -> Void) {
@@ -170,6 +181,11 @@ final class OpenDisplaySocketChannel: OpenDisplayChannel {
     var pendingBytes: Int {
         lock.lock(); defer { lock.unlock() }
         return pending
+    }
+
+    var pendingSends: Int {
+        lock.lock(); defer { lock.unlock() }
+        return sends
     }
 
     func start() {
@@ -216,6 +232,7 @@ final class OpenDisplaySocketChannel: OpenDisplayChannel {
         lock.lock()
         guard !closed else { lock.unlock(); return }
         pending += data.count
+        sends += 1
         lock.unlock()
         writes.async { [weak self] in
             guard let self else { return }
@@ -226,6 +243,7 @@ final class OpenDisplaySocketChannel: OpenDisplayChannel {
             defer {
                 self.lock.lock()
                 self.pending -= data.count
+                self.sends -= 1
                 self.lock.unlock()
             }
             guard !closed, fd >= 0 else { return }

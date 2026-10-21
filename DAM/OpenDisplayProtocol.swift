@@ -212,6 +212,26 @@ struct OpenDisplayHello: Equatable {
     }
 }
 
+/// How this end is doing, told the receiver with each ping for its overlay: frames dropped
+/// by the encoder and for a backed-up connection so far, sends not yet written out, the
+/// capture rate, and how long input took to arrive since the last ping, in milliseconds.
+struct OpenDisplayHealth: Equatable {
+    var capFps: Double?
+    var encDrops = 0
+    var netDrops = 0
+    var pending = 0
+    var inp50: Double?
+    var inp95: Double?
+
+    /// The value `fraction` of the way up `values`, the nearest one there; nil for none.
+    static func percentile(_ values: [Double], _ fraction: Double) -> Double? {
+        guard !values.isEmpty else { return nil }
+        let sorted = values.sorted()
+        let rank = Int((fraction * Double(sorted.count)).rounded(.up)) - 1
+        return sorted[min(max(rank, 0), sorted.count - 1)]
+    }
+}
+
 /// A message from a receiver.
 enum OpenDisplayMessage: Equatable {
     enum Phase: String { case began, moved, ended, cancelled }
@@ -219,12 +239,13 @@ enum OpenDisplayMessage: Equatable {
     case hello(OpenDisplayHello)
     /// The receiver's clock, in milliseconds since 1970, to echo back.
     case ping(t: Double)
-    /// A finger, at a normalized point of the video.
-    case touch(Phase, x: Double, y: Double)
+    /// A finger, at a normalized point of the video; `t` when it touched, on this end's
+    /// clock, once the receiver knows the two clocks' offset.
+    case touch(Phase, x: Double, y: Double, t: Double? = nil)
     /// Two fingers scrolling, in video pixels, content following them.
     case scroll(dx: Double, dy: Double)
-    /// The stylus; "down", "move", "up" or "hover".
-    case pencil(String, x: Double, y: Double)
+    /// The stylus; "down", "move", "up" or "hover"; `t` as a finger's.
+    case pencil(String, x: Double, y: Double, t: Double? = nil)
     case keyFrame
     /// The first pointer datagram arrived.
     case cursorAck
@@ -250,13 +271,13 @@ enum OpenDisplayMessage: Equatable {
         case "touch":
             guard let phase = (json["phase"] as? String).flatMap(Phase.init(rawValue:)),
                   let x = number("x"), let y = number("y") else { return .other(type) }
-            return .touch(phase, x: x, y: y)
+            return .touch(phase, x: x, y: y, t: number("t"))
         case "scroll":
             guard let dx = number("dx"), let dy = number("dy") else { return .other(type) }
             return .scroll(dx: dx, dy: dy)
         case "pencil":
             guard let phase = json["phase"] as? String, let x = number("x"), let y = number("y") else { return .other(type) }
-            return .pencil(phase, x: x, y: y)
+            return .pencil(phase, x: x, y: y, t: number("t"))
         case "kf":
             return .keyFrame
         case "cursorAck":
@@ -285,9 +306,12 @@ enum OpenDisplayReply {
         OpenDisplayWire.control(["type": "pong", "t": t, "mt": OpenDisplayWire.nowMs()])
     }
 
-    static func ping(capFps: Double?, netDrops: Int) -> Data? {
-        var object: [String: Any] = ["type": "ping", "netDrops": netDrops]
-        if let capFps { object["capFps"] = (capFps * 10).rounded() / 10 }
+    static func ping(_ health: OpenDisplayHealth) -> Data? {
+        var object: [String: Any] = ["type": "ping", "encDrops": health.encDrops, "netDrops": health.netDrops,
+                                     "drops": health.encDrops + health.netDrops, "pending": health.pending]
+        if let capFps = health.capFps { object["capFps"] = (capFps * 10).rounded() / 10 }
+        if let inp50 = health.inp50 { object["inp50"] = inp50.rounded() }
+        if let inp95 = health.inp95 { object["inp95"] = inp95.rounded() }
         return OpenDisplayWire.control(object)
     }
 
@@ -341,14 +365,14 @@ enum OpenDisplayTouches {
             return .moveTo(x: clamp(x), y: clamp(y), width: Self.grid, height: Self.grid)
         }
         switch message {
-        case let .touch(phase, x, y):
+        case let .touch(phase, x, y, _):
             switch phase {
             case .began: return [at(x, y), .button(1, down: true)]
             case .moved: return [at(x, y)]
             case .ended: return [at(x, y), .button(1, down: false)]
             case .cancelled: return [.button(1, down: false)]
             }
-        case let .pencil(phase, x, y):
+        case let .pencil(phase, x, y, _):
             // As a finger, the stylus hovering moving the pointer only.
             switch phase {
             case "down":

@@ -40,9 +40,22 @@ final class OpenDisplaySender {
         set { UserDefaults.dam.set(newValue, forKey: enabledKey) }
     }
 
+    /// The video's bitrate; a change goes to the streams under way at once.
     static var bitrateKbps: Int {
-        let set = UserDefaults.dam.integer(forKey: bitrateKey)
-        return set > 0 ? set : 20_000
+        get {
+            let set = UserDefaults.dam.integer(forKey: bitrateKey)
+            return set > 0 ? set : 20_000
+        }
+        set { UserDefaults.dam.set(newValue, forKey: bitrateKey) }
+    }
+
+    /// The bitrates Settings offers, in kbit/s.
+    static let bitrateChoices = [10_000, 15_000, 20_000, 30_000, 40_000, 60_000]
+
+    /// Sets the bitrate, for the streams under way too.
+    func setBitrate(kbps: Int) {
+        Self.bitrateKbps = kbps
+        for session in sessions.values { session.bitrateChanged() }
     }
 
     /// Whether the pointer may go over UDP where a receiver offers it; on unless set off,
@@ -389,6 +402,10 @@ final class OpenDisplaySession {
     private var lastFrame: (buffer: CVPixelBuffer, time: CMTime)?
     private var netDrops = 0
     private var captured = 0
+    /// Frames dropped by encoders this session had before the one it has.
+    private var earlierEncDrops = 0
+    /// How long input took to arrive since the last ping, in milliseconds.
+    private var inputDelays: [Double] = []
 
     init(key: String, name: String, sender: OpenDisplaySender) {
         self.key = key
@@ -530,6 +547,9 @@ final class OpenDisplaySession {
                 cursorAcked = true
                 odLog.debug("\(self.name, privacy: .public): pointer over UDP")
             }
+        case .touch(_, _, _, let t?), .pencil(_, _, _, let t?):
+            if inputDelays.count < 1000 { inputDelays.append(max(Double(OpenDisplayWire.nowMs()) - t, 0)) }
+            injector?.handle(OpenDisplayTouches.events(for: message))
         case .touch, .pencil:
             injector?.handle(OpenDisplayTouches.events(for: message))
         case let .scroll(dx, dy):
@@ -646,6 +666,7 @@ final class OpenDisplaySession {
         injector?.close()
         injector = nil
         lock.lock()
+        earlierEncDrops += encoder?.droppedFrames ?? 0
         encoder = nil
         lastFrame = nil
         lock.unlock()
@@ -707,6 +728,14 @@ final class OpenDisplaySession {
         link.send(OpenDisplayWire.video(frame.data, capturedMs: sent - age, sentMs: sent))
     }
 
+    /// Takes up a new bitrate setting.
+    func bitrateChanged() {
+        lock.lock()
+        let encoder = self.encoder
+        lock.unlock()
+        encoder?.setBitrate(kbps: OpenDisplaySender.bitrateKbps)
+    }
+
     private func requestKeyFrameWhenDrained() {
         lock.lock()
         let pending = sendLink?.pendingBytes ?? 0
@@ -744,11 +773,15 @@ final class OpenDisplaySession {
                 return lose(link, "nothing from the receiver for \(Int(OpenDisplayWire.silenceLimit)) s")
             }
             lock.lock()
-            let drops = netDrops
-            let frames = captured
+            var health = OpenDisplayHealth(capFps: Double(captured) / OpenDisplayWire.pingInterval,
+                                           encDrops: earlierEncDrops + (encoder?.droppedFrames ?? 0),
+                                           netDrops: netDrops, pending: sendLink?.pendingSends ?? 0)
             captured = 0
             lock.unlock()
-            send(OpenDisplayReply.ping(capFps: Double(frames) / OpenDisplayWire.pingInterval, netDrops: drops))
+            health.inp50 = OpenDisplayHealth.percentile(inputDelays, 0.5)
+            health.inp95 = OpenDisplayHealth.percentile(inputDelays, 0.95)
+            inputDelays = []
+            send(OpenDisplayReply.ping(health))
         } else if let lostAt, Date().timeIntervalSince(lostAt) > Self.grace {
             end(reason: "the receiver didn't come back")
         }

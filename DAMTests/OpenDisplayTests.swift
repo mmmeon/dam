@@ -134,7 +134,9 @@ final class OpenDisplayTests: XCTestCase {
     func testReceiverMessages() {
         XCTAssertEqual(OpenDisplayMessage.parse(Data(#"{"type":"ping","t":1712345678901}"#.utf8)), .ping(t: 1712345678901))
         XCTAssertEqual(OpenDisplayMessage.parse(Data(#"{"type":"touch","phase":"began","x":0.5,"y":0.25,"t":3}"#.utf8)),
-                       .touch(.began, x: 0.5, y: 0.25))
+                       .touch(.began, x: 0.5, y: 0.25, t: 3))
+        XCTAssertEqual(OpenDisplayMessage.parse(Data(#"{"type":"pencil","phase":"move","x":0.5,"y":0.25,"t":7}"#.utf8)),
+                       .pencil("move", x: 0.5, y: 0.25, t: 7))
         XCTAssertEqual(OpenDisplayMessage.parse(Data(#"{"type":"scroll","dx":-3,"dy":12.5}"#.utf8)), .scroll(dx: -3, dy: 12.5))
         XCTAssertEqual(OpenDisplayMessage.parse(Data(#"{"type":"kf"}"#.utf8)), .keyFrame)
         XCTAssertEqual(OpenDisplayMessage.parse(Data(#"{"type":"closing"}"#.utf8)), .closing)
@@ -144,6 +146,29 @@ final class OpenDisplayTests: XCTestCase {
         // Not JSON, or no type: ignored, not fatal.
         XCTAssertNil(OpenDisplayMessage.parse(Data("hello".utf8)))
         XCTAssertNil(OpenDisplayMessage.parse(Data(#"{"phase":"began"}"#.utf8)))
+    }
+
+    func testPingsCarryTheSendersHealth() throws {
+        var health = OpenDisplayHealth(capFps: 59.96, encDrops: 2, netDrops: 3, pending: 4)
+        health.inp50 = 12.4
+        let ping = try XCTUnwrap(OpenDisplayReply.ping(health))
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: ping.dropFirst(4)) as? [String: Any])
+        XCTAssertEqual(json["type"] as? String, "ping")
+        XCTAssertEqual(json["capFps"] as? Double, 60)
+        XCTAssertEqual(json["encDrops"] as? Int, 2)
+        XCTAssertEqual(json["netDrops"] as? Int, 3)
+        XCTAssertEqual(json["drops"] as? Int, 5)
+        XCTAssertEqual(json["pending"] as? Int, 4)
+        XCTAssertEqual(json["inp50"] as? Double, 12)
+        XCTAssertNil(json["inp95"], "no input, no latency")
+    }
+
+    func testPercentiles() {
+        XCTAssertNil(OpenDisplayHealth.percentile([], 0.5))
+        XCTAssertEqual(OpenDisplayHealth.percentile([7], 0.95), 7)
+        let values = (1...100).map(Double.init).shuffled()
+        XCTAssertEqual(OpenDisplayHealth.percentile(values, 0.5), 50)
+        XCTAssertEqual(OpenDisplayHealth.percentile(values, 0.95), 95)
     }
 
     func testTouchesBecomeClicksAndDrags() {

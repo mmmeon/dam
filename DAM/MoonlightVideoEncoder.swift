@@ -105,6 +105,8 @@ final class MoonlightVideoEncoder {
     private var keyFrameRequested = true
     /// Frames given to the encoder and not yet handed back; under `lock`.
     private var pending = 0
+    /// Frames the encoder dropped or failed on; under `lock`.
+    private var dropped = 0
     /// Counts frames given to the encoder, to tell whether another came after one; on the encoding thread.
     private var submissions = 0
     /// The last time given to the encoder, which needs them to rise; on the encoding thread.
@@ -216,14 +218,22 @@ final class MoonlightVideoEncoder {
         lock.unlock()
     }
 
+    /// Frames given to `encode` that never came out: passed over for a newer one, or dropped
+    /// or failed on by the encoder.
+    var droppedFrames: Int {
+        lock.lock(); defer { lock.unlock() }
+        return dropped
+    }
+
     /// Puts `buffer` in the slot, in place of any frame not yet taken (or, for a steady
     /// stream, behind it), and returns at once.
     func encode(_ buffer: CVPixelBuffer, at time: CMTime) {
         lock.lock()
         if settings.steady {
             waiting.append((buffer, time))
-            if waiting.count > 4 { waiting.removeFirst() }
+            if waiting.count > 4 { waiting.removeFirst(); dropped += 1 }
         } else {
+            dropped += waiting.count
             waiting = [(buffer, time)]
         }
         let start = !busy
@@ -281,6 +291,9 @@ final class MoonlightVideoEncoder {
             self.lock.unlock()
             guard status == noErr, !flags.contains(.frameDropped), let sample,
                   let (sets, _) = Self.parameterSets(sample), var units = Self.nalUnits(sample) else {
+                self.lock.lock()
+                self.dropped += 1
+                self.lock.unlock()
                 veLog.error("encode: \(status)")
                 if keyFrame { self.requestKeyFrame() }
                 return

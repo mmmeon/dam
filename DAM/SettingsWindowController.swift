@@ -722,12 +722,35 @@ final class SettingsWindowController: NSWindowController {
         let receivers: NSView = rows.isEmpty
             ? placeholderLabel(sender.isRunning ? "None found. Open OpenDisplay on the device." : "Turn sending on to look for them.")
             : grid
+        let bitrate = ClosurePopup(onSelect: { [weak sender] value in
+            guard let kbps = value.flatMap(Int.init) else { return }
+            sender?.setBitrate(kbps: kbps)
+        })
+        bitrate.controlSize = .small
+        bitrate.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        var choices = OpenDisplaySender.bitrateChoices
+        if !choices.contains(OpenDisplaySender.bitrateKbps) { choices = (choices + [OpenDisplaySender.bitrateKbps]).sorted() }
+        for kbps in choices {
+            let item = NSMenuItem(title: Self.mbitText(kbps), action: nil, keyEquivalent: "")
+            item.representedObject = String(kbps)
+            bitrate.menu?.addItem(item)
+            if kbps == OpenDisplaySender.bitrateKbps { bitrate.select(item) }
+        }
+        bitrate.toolTip = "The video's bitrate to each receiver. Higher is sharper in motion, and needs " +
+                          "more of the Wi-Fi; a cable has room for any of them. Takes effect at once."
         return formTab([
             ("Sending:", [send]),
+            ("Bitrate:", [bitrate]),
             ("Receivers:", [receivers,
                             smallNote("A receiver takes the newest sender, so DAM dials only those turned on. " +
                                       "Turning one on takes it from the OpenDisplay Mac app if that is streaming to it.")]),
         ], leftAligned: true)
+    }
+
+    /// "20 Mbit/s", or "12.5 Mbit/s" for a rate set outside Settings.
+    private static func mbitText(_ kbps: Int) -> String {
+        let mbit = Double(kbps) / 1000
+        return (mbit == mbit.rounded() ? String(Int(mbit)) : String(format: "%.1f", mbit)) + " Mbit/s"
     }
 
     /// Rebuilds the OpenDisplay page if what it shows of the receivers has changed.
