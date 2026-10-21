@@ -154,7 +154,12 @@ final class MoonlightHost {
         self.directory = directory
         self.advertises = advertises
         self.limits = limits
+        http = MoonlightHTTPConnections(limits: limits)
         rtsps = (0..<Self.maxSessions).map { _ in MoonlightRTSP(limits: limits) }
+        http.onRequest = { [weak self] head, connection, secure in self?.answer(head, on: connection, secure: secure) }
+        http.onClose = { [weak self] connection in
+            if let self, self.waitingForPIN === connection { self.abandonPairing() }
+        }
     }
 
     private var identity: (key: SecKey, certificate: Data, secIdentity: SecIdentity)?
@@ -166,8 +171,8 @@ final class MoonlightHost {
     private var closingListeners = 0
     /// Whether to start once they have.
     private var startWhenClosed = false
-    /// Connections being served, held until they end.
-    private var connections: [ObjectIdentifier: NWConnection] = [:]
+    /// The HTTP and HTTPS connections being served.
+    private let http: MoonlightHTTPConnections
     private var pairing: MoonlightPairing?
     private var pairingAddress = ""
     /// The first pairing request, answered once the user has typed the PIN.
@@ -265,7 +270,7 @@ final class MoonlightHost {
                 }
                 if listener === httpListener || listener === httpsListener {
                     listener.newConnectionHandler = { [weak self] connection in
-                        self?.accept(connection, secure: secure)
+                        self?.http.accept(connection, secure: secure)
                     }
                 }
                 listener.start(queue: .main)
@@ -300,7 +305,7 @@ final class MoonlightHost {
         listeners = []
         httpListener = nil
         readyListeners = []
-        connections.values.forEach { $0.cancel() }
+        http.closeAll()
         rtsps.forEach { $0.closeAll() }
         for session in sessions { endLaunch(of: session.certificate) }
         if let waiting = waitingForPIN {
@@ -365,50 +370,11 @@ final class MoonlightHost {
         let query: [String: String]
     }
 
-    private func accept(_ connection: NWConnection, secure: Bool) {
-        guard limits.admit(connection) else { return }
-        connections[ObjectIdentifier(connection)] = connection
-        connection.stateUpdateHandler = { [weak self, weak connection] state in
-            guard let self, let connection else { return }
-            switch state {
-            case .ready:
-                self.receive(on: connection, secure: secure, buffer: Data())
-            case .failed:
-                connection.cancel()
-            case .cancelled:
-                self.connections[ObjectIdentifier(connection)] = nil
-                self.limits.closed(connection)
-                if self.waitingForPIN === connection { self.abandonPairing() }
-            default:
-                break
-            }
-        }
-        connection.start(queue: .main)
-    }
-
-    private func receive(on connection: NWConnection, secure: Bool, buffer: Data) {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 16384) { [weak self] data, _, isComplete, error in
-            guard let self else { return }
-            let buffer = buffer + (data ?? Data())
-            if let end = buffer.range(of: Data("\r\n\r\n".utf8)) {
-                self.limits.received(connection)
-                let head = String(decoding: buffer[..<end.lowerBound], as: UTF8.self)
-                guard let request = Self.parse(head) else { return self.send(status: "400 Bad Request", to: connection) }
-                let certificate = secure ? Self.peerCertificate(of: connection) : nil
-                self.handle(request, on: connection, secure: secure, certificate: certificate)
-                return
-            }
-            guard !isComplete, error == nil, buffer.count < 16384 else { return connection.cancel() }
-            self.receive(on: connection, secure: secure, buffer: buffer)
-        }
-    }
-
-    private static func parse(_ head: String) -> Request? {
-        let parts = head.split(separator: "\r\n", maxSplits: 1).first?.split(separator: " ") ?? []
-        guard parts.count >= 2, parts[0] == "GET", let url = URLComponents(string: String(parts[1])) else { return nil }
-        var query: [String: String] = [:]
-        for item in url.queryItems ?? [] where query[item.name] == nil { query[item.name] = item.value ?? "" }
-        return Request(path: url.path, query: query)
+    /// Answers a request's head.
+    private func answer(_ head: String, on connection: NWConnection, secure: Bool) {
+        guard let parsed = MoonlightHTTPConnections.parse(head) else { return send(status: "400 Bad Request", to: connection) }
+        let certificate = secure ? Self.peerCertificate(of: connection) : nil
+        handle(Request(path: parsed.path, query: parsed.query), on: connection, secure: secure, certificate: certificate)
     }
 
     private static func peerCertificate(of connection: NWConnection) -> Data? {
@@ -793,9 +759,7 @@ final class MoonlightHost {
 
     private func send(status: String, contentType: String = "text/plain", body: Data = Data(),
                       to connection: NWConnection) {
-        let head = "HTTP/1.1 \(status)\r\nContent-Type: \(contentType)\r\nContent-Length: \(body.count)\r\n" +
-                   "Connection: close\r\n\r\n"
-        connection.send(content: Data(head.utf8) + body, completion: .contentProcessed { _ in connection.cancel() })
+        MoonlightHTTPConnections.send(status: status, contentType: contentType, body: body, to: connection)
     }
 
     // MARK: - Identity and storage
@@ -889,6 +853,91 @@ final class MoonlightHost {
                                                 attributes: [.posixPermissions: 0o700])
         try data.write(to: url, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    }
+}
+
+/// The HTTP both of DAM's web servers speak, the host's and the browser stream's: each
+/// connection admitted under `limits`, its request's head read and handed on, and answered
+/// once with `send`, which closes it. Used on the main queue.
+final class MoonlightHTTPConnections {
+    /// Called with a request's head, up to the blank line that ends it, and the connection
+    /// to answer on.
+    var onRequest: ((_ head: String, _ connection: NWConnection, _ secure: Bool) -> Void)?
+    /// Called once a connection has closed, answered or not.
+    var onClose: ((NWConnection) -> Void)?
+
+    let limits: MoonlightConnectionLimits
+    /// Connections open, held until they close.
+    private var open: [ObjectIdentifier: NWConnection] = [:]
+
+    init(limits: MoonlightConnectionLimits) {
+        self.limits = limits
+    }
+
+    func accept(_ connection: NWConnection, secure: Bool) {
+        guard limits.admit(connection) else { return }
+        open[ObjectIdentifier(connection)] = connection
+        connection.stateUpdateHandler = { [weak self, weak connection] state in
+            guard let self, let connection else { return }
+            switch state {
+            case .ready:
+                self.receive(on: connection, secure: secure, buffer: Data())
+            case .failed:
+                connection.cancel()
+            case .cancelled:
+                self.open[ObjectIdentifier(connection)] = nil
+                self.limits.closed(connection)
+                self.onClose?(connection)
+            default:
+                break
+            }
+        }
+        connection.start(queue: .main)
+    }
+
+    /// Closes every connection still open, answered or not.
+    func closeAll() {
+        open.values.forEach { $0.cancel() }
+    }
+
+    private func receive(on connection: NWConnection, secure: Bool, buffer: Data) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 16384) { [weak self] data, _, isComplete, error in
+            guard let self else { return }
+            let buffer = buffer + (data ?? Data())
+            if let end = buffer.range(of: Data("\r\n\r\n".utf8)) {
+                self.limits.received(connection)
+                self.onRequest?(String(decoding: buffer[..<end.lowerBound], as: UTF8.self), connection, secure)
+                return
+            }
+            guard !isComplete, error == nil, buffer.count < 16384 else { return connection.cancel() }
+            self.receive(on: connection, secure: secure, buffer: buffer)
+        }
+    }
+
+    /// A GET request's path, its query (the first value of each name) and its headers (by
+    /// name in lower case); nil for anything else.
+    static func parse(_ head: String) -> (path: String, query: [String: String], headers: [String: String])? {
+        var lines = head.components(separatedBy: "\r\n")
+        let parts = lines.removeFirst().split(separator: " ")
+        guard parts.count >= 2, parts[0] == "GET", let url = URLComponents(string: String(parts[1])) else { return nil }
+        var query: [String: String] = [:]
+        for item in url.queryItems ?? [] where query[item.name] == nil { query[item.name] = item.value ?? "" }
+        var headers: [String: String] = [:]
+        for line in lines {
+            guard let colon = line.firstIndex(of: ":") else { continue }
+            headers[line[..<colon].lowercased()] = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+        }
+        return (url.path, query, headers)
+    }
+
+    /// Answers `connection` and closes it once the answer is out; `headers` are whole lines
+    /// without their ends, after the content's type and length.
+    static func send(status: String, contentType: String, headers: [String] = [], body: Data,
+                     to connection: NWConnection) {
+        let head = "HTTP/1.1 \(status)\r\nContent-Type: \(contentType)\r\nContent-Length: \(body.count)\r\n" +
+                   headers.map { "\($0)\r\n" }.joined() +
+                   "Connection: close\r\n\r\n"
+        connection.send(content: Data(head.utf8) + body, completion: .contentProcessed { _ in connection.cancel() })
     }
 }
 
