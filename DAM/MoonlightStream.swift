@@ -57,6 +57,18 @@ enum LocalNetwork {
         return subnets.contains { $0.contains(bytes) }
     }
 
+    /// The Mac's own addresses, written as `MoonlightHost.address(_:)` writes them.
+    static func ownAddresses(subnets: [Subnet] = interfaceSubnets()) -> Set<String> {
+        Set(subnets.compactMap { subnet -> String? in
+            var bytes = subnet.address
+            // A link-local IPv6 address comes with its interface's index in its third and fourth bytes.
+            if bytes.count == 16, bytes[0] == 0xFE, bytes[1] & 0xC0 == 0x80 { bytes[2] = 0; bytes[3] = 0 }
+            let host: NWEndpoint.Host? = bytes.count == 4 ? IPv4Address(Data(bytes)).map { .ipv4($0) }
+                : IPv6Address(Data(bytes)).map { .ipv6($0) }
+            return host.map { MoonlightHost.address(.hostPort(host: $0, port: .any)) }
+        })
+    }
+
     /// The subnets of the interfaces that are up.
     static func interfaceSubnets() -> [Subnet] {
         var first: UnsafeMutablePointer<ifaddrs>?
@@ -164,6 +176,22 @@ final class MoonlightUDPSocket {
         closed = true
         Darwin.close(descriptor)
     }
+
+    /// Takes the client's pings (see MoonlightVideoSender.isPing) on a thread of its own,
+    /// named `name`, handing `ping` where each came from, until `isRunning` turns false;
+    /// then closes the socket.
+    func listenForPings(named name: String, payload: Data, client: in_addr?, while isRunning: @escaping () -> Bool,
+                        ping: @escaping (sockaddr_in) -> Void) {
+        Thread.detachNewThread { [self] in
+            Thread.current.name = name
+            while isRunning() {
+                guard let (data, from) = receive(timeout: 0.25) else { continue }
+                guard MoonlightVideoSender.isPing(data, from: from, payload: payload, client: client) else { continue }
+                ping(from)
+            }
+            close()
+        }
+    }
 }
 
 // MARK: - Video
@@ -205,6 +233,62 @@ final class MoonlightStreamStats {
         frames = 0; keyFrames = 0; videoPackets = 0; videoBytes = 0; videoRefused = 0
         audioPackets = 0; audioRefused = 0; keyFrameRequests = 0; coveredRequests = 0; rebuilt = 0; lost = 0
         return line
+    }
+}
+
+/// Asks a stream's encoder for keyframes, for whoever needs one: a client that lost packets,
+/// a viewer joining or catching up, the stream itself. Requests go through
+/// MoonlightKeyFrameRequests: at most one keyframe a quarter second, none for a request a
+/// keyframe on its way answers, and none for one held for later that a keyframe answered
+/// meanwhile. A keyframe is made from the picture the caller gives at once, such as the last
+/// one while the screen is still, which brings no next frame; else from the next frame.
+final class MoonlightKeyFrameRequester {
+    /// The encoder, and the picture to make the keyframe from now, nil for the next frame.
+    /// Called once for each keyframe asked of the encoder.
+    typealias Source = () -> (encoder: MoonlightVideoEncoder?, picture: (buffer: CVPixelBuffer, time: CMTime)?)
+
+    private let lock = NSLock()
+    private var requests = MoonlightKeyFrameRequests()
+    /// Where requests held for later are made again.
+    private let queue: DispatchQueue
+
+    init(retryingOn queue: DispatchQueue) {
+        self.queue = queue
+    }
+
+    /// A request now; `roundTrip` is the client's in nanoseconds, nil for any other (see
+    /// MoonlightKeyFrameRequests). `source` is called with no lock held.
+    @discardableResult
+    func request(roundTrip: UInt64? = nil, from source: @escaping Source) -> MoonlightKeyFrameRequests.Decision {
+        handle(roundTrip: roundTrip, retry: false, source: source)
+    }
+
+    /// A keyframe came out, asked for or not.
+    func keyFrameSent() {
+        lock.lock()
+        requests.keyFrameSent(at: DispatchTime.now().uptimeNanoseconds)
+        lock.unlock()
+    }
+
+    @discardableResult
+    private func handle(roundTrip: UInt64?, retry: Bool, source: @escaping Source) -> MoonlightKeyFrameRequests.Decision {
+        let now = DispatchTime.now().uptimeNanoseconds
+        lock.lock()
+        let decision = retry ? requests.retry(at: now, roundTrip: roundTrip) : requests.request(at: now, roundTrip: roundTrip)
+        lock.unlock()
+        switch decision {
+        case .now:
+            let (encoder, picture) = source()
+            encoder?.requestKeyFrame()
+            if let picture { encoder?.encode(picture.buffer, at: picture.time) }
+        case .later(let wait):
+            queue.asyncAfter(deadline: .now() + .nanoseconds(Int(wait))) { [weak self] in
+                self?.handle(roundTrip: roundTrip, retry: true, source: source)
+            }
+        case .alreadyDue, .covered:
+            break
+        }
+        return decision
     }
 }
 
@@ -268,21 +352,15 @@ final class MoonlightVideoSender {
     }
 
     func startListening() {
-        Thread.detachNewThread { [self] in
-            Thread.current.name = "Moonlight video pings"
-            while isRunning {
-                guard let (data, from) = socket.receive(timeout: 0.25) else { continue }
-                guard Self.isPing(data, from: from, payload: pingPayload, client: client) else { continue }
-                lock.lock()
-                let first = peer == nil
-                peer = from
-                lock.unlock()
-                if first {
-                    msLog.debug("video ping from \(Self.describe(from), privacy: .public)")
-                    onFirstPing?()
-                }
-            }
-            socket.close()
+        socket.listenForPings(named: "Moonlight video pings", payload: pingPayload, client: client,
+                              while: { self.isRunning }) { [self] from in
+            lock.lock()
+            let first = peer == nil
+            peer = from
+            lock.unlock()
+            guard first else { return }
+            msLog.debug("video ping from \(Self.describe(from), privacy: .public)")
+            onFirstPing?()
         }
     }
 
@@ -434,21 +512,15 @@ final class MoonlightAudioSender {
     }
 
     func startListening() {
-        Thread.detachNewThread { [self] in
-            Thread.current.name = "Moonlight audio pings"
-            while isRunning {
-                guard let (data, from) = socket.receive(timeout: 0.25) else { continue }
-                guard MoonlightVideoSender.isPing(data, from: from, payload: pingPayload, client: client) else { continue }
-                lock.lock()
-                let first = peer == nil
-                peer = from
-                lock.unlock()
-                if first {
-                    msLog.debug("audio ping from \(MoonlightVideoSender.describe(from), privacy: .public)")
-                    queue.async { self.startPacing() }
-                }
-            }
-            socket.close()
+        socket.listenForPings(named: "Moonlight audio pings", payload: pingPayload, client: client,
+                              while: { self.isRunning }) { [self] from in
+            lock.lock()
+            let first = peer == nil
+            peer = from
+            lock.unlock()
+            guard first else { return }
+            msLog.debug("audio ping from \(MoonlightVideoSender.describe(from), privacy: .public)")
+            queue.async { self.startPacing() }
         }
     }
 
@@ -700,7 +772,8 @@ final class MoonlightStream {
         set { UserDefaults.dam.set(newValue, forKey: adaptsBitrateKey) }
     }
 
-    /// Whether streams, Moonlight's and the browser's, show the pointer; from the next stream.
+    /// Whether Moonlight's streams show the pointer; from the next stream. The browser's
+    /// have their own setting (WebStreamServer.showsPointer).
     static var showsPointer: Bool {
         get { UserDefaults.dam.object(forKey: showsPointerKey) as? Bool ?? true }
         set { UserDefaults.dam.set(newValue, forKey: showsPointerKey) }
@@ -719,7 +792,7 @@ final class MoonlightStream {
     private var repeater: DispatchSourceTimer?
     private var ended = false
     private var inputAllowed: Bool
-    private var keyFrames = MoonlightKeyFrameRequests()
+    private let keyFrames = MoonlightKeyFrameRequester(retryingOn: .global(qos: .userInteractive))
     /// The bitrate, set from the client's losses; nil when `adaptsBitrate` is off, for the
     /// client's bitrate throughout.
     private var bitrate: MoonlightBitrateGovernor?
@@ -758,12 +831,7 @@ final class MoonlightStream {
             let covered = self.sendKeyFrame(roundTrip: roundTrip) == .covered
             self.video.stats.keyFrameRequested(covered: covered)
         }
-        video.onKeyFrameSent = { [weak self] in
-            guard let self else { return }
-            self.lock.lock()
-            self.keyFrames.keyFrameSent(at: DispatchTime.now().uptimeNanoseconds)
-            self.lock.unlock()
-        }
+        video.onKeyFrameSent = { [weak self] in self?.keyFrames.keyFrameSent() }
         control.onFrameStatus = { [weak self] status in
             guard let self else { return }
             self.video.stats.frameStatus(status)
@@ -784,9 +852,11 @@ final class MoonlightStream {
         }
         statsTimer = stats
         stats.resume()
+        // Whether input is allowed is checked where it is posted, so none that came before
+        // it was turned off goes after the release.
+        input.allowInput(allowsInput)
         control.onInput = { [weak self] payload in
-            guard let self, self.allowsInput else { return }
-            self.input.handle(MoonlightInput.parse(payload))
+            self?.input.handle(MoonlightInput.parse(payload))
         }
         control.onDisconnect = { [weak self] in self?.end("Moonlight disconnected") }
         video.onFirstPing = { [weak self] in self?.startPicture() }
@@ -811,11 +881,12 @@ final class MoonlightStream {
             lock.lock()
             inputAllowed = newValue
             lock.unlock()
-            if !newValue { input.releaseAll() }
+            input.allowInput(newValue)
         }
     }
 
-    /// Stops everything; Moonlight is told the host ended the stream.
+    /// Stops everything; Moonlight is told the host ended the stream. From any thread, more
+    /// than once: what it lets go is taken under the lock, so each goes once.
     func stop() {
         lock.lock()
         ended = true
@@ -824,6 +895,10 @@ final class MoonlightStream {
         repeater?.cancel()
         repeater = nil
         encoder = nil
+        let activity = self.activity
+        self.activity = nil
+        let timers = [statsTimer, bitrateTimer]
+        (statsTimer, bitrateTimer) = (nil, nil)
         lock.unlock()
         capture?.cancel()
         input.close()
@@ -831,11 +906,7 @@ final class MoonlightStream {
         video.stop()
         audio.stop()
         if let activity { ProcessInfo.processInfo.endActivity(activity) }
-        activity = nil
-        statsTimer?.cancel()
-        statsTimer = nil
-        bitrateTimer?.cancel()
-        bitrateTimer = nil
+        timers.forEach { $0?.cancel() }
     }
 
     /// Each second, sets the encoder's bitrate from the client's losses (see
@@ -940,33 +1011,17 @@ final class MoonlightStream {
         }
     }
 
-    /// The next frame as a keyframe, made from the last picture at once when the screen is
-    /// still and no new frame would come; no more than one a quarter second, and none for a
-    /// request a keyframe on its way answers (see MoonlightKeyFrameRequests). `roundTrip` is
+    /// The next frame as a keyframe, made from the last picture at once, so it never waits
+    /// for the screen to change, still or not (see MoonlightKeyFrameRequester). `roundTrip` is
     /// the client's for its requests, nil for the host's own.
     @discardableResult
     private func sendKeyFrame(roundTrip: UInt64?) -> MoonlightKeyFrameRequests.Decision {
-        lock.lock()
-        let decision = keyFrames.request(at: DispatchTime.now().uptimeNanoseconds, roundTrip: roundTrip)
-        switch decision {
-        case .now:
-            break
-        case .later(let wait):
-            lock.unlock()
-            DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + .nanoseconds(Int(wait))) {
-                [weak self] in self?.sendKeyFrame(roundTrip: roundTrip)
-            }
-            return decision
-        case .alreadyDue, .covered:
-            lock.unlock()
-            return decision
+        keyFrames.request(roundTrip: roundTrip) { [weak self] in
+            guard let self else { return (nil, nil) }
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            return (self.encoder, self.lastFrame.map { ($0.buffer, $0.time) })
         }
-        let encoder = self.encoder
-        let last = lastFrame
-        lock.unlock()
-        encoder?.requestKeyFrame()
-        if let last { encoder?.encode(last.buffer, at: last.time) }
-        return decision
     }
 
     /// Sends the last picture again while the screen is still, at most every half second,

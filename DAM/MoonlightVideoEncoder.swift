@@ -80,7 +80,7 @@ final class MoonlightVideoEncoder {
         var avcc: Data {
             var out = Data()
             for unit in units {
-                out.append(contentsOf: (0..<4).map { UInt8(unit.count >> (24 - 8 * $0) & 0xFF) })
+                out.append(bigEndian: UInt32(unit.count))
                 out.append(unit)
             }
             return out

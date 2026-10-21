@@ -210,6 +210,51 @@ final class SidecarDisplayTests: XCTestCase {
         XCTAssertEqual(manager.virtualAnchorArrangements["TV"]?.origins, captured.origins)
     }
 
+    func testAReleasedAnchorLeavesTheKeptLayoutsAsItsReleaseLeavesTheDisplays() {
+        // 5 is the anchor, 3 the iPad it drives, 7 set to mirror the iPad, 8 pulled in by WindowServer.
+        let captured = DisplayArrangement(origins: [1: .zero, 5: CGPoint(x: 1440, y: 0)],
+                                          mirrorMasters: [1: 0, 5: 0, 3: 5, 7: 5, 8: 5, 9: 1])
+        let released = captured.releasing(5, target: 3, setSlaves: [7])
+        XCTAssertEqual(released.mirrorMasters, [1: 0, 3: 0, 7: 3, 8: 0, 9: 1])
+        XCTAssertEqual(released.origins, [1: .zero])
+
+        let manager = VideoManager()
+        manager.virtualAnchorCGIDs = ["iPad": 5, "TV": 6]
+        manager.virtualAnchorTargets = ["iPad": 3, "TV": 4]
+        manager.anchorSetSlaves = ["iPad": [7]]
+        manager.virtualAnchorArrangements = ["TV": captured]
+        manager.streamingArrangement = captured
+        manager.forgetAnchor("iPad")
+        XCTAssertEqual(manager.streamingArrangement?.mirrorMasters, released.mirrorMasters)
+        XCTAssertEqual(manager.virtualAnchorArrangements["TV"]?.mirrorMasters, released.mirrorMasters)
+    }
+
+    func testEachAnchorHasItsOwnSerialTheFirstTheOneAnchorsHad() {
+        let serials = (0..<8).map(VideoManager.anchorSerial)
+        XCTAssertEqual(serials.first, 0x0002)
+        XCTAssertEqual(Set(serials).count, serials.count)
+        let streaming = (0..<VideoManager.maxStreamingDisplays).map(VideoManager.streamingSerial)
+        XCTAssertTrue(Set(serials).isDisjoint(with: streaming + [0x0003]))
+    }
+
+    func testAStreamingDisplayIsMirroredByChoiceOnlyWhileMirroredThroughDAM() {
+        let manager = VideoManager()
+        manager.streamingDisplays = [VideoManager.StreamingDisplay(display: NSObject(), index: 0, name: "S",
+                                                                   serial: 4, start: StreamingDisplayModes.start,
+                                                                   id: 42)]
+        manager.keepUserMirror([2], on: 42)
+        XCTAssertEqual(manager.displaysMirroredByChoice, [42])
+        // Nothing online mirrors it once 2 is extended again.
+        manager.keepUserMirror([2], on: 0)
+        XCTAssertTrue(manager.displaysMirroredByChoice.isEmpty)
+
+        // Set to mirror another display, which a resize keeps.
+        manager.keepUserMirror([42, 2], on: 1)
+        XCTAssertEqual(manager.streamingDisplaysMirroringByChoice, [42])
+        manager.keepUserMirror([42], on: 0)
+        XCTAssertTrue(manager.streamingDisplaysMirroringByChoice.isEmpty)
+    }
+
     func testOnlyTheStandInAnAttemptMadeIsReleased() {
         let manager = VideoManager()
         let later = NSObject()

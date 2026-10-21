@@ -154,7 +154,12 @@ final class MoonlightHost {
         self.directory = directory
         self.advertises = advertises
         self.limits = limits
+        http = MoonlightHTTPConnections(limits: limits)
         rtsps = (0..<Self.maxSessions).map { _ in MoonlightRTSP(limits: limits) }
+        http.onRequest = { [weak self] head, connection, secure in self?.answer(head, on: connection, secure: secure) }
+        http.onClose = { [weak self] connection in
+            if let self, self.waitingForPIN === connection { self.abandonPairing() }
+        }
     }
 
     private var identity: (key: SecKey, certificate: Data, secIdentity: SecIdentity)?
@@ -166,8 +171,8 @@ final class MoonlightHost {
     private var closingListeners = 0
     /// Whether to start once they have.
     private var startWhenClosed = false
-    /// Connections being served, held until they end.
-    private var connections: [ObjectIdentifier: NWConnection] = [:]
+    /// The HTTP and HTTPS connections being served.
+    private let http: MoonlightHTTPConnections
     private var pairing: MoonlightPairing?
     private var pairingAddress = ""
     /// The first pairing request, answered once the user has typed the PIN.
@@ -186,6 +191,12 @@ final class MoonlightHost {
             self.certificate = certificate
             self.launch = launch
         }
+
+        /// Stops its stream, if one is running.
+        func endStream() {
+            stream?.stop()
+            stream = nil
+        }
     }
 
     private var sessions: [Session] = []
@@ -196,7 +207,7 @@ final class MoonlightHost {
 
     /// The paired devices with a launch, oldest first.
     var streamingClients: [MoonlightClient] {
-        sessions.compactMap { session in clients.first { $0.certificate == session.certificate } }
+        sessions.compactMap { client(for: $0.certificate) }
     }
 
     /// The RTSP port of session `slot`.
@@ -204,6 +215,15 @@ final class MoonlightHost {
 
     private func session(for certificate: Data?) -> Session? {
         sessions.first { $0.certificate == certificate }
+    }
+
+    /// The paired device with `certificate`, if there is one.
+    private func client(for certificate: Data?) -> MoonlightClient? {
+        clientIndex(for: certificate).map { clients[$0] }
+    }
+
+    private func clientIndex(for certificate: Data?) -> Int? {
+        clients.firstIndex { $0.certificate == certificate }
     }
 
     // MARK: - Starting and stopping
@@ -250,7 +270,7 @@ final class MoonlightHost {
                 }
                 if listener === httpListener || listener === httpsListener {
                     listener.newConnectionHandler = { [weak self] connection in
-                        self?.accept(connection, secure: secure)
+                        self?.http.accept(connection, secure: secure)
                     }
                 }
                 listener.start(queue: .main)
@@ -285,7 +305,7 @@ final class MoonlightHost {
         listeners = []
         httpListener = nil
         readyListeners = []
-        connections.values.forEach { $0.cancel() }
+        http.closeAll()
         rtsps.forEach { $0.closeAll() }
         for session in sessions { endLaunch(of: session.certificate) }
         if let waiting = waitingForPIN {
@@ -319,7 +339,7 @@ final class MoonlightHost {
 
     /// Sets whether `client`'s streams use low-latency rate control, from its next stream on.
     func setLowLatency(_ lowLatency: Bool, for client: MoonlightClient) {
-        guard let index = clients.firstIndex(where: { $0.certificate == client.certificate }) else { return }
+        guard let index = clientIndex(for: client.certificate) else { return }
         clients[index].lowLatency = lowLatency
         saveClients()
         onChange?()
@@ -327,7 +347,7 @@ final class MoonlightHost {
 
     /// Sets whether `client`'s mouse, keyboard and text reach the Mac, its stream's at once.
     func setAllowsInput(_ allowsInput: Bool, for client: MoonlightClient) {
-        guard let index = clients.firstIndex(where: { $0.certificate == client.certificate }) else { return }
+        guard let index = clientIndex(for: client.certificate) else { return }
         clients[index].allowsInput = allowsInput
         session(for: client.certificate)?.stream?.allowsInput = allowsInput
         saveClients()
@@ -350,50 +370,11 @@ final class MoonlightHost {
         let query: [String: String]
     }
 
-    private func accept(_ connection: NWConnection, secure: Bool) {
-        guard limits.admit(connection) else { return }
-        connections[ObjectIdentifier(connection)] = connection
-        connection.stateUpdateHandler = { [weak self, weak connection] state in
-            guard let self, let connection else { return }
-            switch state {
-            case .ready:
-                self.receive(on: connection, secure: secure, buffer: Data())
-            case .failed:
-                connection.cancel()
-            case .cancelled:
-                self.connections[ObjectIdentifier(connection)] = nil
-                self.limits.closed(connection)
-                if self.waitingForPIN === connection { self.abandonPairing() }
-            default:
-                break
-            }
-        }
-        connection.start(queue: .main)
-    }
-
-    private func receive(on connection: NWConnection, secure: Bool, buffer: Data) {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 16384) { [weak self] data, _, isComplete, error in
-            guard let self else { return }
-            let buffer = buffer + (data ?? Data())
-            if let end = buffer.range(of: Data("\r\n\r\n".utf8)) {
-                self.limits.received(connection)
-                let head = String(decoding: buffer[..<end.lowerBound], as: UTF8.self)
-                guard let request = Self.parse(head) else { return self.send(status: "400 Bad Request", to: connection) }
-                let certificate = secure ? Self.peerCertificate(of: connection) : nil
-                self.handle(request, on: connection, secure: secure, certificate: certificate)
-                return
-            }
-            guard !isComplete, error == nil, buffer.count < 16384 else { return connection.cancel() }
-            self.receive(on: connection, secure: secure, buffer: buffer)
-        }
-    }
-
-    private static func parse(_ head: String) -> Request? {
-        let parts = head.split(separator: "\r\n", maxSplits: 1).first?.split(separator: " ") ?? []
-        guard parts.count >= 2, parts[0] == "GET", let url = URLComponents(string: String(parts[1])) else { return nil }
-        var query: [String: String] = [:]
-        for item in url.queryItems ?? [] where query[item.name] == nil { query[item.name] = item.value ?? "" }
-        return Request(path: url.path, query: query)
+    /// Answers a request's head.
+    private func answer(_ head: String, on connection: NWConnection, secure: Bool) {
+        guard let parsed = MoonlightHTTPConnections.parse(head) else { return send(status: "400 Bad Request", to: connection) }
+        let certificate = secure ? Self.peerCertificate(of: connection) : nil
+        handle(Request(path: parsed.path, query: parsed.query), on: connection, secure: secure, certificate: certificate)
     }
 
     private static func peerCertificate(of connection: NWConnection) -> Data? {
@@ -421,7 +402,7 @@ final class MoonlightHost {
         mlLog.debug("\(secure ? "https" : "http", privacy: .public) \(request.path, privacy: .public)")
         // Over HTTPS, only paired devices. Moonlight takes a 401 to mean unpaired and asks
         // again over HTTP.
-        if secure && !clients.contains(where: { $0.certificate == certificate }) {
+        if secure && client(for: certificate) == nil {
             return reply(Self.xml(status: 401, message: "The client is not authorized. Certificate verification failed."),
                          to: connection)
         }
@@ -506,13 +487,13 @@ final class MoonlightHost {
         let current = session(for: certificate)?.launch
         let appID = request.query["appid"].flatMap(Int.init) ?? current?.appID ?? Self.newDisplayAppID
         let address = Self.address(connection.currentPath?.localEndpoint)
-        let client = connection.currentPath?.remoteEndpoint ?? connection.endpoint
-        let lowLatency = clients.first { $0.certificate == certificate }?.lowLatency ?? true
+        let peer = connection.currentPath?.remoteEndpoint ?? connection.endpoint
+        let lowLatency = client(for: certificate)?.lowLatency ?? true
         let encryption = MoonlightStream.videoEncryption
         let answer = { [weak self] (launch: MoonlightLaunch) in
             guard let self else { return }
             // Hosting stopped, or the device was unpaired, while a display was made for it.
-            guard self.isRunning, self.clients.contains(where: { $0.certificate == certificate }) else {
+            guard self.isRunning, self.client(for: certificate) != nil else {
                 if launch.ownsDisplay, !self.sessions.contains(where: { $0.launch.displayID == launch.displayID }) {
                     self.removeDisplay?(launch.displayID)
                 }
@@ -520,12 +501,11 @@ final class MoonlightHost {
             }
             var launch = launch
             launch.lowLatency = lowLatency
-            launch.offersEncryptedVideo = encryption.offers(to: client)
+            launch.offersEncryptedVideo = encryption.offers(to: peer)
             launch.requiresEncryptedVideo = encryption == .always
-            launch.clientAddress = Self.address(client)
+            launch.clientAddress = Self.address(peer)
             if let session = self.session(for: certificate) {
-                session.stream?.stop()
-                session.stream = nil
+                session.endStream()
                 // Another launch of the device's, answered first, may have made a display.
                 if session.launch.displayID != launch.displayID { self.letGo(of: session.launch, by: session) }
                 launch.slot = session.launch.slot
@@ -601,8 +581,7 @@ final class MoonlightHost {
     func endLaunch(of certificate: Data) {
         guard let index = sessions.firstIndex(where: { $0.certificate == certificate }) else { return }
         let session = sessions.remove(at: index)
-        session.stream?.stop()
-        session.stream = nil
+        session.endStream()
         letGo(of: session.launch, by: session)
     }
 
@@ -622,8 +601,7 @@ final class MoonlightHost {
     private func startStream(_ launch: MoonlightLaunch, _ config: MoonlightStreamConfig) -> String? {
         guard let session = sessions.first(where: { $0.launch.sessionID == launch.sessionID }) else { return "No launch" }
         guard !session.launch.announced else { return "Already started" }
-        session.stream?.stop()
-        session.stream = nil
+        session.endStream()
         var config = config
         config.lowLatency = launch.lowLatency
         do {
@@ -631,7 +609,7 @@ final class MoonlightHost {
                                              keyID: launch.keyID, pingPayload: launch.pingPayload,
                                              connectData: launch.connectData, clientAddress: launch.clientAddress,
                                              ports: launch.ports,
-                                             allowsInput: clients.first { $0.certificate == session.certificate }?.allowsInput ?? true)
+                                             allowsInput: client(for: session.certificate)?.allowsInput ?? true)
             stream.onEnd = { [weak self, weak session, weak stream] reason in
                 guard let self, let session, let stream, session.stream === stream else { return }
                 session.stream = nil
@@ -648,9 +626,7 @@ final class MoonlightHost {
     }
 
     private func endStream(of certificate: Data) {
-        guard let session = session(for: certificate) else { return }
-        session.stream?.stop()
-        session.stream = nil
+        session(for: certificate)?.endStream()
     }
 
     private func currentPairing() throws -> MoonlightPairing {
@@ -783,9 +759,7 @@ final class MoonlightHost {
 
     private func send(status: String, contentType: String = "text/plain", body: Data = Data(),
                       to connection: NWConnection) {
-        let head = "HTTP/1.1 \(status)\r\nContent-Type: \(contentType)\r\nContent-Length: \(body.count)\r\n" +
-                   "Connection: close\r\n\r\n"
-        connection.send(content: Data(head.utf8) + body, completion: .contentProcessed { _ in connection.cancel() })
+        MoonlightHTTPConnections.send(status: status, contentType: contentType, body: body, to: connection)
     }
 
     // MARK: - Identity and storage
@@ -819,10 +793,16 @@ final class MoonlightHost {
            SecCertificateCreateWithData(nil, stored as CFData) != nil {
             key = imported
             certificate = stored
+            // Kept even so, as a new one unpairs every device.
+            if !DER.hasMinimalSerial(stored) {
+                mlLog.error("the host certificate's serial is not minimal DER; some Moonlight clients may refuse it")
+            }
         } else {
             mlLog.debug("making the host's key and certificate")
             key = try MoonlightCrypto.generatePrivateKey()
-            certificate = try MoonlightCrypto.selfSignedCertificate(key: key, commonName: "\(AppIdentity.name) GameStream Host")
+            // Self-signed, for 20 years.
+            certificate = try MoonlightCrypto.certificate(key: key, subject: "\(AppIdentity.name) GameStream Host",
+                                                          days: 20 * 365)
             try writePrivately(try MoonlightCrypto.exportPrivateKey(key), to: keyURL)
             try writePrivately(certificate, to: certificateURL)
             try? FileManager.default.removeItem(at: clientsURL)
@@ -873,6 +853,91 @@ final class MoonlightHost {
                                                 attributes: [.posixPermissions: 0o700])
         try data.write(to: url, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    }
+}
+
+/// The HTTP both of DAM's web servers speak, the host's and the browser stream's: each
+/// connection admitted under `limits`, its request's head read and handed on, and answered
+/// once with `send`, which closes it. Used on the main queue.
+final class MoonlightHTTPConnections {
+    /// Called with a request's head, up to the blank line that ends it, and the connection
+    /// to answer on.
+    var onRequest: ((_ head: String, _ connection: NWConnection, _ secure: Bool) -> Void)?
+    /// Called once a connection has closed, answered or not.
+    var onClose: ((NWConnection) -> Void)?
+
+    let limits: MoonlightConnectionLimits
+    /// Connections open, held until they close.
+    private var open: [ObjectIdentifier: NWConnection] = [:]
+
+    init(limits: MoonlightConnectionLimits) {
+        self.limits = limits
+    }
+
+    func accept(_ connection: NWConnection, secure: Bool) {
+        guard limits.admit(connection) else { return }
+        open[ObjectIdentifier(connection)] = connection
+        connection.stateUpdateHandler = { [weak self, weak connection] state in
+            guard let self, let connection else { return }
+            switch state {
+            case .ready:
+                self.receive(on: connection, secure: secure, buffer: Data())
+            case .failed:
+                connection.cancel()
+            case .cancelled:
+                self.open[ObjectIdentifier(connection)] = nil
+                self.limits.closed(connection)
+                self.onClose?(connection)
+            default:
+                break
+            }
+        }
+        connection.start(queue: .main)
+    }
+
+    /// Closes every connection still open, answered or not.
+    func closeAll() {
+        open.values.forEach { $0.cancel() }
+    }
+
+    private func receive(on connection: NWConnection, secure: Bool, buffer: Data) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 16384) { [weak self] data, _, isComplete, error in
+            guard let self else { return }
+            let buffer = buffer + (data ?? Data())
+            if let end = buffer.range(of: Data("\r\n\r\n".utf8)) {
+                self.limits.received(connection)
+                self.onRequest?(String(decoding: buffer[..<end.lowerBound], as: UTF8.self), connection, secure)
+                return
+            }
+            guard !isComplete, error == nil, buffer.count < 16384 else { return connection.cancel() }
+            self.receive(on: connection, secure: secure, buffer: buffer)
+        }
+    }
+
+    /// A GET request's path, its query (the first value of each name) and its headers (by
+    /// name in lower case); nil for anything else.
+    static func parse(_ head: String) -> (path: String, query: [String: String], headers: [String: String])? {
+        var lines = head.components(separatedBy: "\r\n")
+        let parts = lines.removeFirst().split(separator: " ")
+        guard parts.count >= 2, parts[0] == "GET", let url = URLComponents(string: String(parts[1])) else { return nil }
+        var query: [String: String] = [:]
+        for item in url.queryItems ?? [] where query[item.name] == nil { query[item.name] = item.value ?? "" }
+        var headers: [String: String] = [:]
+        for line in lines {
+            guard let colon = line.firstIndex(of: ":") else { continue }
+            headers[line[..<colon].lowercased()] = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+        }
+        return (url.path, query, headers)
+    }
+
+    /// Answers `connection` and closes it once the answer is out; `headers` are whole lines
+    /// without their ends, after the content's type and length.
+    static func send(status: String, contentType: String, headers: [String] = [], body: Data,
+                     to connection: NWConnection) {
+        let head = "HTTP/1.1 \(status)\r\nContent-Type: \(contentType)\r\nContent-Length: \(body.count)\r\n" +
+                   headers.map { "\($0)\r\n" }.joined() +
+                   "Connection: close\r\n\r\n"
+        connection.send(content: Data(head.utf8) + body, completion: .contentProcessed { _ in connection.cancel() })
     }
 }
 

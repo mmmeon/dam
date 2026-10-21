@@ -284,6 +284,10 @@ final class WebStreamCertificates {
            let stored = try? Data(contentsOf: authorityURL), SecCertificateCreateWithData(nil, stored as CFData) != nil {
             authorityKey = key
             authority = stored
+            // Kept even so: a new authority would have to be trusted again on every device.
+            if !DER.hasMinimalSerial(stored) {
+                waLog.error("the certificate authority's serial is not minimal DER; browsers using BoringSSL may refuse it")
+            }
         } else {
             waLog.debug("making the browser stream's certificate authority")
             authorityKey = try MoonlightCrypto.generatePrivateKey()
@@ -300,7 +304,9 @@ final class WebStreamCertificates {
         let server: Data
         if let keyData = try? Data(contentsOf: serverKeyURL), (try? MoonlightCrypto.importPrivateKey(keyData)) != nil,
            let stored = try? Data(contentsOf: serverURL), let certificate = SecCertificateCreateWithData(nil, stored as CFData),
-           storedCovers == covers, let ends = Self.notAfter(of: certificate), ends.timeIntervalSince(now) > 30 * 24 * 3600 {
+           storedCovers == covers, let ends = Self.notAfter(of: certificate), ends.timeIntervalSince(now) > 30 * 24 * 3600,
+           // One some browsers refuse is made again; nothing else depends on it.
+           DER.hasMinimalSerial(stored) {
             server = stored
         } else {
             waLog.debug("making the browser stream's server certificate for \(names, privacy: .public)")

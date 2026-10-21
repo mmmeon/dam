@@ -79,9 +79,14 @@ final class AudioManager: ObservableObject {
     /// The hiding step is skipped when autoHideVirtualAudio is off, but seen-device
     /// tracking always runs so toggling the preference later has no retroactive effect.
     private func autoHideNewVirtualDevices(in devices: [AudioDevice]) {
+        Self.autoHideNewDevices(devices) { !self.isHardwareDevice($0) }
+    }
+
+    /// The core of `autoHideNewVirtualDevices(in:)`, told which devices are virtual.
+    static func autoHideNewDevices(_ devices: [AudioDevice], isVirtual: (AudioDeviceID) -> Bool) {
         var seen = VisibilityPreferences.seenAudioDevices
         for device in devices where !seen.contains(device.name) {
-            if VisibilityPreferences.autoHideVirtualAudio && !isHardwareDevice(device.id) {
+            if VisibilityPreferences.autoHideVirtualAudio && isVirtual(device.id) {
                 VisibilityPreferences.setVisible(false, audioDevice: device.name)
             }
             seen.insert(device.name)
@@ -97,13 +102,6 @@ final class AudioManager: ObservableObject {
 
     static func filter(devices: [AudioDevice], hidden: Set<String>) -> [AudioDevice] {
         devices.filter { !hidden.contains($0.name) }
-    }
-
-    /// The device after the one with `currentID` in `devices`, wrapping around; the first
-    /// device when `currentID` isn't listed (e.g. the current output is hidden). Nil if empty.
-    static func device(after currentID: AudioDeviceID, in devices: [AudioDevice]) -> AudioDevice? {
-        guard let idx = devices.firstIndex(where: { $0.id == currentID }) else { return devices.first }
-        return devices[(idx + 1) % devices.count]
     }
 
     func setDefaultDevice(_ device: AudioDevice) {
@@ -250,14 +248,7 @@ final class AudioManager: ObservableObject {
     /// Virtual devices (Teams, Zoom, BlackHole, Loopback, etc.) use
     /// kAudioDeviceTransportTypeVirtual or kAudioDeviceTransportTypeAggregate.
     private func isHardwareDevice(_ id: AudioDeviceID) -> Bool {
-        var addr = AudioObjectPropertyAddress(
-            mSelector: kAudioDevicePropertyTransportType,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        var transport: UInt32 = 0
-        var size = UInt32(MemoryLayout<UInt32>.size)
-        guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &transport) == noErr else {
+        guard let transport = transportType(id) else {
             return true   // if we can't read it, include it to be safe
         }
         switch transport {

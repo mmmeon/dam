@@ -24,6 +24,8 @@ final class MoonlightInputInjector {
     /// Where events are posted, one at a time; everything below is only touched on it.
     private let queue = DispatchQueue(label: "\(AppIdentity.bundleID).moonlight.input", qos: .userInteractive)
     private var closed = false
+    /// Whether events are acted on; see `allowInput`.
+    private var allowed = true
     private var trusted = false
     /// When access was last found missing, so it is asked of macOS no more than once a second.
     private var checkedAccess: TimeInterval?
@@ -48,7 +50,7 @@ final class MoonlightInputInjector {
     func handle(_ events: [MoonlightInput]) {
         guard !events.isEmpty else { return }
         queue.async { [self] in
-            guard !closed, hasAccess() else { return }
+            guard !closed, allowed, hasAccess() else { return }
             for event in events { post(event) }
         }
     }
@@ -58,8 +60,18 @@ final class MoonlightInputInjector {
     func scrollPixels(dx: Int32, dy: Int32) {
         guard dx != 0 || dy != 0 else { return }
         queue.async { [self] in
-            guard !closed, hasAccess() else { return }
+            guard !closed, allowed, hasAccess() else { return }
             scroll(units: .pixel, vertical: dy, horizontal: dx)
+        }
+    }
+
+    /// Acts on input from now on, or not; turned off, whatever is held is let go. Set on the
+    /// queue events are posted on, so events handed over before it is turned off are acted
+    /// on first (and let go of), and none handed over after.
+    func allowInput(_ allow: Bool) {
+        queue.async { [self] in
+            allowed = allow
+            if !allow { releaseHeld() }
         }
     }
 
@@ -181,9 +193,7 @@ final class MoonlightInputInjector {
 
     /// Types `text` as it is, whatever the keyboard layout, a few characters an event.
     private func type(_ text: String) {
-        let units = Array(text.utf16)
-        for start in stride(from: 0, to: units.count, by: 20) {
-            let chunk = Array(units[start..<min(start + 20, units.count)])
+        for chunk in Self.chunks(of: text) {
             for down in [true, false] {
                 guard let event = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: down) else { continue }
                 event.flags = []
@@ -191,6 +201,27 @@ final class MoonlightInputInjector {
                 event.post(tap: .cghidEventTap)
             }
         }
+    }
+
+    /// `text` as UTF-16 in pieces of at most `maxUnits`, as an event carries, whole
+    /// characters each: a character cut in two would type as two broken ones. One longer
+    /// than a piece on its own goes a scalar at a time.
+    static func chunks(of text: String, maxUnits: Int = 20) -> [[UInt16]] {
+        var chunks: [[UInt16]] = []
+        var chunk: [UInt16] = []
+        for character in text {
+            let pieces = character.utf16.count <= maxUnits
+                ? [Array(character.utf16)] : character.unicodeScalars.map { Array(String($0).utf16) }
+            for piece in pieces {
+                if chunk.count + piece.count > maxUnits {
+                    chunks.append(chunk)
+                    chunk = []
+                }
+                chunk += piece
+            }
+        }
+        if !chunk.isEmpty { chunks.append(chunk) }
+        return chunks
     }
 
     /// The modifiers the keys held down make.

@@ -37,6 +37,74 @@ struct ControlRequest: Codable, Equatable {
     var all: Bool?
 }
 
+extension ControlRequest {
+    /// Values a request can't have, and why.
+    struct Invalid: Error, Equatable { var message: String }
+
+    static let commands: Set<String> = ["session.start", "session.end", "display.list", "status"]
+
+    /// The highest frame rate a session can ask for.
+    static let maxFPS = 240
+    /// The widest or tallest client a session can ask for: 8K. Past the streaming display's
+    /// own sizes on purpose, as a 5K or ultrawide client gets a HiDPI display of half its size.
+    static let maxSide = 7680
+
+    /// Why the request's values can't be used, or nil when they can. Every request is
+    /// checked here, from the command line, the socket or a URL.
+    var problem: String? {
+        let side = Self.maxSide
+        if let width, !(1...side).contains(width) { return "The width must be from 1 to \(side) pixels." }
+        if let height, !(1...side).contains(height) { return "The height must be from 1 to \(side) pixels." }
+        if let fps, !(1...Self.maxFPS).contains(fps) { return "The frame rate must be from 1 to \(Self.maxFPS)." }
+        if let display, SessionProfile.DisplayChoice(rawValue: display) == nil { return "The display is create, adopt or none." }
+        if let placement, SessionProfile.Placement(rawValue: placement) == nil { return "The placement is extend, main or mirror." }
+        return nil
+    }
+
+    /// The request for `command` with the values in `fields`, by the command line's names
+    /// for them (`app`, `client-id`, `width`, `blackout`, `all`, …); a `dam://` URL's query is
+    /// read the same way. An empty value counts as none.
+    static func make(_ command: String, fields: [String: String]) throws -> ControlRequest {
+        func text(_ key: String) -> String? { fields[key].flatMap { $0.isEmpty ? nil : $0 } }
+        func number(_ key: String, _ name: String) throws -> Int? {
+            guard let text = text(key) else { return nil }
+            guard let value = Int(text) else { throw Invalid(message: "The \(name) must be a number.") }
+            return value
+        }
+        func flag(_ key: String) throws -> Bool? {
+            guard let text = text(key) else { return nil }
+            switch text.lowercased() {
+            case "yes", "true", "1": return true
+            case "no", "false", "0": return false
+            default: throw Invalid(message: "\(key) is yes or no.")
+            }
+        }
+        var request = ControlRequest(command: command)
+        switch command {
+        case "session.start":
+            guard let app = text("app") else { throw Invalid(message: "No app given.") }
+            request.app = app
+            request.client = text("client")
+            request.clientID = text("client-id")
+            request.width = try number("width", "width")
+            request.height = try number("height", "height")
+            request.fps = try number("fps", "frame rate")
+            request.display = text("display")
+            request.placement = text("placement")
+            request.audio = text("audio")
+            request.blackout = try flag("blackout")
+        case "session.end":
+            guard let app = text("app") else { throw Invalid(message: "No app given.") }
+            request.app = app
+            request.all = try flag("all")
+        default:
+            break
+        }
+        if let problem = request.problem { throw Invalid(message: problem) }
+        return request
+    }
+}
+
 /// The running app's answer.
 struct ControlResponse: Codable, Equatable {
     struct Display: Codable, Equatable {
@@ -227,11 +295,21 @@ final class ControlServer {
         clients[fd] = nil
     }
 
+    /// The most of a message an answer carries, as a message can repeat what was asked.
+    private static let maxMessage = 300
+
     private static func reply(_ response: ControlResponse, to fd: Int32) {
+        var response = response
+        if let message = response.message, message.count > maxMessage {
+            response.message = String(message.prefix(maxMessage)) + "…"
+        }
         var data = (try? JSONEncoder().encode(response)) ?? Data()
         data.append(UInt8(ascii: "\n"))
-        // Blocking for the write: answers are small, and the client is waiting for it.
+        // Blocking for the write: answers are small, and the client is waiting for it. But
+        // only for a moment, as this is the main thread and a client may never read.
         _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) & ~O_NONBLOCK)
+        var wait = timeval(tv_sec: 1, tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &wait, socklen_t(MemoryLayout<timeval>.size))
         data.withUnsafeBytes { raw in
             var offset = 0
             while offset < raw.count {
@@ -297,43 +375,31 @@ enum ControlCLI {
         if let unknown = options.keys.first(where: { !known.contains($0) }) {
             throw ParseError.usage("Unknown option --\(unknown).")
         }
-        func int(_ key: String, env: String) throws -> Int? {
-            guard let text = options[key] ?? environment[env], !text.isEmpty else { return nil }
-            guard let value = Int(text), value > 0 else { throw ParseError.usage("--\(key) must be a positive number.") }
-            return value
+        if flags.contains("all") { options["all"] = "yes" }
+        func make(_ command: String) throws -> ControlRequest {
+            do {
+                return try ControlRequest.make(command, fields: options)
+            } catch let error as ControlRequest.Invalid {
+                throw ParseError.usage(error.message)
+            }
         }
 
         switch (first, words.first) {
         case ("session", "start"):
-            guard let app = options["app"] else { throw ParseError.usage("session start needs --app.") }
-            if let display = options["display"], SessionProfile.DisplayChoice(rawValue: display) == nil {
-                throw ParseError.usage("--display is create, adopt or none.")
-            }
-            if let placement = options["placement"], SessionProfile.Placement(rawValue: placement) == nil {
-                throw ParseError.usage("--placement is extend, main or mirror.")
-            }
-            var blackout: Bool?
-            if let text = options["blackout"] {
-                guard ["yes", "no"].contains(text) else { throw ParseError.usage("--blackout is yes or no.") }
-                blackout = text == "yes"
-            }
-            let client = options["client"] ?? environment["SUNSHINE_CLIENT_NAME"].flatMap { $0.isEmpty ? nil : $0 }
-            let clientID = options["client-id"]
-                ?? [environment["APOLLO_CLIENT_UUID"], environment["SUNSHINE_CLIENT_CERT_UUID"]]
-                    .compactMap { $0 }.first { !$0.isEmpty }
-            return ControlRequest(command: "session.start", app: app, client: client, clientID: clientID,
-                                  width: try int("width", env: "SUNSHINE_CLIENT_WIDTH"),
-                                  height: try int("height", env: "SUNSHINE_CLIENT_HEIGHT"),
-                                  fps: try int("fps", env: "SUNSHINE_CLIENT_FPS"),
-                                  display: options["display"], placement: options["placement"],
-                                  audio: options["audio"], blackout: blackout)
+            // What Sunshine passes, for what the options leave out.
+            func variable(_ name: String) -> String? { environment[name].flatMap { $0.isEmpty ? nil : $0 } }
+            options["client"] = options["client"] ?? variable("SUNSHINE_CLIENT_NAME")
+            options["client-id"] = options["client-id"] ?? variable("APOLLO_CLIENT_UUID") ?? variable("SUNSHINE_CLIENT_CERT_UUID")
+            options["width"] = options["width"] ?? variable("SUNSHINE_CLIENT_WIDTH")
+            options["height"] = options["height"] ?? variable("SUNSHINE_CLIENT_HEIGHT")
+            options["fps"] = options["fps"] ?? variable("SUNSHINE_CLIENT_FPS")
+            return try make("session.start")
         case ("session", "end"):
-            guard let app = options["app"] else { throw ParseError.usage("session end needs --app.") }
-            return ControlRequest(command: "session.end", app: app, all: flags.contains("all") ? true : nil)
+            return try make("session.end")
         case ("display", "list"):
-            return ControlRequest(command: "display.list")
+            return try make("display.list")
         case ("status", nil):
-            return ControlRequest(command: "status")
+            return try make("status")
         default:
             throw ParseError.usage("Unknown command.")
         }
@@ -428,6 +494,7 @@ final class ControlHandler {
     }
 
     func handle(_ request: ControlRequest, reply: @escaping (ControlResponse) -> Void) {
+        if let problem = request.problem { return reply(.failure(problem)) }
         switch request.command {
         case "session.start":
             guard let app = request.app?.lowercased(), !app.isEmpty else { return reply(.failure("No app given.")) }
@@ -481,20 +548,22 @@ final class ControlHandler {
         }
     }
 
-    /// The request a `dam://session/start?app=…` URL asks for, or nil for any other URL.
+    /// The request a `dam://session/start?app=…` URL asks for, or nil for any other URL, or
+    /// for one whose values can't be used, which is logged.
     static func request(from url: URL) -> ControlRequest? {
         guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
               let host = components.host else { return nil }
         let command = ([host] + url.pathComponents.filter { $0 != "/" }).joined(separator: ".")
-        let query = Dictionary((components.queryItems ?? []).compactMap { item in item.value.map { (item.name, $0) } },
+        var query = Dictionary((components.queryItems ?? []).compactMap { item in item.value.map { (item.name, $0) } },
                                uniquingKeysWith: { _, last in last })
-        guard ["session.start", "session.end", "status", "display.list"].contains(command) else { return nil }
-        return ControlRequest(command: command, app: query["app"], client: query["client"],
-                              clientID: query["clientID"] ?? query["client-id"],
-                              width: query["width"].flatMap(Int.init), height: query["height"].flatMap(Int.init),
-                              fps: query["fps"].flatMap(Int.init), display: query["display"],
-                              placement: query["placement"], audio: query["audio"],
-                              blackout: query["blackout"].map { $0 == "1" || $0 == "yes" || $0 == "true" },
-                              all: query["all"].map { $0 == "1" || $0 == "true" })
+        guard ControlRequest.commands.contains(command) else { return nil }
+        // The client's ID either way it is spelled.
+        if let id = query["clientID"] { query["client-id"] = id }
+        do {
+            return try ControlRequest.make(command, fields: query)
+        } catch {
+            NSLog("\(AppIdentity.name): \(url.absoluteString): \((error as? ControlRequest.Invalid)?.message ?? "\(error)")")
+            return nil
+        }
     }
 }

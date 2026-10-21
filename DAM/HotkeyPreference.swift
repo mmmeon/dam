@@ -5,110 +5,92 @@
 import AppKit
 import Carbon.HIToolbox
 
+/// The app's shortcuts: what each is called in Settings, where it is stored and what it
+/// starts as. Settings lists them in this order.
+enum HotkeyAction: CaseIterable {
+    case switcher, airPlayConnect, mirrorToggle, audioCycle, mainDisplay, resolution, rotation
+
+    /// The shortcut set for this action, or its default when none is.
+    var shortcut: HotkeyPreference {
+        get {
+            guard let data = UserDefaults.dam.data(forKey: defaultsKey),
+                  let pref = try? JSONDecoder().decode(HotkeyPreference.self, from: data)
+            else { return defaultShortcut }
+            return pref
+        }
+        nonmutating set { UserDefaults.dam.set(try? JSONEncoder().encode(newValue), forKey: defaultsKey) }
+    }
+
+    /// Where the shortcut is stored; the keys predate this enum, so they stay as they were.
+    var defaultsKey: String {
+        switch self {
+        case .switcher:       return "\(AppIdentity.bundleID).hotkey"
+        case .airPlayConnect: return "\(AppIdentity.bundleID).hotkeyAirPlayConnect"
+        case .mirrorToggle:   return "\(AppIdentity.bundleID).hotkeyMirrorToggle"
+        case .audioCycle:     return "\(AppIdentity.bundleID).hotkeyAudioCycle"
+        case .mainDisplay:    return "\(AppIdentity.bundleID).hotkeyMainDisplay"
+        case .resolution:     return "\(AppIdentity.bundleID).hotkeyResolution"
+        case .rotation:       return "\(AppIdentity.bundleID).hotkeyRotation"
+        }
+    }
+
+    /// ⌃⌥⌘ and a letter: B, A, M, O, D, R and T.
+    var defaultShortcut: HotkeyPreference {
+        let key: Int
+        switch self {
+        case .switcher:       key = kVK_ANSI_B
+        case .airPlayConnect: key = kVK_ANSI_A
+        case .mirrorToggle:   key = kVK_ANSI_M
+        case .audioCycle:     key = kVK_ANSI_O
+        case .mainDisplay:    key = kVK_ANSI_D
+        case .resolution:     key = kVK_ANSI_R
+        case .rotation:       key = kVK_ANSI_T
+        }
+        return HotkeyPreference(keyCode: UInt32(key), modifiers: UInt32(controlKey | optionKey | cmdKey))
+    }
+
+    /// Its name in Settings, and in another's clash.
+    var title: String {
+        switch self {
+        case .switcher:       return "Switcher"
+        case .airPlayConnect: return "Quick Connect"
+        case .mirrorToggle:   return "Mirror / Extend"
+        case .audioCycle:     return "Cycle Audio"
+        case .mainDisplay:    return "Main Display"
+        case .resolution:     return "Resolution"
+        case .rotation:       return "Rotation"
+        }
+    }
+
+    /// What it does, as Settings tells it.
+    var help: String {
+        switch self {
+        case .switcher:
+            return "Opens the Touch Bar switcher for the audio output and AirPlay display. " +
+                   "Without a Touch Bar (or with the lid closed) it opens the menu bar menu."
+        case .airPlayConnect:
+            return "Connects to an AirPlay display or an iPad (Sidecar) from any " +
+                   "application, even with no display attached."
+        case .mirrorToggle:
+            return "Picks where the connected AirPlay display is mirrored: nowhere, " +
+                   "on one of the other displays, or on all of them."
+        case .audioCycle:
+            return "Picks an audio output among those checked on the Devices tab."
+        case .mainDisplay:
+            return "Picks the display that has the menu bar."
+        case .resolution:
+            return "Picks a resolution for the display under the pointer."
+        case .rotation:
+            return "Turns the display under the pointer, where macOS allows it, or a " +
+                   "streaming display, whose streams keep their shape."
+        }
+    }
+}
+
 struct HotkeyPreference: Codable, Equatable {
 
     var keyCode:  UInt32   // Carbon virtual key code
     var modifiers: UInt32  // Carbon modifier mask
-
-    // MARK: - Defaults
-
-    /// Default shortcut for opening the audio/display switcher (⌃⌥⌘B).
-    static let `default` = HotkeyPreference(
-        keyCode:   UInt32(kVK_ANSI_B),
-        modifiers: UInt32(controlKey | optionKey | cmdKey)
-    )
-
-    /// Default shortcut for AirPlay Quick Connect (⌃⌥⌘A).
-    static let defaultAirPlayConnect = HotkeyPreference(
-        keyCode:   UInt32(kVK_ANSI_A),
-        modifiers: UInt32(controlKey | optionKey | cmdKey)
-    )
-
-    /// Default shortcut for toggling mirror / extend on the AirPlay display (⌃⌥⌘M).
-    static let defaultMirrorToggle = HotkeyPreference(
-        keyCode:   UInt32(kVK_ANSI_M),
-        modifiers: UInt32(controlKey | optionKey | cmdKey)
-    )
-
-    /// Default shortcut for cycling through the enabled audio outputs (⌃⌥⌘O).
-    static let defaultAudioCycle = HotkeyPreference(
-        keyCode:   UInt32(kVK_ANSI_O),
-        modifiers: UInt32(controlKey | optionKey | cmdKey)
-    )
-
-    /// Default shortcut for choosing the main display (⌃⌥⌘D).
-    static let defaultMainDisplay = HotkeyPreference(
-        keyCode:   UInt32(kVK_ANSI_D),
-        modifiers: UInt32(controlKey | optionKey | cmdKey)
-    )
-
-    /// Default shortcut for cycling the resolutions of the display under the pointer (⌃⌥⌘R).
-    static let defaultResolution = HotkeyPreference(
-        keyCode:   UInt32(kVK_ANSI_R),
-        modifiers: UInt32(controlKey | optionKey | cmdKey)
-    )
-
-    /// Default shortcut for turning the display under the pointer (⌃⌥⌘T).
-    static let defaultRotation = HotkeyPreference(
-        keyCode:   UInt32(kVK_ANSI_T),
-        modifiers: UInt32(controlKey | optionKey | cmdKey)
-    )
-
-    // MARK: - Persistence
-
-    private static let defaultsKey               = "\(AppIdentity.bundleID).hotkey"
-    private static let airPlayConnectDefaultsKey  = "\(AppIdentity.bundleID).hotkeyAirPlayConnect"
-    private static let mirrorToggleDefaultsKey    = "\(AppIdentity.bundleID).hotkeyMirrorToggle"
-    private static let audioCycleDefaultsKey      = "\(AppIdentity.bundleID).hotkeyAudioCycle"
-    private static let mainDisplayDefaultsKey     = "\(AppIdentity.bundleID).hotkeyMainDisplay"
-    private static let resolutionDefaultsKey      = "\(AppIdentity.bundleID).hotkeyResolution"
-    private static let rotationDefaultsKey        = "\(AppIdentity.bundleID).hotkeyRotation"
-
-    static var current: HotkeyPreference {
-        get { load(defaultsKey, fallback: .default) }
-        set { store(newValue, defaultsKey) }
-    }
-
-    static var currentAirPlayConnect: HotkeyPreference {
-        get { load(airPlayConnectDefaultsKey, fallback: .defaultAirPlayConnect) }
-        set { store(newValue, airPlayConnectDefaultsKey) }
-    }
-
-    static var currentMirrorToggle: HotkeyPreference {
-        get { load(mirrorToggleDefaultsKey, fallback: .defaultMirrorToggle) }
-        set { store(newValue, mirrorToggleDefaultsKey) }
-    }
-
-    static var currentAudioCycle: HotkeyPreference {
-        get { load(audioCycleDefaultsKey, fallback: .defaultAudioCycle) }
-        set { store(newValue, audioCycleDefaultsKey) }
-    }
-
-    static var currentMainDisplay: HotkeyPreference {
-        get { load(mainDisplayDefaultsKey, fallback: .defaultMainDisplay) }
-        set { store(newValue, mainDisplayDefaultsKey) }
-    }
-
-    static var currentResolution: HotkeyPreference {
-        get { load(resolutionDefaultsKey, fallback: .defaultResolution) }
-        set { store(newValue, resolutionDefaultsKey) }
-    }
-
-    static var currentRotation: HotkeyPreference {
-        get { load(rotationDefaultsKey, fallback: .defaultRotation) }
-        set { store(newValue, rotationDefaultsKey) }
-    }
-
-    private static func load(_ key: String, fallback: HotkeyPreference) -> HotkeyPreference {
-        guard let data = UserDefaults.dam.data(forKey: key),
-              let pref = try? JSONDecoder().decode(HotkeyPreference.self, from: data)
-        else { return fallback }
-        return pref
-    }
-
-    private static func store(_ pref: HotkeyPreference, _ key: String) {
-        UserDefaults.dam.set(try? JSONEncoder().encode(pref), forKey: key)
-    }
 
     // MARK: - Clashes
 

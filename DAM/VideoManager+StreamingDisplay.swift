@@ -25,6 +25,11 @@ enum StreamingDisplayModes {
     ]
     static let refreshRates = [60, 30, 120]
 
+    /// The most pixels a streaming display is made with on either side (8K), and its highest
+    /// rate, whatever a stream asks for.
+    static let largestSide = 8192
+    static let highestRefreshRate = 480
+
     /// A mode a streaming display comes up in.
     struct Mode: Equatable {
         var width: Int
@@ -38,6 +43,14 @@ enum StreamingDisplayModes {
 
         /// Taller than wide.
         var isPortrait: Bool { height > width }
+
+        /// Whether a display can be made in it: every side from 1 to `largestSide` pixels, the
+        /// rate from 1 to `highestRefreshRate`. Asked before anything is worked out from it.
+        var isValid: Bool {
+            let side = 1...StreamingDisplayModes.largestSide
+            return side.contains(width) && side.contains(height) && side.contains(pixelWidth)
+                && side.contains(pixelHeight) && (1...StreamingDisplayModes.highestRefreshRate).contains(refreshRate)
+        }
 
         /// The same mode turned by `rotation`: on its side, its width and height trade places.
         func rotated(_ rotation: DisplayRotation) -> Mode {
@@ -84,6 +97,24 @@ enum StreamingDisplayModes {
             m.width == start.width && m.height == start.height && m.refreshRate == start.refreshRate
         }
         return [(start.width, start.height, start.refreshRate)] + all.filter { !isStart($0) }
+    }
+
+    /// The settings that give a streaming display every mode, `start` first.
+    static func settings(startingIn start: Mode) -> CGVirtualDisplaySettings {
+        let settings = CGVirtualDisplaySettings()
+        settings.hiDPI = 1
+        settings.modes = advertised(startingIn: start).map {
+            CGVirtualDisplayMode(width: UInt($0.width), height: UInt($0.height), refreshRate: Double($0.refreshRate))
+        }
+        return settings
+    }
+}
+
+extension StreamingDisplayModes.Mode {
+    /// The mode a display runs, as a streaming display's mode.
+    init(_ mode: CGDisplayMode) {
+        self.init(width: mode.width, height: mode.height, refreshRate: Int(mode.refreshRate.rounded()),
+                  hiDPI: mode.pixelWidth > mode.width)
     }
 }
 
@@ -169,8 +200,7 @@ extension VideoManager {
         guard streamingIDs.contains(where: { CGDisplayIsMain($0) != 0 }),
               !streamingDisplayIsMainByChoice,
               // Placing one puts main back itself; the others' commits would race this one.
-              !streamingChangeInFlight, !streamingReassertInFlight, !streamingMainHandBackInFlight,
-              !virtualAnchorReassertInFlight else { return }
+              !displayChangeInFlight else { return }
         // Displays showing their own desktop, on their own or through an anchor; a disabled
         // one stays online but has no screen.
         let candidates = (allConnectedDisplays + allAirPlayDevices).filter {
@@ -186,6 +216,153 @@ extension VideoManager {
         sdLog.debug("a streaming display is main; making \(id) main")
         streamingMainHandBackInFlight = true
         setMainDisplay(display) { [weak self] _ in self?.streamingMainHandBackInFlight = false }
+    }
+
+    /// Notes a display DAM didn't make joining or leaving (a TV connected or disconnected):
+    /// WindowServer then lays the new set out from a layout it saved for it, mirrors included,
+    /// over the next seconds, or hands a mirror set the leaver was in to another of its members;
+    /// an anchor made for a newcomer keeps a layout for its first 30. While the set is settled,
+    /// notes where each display is.
+    func noteDisplaySetChanged() {
+        // DAM's own come and go through it, which lays them out.
+        let online = Set(DisplayArrangement.onlineDisplayIDs().filter { CGDisplayVendorNumber($0) != Self.anchorVendorID })
+        defer { onlineAtLastMerge = online }
+        guard let before = onlineAtLastMerge, online != before else {
+            onlineAtLastMerge = online
+            return noteSettledFrames()
+        }
+        displaySetChangedUntil = Date().addingTimeInterval(45)
+        // Noted again once the set has settled, with any streaming display placed meanwhile.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 46) { [weak self] in self?.noteSettledFrames() }
+    }
+
+    /// Notes where each display is while the set is settled, once a change of DAM's own (a
+    /// streaming display being placed, say) has landed: until then they are on the way.
+    private func noteSettledFrames() {
+        guard displaySetChangedUntil <= Date() else { return }
+        guard !displayChangeInFlight else {
+            guard !settledFramesPending else { return }
+            settledFramesPending = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                self?.settledFramesPending = false
+                self?.noteSettledFrames()
+            }
+            return
+        }
+        let all = DisplayArrangement.onlineDisplayIDs()
+        // Not if one came or went meanwhile: the next re-read sees to that.
+        guard Set(all.filter { CGDisplayVendorNumber($0) != Self.anchorVendorID }) == onlineAtLastMerge else { return }
+        framesBeforeSetChange = Dictionary(uniqueKeysWithValues: all.map { ($0, CGDisplayBounds($0)) })
+    }
+
+    /// Where to move each of `streaming` so it is where it was in `before` beside the others,
+    /// going by `main` (or another display neither streaming nor mirroring, in both): none
+    /// that mirrors, and nothing when a move would overlap another display.
+    static func originsBack(before: [CGDirectDisplayID: CGRect], now: [CGDirectDisplayID: CGRect],
+                            streaming: Set<CGDirectDisplayID>, mirroring: Set<CGDirectDisplayID>,
+                            main: CGDirectDisplayID) -> [CGDirectDisplayID: CGPoint] {
+        let fixed = { (id: CGDirectDisplayID) in !streaming.contains(id) && !mirroring.contains(id) }
+        guard let reference = ([main] + now.keys.sorted()).first(where: { fixed($0) && before[$0] != nil }),
+              let then = before[reference], let present = now[reference] else { return [:] }
+        let dx = present.minX - then.minX, dy = present.minY - then.minY
+        var moves: [CGDirectDisplayID: CGPoint] = [:]
+        for id in streaming where !mirroring.contains(id) {
+            guard let old = before[id], let current = now[id] else { continue }
+            let target = CGPoint(x: old.minX + dx, y: old.minY + dy)
+            if target != current.origin { moves[id] = target }
+        }
+        guard !moves.isEmpty else { return [:] }
+        let frames = now.filter { !mirroring.contains($0.key) }.map { id, frame in
+            moves[id].map { CGRect(origin: $0, size: frame.size) } ?? frame
+        }
+        for (i, a) in frames.enumerated() {
+            for b in frames[(i + 1)...] {
+                let overlap = a.intersection(b)
+                if !overlap.isNull, overlap.width > 0, overlap.height > 0 { return [:] }
+            }
+        }
+        return moves
+    }
+
+    /// The displays to give their own desktop again: each of `streaming` mirroring a display
+    /// though not set to through DAM, and each display mirroring one of `streaming` the user
+    /// didn't mirror onto it through DAM; none an anchor's set holds.
+    static func mirrorsToRelease(streaming: Set<CGDirectDisplayID>, online: [CGDirectDisplayID],
+                                 masterOf: (CGDirectDisplayID) -> CGDirectDisplayID,
+                                 mirroringByChoice: Set<CGDirectDisplayID>,
+                                 mirroredByChoice: Set<CGDirectDisplayID>,
+                                 anchorManaged: Set<CGDirectDisplayID>) -> [CGDirectDisplayID] {
+        online.filter { id in
+            let master = masterOf(id)
+            guard master != 0, !anchorManaged.contains(id) else { return false }
+            if streaming.contains(id) { return !mirroringByChoice.contains(id) }
+            return streaming.contains(master) && !mirroredByChoice.contains(master)
+        }
+    }
+
+    /// Undoes what WindowServer does to the streaming displays while laying out a set a display
+    /// joined or left, from a layout it saved for it: frees those it put in a mirror set (one
+    /// mirroring another can't be captured, so its stream stops, and one mirrored takes the
+    /// others' screens, main with them), gives each the mode it was made in or set to (a
+    /// HiDPI one, say, for a stream of its pixel size) and puts it back where it was. Only
+    /// then, so a change made in System Settings later stays; a mirror the user made through
+    /// DAM stays too.
+    func keepStreamingDisplaysAsMade() {
+        guard displaySetChangedUntil > Date(), !streamingDisplays.isEmpty else { return }
+        guard !displayChangeInFlight else {
+            // Looked at again once the change has landed.
+            guard !streamingMirrorCheckPending else { return }
+            streamingMirrorCheckPending = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                self?.streamingMirrorCheckPending = false
+                self?.keepStreamingDisplaysAsMade()
+            }
+            return
+        }
+        let streaming = streamingDisplayIDs.subtracting(standInDisplayIDs)
+        let free = Self.mirrorsToRelease(streaming: streaming,
+                                         online: DisplayArrangement.onlineDisplayIDs(),
+                                         masterOf: { CGDisplayMirrorsDisplay($0) },
+                                         mirroringByChoice: streamingDisplaysMirroringByChoice,
+                                         mirroredByChoice: displaysMirroredByChoice,
+                                         anchorManaged: anchorManagedDisplayIDs)
+        // Not one left in a mirror set made through DAM: the set runs one mode on all of them.
+        let modes: [(CGDirectDisplayID, CGDisplayMode)] = streamingDisplays.compactMap { display in
+            let id = display.id
+            guard streaming.contains(id), CGDisplayMirrorsDisplay(id) == 0 || free.contains(id),
+                  !displaysMirroredByChoice.contains(id),
+                  let wanted = Self.displayMode(display.start, of: id),
+                  !(CGDisplayCopyDisplayMode(id).map { DisplayArrangement.sameMode($0, wanted) } ?? false)
+            else { return nil }
+            return (id, wanted)
+        }
+        // Where they were, once main is off them (`keepStreamingDisplayOffMain` hands it back)
+        // and none is freed: WindowServer moves them about a display that came or went.
+        let online = DisplayArrangement.onlineDisplayIDs()
+        let mainID = CGMainDisplayID()
+        let origins = !free.isEmpty || (streaming.contains(mainID) && !streamingDisplayIsMainByChoice) ? [:]
+            : Self.originsBack(before: framesBeforeSetChange,
+                               now: Dictionary(uniqueKeysWithValues: online.map { ($0, CGDisplayBounds($0)) }),
+                               streaming: streaming, mirroring: Set(online.filter { CGDisplayMirrorsDisplay($0) != 0 }),
+                               main: mainID)
+        guard !free.isEmpty || !modes.isEmpty || !origins.isEmpty else { return }
+        sdLog.debug("the display set changed; freeing \(free) from mirrors, modes back on \(modes.map(\.0)), moving \(Array(origins.keys))")
+        // So no layout DAM puts back (an anchor's, the streaming one) mirrors or moves them again.
+        if !free.isEmpty { keepUserMirror(free, on: 0) }
+        if !origins.isEmpty {
+            streamingSettle = streamingSettle.map { ($0.arrangement.replacingOrigins(origins), $0.until) }
+            for (name, arrangement) in virtualAnchorArrangements {
+                virtualAnchorArrangements[name] = arrangement.replacingOrigins(origins)
+            }
+        }
+        streamingMirrorReleaseInFlight = true
+        commitDisplayChange({ cfg in
+            for id in free { CGConfigureDisplayMirrorOfDisplay(cfg, id, CGDirectDisplayID(0)) }
+            for (id, mode) in modes { CGConfigureDisplayWithDisplayMode(cfg, id, mode, nil) }
+            for (id, origin) in origins {
+                CGConfigureDisplayOrigin(cfg, id, Int32(origin.x.rounded()), Int32(origin.y.rounded()))
+            }
+        }) { [weak self] _ in self?.streamingMirrorReleaseInFlight = false }
     }
 
     /// An addition, removal, resize or rotation of a streaming display, waiting its turn. An
@@ -343,7 +520,8 @@ extension VideoManager {
                                      identity: StreamingIdentity?, main: Bool,
                                      completion: ((CGDirectDisplayID?) -> Void)?) {
         let used = Set(streamingDisplays.map(\.index))
-        guard let index = (0..<Self.maxStreamingDisplays).first(where: { !used.contains($0) }) else {
+        guard mode.isValid, let index = (0..<Self.maxStreamingDisplays).first(where: { !used.contains($0) }) else {
+            if !mode.isValid { sdLog.error("add: no display can be made at \(mode.width)×\(mode.height)@\(mode.refreshRate)") }
             completion?(nil)
             return
         }
@@ -386,13 +564,7 @@ extension VideoManager {
             streamingDisplayIsMainByChoice = false
         }
         let vd = CGVirtualDisplay(descriptor: descriptor)
-        let settings = CGVirtualDisplaySettings()
-        settings.hiDPI = 1
-        settings.modes = StreamingDisplayModes.advertised(startingIn: mode).map {
-            CGVirtualDisplayMode(width: UInt($0.width), height: UInt($0.height),
-                                 refreshRate: Double($0.refreshRate))
-        }
-        guard vd.apply(settings) else {
+        guard vd.apply(StreamingDisplayModes.settings(startingIn: mode)) else {
             sdLog.error("add: applySettings failed")
             if streamingDisplays.isEmpty { streamingArrangement = nil }
             completion?(nil)
@@ -405,7 +577,7 @@ extension VideoManager {
                                                   start: mode, rotation: rotation, standsInFor: standIn?.name))
         streamingAddCompletion = completion
         streamingChangeInFlight = true
-        waitForStreamingDisplay(vd, index: index, serial: serial, before: before, main: main, attempt: 0)
+        waitForStreamingDisplay(vd, index: index, serial: serial, before: before, main: main)
     }
 
     /// Removes streaming display `index`, if it is still there, and puts the others back
@@ -423,7 +595,8 @@ extension VideoManager {
             streamingDisplayIsMainByChoice = false
         }
         // Its ID can come back for another display.
-        streamingDisplaysMirroredByChoice.remove(last.id)
+        displaysMirroredByChoice.remove(last.id)
+        streamingDisplaysMirroringByChoice.remove(last.id)
         // Dropping the last reference removes the display. While the set settles without
         // it, each change puts the resolutions and positions back if WindowServer's saved
         // layout for the smaller set changed them.
@@ -456,57 +629,50 @@ extension VideoManager {
         guard !streamingReassertInFlight, let settle = streamingSettle else { return }
         guard settle.until > Date() else { streamingSettle = nil; return }
         let arrangement = settle.arrangement
-        var config: CGDisplayConfigRef?
-        guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else { return }
-        // Resolutions only for the same displays, mirrored the same way (see reapplyModes).
-        let sameSet = DisplayArrangement.sameSet(captured: arrangement.mirrorMasters,
-                                                 online: DisplayArrangement.onlineDisplayIDs(),
-                                                 mirrorOf: { CGDisplayMirrorsDisplay($0) })
-        let resized = sameSet && arrangement.restoreModes(in: cfg, excluding: [])
-        guard arrangement.restore(in: cfg, excluding: []) || resized else {
-            CGCancelDisplayConfiguration(cfg)
-            return
-        }
-        streamingReassertInFlight = true
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let err = CGCompleteDisplayConfiguration(cfg, .permanently)
+        // Not what the anchors keep: the layout can be from before an anchor came or went.
+        let excluded = anchorManagedDisplayIDs
+        let start = Self.configureDisplays(in: .permanently, { cfg in
+            // Resolutions only for the same displays, mirrored the same way (see sameSet).
+            let sameSet = DisplayArrangement.sameSet(captured: arrangement.mirrorMasters,
+                                                     online: DisplayArrangement.onlineDisplayIDs(),
+                                                     mirrorOf: { CGDisplayMirrorsDisplay($0) })
+            let resized = sameSet && arrangement.restoreModes(in: cfg, excluding: excluded)
+            return arrangement.restore(in: cfg, excluding: excluded) || resized
+        }) { [weak self] err in
             sdLog.debug("reassert: CompleteDisplayConfiguration err=\(err.rawValue)")
-            DispatchQueue.main.async {
-                guard let self else { return }
-                // A change that arrived meanwhile was skipped; look now.
-                self.streamingReassertInFlight = false
-                self.reassertStreamingLayout()
-                self.processStreamingRequests()
-            }
+            guard let self else { return }
+            // A change that arrived meanwhile was skipped; look now.
+            self.streamingReassertInFlight = false
+            self.reassertStreamingLayout()
+            self.processStreamingRequests()
         }
+        if case .committing = start { streamingReassertInFlight = true }
     }
 
     /// Gives streaming display `id` a mode list starting with `mode`, then switches to it once
     /// WindowServer lists it, putting the others back as they were.
     private func resizeStreamingDisplay(id: CGDirectDisplayID, mode: StreamingDisplayModes.Mode,
                                         completion: @escaping (Bool) -> Void) {
-        guard id != 0, let i = streamingDisplays.firstIndex(where: { $0.id == id }),
+        guard id != 0, mode.isValid, let i = streamingDisplays.firstIndex(where: { $0.id == id }),
               let vd = streamingDisplays[i].display as? CGVirtualDisplay,
               mode.pixelWidth <= Int(vd.maxPixelsWide), mode.pixelHeight <= Int(vd.maxPixelsHigh) else {
             return completion(false)
         }
-        // Already in it, mirroring nothing: nothing to do. Asked here, before the new mode list:
-        // once a virtual display is given one, it reports the list's first mode as its own
-        // straight away, while it still runs the old one.
-        if CGDisplayMirrorsDisplay(id) == 0, let wanted = Self.displayMode(mode, of: id),
-           let current = CGDisplayCopyDisplayMode(id), DisplayArrangement.sameMode(wanted, current) {
+        // A mirror the user made through DAM is kept; any other goes, so that the display shows
+        // its own desktop at the new size.
+        let keepsMirror = CGDisplayMirrorsDisplay(id) != 0 && streamingDisplaysMirroringByChoice.contains(id)
+        // What it runs, asked before the new mode list: once a virtual display is given one, it
+        // reports the list's first mode as its own straight away, while it still runs the old one.
+        let running = CGDisplayCopyDisplayMode(id)
+        // Already in it, mirroring nothing or as chosen: nothing to do.
+        if CGDisplayMirrorsDisplay(id) == 0 || keepsMirror, let running, let wanted = Self.displayMode(mode, of: id),
+           DisplayArrangement.sameMode(wanted, running) {
             streamingDisplays[i].start = mode
             return completion(true)
         }
         let index = streamingDisplays[i].index
         sdLog.debug("resize \(index) to \(mode.width)×\(mode.height)@\(mode.refreshRate)\(mode.hiDPI ? " HiDPI" : "")")
-        let settings = CGVirtualDisplaySettings()
-        settings.hiDPI = 1
-        settings.modes = StreamingDisplayModes.advertised(startingIn: mode).map {
-            CGVirtualDisplayMode(width: UInt($0.width), height: UInt($0.height),
-                                 refreshRate: Double($0.refreshRate))
-        }
-        guard vd.apply(settings) else {
+        guard vd.apply(StreamingDisplayModes.settings(startingIn: mode)) else {
             sdLog.error("resize: applySettings failed")
             return completion(false)
         }
@@ -515,10 +681,15 @@ extension VideoManager {
         streamingSettle?.arrangement.modes[id] = nil
         streamingChangeInFlight = true
         let before = activeStreamingSettle ?? DisplayArrangement.current()
-        switchStreamingDisplay(id, to: mode, before: before, attempt: 0) { [weak self] done in
+        switchStreamingDisplay(id, to: mode, keepingMirror: keepsMirror, before: before, attempt: 0) { [weak self, weak vd] done in
             // Only once it runs it: a rotation that failed goes back to the old one.
             if done, let i = self?.streamingDisplays.firstIndex(where: { $0.id == id }) {
                 self?.streamingDisplays[i].start = mode
+            } else if !done, let running {
+                // Its mode list goes back to one led by what it still runs, or it would go on
+                // reporting the new mode as its own, and asking for that again would do nothing.
+                sdLog.debug("resize: failed; listing \(running.width)×\(running.height) first again")
+                _ = vd?.apply(StreamingDisplayModes.settings(startingIn: StreamingDisplayModes.Mode(running)))
             }
             completion(done)
         }
@@ -550,9 +721,10 @@ extension VideoManager {
     }
 
     /// Switches `id` to `mode` once WindowServer lists it, which takes a moment after a new
-    /// mode list; gives up after two seconds. `completion` runs before the next change starts.
+    /// mode list; gives up after two seconds. Unless `keepingMirror`, it stops mirroring.
+    /// `completion` runs before the next change starts.
     private func switchStreamingDisplay(_ id: CGDirectDisplayID, to mode: StreamingDisplayModes.Mode,
-                                        before: DisplayArrangement, attempt: Int,
+                                        keepingMirror: Bool, before: DisplayArrangement, attempt: Int,
                                         completion: @escaping (Bool) -> Void) {
         guard let target = Self.displayMode(mode, of: id) else {
             guard attempt < 20, DisplayArrangement.onlineDisplayIDs().contains(id) else {
@@ -561,47 +733,50 @@ extension VideoManager {
                 return finishStreamingChange()
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-                self?.switchStreamingDisplay(id, to: mode, before: before, attempt: attempt + 1, completion: completion)
+                self?.switchStreamingDisplay(id, to: mode, keepingMirror: keepingMirror, before: before,
+                                             attempt: attempt + 1, completion: completion)
             }
             return
         }
-        var config: CGDisplayConfigRef?
-        guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else {
-            completion(false)
-            return finishStreamingChange()
-        }
-        // WindowServer may mirror, move or resize the others for the new size.
-        if CGDisplayMirrorsDisplay(id) != 0 { CGConfigureDisplayMirrorOfDisplay(cfg, id, CGDirectDisplayID(0)) }
-        _ = before.restore(in: cfg, excluding: [id])
-        before.restoreModes(in: cfg, excluding: [id])
-        // Always: given a new mode list, the display reports `target` as its mode already
-        // (see resizeStreamingDisplay), so asking whether it runs it says nothing.
-        CGConfigureDisplayWithDisplayMode(cfg, id, target, nil)
+        let master = keepingMirror ? CGDisplayMirrorsDisplay(id) : 0
         let origin = before.origins[id] ?? CGDisplayBounds(id).origin
-        let resized = before.excluding(id).adding(id, origin: origin, mode: target)
+        let resized = before.excluding(id).adding(id, origin: origin, mode: target, mirroring: master)
         let settle = { [weak self] (done: Bool) in
             guard let self else { return completion(false) }
-            self.streamingSettle = (resized, Date().addingTimeInterval(5))
+            // Failed, it still runs its old mode, which the layout taken after the new list
+            // doesn't hold.
+            self.streamingSettle = (done ? resized : before.excluding(id), Date().addingTimeInterval(5))
             self.reassertStreamingLayout()
             self.mergeDevices()
             completion(done)
             self.finishStreamingChange()
         }
         // For the session, as placing one is.
-        DispatchQueue.global(qos: .userInitiated).async {
-            let err = CGCompleteDisplayConfiguration(cfg, .forSession)
+        let start = Self.configureDisplays(in: .forSession, { cfg in
+            // WindowServer may mirror, move or resize the others for the new size.
+            if CGDisplayMirrorsDisplay(id) != master { CGConfigureDisplayMirrorOfDisplay(cfg, id, master) }
+            _ = before.restore(in: cfg, excluding: [id])
+            before.restoreModes(in: cfg, excluding: [id])
+            // Always: given a new mode list, the display reports `target` as its mode already
+            // (see resizeStreamingDisplay), so asking whether it runs it says nothing.
+            CGConfigureDisplayWithDisplayMode(cfg, id, target, nil)
+            return true
+        }) { err in
             sdLog.debug("resize: CompleteDisplayConfiguration err=\(err.rawValue)")
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { settle(err == .success) }
+        }
+        if case .failed = start {
+            completion(false)
+            finishStreamingChange()
         }
     }
 
     /// The mode of `id` that is `mode`: its size, rate and scale.
     static func displayMode(_ mode: StreamingDisplayModes.Mode, of id: CGDirectDisplayID) -> CGDisplayMode? {
-        let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
-        let modes = CGDisplayCopyAllDisplayModes(id, options) as? [CGDisplayMode] ?? []
-        return modes.first {
+        DisplayArrangement.listedModes(of: id).first {
             $0.width == mode.width && $0.height == mode.height && $0.pixelWidth == mode.pixelWidth
-                && Int($0.refreshRate.rounded()) == mode.refreshRate
+                && $0.pixelHeight == mode.pixelHeight
+                && DisplayArrangement.RateMatch.wholeHertz.matches($0.refreshRate, Double(mode.refreshRate))
         }
     }
 
@@ -609,7 +784,8 @@ extension VideoManager {
     private func streamingDisplayEnded(index: Int) {
         guard let i = streamingDisplays.firstIndex(where: { $0.index == index }) else { return }
         sdLog.debug("terminationHandler: streaming display \(index) ended")
-        streamingDisplaysMirroredByChoice.remove(streamingDisplays[i].id)
+        displaysMirroredByChoice.remove(streamingDisplays[i].id)
+        streamingDisplaysMirroringByChoice.remove(streamingDisplays[i].id)
         streamingDisplays.remove(at: i)
         if streamingDisplays.isEmpty {
             streamingArrangement = nil
@@ -624,36 +800,29 @@ extension VideoManager {
     }
 
     private func waitForStreamingDisplay(_ vd: CGVirtualDisplay, index: Int, serial: UInt32,
-                                         before: DisplayArrangement, main: Bool, attempt: Int) {
-        // Ended meanwhile; nothing else finishes this change.
-        guard isStreamingDisplay(vd) else { return finishStreamingChange() }
-        let online = DisplayArrangement.onlineDisplayIDs()
-        let id = vd.displayID != 0 && online.contains(vd.displayID)
-            ? vd.displayID
-            : online.first {
-                CGDisplayVendorNumber($0) == Self.anchorVendorID
-                    && CGDisplayModelNumber($0) == Self.streamingProductID
-                    && CGDisplaySerialNumber($0) == serial
-            } ?? 0
-        if id != 0, let i = streamingDisplays.firstIndex(where: { $0.display === vd }) {
-            sdLog.debug("\(index) online as \(id)")
-            streamingDisplays[i].id = id
-            // Let WindowServer lay out the new set first; it would undo a placement made before.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-                guard let self else { return }
-                guard self.isStreamingDisplay(vd) else { return self.finishStreamingChange() }
-                self.placeStreamingDisplay(id, before: before, main: main)
+                                         before: DisplayArrangement, main: Bool) {
+        whenOnline(vd, product: Self.streamingProductID, serial: serial,
+                   wanted: { [weak self] in self?.isStreamingDisplay(vd) ?? false }) { [weak self] search in
+            guard let self else { return }
+            switch search {
+            case .found(let id):
+                sdLog.debug("\(index) online as \(id)")
+                if let i = self.streamingDisplays.firstIndex(where: { $0.display === vd }) { self.streamingDisplays[i].id = id }
+                // Let WindowServer lay out the new set first; it would undo a placement made before.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                    guard let self else { return }
+                    guard self.isStreamingDisplay(vd) else { return self.finishStreamingChange() }
+                    self.placeStreamingDisplay(id, before: before, main: main)
+                }
+            case .released:
+                // Ended meanwhile; nothing else finishes this change.
+                self.finishStreamingChange()
+            case .neverCame:
+                sdLog.error("\(index) never came online — dropping it")
+                self.streamingDisplays.removeAll { $0.display === vd }
+                if self.streamingDisplays.isEmpty { self.streamingArrangement = nil }
+                self.finishStreamingChange()
             }
-            return
-        }
-        guard attempt < 10 else {
-            sdLog.error("\(index) never came online — dropping it")
-            streamingDisplays.removeAll { $0.display === vd }
-            if streamingDisplays.isEmpty { streamingArrangement = nil }
-            return finishStreamingChange()
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-            self?.waitForStreamingDisplay(vd, index: index, serial: serial, before: before, main: main, attempt: attempt + 1)
         }
     }
 
@@ -682,8 +851,27 @@ extension VideoManager {
             // fires no reconfiguration to check this.
             self?.finishStreamingChange(placed: id)
         }
-        var config: CGDisplayConfigRef?
-        guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else {
+        // For the session, not the app: when another app's own changes end, WindowServer goes
+        // back to the session's layout, which would undo app-only ones.
+        let transaction = Self.configureDisplays(in: .forSession, { cfg in
+            // Set before the commit, or the check after it would hand main back; not before
+            // the configuration begins, or a failure there would leave it set.
+            if main { streamingDisplayIsMainByChoice = true }
+            // WindowServer may have mirrored, moved or changed the resolutions of the others for
+            // the new set, or laid it out as placed already, from a layout it saved for the set.
+            let moved = placed.restore(in: cfg, excluding: [])
+            return placed.restoreModes(in: cfg, excluding: []) || moved
+        }) { err in
+            sdLog.debug("place: CompleteDisplayConfiguration err=\(err.rawValue)")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: settle)
+        }
+        switch transaction {
+        case .committing:
+            break
+        case .unchanged:
+            sdLog.debug("place: already in place")
+            settle()
+        case .failed:
             // Told none was made, so none is left: dropping it removes it, as for one that
             // never came online.
             sdLog.error("place: could not begin a configuration — dropping \(id)")
@@ -691,26 +879,6 @@ extension VideoManager {
             if streamingDisplays.isEmpty { streamingArrangement = nil }
             mergeDevices()
             finishStreamingChange()
-            return
-        }
-        // Set before the commit, or the check after it would hand main back; not before
-        // the configuration begins, or a failure there would leave it set.
-        if main { streamingDisplayIsMainByChoice = true }
-        // WindowServer may have mirrored, moved or changed the resolutions of the others for the
-        // new set, or laid it out as placed already, from a layout it saved for the set.
-        let moved = placed.restore(in: cfg, excluding: [])
-        guard placed.restoreModes(in: cfg, excluding: []) || moved else {
-            // A commit that changes nothing takes 10 s to return.
-            sdLog.debug("place: already in place")
-            CGCancelDisplayConfiguration(cfg)
-            return settle()
-        }
-        // For the session, not the app: when another app's own changes end, WindowServer goes
-        // back to the session's layout, which would undo app-only ones.
-        DispatchQueue.global(qos: .userInitiated).async {
-            let err = CGCompleteDisplayConfiguration(cfg, .forSession)
-            sdLog.debug("place: CompleteDisplayConfiguration err=\(err.rawValue)")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: settle)
         }
     }
 }

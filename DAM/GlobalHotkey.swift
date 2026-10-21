@@ -54,6 +54,11 @@ final class GlobalHotkey {
     private var hotKeyRef: EventHotKeyRef?
     private var preference: HotkeyPreference
 
+    /// Every hotkey there is, to pause them all.
+    private static let all = NSHashTable<GlobalHotkey>.weakObjects()
+    /// While above zero no hotkey is registered, as a shortcut recorder is taking keys.
+    private static var pauses = 0
+
     /// Registers `preference` as a system-wide hotkey. `action` is called on
     /// the main thread each time it fires.
     init(preference: HotkeyPreference, action: @escaping () -> Void) {
@@ -62,11 +67,27 @@ final class GlobalHotkey {
         _nextHotkeyID += 1
         self.preference = preference
         _hotkeyActions[id] = { DispatchQueue.main.async { action() } }
+        Self.all.add(self)
         register()
     }
 
+    /// Unregisters every hotkey until `resumeAll()`, so a shortcut recorder gets the keys
+    /// another shortcut has rather than that shortcut acting on them.
+    static func pauseAll() {
+        pauses += 1
+        if pauses == 1 { for hotkey in all.allObjects { hotkey.unregister() } }
+    }
+
+    /// Registers every hotkey again once each pause has been resumed, in the order they were
+    /// made, so the one made first keeps keys two of them share, as at launch.
+    static func resumeAll() {
+        guard pauses > 0 else { return }
+        pauses -= 1
+        if pauses == 0 { for hotkey in all.allObjects.sorted(by: { $0.id < $1.id }) { hotkey.register() } }
+    }
+
     /// Whether the keys are registered; not while another shortcut, of this app or another,
-    /// has them.
+    /// has them, nor while hotkeys are paused.
     var isRegistered: Bool { hotKeyRef != nil }
 
     /// Re-registers with a new key binding (call after the user changes the shortcut).
@@ -81,8 +102,13 @@ final class GlobalHotkey {
         if !isRegistered { register() }
     }
 
-    private func register() {
+    private func unregister() {
         if let ref = hotKeyRef { UnregisterEventHotKey(ref); hotKeyRef = nil }
+    }
+
+    private func register() {
+        unregister()
+        guard Self.pauses == 0 else { return }
         let sig  = AppIdentity.fourCharCode
         let hkID = EventHotKeyID(signature: sig, id: id)
         var ref: EventHotKeyRef?
@@ -97,7 +123,7 @@ final class GlobalHotkey {
     }
 
     deinit {
-        if let ref = hotKeyRef { UnregisterEventHotKey(ref) }
+        unregister()
         _hotkeyActions.removeValue(forKey: id)
     }
 }

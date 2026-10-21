@@ -10,8 +10,6 @@
 import AppKit
 
 private extension HUDHint {
-    static let mainPicking  = HUDHint(leading: "Hotkey for next, or press a number",
-                                      trailing: "Esc to cancel")
     static let mainChanging = HUDHint(leading: "Moving the menu bar", trailing: "")
 }
 
@@ -21,7 +19,6 @@ final class MainDisplayPicker {
 
     private weak var videoManager: VideoManager?
     private let picker = ChoicePicker(idPrefix: "\(AppIdentity.shortID).main",
-                                      pickingHint: .mainPicking,
                                       pickedHint: { _ in .mainChanging })
 
     private init() {}
@@ -40,12 +37,7 @@ final class MainDisplayPicker {
     /// the next display when already open. Picking the current main display again changes
     /// nothing.
     func advance() {
-        if picker.isCycling {
-            picker.advance()
-            return
-        }
-        picker.close()
-        guard let vm = videoManager else { return }
+        guard !picker.advanceIfOpen(), let vm = videoManager else { return }
         vm.refresh()
         let candidates = vm.mainDisplayCandidates()
         guard candidates.count >= 2 else {
@@ -65,14 +57,9 @@ final class MainDisplayPicker {
     }
 
 #if DEBUG
-    /// Opens the picker on sample displays, steps the cursor once, then lets it pick after
-    /// the pause, silently, without changing the displays.
+    /// Plays the picker on sample displays, without changing the displays.
     func playDebugPreview() {
-        picker.open(choices: ["Built-in Display", "LEN T24i-20", "Living Room TV"],
-                    cursor: 1, preview: true) { _ in }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [picker] in
-            picker.previewMove(to: 2)
-        }
+        picker.playPreview(["Built-in Display", "LEN T24i-20", "Living Room TV"])
     }
 #endif
 }

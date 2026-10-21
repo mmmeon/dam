@@ -114,8 +114,23 @@
 /* Moonlight hosting stopped; the value is the system's reason */
 "Stopped: %@" = "Stopped: %@";
 
+/* Browser stream turned on */
+"Browsers can watch" = "Browsers can watch";
+
+/* Browser stream turned off */
+"Browsers can no longer watch" = "Browsers can no longer watch";
+
+/* Browser stream failed with no reason */
+"The browser stream could not start" = "The browser stream could not start";
+
+/* Shown with the browser pairing prompt */
+"A browser wants to watch. Type the code it shows." = "A browser wants to watch. Type the code it shows.";
+
 /* Shown with the pairing PIN prompt */
 "Moonlight wants to pair. Type the PIN it shows." = "Moonlight wants to pair. Type the PIN it shows.";
+
+/* A player link for the browser stream was copied */
+"Copied the link" = "Copied the link";
 
 /* The player page address was copied */
 "Copied %@" = "Copied %@";
@@ -146,6 +161,9 @@
 
 /* Arrange preview: the first value is the display being moved, the second the display it is placed next to */
 "%@ below %@" = "%@ below %@";
+
+/* Tooltip of a shortcut field whose keys another app has registered */
+"Another app uses this shortcut." = "Another app uses this shortcut.";
 
 /* Debug menu */
 "Checking Screen Mirroring" = "Checking Screen Mirroring";

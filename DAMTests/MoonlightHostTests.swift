@@ -44,7 +44,7 @@ final class MoonlightHostTests: XCTestCase {
 
         static func make() throws -> Client {
             let key = try MoonlightCrypto.generatePrivateKey()
-            let certificate = try MoonlightCrypto.selfSignedCertificate(key: key, commonName: "NVIDIA GameStream Client")
+            let certificate = try MoonlightCrypto.certificate(key: key, subject: "NVIDIA GameStream Client", days: 20 * 365)
             let identity = try XCTUnwrap(MoonlightHost.makeIdentity(
                 try XCTUnwrap(SecCertificateCreateWithData(nil, certificate as CFData)), key))
             return Client(key: key, certificate: certificate, identity: identity)
@@ -625,12 +625,12 @@ final class MoonlightHostTests: XCTestCase {
         XCTAssertTrue(try pair(client, pin: "1234"))
         XCTAssertEqual(field("gamesession", in: try launchNewDisplay(client)), "1")
         let common = "X-GS-ClientVersion: 14\r\nHost: 127.0.0.1\r\n"
-        // From another of the Mac's own addresses, as another device's would be.
+        // From another of the Mac's own addresses, as Moonlight on this Mac may come: answered,
+        // as no other device can send from them (others are turned away, see MoonlightRTSPTests).
         if let other = LocalNetwork.interfaceSubnets().first(where: { $0.address.count == 4 && ![127, 169].contains($0.address[0]) }) {
-            let reply = rtsp("SETUP streamid=video/0/0 RTSP/1.0\r\nCSeq: 4\r\n\(common)\r\n",
+            let reply = rtsp("OPTIONS rtsp://127.0.0.1:48010 RTSP/1.0\r\nCSeq: 4\r\n\(common)\r\n",
                              to: other.address.map(String.init).joined(separator: "."))
-            XCTAssertTrue(reply.hasPrefix("RTSP/1.0 403"), reply)
-            XCTAssertNil(header("X-SS-Ping-Payload", in: reply))
+            XCTAssertTrue(reply.hasPrefix("RTSP/1.0 200"), reply)
         }
         let sdp = "v=0\r\na=x-ss-general.encryptionEnabled:1 \r\na=x-nv-video[0].clientViewportWd:1280 \r\n" +
                   "a=x-nv-video[0].clientViewportHt:720 \r\na=x-nv-video[0].maxFPS:60 \r\n" +

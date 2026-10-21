@@ -92,13 +92,32 @@ final class ScreenMirroringPanel {
         NSWorkspace.shared.open(url)
     }
 
-    /// The row's identifier (or its title, when it has none) ends with the device name.
-    /// Each device also has a disclosure triangle with the same identifier, which only
-    /// expands the device's options, so that role is skipped.
+    /// The row's identifier ends with the device name after a separator (as in
+    /// "screen-mirroring-device-Living Room TV"), or, when it has none, its title is the
+    /// name; so "Apple TV" doesn't match "Bedroom Apple TV". Each device also has a
+    /// disclosure triangle with the same identifier, which only expands the device's
+    /// options, so that role is skipped.
     static func matchesDevice(identifier: String?, title: String?, role: String?,
                               deviceName: String) -> Bool {
-        let label = identifier ?? title ?? ""
-        return label.hasSuffix(deviceName) && role != kAXDisclosureTriangleRole
+        guard role != kAXDisclosureTriangleRole, !deviceName.isEmpty else { return false }
+        guard let identifier else { return title == deviceName }
+        guard identifier.hasSuffix(deviceName) else { return false }
+        guard let separator = identifier.dropLast(deviceName.count).last else { return true }
+        return separator.isPunctuation || separator.isSymbol
+    }
+
+    /// Of the rows that match, the one to press: the closest match (the shortest label, so
+    /// "Apple TV" over "Bedroom-Apple TV"), a checkbox before any other role.
+    static func bestMatch(among rows: [(identifier: String?, title: String?, role: String?)],
+                          deviceName: String) -> Int? {
+        let matching = rows.indices.filter {
+            matchesDevice(identifier: rows[$0].identifier, title: rows[$0].title, role: rows[$0].role,
+                          deviceName: deviceName)
+        }
+        let length = { (i: Int) in (rows[i].identifier ?? rows[i].title ?? "").count }
+        let shortest = matching.map(length).min()
+        let closest = matching.filter { length($0) == shortest }
+        return closest.first { rows[$0].role == kAXCheckBoxRole } ?? closest.first
     }
 
     // MARK: - Timing
@@ -309,10 +328,9 @@ final class ScreenMirroringPanel {
     }
 
     private static func findDevice(named name: String, in window: AXUIElement) -> AXUIElement? {
-        let rows = window.descendants(maxDepth: 5).filter {
-            matchesDevice(identifier: $0.identifier, title: $0.title, role: $0.role, deviceName: name)
-        }
-        return rows.first { $0.role == kAXCheckBoxRole } ?? rows.first
+        let elements = window.descendants(maxDepth: 5)
+        let rows = elements.map { (identifier: $0.identifier, title: $0.title, role: $0.role) }
+        return bestMatch(among: rows, deviceName: name).map { elements[$0] }
     }
 
     /// Logs every window's element tree, for diagnosing an item that was not found. A

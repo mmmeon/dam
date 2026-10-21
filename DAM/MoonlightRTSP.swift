@@ -156,6 +156,7 @@ final class MoonlightRTSP {
     /// The reply to `request`, from the device at `address`. Moonlight needs at least one
     /// header in every reply, values after exactly one space, and a non-empty DESCRIBE body.
     static func response(to request: Request, from address: String, launch: MoonlightLaunch?,
+                         ownAddresses: @autoclosure () -> Set<String> = LocalNetwork.ownAddresses(),
                          announce: (MoonlightLaunch, MoonlightStreamConfig) -> String?) -> String {
         let sequence = request.headers["CSeq"] ?? "0"
         func reply(_ status: String, _ headers: KeyValuePairs<String, String> = [:], body: String = "") -> String {
@@ -164,8 +165,10 @@ final class MoonlightRTSP {
             return text + "\r\n" + body
         }
         guard let launch else { return reply("503 Service Unavailable") }
-        // Only the device that launched: SETUP hands out the stream's tokens.
-        guard !launch.clientAddress.isEmpty, address == launch.clientAddress else {
+        // Only the device that launched: SETUP hands out the stream's tokens. A Moonlight on this
+        // Mac may come through any of the Mac's own addresses, which no other device can.
+        guard !launch.clientAddress.isEmpty,
+              address == launch.clientAddress || ownAddresses().isSuperset(of: [address, launch.clientAddress]) else {
             rtLog.error("\(request.method, privacy: .public) refused from \(address, privacy: .public): not the device that launched")
             return reply("403 Forbidden")
         }

@@ -10,8 +10,6 @@
 import AppKit
 
 private extension HUDHint {
-    static let resolutionPicking  = HUDHint(leading: "Hotkey for next, or press a number",
-                                            trailing: "Esc to cancel")
     static let resolutionChanging = HUDHint(leading: "Changing the resolution", trailing: "")
 }
 
@@ -23,7 +21,6 @@ final class ResolutionPicker {
     /// Applies a picked mode to its display, as the menu's resolution items do.
     private var select: ((DisplayMode, DisplayInfo) -> Void)?
     private let picker = ChoicePicker(idPrefix: "\(AppIdentity.shortID).resolution",
-                                      pickingHint: .resolutionPicking,
                                       pickedHint: { _ in .resolutionChanging })
 
     private init() {}
@@ -37,18 +34,9 @@ final class ResolutionPicker {
     /// next one, as set), or moves to the next resolution when already open. Picking the
     /// current resolution again changes nothing.
     func advance() {
-        if picker.isCycling {
-            picker.advance()
-            return
-        }
-        picker.close()
-        guard let vm = videoManager else { return }
+        guard !picker.advanceIfOpen(), let vm = videoManager else { return }
         vm.refresh()
-        guard let display = vm.displayUnderPointer() else { return }
-        if let master = vm.anchoredMaster(of: display) {
-            SpeechSynthesizer.shared.announce(Spoken.follows(display.label, master.label))
-            return
-        }
+        guard let display = ChoicePicker.displayUnderPointer(in: vm) else { return }
         let (modes, current) = vm.resolutionChoices(for: display, includeLarger1x: true).flattened()
         guard modes.count >= 2 else {
             SpeechSynthesizer.shared.announce(Spoken.noOtherResolution(for: display.label))
@@ -62,14 +50,9 @@ final class ResolutionPicker {
     }
 
 #if DEBUG
-    /// Opens the picker on sample resolutions, steps the cursor once, then lets it pick after
-    /// the pause, silently, without changing the display.
+    /// Plays the picker on sample resolutions, without changing the display.
     func playDebugPreview() {
-        picker.open(choices: ["2560 × 1440  HiDPI", "1920 × 1080  HiDPI", "1280 × 720  HiDPI"],
-                    cursor: 1, preview: true) { _ in }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [picker] in
-            picker.previewMove(to: 2)
-        }
+        picker.playPreview(["2560 × 1440  HiDPI", "1920 × 1080  HiDPI", "1280 × 720  HiDPI"])
     }
 #endif
 }

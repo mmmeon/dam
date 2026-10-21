@@ -128,6 +128,46 @@ final class StreamingDisplayTests: XCTestCase {
         XCTAssertEqual(arrangement.makingMain(2).origins, [1: CGPoint(x: -1440, y: 0), 2: .zero])
     }
 
+    func testOnlyAModeADisplayCanBeMadeInIsValid() {
+        XCTAssertTrue(StreamingDisplayModes.start.isValid)
+        XCTAssertTrue(StreamingDisplayModes.forStream(width: 7680, height: 4320, fps: 120).isValid)
+        XCTAssertFalse(StreamingDisplayModes.Mode(width: -1920, height: 1080, refreshRate: 60).isValid)
+        XCTAssertFalse(StreamingDisplayModes.Mode(width: 1920, height: 0, refreshRate: 60).isValid)
+        XCTAssertFalse(StreamingDisplayModes.Mode(width: 1920, height: 1080, refreshRate: 0).isValid)
+        XCTAssertFalse(StreamingDisplayModes.Mode(width: 1920, height: 1080, refreshRate: 100_000).isValid)
+        XCTAssertFalse(StreamingDisplayModes.Mode(width: 5000, height: 2000, refreshRate: 60, hiDPI: true).isValid)
+        // Asked without working out its pixels, which would overflow.
+        XCTAssertFalse(StreamingDisplayModes.Mode(width: .max, height: 1080, refreshRate: 60, hiDPI: true).isValid)
+        XCTAssertFalse(StreamingDisplayModes.forStream(width: .max, height: 1080, fps: 60).isValid)
+    }
+
+    func testAnInvalidModeMakesNoDisplay() {
+        let manager = VideoManager()
+        var result: CGDirectDisplayID?? = .none
+        manager.createStreamingDisplay(mode: .init(width: -5, height: 1080, refreshRate: 60)) { result = $0 }
+        XCTAssertEqual(result, .some(nil))
+        XCTAssertTrue(manager.streamingDisplays.isEmpty)
+    }
+
+    func testArrangementPutsBackOnlyMirrorsOntoMastersStillOnline() {
+        let arrangement = DisplayArrangement(origins: [1: .zero], mirrorMasters: [1: 0, 2: 1, 3: 9, 4: 0, 5: 1])
+        // 2 and 3 have since been extended, 4 mirrored onto 1; 9 has gone; 5 is left out.
+        let live: [CGDirectDisplayID: CGDirectDisplayID] = [1: 0, 2: 0, 3: 0, 4: 1, 5: 0]
+        let changes = arrangement.mirrorChanges(online: [1, 2, 3, 4, 5], excluding: [5], mirrorOf: { live[$0] ?? 0 })
+        XCTAssertEqual(changes, [2: 1, 4: 0])
+    }
+
+    func testArrangementMovesOnlyDisplaysShowingTheirOwnDesktop() {
+        let arrangement = DisplayArrangement(origins: [1: .zero, 2: CGPoint(x: 1440, y: 0), 3: CGPoint(x: -1920, y: 0),
+                                                       4: CGPoint(x: 0, y: 900), 5: CGPoint(x: 0, y: -900)],
+                                             mirrorMasters: [1: 0, 2: 0, 3: 0, 4: 0, 5: 1])
+        // All moved since; 3 has been mirrored onto 1, 4 is left out, 5 was a mirror slave.
+        let live: [CGDirectDisplayID: CGDirectDisplayID] = [3: 1, 5: 1]
+        let changes = arrangement.originChanges(online: [1, 2, 3, 4, 5], excluding: [4], mirrorOf: { live[$0] ?? 0 },
+                                                originOf: { _ in CGPoint(x: 5000, y: 0) })
+        XCTAssertEqual(changes, [1: .zero, 2: CGPoint(x: 1440, y: 0)])
+    }
+
     // MARK: - Main display
 
     func testHandsMainBackToTheDisplayThatHadIt() {
@@ -161,6 +201,96 @@ final class StreamingDisplayTests: XCTestCase {
 
     func testGoesAtTheOriginWithNoOtherDisplay() {
         XCTAssertEqual(VideoManager.streamingDisplayOrigin(others: []), .zero)
+    }
+
+    // MARK: - Mirrors WindowServer makes when a display joins
+
+    /// 1 the Mac, 2 a TV, 10 and 11 streaming displays, 20 an anchor.
+    private func release(masters: [CGDirectDisplayID: CGDirectDisplayID],
+                         mirroringByChoice: Set<CGDirectDisplayID> = [],
+                         mirroredByChoice: Set<CGDirectDisplayID> = [],
+                         anchorManaged: Set<CGDirectDisplayID> = []) -> [CGDirectDisplayID] {
+        VideoManager.mirrorsToRelease(streaming: [10, 11], online: [1, 2, 10, 11, 20],
+                                      masterOf: { masters[$0] ?? 0 },
+                                      mirroringByChoice: mirroringByChoice, mirroredByChoice: mirroredByChoice,
+                                      anchorManaged: anchorManaged)
+    }
+
+    func testAStreamingDisplayMirroringTheTVIsFreed() {
+        XCTAssertEqual(release(masters: [10: 2]), [10])
+    }
+
+    func testTheTVMirroringAStreamingDisplayIsFreed() {
+        XCTAssertEqual(release(masters: [2: 10, 1: 10]), [1, 2])
+    }
+
+    func testMirrorsMadeThroughDAMStay() {
+        XCTAssertEqual(release(masters: [10: 2], mirroringByChoice: [10]), [])
+        XCTAssertEqual(release(masters: [2: 11], mirroredByChoice: [11]), [])
+    }
+
+    /// The Lenovo (1) main with the iPad's display (11) and Moonlight's (10) right of it, before
+    /// the TV came.
+    private let settled: [CGDirectDisplayID: CGRect] = [
+        1: CGRect(x: 0, y: 0, width: 1920, height: 1080),
+        11: CGRect(x: 1920, y: 0, width: 1024, height: 768),
+        10: CGRect(x: 2944, y: 0, width: 1920, height: 1080),
+    ]
+
+    func testStreamingDisplaysGoBackWhereTheyWereOnceTheTVLeaves() {
+        // As seen: after the TV left, Moonlight's display took the iPad's place, and the iPad's
+        // went left of the Lenovo.
+        let now: [CGDirectDisplayID: CGRect] = [
+            1: CGRect(x: 0, y: 0, width: 1920, height: 1080),
+            10: CGRect(x: 1920, y: 0, width: 1920, height: 1080),
+            11: CGRect(x: -1024, y: 533, width: 1024, height: 768),
+        ]
+        let moves = VideoManager.originsBack(before: settled, now: now, streaming: [10, 11], mirroring: [], main: 1)
+        XCTAssertEqual(moves, [10: CGPoint(x: 2944, y: 0), 11: CGPoint(x: 1920, y: 0)])
+    }
+
+    func testStreamingDisplaysFollowTheMainDisplayWhenItMoved() {
+        var now = settled
+        now[1] = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        now[2] = CGRect(x: -1920, y: 0, width: 1920, height: 1080)  // the TV, left of it
+        XCTAssertEqual(VideoManager.originsBack(before: settled, now: now, streaming: [10, 11], mirroring: [], main: 1), [:])
+        // Main went to the TV, which the Lenovo mirrors: placed by the Lenovo, as before.
+        now = [2: CGRect(x: 0, y: 0, width: 1920, height: 1080), 1: CGRect(x: 0, y: 0, width: 1920, height: 1080),
+               10: CGRect(x: 1920, y: 0, width: 1920, height: 1080), 11: CGRect(x: 3840, y: 0, width: 1024, height: 768)]
+        XCTAssertEqual(VideoManager.originsBack(before: settled, now: now, streaming: [10, 11], mirroring: [1], main: 2), [:],
+                       "no display both settled and fixed now, but the TV, which was not there")
+    }
+
+    func testNoMoveThatWouldOverlapAnotherDisplay() {
+        let now: [CGDirectDisplayID: CGRect] = [
+            1: CGRect(x: 0, y: 0, width: 1920, height: 1080),
+            2: CGRect(x: 1920, y: 0, width: 1920, height: 1080),  // the TV, where the iPad's was
+            10: CGRect(x: 3840, y: 0, width: 1920, height: 1080),
+            11: CGRect(x: -1024, y: 0, width: 1024, height: 768),
+        ]
+        XCTAssertEqual(VideoManager.originsBack(before: settled, now: now, streaming: [10, 11], mirroring: [], main: 1), [:])
+    }
+
+    func testMirrorsWithoutStreamingDisplaysAndAnchorSetsAreLeftAlone() {
+        XCTAssertEqual(release(masters: [2: 1]), [])
+        XCTAssertEqual(release(masters: [10: 20], anchorManaged: [10, 20]), [])
+    }
+}
+
+final class DisplayModeRateMatchTests: XCTestCase {
+    func testExactKeeps5994And60Apart() {
+        XCTAssertFalse(DisplayArrangement.RateMatch.exact.matches(59.94, 60))
+        XCTAssertTrue(DisplayArrangement.RateMatch.exact.matches(60, 60.001))
+    }
+
+    func testWholeHertzTakes5994For60() {
+        XCTAssertTrue(DisplayArrangement.RateMatch.wholeHertz.matches(59.94, 60))
+        XCTAssertFalse(DisplayArrangement.RateMatch.wholeHertz.matches(59.4, 60))
+    }
+
+    func testWithinOneHertzTakesAVirtualDisplaysRate() {
+        XCTAssertTrue(DisplayArrangement.RateMatch.withinOneHertz.matches(119.88, 120))
+        XCTAssertFalse(DisplayArrangement.RateMatch.withinOneHertz.matches(119, 120))
     }
 }
 

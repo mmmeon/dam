@@ -134,6 +134,27 @@ final class MoonlightRTSPTests: XCTestCase {
         XCTAssertThrowsError(try MoonlightRTSP.parse(Data("NONSENSE\r\n\r\n".utf8)))
     }
 
+    func testAMoonlightOnThisMacMayComeThroughAnotherOfItsAddresses() {
+        // As seen: launched through the cable's link-local address, RTSP from the Wi-Fi one.
+        var local = launch
+        local.clientAddress = "169.254.40.18"
+        let own: Set<String> = ["127.0.0.1", "::1", "10.10.1.167", "169.254.40.18"]
+        XCTAssertTrue(MoonlightRTSP.response(to: request("OPTIONS", "/"), from: "10.10.1.167", launch: local,
+                                             ownAddresses: own, announce: { _, _ in nil }).hasPrefix("RTSP/1.0 200"))
+        // Another device still can't, nor this Mac for a launch from another device.
+        XCTAssertTrue(MoonlightRTSP.response(to: request("OPTIONS", "/"), from: "10.10.1.50", launch: local,
+                                             ownAddresses: own, announce: { _, _ in nil }).hasPrefix("RTSP/1.0 403"))
+        XCTAssertTrue(MoonlightRTSP.response(to: request("OPTIONS", "/"), from: "10.10.1.167", launch: launch,
+                                             ownAddresses: own, announce: { _, _ in nil }).hasPrefix("RTSP/1.0 403"))
+    }
+
+    func testOwnAddressesAreWrittenAsConnectionsGiveThem() {
+        let subnets = [LocalNetwork.Subnet(address: [10, 10, 1, 167], mask: [255, 255, 255, 0]),
+                       LocalNetwork.Subnet(address: [0xFE, 0x80, 0, 4] + [UInt8](repeating: 0, count: 11) + [1],
+                                           mask: [UInt8](repeating: 0xFF, count: 8) + [UInt8](repeating: 0, count: 8))]
+        XCTAssertEqual(LocalNetwork.ownAddresses(subnets: subnets), ["10.10.1.167", "fe80::1"])
+    }
+
     func testAnswersOnlyTheDeviceThatLaunched() {
         for method in ["OPTIONS", "DESCRIBE", "SETUP", "ANNOUNCE", "PLAY"] {
             let reply = MoonlightRTSP.response(to: request(method, "streamid=video/0/0"), from: "10.0.0.3", launch: launch,

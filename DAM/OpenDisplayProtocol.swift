@@ -371,6 +371,17 @@ enum OpenDisplayTouches {
         return .moveTo(x: clamp(x), y: clamp(y), width: Self.grid, height: Self.grid)
     }
 
+    /// A scroll of `dx`, `dy` across the stream's picture, the display's way up: turned back
+    /// as frames turned clockwise by `rotation` are.
+    static func scroll(dx: Double, dy: Double, rotation: DisplayRotation) -> (dx: Double, dy: Double) {
+        switch rotation {
+        case .standard:      return (dx, dy)
+        case .quarter:       return (dy, -dx)
+        case .half:          return (-dx, -dy)
+        case .threeQuarters: return (-dy, dx)
+        }
+    }
+
     static func events(for message: OpenDisplayMessage) -> [MoonlightInput] {
         let at = move
         switch message {

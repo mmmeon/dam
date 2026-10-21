@@ -3,6 +3,7 @@
 //  DAMTests
 //
 
+import AppKit
 import Network
 import XCTest
 @testable import DAM
@@ -206,6 +207,89 @@ final class OpenDisplayTests: XCTestCase {
         let datagram = try XCTUnwrap(OpenDisplayReply.cursorDatagram(at: CGPoint(x: 0.5, y: 0.25), sequence: 88))
         XCTAssertEqual(Data(framed.dropFirst(4)), datagram)
         XCTAssertEqual(String(decoding: datagram, as: UTF8.self), #"{"s":88,"type":"cursor","v":1,"x":0.5,"y":0.25}"#)
+    }
+
+    // MARK: A turned display
+
+    /// A display at `rotation` as DAM makes it for a 2048 × 1536 stream: its sides traded on
+    /// a quarter turn, in points at half the stream's pixels.
+    private func turnedDisplay(_ rotation: DisplayRotation) -> CGRect {
+        let size = rotation.inverse.size(width: 1024, height: 768)
+        return CGRect(x: 1920, y: 0, width: size.width, height: size.height)
+    }
+
+    func testThePointerGoesBackThroughTheTurnTouchesComeThrough() {
+        let grid = 10_000
+        for rotation in DisplayRotation.allCases {
+            let bounds = turnedDisplay(rotation)
+            for (x, y) in [(5000, 5000), (1000, 2000), (9000, 300), (2500, 8000)] {
+                let onDisplay = MoonlightPointerMapping.point(x: x, y: y, width: grid, height: grid, streamWidth: 2048,
+                                                              streamHeight: 1536, bounds: bounds, rotation: rotation)
+                let back = MoonlightPointerMapping.streamPoint(of: onDisplay, streamWidth: 2048, streamHeight: 1536,
+                                                               bounds: bounds, rotation: rotation)
+                XCTAssertEqual(back.x, Double(x) / Double(grid), accuracy: 1e-9, "\(rotation) \(x),\(y)")
+                XCTAssertEqual(back.y, Double(y) / Double(grid), accuracy: 1e-9, "\(rotation) \(x),\(y)")
+            }
+        }
+    }
+
+    func testAPointOnATurnedDisplayLiesTurnedInTheStream() {
+        let portrait = turnedDisplay(.quarter)
+        // Turned a quarter clockwise, the display's top-left is the stream's top-right.
+        let topLeft = MoonlightPointerMapping.streamPoint(of: portrait.origin, streamWidth: 2048, streamHeight: 1536,
+                                                          bounds: portrait, rotation: .quarter)
+        XCTAssertEqual(topLeft, CGPoint(x: 1, y: 0))
+        let half = MoonlightPointerMapping.streamPoint(of: CGPoint(x: 1920 + 256, y: 192), streamWidth: 2048,
+                                                       streamHeight: 1536, bounds: turnedDisplay(.half), rotation: .half)
+        XCTAssertEqual(half, CGPoint(x: 0.75, y: 0.75))
+        // A 4:3 display streamed 16:9 sits between bars.
+        let square = CGRect(x: 0, y: 0, width: 1024, height: 768)
+        XCTAssertEqual(MoonlightPointerMapping.streamPoint(of: .zero, streamWidth: 1280, streamHeight: 720,
+                                                           bounds: square, rotation: .standard), CGPoint(x: 0.125, y: 0))
+    }
+
+    func testAScrollIsTurnedAsTouchesAre() {
+        // On a square display and stream, a scroll moves as far as a touch moved by as much.
+        let bounds = CGRect(x: 0, y: 0, width: 1000, height: 1000)
+        for rotation in DisplayRotation.allCases {
+            func at(_ x: Int, _ y: Int) -> CGPoint {
+                MoonlightPointerMapping.point(x: x, y: y, width: 1000, height: 1000, streamWidth: 1000, streamHeight: 1000,
+                                              bounds: bounds, rotation: rotation)
+            }
+            let from = at(500, 500), to = at(530, 430)
+            let scroll = OpenDisplayTouches.scroll(dx: 30, dy: -70, rotation: rotation)
+            XCTAssertEqual(scroll.dx, Double(to.x - from.x), accuracy: 1e-9, "\(rotation)")
+            XCTAssertEqual(scroll.dy, Double(to.y - from.y), accuracy: 1e-9, "\(rotation)")
+        }
+    }
+
+    func testThePointersPictureIsTurnedAsTheDisplaysIs() throws {
+        // 20 × 10 points, its top-left corner marked.
+        let image = NSImage(size: NSSize(width: 20, height: 10), flipped: true) { _ in
+            NSColor.red.setFill()
+            NSRect(x: 0, y: 0, width: 5, height: 5).fill()
+            return true
+        }
+        func marked(_ rotation: DisplayRotation) throws -> (width: Int, height: Int, corners: [Bool]) {
+            let png = try XCTUnwrap(OpenDisplayCursor.png(of: image, turnedBy: rotation))
+            let rep = try XCTUnwrap(NSBitmapImageRep(data: png))
+            let w = rep.pixelsWide, h = rep.pixelsHigh
+            // Top-left, top-right, bottom-right, bottom-left.
+            let corners = [(2, 2), (w - 3, 2), (w - 3, h - 3), (2, h - 3)].map {
+                (rep.colorAt(x: $0.0, y: $0.1)?.alphaComponent ?? 0) > 0.5
+            }
+            return (w, h, corners)
+        }
+        let standard = try marked(.standard)
+        XCTAssertEqual([standard.width, standard.height], [40, 20])
+        XCTAssertEqual(standard.corners, [true, false, false, false])
+        let quarter = try marked(.quarter)
+        XCTAssertEqual([quarter.width, quarter.height], [20, 40])
+        XCTAssertEqual(quarter.corners, [false, true, false, false])
+        XCTAssertEqual(try marked(.half).corners, [false, false, true, false])
+        XCTAssertEqual(try marked(.threeQuarters).corners, [false, false, false, true])
+        // Its hot spot goes with it.
+        XCTAssertEqual(MoonlightPointerMapping.turned(CGPoint(x: 0, y: 0), by: .quarter), CGPoint(x: 1, y: 0))
     }
 
     // MARK: usbmuxd

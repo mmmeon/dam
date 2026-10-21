@@ -35,6 +35,8 @@ private final class FakeSessionDisplays: SessionDisplays {
         others.first { $0.key.localizedCaseInsensitiveContains(name) }?.value
     }
 
+    func isListed(_ id: CGDirectDisplayID) -> Bool { others.values.contains(id) }
+
     func place(_ id: CGDirectDisplayID, _ placement: SessionProfile.Placement, completion: @escaping (Bool) -> Void) {
         placed.append((id, placement))
         if placeSucceeds { placements[id] = placement }
@@ -65,6 +67,15 @@ private final class FakeSessionDisplays: SessionDisplays {
         outputUID = uid
         return true
     }
+}
+
+/// A detector whose events a test sends through `onEvent`.
+private final class ScriptedDetector: SessionDetector {
+    let app: String
+    var onEvent: ((SessionEvent) -> Void)?
+    init(app: String) { self.app = app }
+    func start() {}
+    func stop() {}
 }
 
 final class RemoteSessionsTests: XCTestCase {
@@ -378,6 +389,25 @@ final class RemoteSessionsTests: XCTestCase {
         XCTAssertEqual(fake.outputUID, "speakers")
     }
 
+    func testATurnedDisplaysModeComparesAsItWasMade() {
+        let made = StreamingDisplayModes.forStream(width: 3840, height: 2160, fps: 60)
+        // Kept on its side: shown 1080 × 1920 points, 2160 pixels wide.
+        let turned = LiveSessionDisplays.mode(width: 1080, height: 1920, pixelWidth: 2160, refreshRate: 60, turned: .quarter)
+        XCTAssertEqual(turned, made)
+        XCTAssertEqual(LiveSessionDisplays.mode(width: 1920, height: 1080, pixelWidth: 1920, refreshRate: 59.94, turned: .half),
+                       StreamingDisplayModes.Mode(width: 1920, height: 1080, refreshRate: 60))
+        XCTAssertEqual(LiveSessionDisplays.mode(width: 1280, height: 800, pixelWidth: 1280, refreshRate: 60, turned: nil),
+                       StreamingDisplayModes.Mode(width: 1280, height: 800, refreshRate: 60))
+
+        // So a session on a turned display keeps its profile as it was.
+        let fake = FakeSessionDisplays()
+        let c = coordinator(fake, profiles: ["sunshine": SessionProfile()])
+        _ = start(c, SessionRequest(app: "sunshine", width: 3840, height: 2160, fps: 60))
+        fake.modes[100] = turned
+        c.end(app: "sunshine")
+        XCTAssertNil(c.profile(for: "sunshine").width)
+    }
+
     func testNothingChangedKeepsTheProfile() {
         let fake = FakeSessionDisplays()
         var profile = SessionProfile()
@@ -507,6 +537,44 @@ final class RemoteSessionsTests: XCTestCase {
         XCTAssertNil(ControlHandler.request(from: URL(string: "dam://quit")!))
     }
 
+    func testSizesAndChoicesAreCheckedHoweverTheyCome() {
+        let side = ControlRequest.maxSide
+        let start = ["session", "start", "--app", "x"]
+        for bad in [["--width", "-2"], ["--width", "0"], ["--height", "\(side + 1)"], ["--width", "99999999999"],
+                    ["--fps", "0"], ["--fps", "1000"], ["--display", "make"], ["--placement", "left"]] {
+            XCTAssertThrowsError(try ControlCLI.request(from: start + bad, environment: [:]), "\(bad)")
+        }
+        XCTAssertThrowsError(try ControlCLI.request(from: start, environment: ["SUNSHINE_CLIENT_WIDTH": "-1"]))
+        XCTAssertEqual(try ControlCLI.request(from: start + ["--width", "\(side)", "--fps", "240"], environment: [:]).width, side)
+
+        // URLs: refused, not passed on with the bad value or without it.
+        for query in ["width=-2&height=-2", "width=wide", "fps=0", "height=\(side + 1)", "display=make", "placement=left",
+                      "blackout=maybe"] {
+            XCTAssertNil(ControlHandler.request(from: URL(string: "dam://session/start?app=x&\(query)")!), query)
+        }
+        XCTAssertNil(ControlHandler.request(from: URL(string: "dam://session/start?width=1280")!))
+
+        // The socket's requests come as JSON, checked by the handler with the same rules.
+        XCTAssertNotNil(ControlRequest(command: "session.start", app: "x", width: -2, height: -2).problem)
+        XCTAssertNotNil(ControlRequest(command: "session.start", app: "x", fps: 100_000).problem)
+        XCTAssertNotNil(ControlRequest(command: "session.start", app: "x", display: "make").problem)
+        XCTAssertNotNil(ControlRequest(command: "session.start", app: "x", placement: "left").problem)
+        XCTAssertNil(ControlRequest(command: "session.start", app: "x", width: 1920, height: 1080, fps: 60,
+                                    display: "create", placement: "mirror").problem)
+        // A 5K or ultrawide client gets a HiDPI display of half its size.
+        XCTAssertNil(ControlRequest(command: "session.start", app: "x", width: 5120, height: 1440).problem)
+    }
+
+    func testYesAndNoAreReadAlikeEverywhere() throws {
+        for (text, value) in [("yes", true), ("true", true), ("1", true), ("no", false), ("false", false), ("0", false)] {
+            XCTAssertEqual(ControlHandler.request(from: URL(string: "dam://session/start?app=x&blackout=\(text)")!)?.blackout, value)
+            XCTAssertEqual(ControlHandler.request(from: URL(string: "dam://session/end?app=x&all=\(text)")!)?.all, value)
+            XCTAssertEqual(try ControlCLI.request(from: ["session", "start", "--app", "x", "--blackout", text],
+                                                  environment: [:]).blackout, value)
+        }
+        XCTAssertEqual(ControlHandler.request(from: URL(string: "dam://session/start?app=x&clientID=A&client-id=B")!)?.clientID, "A")
+    }
+
     // MARK: - Socket
 
     func testRequestAndAnswerOverTheSocket() throws {
@@ -534,6 +602,45 @@ final class RemoteSessionsTests: XCTestCase {
 
         // A second copy doesn't take over the socket.
         XCTAssertThrowsError(try ControlServer(path: path) { _, _ in }.start())
+    }
+
+    func testAClientThatDoesntReadCantHoldUpTheApp() throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("dam-\(UUID().uuidString.prefix(8)).sock").path
+        var took: TimeInterval?
+        let server = ControlServer(path: path) { _, reply in
+            let display = ControlResponse.Display(id: 1, name: String(repeating: "x", count: 1000), width: 1, height: 1,
+                                                  main: false, mirroring: false, streaming: false)
+            let start = Date()
+            reply(ControlResponse(ok: true, displays: Array(repeating: display, count: 1000)))
+            took = Date().timeIntervalSince(start)
+        }
+        try server.start()
+        defer { server.stop() }
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        defer { close(fd) }
+        XCTAssertTrue(ControlSocketPath.connect(fd, to: path))
+        let line = Data("{\"command\":\"display.list\"}\n".utf8)
+        XCTAssertEqual(line.withUnsafeBytes { write(fd, $0.baseAddress!, $0.count) }, line.count)
+        // Never read.
+        let deadline = Date().addingTimeInterval(10)
+        while took == nil, Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+        XCTAssertLessThan(took ?? 99, 5)
+    }
+
+    func testAnswersDontRepeatAWholeRequest() throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("dam-\(UUID().uuidString.prefix(8)).sock").path
+        let server = ControlServer(path: path) { request, reply in reply(.failure("Unknown command \(request.command).")) }
+        try server.start()
+        defer { server.stop() }
+        let answered = expectation(description: "answer")
+        var response: ControlResponse?
+        DispatchQueue.global().async {
+            response = ControlCLI.send(ControlRequest(command: String(repeating: "x", count: 50_000)), to: path, timeout: 5)
+            answered.fulfill()
+        }
+        wait(for: [answered], timeout: 6)
+        XCTAssertEqual(response?.ok, false)
+        XCTAssertLessThanOrEqual(response?.message?.count ?? .max, 301)
     }
 
     func testNotRunningGivesNoAnswer() {
@@ -728,6 +835,27 @@ final class RemoteSessionsTests: XCTestCase {
         XCTAssertEqual(lines, ["first", "half done", "second"])
     }
 
+    func testLogFollowerThroughALinkReadsEachLineOnce() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let real = dir.appendingPathComponent("real.log")
+        let link = dir.appendingPathComponent("link.log")
+        try "old line\n".write(to: real, atomically: false, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
+        var lines: [String] = []
+        let follower = LogFollower(url: link) { lines.append($0) }
+        follower.start()
+        defer { follower.stop() }
+        let handle = try FileHandle(forWritingTo: real)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("first\n".utf8))
+        try handle.close()
+        // Past its look at the path, which took the link for another file and read it all again.
+        RunLoop.main.run(until: Date().addingTimeInterval(2.5))
+        XCTAssertEqual(lines, ["first"])
+    }
+
     func testWatcherStartsAndEndsSessionsAsTheDetectorSays() {
         final class FakeDetector: SessionDetector {
             let app: String
@@ -772,6 +900,54 @@ final class RemoteSessionsTests: XCTestCase {
         XCTAssertTrue(watcher.detectors.isEmpty)
     }
 
+    /// A watched app's detector, whose events the test sends; and its watcher.
+    private func watched(_ c: RemoteSessionCoordinator, app: String) -> (SessionWatcher, ScriptedDetector) {
+        let detector = ScriptedDetector(app: app)
+        let watcher = SessionWatcher(coordinator: c) { $0 == app ? detector : nil }
+        watcher.update()
+        return (watcher, detector)
+    }
+
+    func testAConnectionsCloseDoesntEndALaterSession() {
+        let fake = FakeSessionDisplays()
+        var profile = SessionProfile()
+        profile.watch = true
+        let c = coordinator(fake, profiles: ["rustdesk": profile])
+        let (watcher, detector) = watched(c, app: "rustdesk")
+        var said: [String] = []
+        watcher.announce = { said.append($0) }
+        detector.onEvent?(.opened(key: "1", client: nil))
+        // Ended by hand, as from the menu, while connection 1 stays open.
+        c.end(app: "rustdesk", all: true)
+        XCTAssertEqual(fake.removed, [100])
+        fake.nextID = 101
+        detector.onEvent?(.opened(key: "2", client: nil))
+        detector.onEvent?(.closed(key: "1"))
+        XCTAssertEqual(c.sessions["rustdesk"]?.displayID, 101)
+        XCTAssertEqual(fake.removed, [100])
+        detector.onEvent?(.closed(key: "2"))
+        XCTAssertNil(c.sessions["rustdesk"])
+        XCTAssertEqual(fake.removed, [100, 101])
+        XCTAssertEqual(said.count, 3)
+    }
+
+    func testAConnectionGoneBeforeItsDisplayCameIsntAnnounced() {
+        let fake = FakeSessionDisplays()
+        fake.pendingMakes = []
+        var profile = SessionProfile()
+        profile.watch = true
+        let c = coordinator(fake, profiles: ["parsec": profile])
+        let (watcher, detector) = watched(c, app: "parsec")
+        var said: [String] = []
+        watcher.announce = { said.append($0) }
+        detector.onEvent?(.opened(key: "guest#1", client: "guest"))
+        detector.onEvent?(.closed(key: "guest#1"))
+        fake.pendingMakes?.forEach { $0() }
+        XCTAssertNil(c.sessions["parsec"])
+        XCTAssertEqual(fake.removed, [100])
+        XCTAssertEqual(said, [])
+    }
+
     func testFindsRunningProcesses() {
         XCTAssertTrue(RunningProcesses.names().contains("launchd"))
     }
@@ -805,6 +981,27 @@ final class RemoteSessionsTests: XCTestCase {
         fake.others = ["Jump Desktop Display": 9]
         RunLoop.main.run(until: Date().addingTimeInterval(0.2))
         XCTAssertEqual(try result?.get().displayID, 9)
+    }
+
+    func testAdoptWaitsForADisplayToldOfToBeListed() {
+        let fake = FakeSessionDisplays()
+        var profile = SessionProfile()
+        profile.display = .adopt
+        profile.placement = .main
+        let c = coordinator(fake, profiles: ["opendisplay": profile])
+        c.adoptInterval = 0.05
+        // Another display goes by the name, but the app told of its own.
+        fake.others = ["OpenDisplay (other)": 3]
+        var request = SessionRequest(app: "opendisplay")
+        request.adoptedDisplayID = 8
+        var result: Result<SessionStart, SessionError>?
+        c.begin(request) { result = $0 }
+        XCTAssertNil(result)
+        XCTAssertTrue(fake.placed.isEmpty)
+        fake.others["OpenDisplay"] = 8
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        XCTAssertEqual(try result?.get(), SessionStart(displayID: 8))
+        XCTAssertEqual(fake.placed.map(\.0), [8])
     }
 
     func testAdoptCarriesOnWithoutTheDisplay() {
@@ -922,6 +1119,7 @@ final class RemoteSessionsTests: XCTestCase {
         profile.display = .adopt
         profile.placement = .main
         let c = coordinator(fake, profiles: ["opendisplay": profile])
+        fake.others = ["OpenDisplay iPad": 7]
         var detector: FakeDetector?
         let watcher = SessionWatcher(coordinator: c) { app in
             guard app == "opendisplay" else { return nil }

@@ -114,29 +114,6 @@ enum MoonlightCrypto {
         return data as Data
     }
 
-    /// A self-signed X.509 v3 certificate for `key`, valid for 20 years from now.
-    static func selfSignedCertificate(key: SecKey, commonName: String, now: Date = Date()) throws -> Data {
-        guard let publicKey = SecKeyCopyPublicKey(key),
-              let publicKeyData = SecKeyCopyExternalRepresentation(publicKey, nil) as Data? else {
-            throw MoonlightCryptoError.badKey
-        }
-        let algorithm = DER.sequence(DER.oid(DER.sha256WithRSA), DER.null)
-        let name = DER.sequence(DER.set(DER.sequence(DER.oid(DER.commonName), DER.utf8String(commonName))))
-        let notAfter = now.addingTimeInterval(20 * 365 * 24 * 3600)
-        var serial = Data((0..<16).map { _ in UInt8.random(in: 0...255) })
-        serial[0] &= 0x7F
-        let tbs = DER.sequence(
-            DER.explicit(0, DER.integer(Data([2]))),
-            DER.integer(serial),
-            algorithm,
-            name,
-            DER.sequence(DER.utcTime(now.addingTimeInterval(-24 * 3600)), DER.utcTime(notAfter)),
-            name,
-            DER.sequence(DER.sequence(DER.oid(DER.rsaEncryption), DER.null), DER.bitString(publicKeyData))
-        )
-        return DER.sequence(tbs, algorithm, DER.bitString(try sign(tbs, with: key)))
-    }
-
     /// An X.509 v3 certificate for `key`'s public half, signed by `issuerKey` (`key` itself
     /// when nil), from a day ago for `days`, with `extensions` as made by `DER.extension`.
     static func certificate(key: SecKey, subject: String, issuer: String? = nil, issuerKey: SecKey? = nil,
@@ -152,8 +129,8 @@ enum MoonlightCrypto {
         var serial = Data((0..<16).map { _ in UInt8.random(in: 0...255) })
         serial[0] &= 0x7F
         var fields = DER.explicit(0, DER.integer(Data([2]))) + DER.integer(serial) + algorithm + name(issuer ?? subject)
-            + DER.sequence(DER.utcTime(now.addingTimeInterval(-24 * 3600)),
-                           DER.utcTime(now.addingTimeInterval(Double(days) * 24 * 3600)))
+            + DER.sequence(DER.time(now.addingTimeInterval(-24 * 3600)),
+                           DER.time(now.addingTimeInterval(Double(days) * 24 * 3600)))
             + name(subject)
             + DER.sequence(DER.sequence(DER.oid(DER.rsaEncryption), DER.null), DER.bitString(publicKeyData))
         if !extensions.isEmpty { fields += DER.explicit(3, DER.tlv(0x30, extensions.reduce(Data(), +))) }
@@ -267,17 +244,40 @@ enum DER {
     static func bitString(_ data: Data) -> Data { tlv(0x03, Data([0]) + data) }
     static func explicit(_ number: UInt8, _ content: Data) -> Data { tlv(0xA0 | number, content) }
 
-    /// A non-negative INTEGER from its big-endian bytes.
+    /// A non-negative INTEGER from its big-endian bytes, in as few as DER allows: leading
+    /// zeros dropped, but for one where the top bit would otherwise read as a minus sign, or
+    /// nothing would be left.
+    /// OpenSSL and BoringSSL refuse a certificate whose serial keeps a zero it need not.
     static func integer(_ bytes: Data) -> Data {
-        tlv(0x02, (bytes.first ?? 0) & 0x80 != 0 ? Data([0]) + bytes : bytes)
+        let trimmed = Data(bytes.drop { $0 == 0 })
+        return tlv(0x02, (trimmed.first ?? 0x80) & 0x80 != 0 ? Data([0]) + trimmed : trimmed)
     }
 
-    static func utcTime(_ date: Date) -> Data {
+    /// Whether a certificate's serial is written in as few bytes as DER allows; one made
+    /// before `integer` saw to it may not be (about one in 256).
+    static func hasMinimalSerial(_ certificate: Data) -> Bool {
+        let bytes = [UInt8](certificate)
+        guard let outer = read(bytes, at: 0), let tbs = read(bytes, at: outer.content.lowerBound),
+              let version = read(bytes, at: tbs.content.lowerBound) else { return false }
+        // The version is optional; the serial follows it if it is there.
+        let serial = version.tag == 0xA0 ? read(bytes, at: version.next) : version
+        guard let serial, serial.tag == 0x02, !serial.content.isEmpty else { return false }
+        return serial.content.count == 1 || bytes[serial.content.lowerBound] != 0
+            || bytes[serial.content.lowerBound + 1] & 0x80 != 0
+    }
+
+    /// A validity time as X.509 has it: UTCTime, with two digits of year, through 2049, and
+    /// GeneralizedTime from 2050, which UTCTime would read as 1950.
+    static func time(_ date: Date) -> Data {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let utc = (1950...2049).contains(calendar.component(.year, from: date))
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(identifier: "UTC")
-        formatter.dateFormat = "yyMMddHHmmss'Z'"
-        return tlv(0x17, Data(formatter.string(from: date).utf8))
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.dateFormat = utc ? "yyMMddHHmmss'Z'" : "yyyyMMddHHmmss'Z'"
+        return tlv(utc ? 0x17 : 0x18, Data(formatter.string(from: date).utf8))
     }
 
     /// The element at `offset`: its tag, the range of its contents, and where the next begins.

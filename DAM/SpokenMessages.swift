@@ -47,7 +47,10 @@ enum Spoken {
     /// "Select a display. 1. Living Room TV. 2. pad"
     static func selectDisplay(_ labels: [String]) -> String {
         let list = labels.enumerated()
-            .map { String(localized: "\($0.offset + 1). \($0.element)", comment: "One numbered display in the spoken list") }
+            // Only the first nine have a number: no key picks the others.
+            .map { $0.offset < 9
+                ? String(localized: "\($0.offset + 1). \($0.element)", comment: "One numbered display in the spoken list")
+                : $0.element }
             .joined(separator: ". ")
         return String(localized: "Select a display. \(list)", comment: "Quick-connect hotkey; followed by the numbered list")
     }

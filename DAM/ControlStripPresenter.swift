@@ -142,20 +142,28 @@ final class ControlStripPresenter: NSObject {
         }
         SpeechSynthesizer.shared.onDisplayTextChanged = { [weak self] in
             DispatchQueue.main.async {
-                let text = SpeechSynthesizer.shared.displayText
-                // On screen, without taking focus.
-                CaptionHUD.shared.show(Feedback.screen ? text : nil,
-                                       spoken: SpeechSynthesizer.shared.spokenLength)
+                Self.showCaptionOnScreen()
                 guard Feedback.touchBar else { return }
-                // Bring the app to the foreground so NSApp.touchBar is visible.
-                // Only activate on the leading edge (text just appeared); on clear
-                // we leave focus wherever it ended up.
-                if text != nil {
-                    NSApp.activate(ignoringOtherApps: true)
-                }
                 self?.rebuild()
             }
         }
+        // The Touch Bar stops showing a caption when another app comes forward; the screen
+        // takes it over.
+        NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification,
+                                               object: nil, queue: .main) { _ in
+            if SpeechSynthesizer.shared.displayText != nil && !Feedback.screen { Self.showCaptionOnScreen() }
+        }
+    }
+
+    /// Shows the caption on screen, without taking focus, when screen feedback is on or the
+    /// Touch Bar can't show it. The app's Touch Bar shows only while the app is active, and a
+    /// caption doesn't activate it: most come from something no one pressed a key for (a
+    /// session starting, a stream ending), and focus taken then would take the user's typing.
+    private static func showCaptionOnScreen() {
+        let onTouchBar = Feedback.touchBar && NSApp.isActive
+        let text = SpeechSynthesizer.shared.displayText
+        CaptionHUD.shared.show(Feedback.screen || !onTouchBar ? text : nil,
+                               spoken: SpeechSynthesizer.shared.spokenLength)
     }
 
     /// The caption to show on the Touch Bar, unless Touch Bar feedback is off.
@@ -221,6 +229,9 @@ final class ControlStripPresenter: NSObject {
         for id in ids {
             guard let item = bar.item(forIdentifier: id) as? NSCustomTouchBarItem,
                   let made = touchBar(bar, makeItemForIdentifier: id) as? NSCustomTouchBarItem else { continue }
+            // The replaced view's entries go, as updateModalBar's do, so the maps don't grow.
+            resolutionSegMap.removeValue(forKey: ObjectIdentifier(item.view))
+            displayButtonMap.removeValue(forKey: ObjectIdentifier(item.view))
             item.view = made.view
         }
     }
@@ -237,15 +248,7 @@ final class ControlStripPresenter: NSObject {
     private func makeStripBar() -> NSTouchBar {
         // Use templateItems directly rather than a delegate — the item must be
         // immediately available in the bar object when the system queries for it.
-        let stripItem = NSCustomTouchBarItem(identifier: Self.stripID)
-        let btn = NSButton(
-            image: NSImage(systemSymbolName: "airplayvideo",
-                           accessibilityDescription: AppIdentity.name) ?? NSImage(),
-            target: self,
-            action: #selector(openModal)
-        )
-        btn.bezelStyle = .rounded
-        stripItem.view = btn
+        let stripItem = makeStripItem()
 
         let bar = NSTouchBar()
         if let text = Self.captionText {
@@ -257,6 +260,20 @@ final class ControlStripPresenter: NSObject {
             bar.defaultItemIdentifiers = [Self.stripID]
         }
         return bar
+    }
+
+    /// The Control Strip button, which opens the modal bar.
+    private func makeStripItem() -> NSCustomTouchBarItem {
+        let item = NSCustomTouchBarItem(identifier: Self.stripID)
+        let btn = NSButton(
+            image: NSImage(systemSymbolName: "airplayvideo",
+                           accessibilityDescription: AppIdentity.name) ?? NSImage(),
+            target: self,
+            action: #selector(openModal)
+        )
+        btn.bezelStyle = .rounded
+        item.view = btn
+        return item
     }
 
     private func makeSpeechStatusItem(text: String) -> NSTouchBarItem {
@@ -274,7 +291,7 @@ final class ControlStripPresenter: NSObject {
             stack.addArrangedSubview(imgView)
         }
 
-        let label = NSTextField(labelWithString: truncated(text, max: 40))
+        let label = NSTextField(labelWithString: text.truncated(to: 40))
         label.textColor = .white
         label.font      = .systemFont(ofSize: 12)
         label.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -359,21 +376,16 @@ final class ControlStripPresenter: NSObject {
 
     /// A button for `display` in the modal bar, with its current mirror / anchor icon.
     private func displayButton(for display: DisplayInfo) -> NSButton {
-        let btn = NSButton(title: truncated(display.label, max: 10),
+        let btn = NSButton(title: display.label.truncated(to: 10),
                            target: self,
                            action: #selector(displayButtonTapped(_:)))
         btn.bezelStyle = .rounded
 
-        // Same rule as the menu: sparkles while a virtual anchor drives the display, the
-        // mirror symbol while it is in a mirror set as slave or master.
-        let isAirPlay    = videoManager?.allAirPlayDevices.contains(where: { $0.id == display.id }) ?? false
-        let hasAnchor    = videoManager?.hasVirtualAnchor(for: display.name) ?? false
-        let mirrorActive = display.isMirroring || (videoManager?.isBeingMirrored(display) ?? false)
+        // The menu's state symbol, else one for the kind of display.
+        let isAirPlay = videoManager?.allAirPlayDevices.contains(where: { $0.id == display.id }) ?? false
         let symbolName: String?
-        if hasAnchor {
-            symbolName = "sparkles"
-        } else if mirrorActive {
-            symbolName = "square.on.square"
+        if let state = videoManager.flatMap({ displayStateSymbol(for: display, video: $0) }) {
+            symbolName = state
         } else if isAirPlay {
             symbolName = "airplayvideo"
         } else if display.isBuiltIn {
@@ -449,7 +461,7 @@ final class ControlStripPresenter: NSObject {
         let resID        = NSTouchBarItem.Identifier(Self.displayResPrefix + display.id)
 
         let targets = videoManager?.mirrorTargets(for: display) ?? []
-        let inSet   = display.isMirroring || (videoManager?.isBeingMirrored(display) ?? false)
+        let inSet   = videoManager?.isInMirrorSet(display) ?? false
         var ids: [NSTouchBarItem.Identifier] = []
         // Same rule as the menu: one other display gets a toggle; several get a "Mirror…"
         // page, with "Extend" alongside while this display has slaves.
@@ -475,7 +487,7 @@ final class ControlStripPresenter: NSObject {
                                       display: DisplayInfo) -> NSTouchBarItem {
         // Same rule as the menu: the display is mirroring whether it is the slave or the
         // master of a set, and a virtual anchor does not count.
-        let isMirroring = display.isMirroring || (videoManager?.isBeingMirrored(display) ?? false)
+        let isMirroring = videoManager?.isInMirrorSet(display) ?? false
         return displayActionItem(id: id, title: isMirroring ? "Extend" : "Mirror", display: display,
                                  action: #selector(mirrorToggleTapped(_:)))
     }
@@ -497,7 +509,7 @@ final class ControlStripPresenter: NSObject {
         } else {
             guard let i = Int(key), targets.indices.contains(i) else { return nil }
             selection = MirrorSelection(display: display, target: targets[i])
-            title     = truncated(targets[i].label, max: 12)
+            title     = targets[i].label.truncated(to: 12)
             active    = slaves.contains(targets[i].id)
         }
         let item = NSCustomTouchBarItem(identifier: id)
@@ -530,7 +542,7 @@ final class ControlStripPresenter: NSObject {
         if let vm = videoManager, let master = vm.anchoredMaster(of: display) {
             let size = vm.currentModes(for: master).anchor.map { " · \($0.shortLabel)" } ?? ""
             let item = NSCustomTouchBarItem(identifier: id)
-            item.view = placeholder("Follows \(truncated(master.label, max: 16))\(size)")
+            item.view = placeholder("Follows \(master.label.truncated(to: 16))\(size)")
             return item
         }
         let options  = resolutionChoices(for: display)
@@ -573,12 +585,8 @@ final class ControlStripPresenter: NSObject {
                                   modes: [DisplayMode], labels: [String], selected: Int?,
                                   action: Selector) -> NSTouchBarItem {
         let item = NSCustomTouchBarItem(identifier: id)
-        NSLog("\(AppIdentity.name) segItem: display='%@' id=%@ cgID=%u selected=%d",
-              display.name, id.rawValue, display.cgDisplayID, selected ?? -1)
-        for (i, m) in modes.enumerated() {
-            NSLog("\(AppIdentity.name) segItem:   modes[%d] %dx%d @%.1fHz virtual=%d ioModeID=%d label='%@'",
-                  i, m.width, m.height, m.refreshRate, m.isVirtual, m.ioModeID, labels[i])
-        }
+        NSLog("\(AppIdentity.name) segItem: display='%@' id=%@ cgID=%u modes=%d selected=%d",
+              display.name, id.rawValue, display.cgDisplayID, modes.count, selected ?? -1)
         guard !modes.isEmpty else {
             let tf = NSTextField(labelWithString: display.cgDisplayID == 0 ? "No display ID" : "No modes")
             tf.textColor = .white
@@ -601,7 +609,7 @@ final class ControlStripPresenter: NSObject {
         let devices = audioManager?.devices ?? []
         guard !devices.isEmpty else { return placeholder("No audio devices") }
         let ctrl = NSSegmentedControl(
-            labels: devices.map { truncated($0.label) },
+            labels: devices.map { $0.label.truncated(to: 30) },
             trackingMode: .selectOne,
             target: self,
             action: #selector(audioSegmentTapped(_:))
@@ -630,7 +638,7 @@ final class ControlStripPresenter: NSObject {
             return placeholder(anyConnected ? "Displays connected" : "No AirPlay or iPads")
         }
         let ctrl = NSSegmentedControl(
-            labels: displays.map { truncated($0.label) },
+            labels: displays.map { $0.label.truncated(to: 30) },
             trackingMode: .selectAny,
             target: self,
             action: #selector(videoSegmentTapped(_:))
@@ -645,10 +653,6 @@ final class ControlStripPresenter: NSObject {
         tf.textColor = .secondaryLabelColor
         tf.font = .systemFont(ofSize: 12)
         return tf
-    }
-
-    private func truncated(_ s: String, max: Int = 30) -> String {
-        s.count > max ? String(s.prefix(max - 1)) + "…" : s
     }
 
     // MARK: - Actions
@@ -871,16 +875,7 @@ extension ControlStripPresenter: NSTouchBarDelegate {
                   makeItemForIdentifier id: NSTouchBarItem.Identifier) -> NSTouchBarItem? {
         switch id {
         case Self.stripID:
-            let item = NSCustomTouchBarItem(identifier: id)
-            let btn = NSButton(
-                image: NSImage(systemSymbolName: "airplayvideo",
-                               accessibilityDescription: AppIdentity.name) ?? NSImage(),
-                target: self,
-                action: #selector(openModal)
-            )
-            btn.bezelStyle = .rounded
-            item.view = btn
-            return item
+            return makeStripItem()
 
         case Self.speechStatusID:
             if let text = Self.captionText {
