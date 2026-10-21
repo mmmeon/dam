@@ -231,13 +231,11 @@ final class OpenDisplaySender {
         }
         if known != bonjourIDs {
             bonjourIDs = known
-            // A receiver turned on by its name is the same one by its ID.
-            var on = turnedOn
-            for (name, id) in known where on.remove("bonjour:\(name)") != nil { on.insert(id) }
-            if on != turnedOn { turnedOn = on }
-            // And its session goes with it, as when a hello gives the ID, or the next dial
-            // would make it a second one.
             for (name, id) in known {
+                // A receiver known by its name is the same one by its ID.
+                rekey(from: "bonjour:\(name)", to: id)
+                // And its session goes with it, as when a hello gives the ID, or the next dial
+                // would make it a second one.
                 guard let session = sessions.removeValue(forKey: "bonjour:\(name)") else { continue }
                 if sessions[id] == nil {
                     session.rekey(id, name: name)
@@ -348,18 +346,35 @@ final class OpenDisplaySender {
         } else {
             return
         }
-        var on = turnedOn
-        if on.remove(session.key) != nil { on.insert(id) }
-        turnedOn = on
-        var saved = names
-        if saved[id] == nil { saved[id] = wifi[id]?.name ?? saved[session.key] }
-        saved[session.key] = nil
-        names = saved
+        rekey(from: session.key, to: id)
         sessions[session.key] = nil
         sessions[id]?.end(reason: "the same receiver came over USB")
         session.rekey(id, name: name(of: id))
         sessions[id] = session
         onChange?()
+    }
+
+    /// Moves what is kept of the receiver keyed `old` to `new`, its ID once known: whether it
+    /// is on, its name, and how dials to it went, as the last address reached. Its session is
+    /// the caller's to move.
+    private func rekey(from old: String, to new: String) {
+        var on = turnedOn
+        if on.remove(old) != nil {
+            on.insert(new)
+            turnedOn = on
+        }
+        var saved = names
+        if saved[new] == nil { saved[new] = wifi[new]?.name ?? saved[old] }
+        saved[old] = nil
+        if saved != names { names = saved }
+        func move<Value>(_ values: inout [String: Value]) {
+            if let value = values.removeValue(forKey: old) { values[new] = value }
+        }
+        move(&retryAt)
+        move(&failures)
+        move(&lastErrors)
+        move(&lastAddress)
+        move(&preferWiFiUntil)
     }
 
     /// Ends the session whose display `id` went without it asking, as when removed from the
@@ -499,14 +514,8 @@ final class OpenDisplaySession {
 
     /// Makes `channel` the link, in place of any other.
     private func adopt(_ channel: OpenDisplayChannel) {
-        if let old = link {
-            // As when a link is lost: nothing more to the old one, and nothing left held.
-            old.close()
-            lock.lock()
-            sendLink = nil
-            lock.unlock()
-            injector?.releaseAll()
-        }
+        // As when a link is lost.
+        if link != nil { dropLink() }
         link = channel
         linkReady = false
         deframer = OpenDisplayDeframer()
@@ -550,14 +559,7 @@ final class OpenDisplaySession {
     private func lose(_ channel: OpenDisplayChannel, _ reason: String) {
         guard link === channel else { return }
         let wasReady = linkReady
-        link = nil
-        linkReady = false
-        channel.close()
-        closeCursorUDP()
-        lock.lock()
-        sendLink = nil
-        lock.unlock()
-        injector?.releaseAll()
+        dropLink()
         odLog.debug("\(self.name, privacy: .public): \(wasReady ? "lost" : "dial failed", privacy: .public): \(reason, privacy: .public)")
         // A display on its way waits as one already made does.
         if displayID != nil || settingUp, lostAt == nil { lostAt = Date() }
@@ -566,6 +568,19 @@ final class OpenDisplaySession {
             stopTimers()
         }
         sender?.sessionLostLink(self, reason: reason, connected: wasReady)
+    }
+
+    /// Closes the link: nothing more to it, and nothing left held.
+    private func dropLink() {
+        let old = link
+        link = nil
+        linkReady = false
+        old?.close()
+        closeCursorUDP()
+        lock.lock()
+        sendLink = nil
+        lock.unlock()
+        injector?.releaseAll()
     }
 
     fileprivate func displayGone() {
@@ -649,11 +664,14 @@ final class OpenDisplaySession {
                 let (x, y) = lastTouch ?? (0.5, 0.5)
                 injector?.handle([OpenDisplayTouches.move(x, y)])
             }
-            // Video pixels to the display's points.
-            let factor = CGDisplayBounds(displayID).width / CGFloat(max(desktop.streamWidth, 1))
+            // Video pixels to the display's points, the display's way up when it is turned.
+            let rotation = StreamRotations.shared.rotation(of: displayID)
+            let captured = rotation.inverse.size(width: desktop.streamWidth, height: desktop.streamHeight)
+            let factor = CGDisplayBounds(displayID).width / CGFloat(max(captured.width, 1))
+            let turned = OpenDisplayTouches.scroll(dx: dx, dy: dy, rotation: rotation)
             // Clamped, since Int32(_:) traps on a delta out of its range.
             func points(_ v: Double) -> Int32 { Int32(min(max((CGFloat(v) * factor).rounded(), CGFloat(Int32.min)), CGFloat(Int32.max))) }
-            injector?.scrollPixels(dx: points(dx), dy: points(dy))
+            injector?.scrollPixels(dx: points(turned.dx), dy: points(turned.dy))
         case .sleeping, .closing:
             // It closes the connection next; dialing again at once would find it still there.
             sender?.holdDialing(key, for: 3)
@@ -757,7 +775,6 @@ final class OpenDisplaySession {
                 self?.fail("capture failed: \(error.localizedDescription)")
             }
         })
-        cursor = OpenDisplayCursor()
         startStream()
     }
 
@@ -894,8 +911,9 @@ final class OpenDisplaySession {
     }
 
     private func followPointer() {
-        guard let displayID, hasLink, desktop != nil else { return }
-        let (image, position) = cursor.update(displayID: displayID)
+        guard let displayID, hasLink, let desktop else { return }
+        let (image, position) = cursor.update(displayID: displayID, streamWidth: desktop.streamWidth,
+                                              streamHeight: desktop.streamHeight)
         if let image { send(image) }
         guard let position else { return }
         cursorSequence += 1
@@ -949,44 +967,58 @@ final class OpenDisplaySession {
 
 // MARK: - The pointer
 
-/// The pointer as the receiver draws it: its place on the display, when it moves, and its
-/// picture, when that changes.
+/// The pointer as the receiver draws it: its place in the stream's picture, when it moves,
+/// and its picture, when that changes; both turned as the display's picture is.
 struct OpenDisplayCursor {
     private var last: CGPoint??
     private var lastImage: Data?
-    /// The display's size the picture was sent for: its size goes as a share of it.
+    /// The display's size and turn the picture was sent for: its size goes as a share of
+    /// the stream's picture.
     private var imageBounds: CGSize?
+    private var imageRotation: DisplayRotation?
     private var checkedImage = Date.distantPast
 
     mutating func reset() {
         last = nil
         lastImage = nil
         imageBounds = nil
+        imageRotation = nil
         checkedImage = .distantPast
     }
 
     /// The picture to send, framed, if it changed, and where the pointer went if it moved:
-    /// a normalized point, or nil when it left the display.
-    mutating func update(displayID: CGDirectDisplayID) -> (image: Data?, position: CGPoint??) {
+    /// a normalized point of a `streamWidth` × `streamHeight` stream, or nil when it left
+    /// the display.
+    mutating func update(displayID: CGDirectDisplayID, streamWidth: Int, streamHeight: Int) -> (image: Data?, position: CGPoint??) {
         var image: Data?
         let bounds = CGDisplayBounds(displayID)
         guard bounds.width > 0, bounds.height > 0 else { return (nil, nil) }
+        let rotation = StreamRotations.shared.rotation(of: displayID)
+        func onStream(_ point: CGPoint) -> CGPoint {
+            MoonlightPointerMapping.streamPoint(of: point, streamWidth: streamWidth, streamHeight: streamHeight,
+                                                bounds: bounds, rotation: rotation)
+        }
         if Date().timeIntervalSince(checkedImage) > 0.25 {
             checkedImage = Date()
             // Again when the display changes shape, as when the iPad turns: it may still have
-            // had its old size when the stream started again.
-            if let (png, size, hotSpot) = Self.picture(), png != lastImage || bounds.size != imageBounds {
+            // had its old size when the stream started again. And when it is turned.
+            if let (png, size, hotSpot) = Self.picture(turnedBy: rotation),
+               png != lastImage || bounds.size != imageBounds || rotation != imageRotation {
                 lastImage = png
                 imageBounds = bounds.size
+                imageRotation = rotation
+                // The share of the stream's picture a box its size on the display takes, its
+                // sides traded on a quarter turn.
+                let a = onStream(bounds.origin)
+                let b = onStream(CGPoint(x: bounds.minX + size.width, y: bounds.minY + size.height))
+                let hotSpot = CGPoint(x: hotSpot.x / max(size.width, 1), y: hotSpot.y / max(size.height, 1))
                 image = OpenDisplayReply.cursorImage(
-                    png: png, size: CGSize(width: size.width / bounds.width, height: size.height / bounds.height),
-                    hotSpot: CGPoint(x: hotSpot.x / max(size.width, 1), y: hotSpot.y / max(size.height, 1)))
+                    png: png, size: CGSize(width: abs(b.x - a.x), height: abs(b.y - a.y)),
+                    hotSpot: MoonlightPointerMapping.turned(hotSpot, by: rotation))
             }
         }
         let location = CGEvent(source: nil)?.location ?? .zero
-        let point: CGPoint? = bounds.contains(location)
-            ? CGPoint(x: (location.x - bounds.minX) / bounds.width, y: (location.y - bounds.minY) / bounds.height)
-            : nil
+        let point: CGPoint? = bounds.contains(location) ? onStream(location) : nil
         let moved: Bool
         switch (last, point) {
         case (nil, _): moved = true
@@ -999,25 +1031,37 @@ struct OpenDisplayCursor {
         return (image, .some(point))
     }
 
-    /// The pointer's picture as a PNG at twice its size, small enough to send, with its size
-    /// and hot spot in points.
-    private static func picture() -> (Data, CGSize, CGPoint)? {
-        guard let cursor = NSCursor.currentSystem else { return nil }
-        let image = cursor.image
+    /// The pointer's picture turned by `rotation`, with its size and hot spot in points the
+    /// display's way up.
+    private static func picture(turnedBy rotation: DisplayRotation) -> (Data, CGSize, CGPoint)? {
+        guard let cursor = NSCursor.currentSystem, let png = png(of: cursor.image, turnedBy: rotation) else { return nil }
+        return (png, cursor.image.size, cursor.hotSpot)
+    }
+
+    /// `image` as a PNG at twice its size, small enough to send, turned clockwise by
+    /// `rotation` as frames are on their way out.
+    static func png(of image: NSImage, turnedBy rotation: DisplayRotation) -> Data? {
         let size = image.size
         guard size.width > 0, size.height > 0 else { return nil }
+        let turned = rotation.swapsAxes ? NSSize(width: size.height, height: size.width) : size
         for scale in [2.0, 1.0] {
-            let width = Int(size.width * scale), height = Int(size.height * scale)
+            let width = Int(turned.width * scale), height = Int(turned.height * scale)
             guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height,
                                              bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
                                              colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { continue }
-            rep.size = size
+            rep.size = turned
             NSGraphicsContext.saveGraphicsState()
             NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+            // About its middle; clockwise is negative with y up.
+            let transform = NSAffineTransform()
+            transform.translateX(by: turned.width / 2, yBy: turned.height / 2)
+            transform.rotate(byDegrees: -CGFloat(rotation.rawValue))
+            transform.translateX(by: -size.width / 2, yBy: -size.height / 2)
+            transform.concat()
             image.draw(in: NSRect(origin: .zero, size: size))
             NSGraphicsContext.restoreGraphicsState()
             if let png = rep.representation(using: .png, properties: [:]), png.count <= 24000 {
-                return (png, size, cursor.hotSpot)
+                return png
             }
         }
         return nil

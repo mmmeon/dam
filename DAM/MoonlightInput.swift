@@ -207,6 +207,31 @@ enum MoonlightPointerMapping {
                        y: bounds.minY + min(max(py, 0), bounds.height - 1))
     }
 
+    /// The other way: where `point` on the display at `bounds` lies in the stream's
+    /// picture, from 0 to 1 across it, for drawing there what is on the display.
+    static func streamPoint(of point: CGPoint, streamWidth: Int, streamHeight: Int,
+                            bounds: CGRect, rotation: DisplayRotation) -> CGPoint {
+        guard bounds.width > 0, bounds.height > 0 else { return CGPoint(x: 0.5, y: 0.5) }
+        let captured = rotation.inverse.size(width: max(streamWidth, 1), height: max(streamHeight, 1))
+        let frameWidth = Double(captured.width), frameHeight = Double(captured.height)
+        let scale = min(frameWidth / bounds.width, frameHeight / bounds.height)
+        let left = (frameWidth - bounds.width * scale) / 2, top = (frameHeight - bounds.height * scale) / 2
+        let du = ((point.x - bounds.minX) * scale + left) / frameWidth
+        let dv = ((point.y - bounds.minY) * scale + top) / frameHeight
+        return turned(CGPoint(x: du, y: dv), by: rotation)
+    }
+
+    /// A point from 0 to 1 across a picture the display's way up, on that picture turned
+    /// clockwise by `rotation`, as frames are on their way out.
+    static func turned(_ point: CGPoint, by rotation: DisplayRotation) -> CGPoint {
+        switch rotation {
+        case .standard:      return point
+        case .quarter:       return CGPoint(x: 1 - point.y, y: point.x)
+        case .half:          return CGPoint(x: 1 - point.x, y: 1 - point.y)
+        case .threeQuarters: return CGPoint(x: point.y, y: 1 - point.x)
+        }
+    }
+
     /// How long after its last move the pointer is taken to be where macOS says it is,
     /// rather than where it was put: posted moves take a moment to land.
     static let settle: TimeInterval = 0.1
