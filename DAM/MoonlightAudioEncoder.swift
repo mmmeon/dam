@@ -116,8 +116,9 @@ final class MoonlightAudioEncoder {
     }
 
     /// Takes captured sound in any layout macOS hands over: float, interleaved or one buffer
-    /// per channel, mono or stereo. It must already be at 48 kHz.
-    func encode(_ sample: CMSampleBuffer) {
+    /// per channel, mono or stereo. It must already be at 48 kHz. The first `skipped` of its
+    /// samples are left out.
+    func encode(_ sample: CMSampleBuffer, skipping skipped: Int = 0) {
         guard let format = CMSampleBufferGetFormatDescription(sample),
               let description = CMAudioFormatDescriptionGetStreamBasicDescription(format)?.pointee,
               description.mFormatID == kAudioFormatLinearPCM,
@@ -136,10 +137,11 @@ final class MoonlightAudioEncoder {
             blockBufferAllocator: nil, blockBufferMemoryAllocator: nil,
             flags: kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment, blockBufferOut: &block) == noErr else { return }
         let frames = CMSampleBufferGetNumSamples(sample)
+        let skipped = min(max(skipped, 0), frames)
         let channels = Int(description.mChannelsPerFrame)
         let interleaved = description.mFormatFlags & kAudioFormatFlagIsNonInterleaved == 0
-        var stereo = [Float](repeating: 0, count: frames * Self.channels)
-        for frame in 0..<frames {
+        var stereo = [Float](repeating: 0, count: (frames - skipped) * Self.channels)
+        for frame in skipped..<frames {
             for channel in 0..<Self.channels {
                 // Mono goes to both sides; channels past two are left out.
                 let source = min(channel, channels - 1)
@@ -149,7 +151,7 @@ final class MoonlightAudioEncoder {
                 } else {
                     value = list[source].mData!.assumingMemoryBound(to: Float.self)[frame]
                 }
-                stereo[frame * Self.channels + channel] = value
+                stereo[(frame - skipped) * Self.channels + channel] = value
             }
         }
         stereo.withUnsafeBufferPointer { encode(interleaved: $0) }

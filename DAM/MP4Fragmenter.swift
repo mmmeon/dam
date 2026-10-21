@@ -194,7 +194,7 @@ final class MP4Fragmenter {
         mp4a += u16(0) + u16(0)                               // compression ID, packet size
         mp4a += u32(UInt32(audioTimescale) << 16)
         // AudioSpecificConfig: AAC LC, 48 kHz, stereo.
-        let config = Data([0x12, 0x10])
+        let config = Data([0x11, 0x90])
         let decoderSpecific = Data([0x05, UInt8(config.count)]) + config
         var decoderConfig = Data([0x40, 0x15, 0, 0, 0])   // AAC, audio stream, buffer size
         decoderConfig += u32(0) + u32(0)                  // bitrates: unknown

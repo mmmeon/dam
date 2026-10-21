@@ -182,6 +182,38 @@ final class MoonlightScreenCaptureTests: XCTestCase {
         XCTAssertEqual(made.count, 3, "started afresh")
     }
 
+    /// A capture that stops on its own, as when replayd dies, is let go: its streams hear,
+    /// and the next to come starts another rather than join it.
+    func testACaptureThatStopsIsLetGoAndItsStreamsAreTold() {
+        let makeCapture = SharedScreenCapture.makeCapture, startCapture = SharedScreenCapture.startCapture
+        defer { SharedScreenCapture.makeCapture = makeCapture; SharedScreenCapture.startCapture = startCapture }
+        var made: [MoonlightScreenCapture] = []
+        SharedScreenCapture.makeCapture = { key, frame in
+            let capture = MoonlightScreenCapture(displayID: key.displayID, width: key.width, height: key.height,
+                                                 fps: key.fps, frame: frame)
+            made.append(capture)
+            return capture
+        }
+        SharedScreenCapture.startCapture = { _, done in done(nil) }
+        let key = SharedScreenCapture.Key(displayID: 7, width: 64, height: 64, fps: 60, showsCursor: true)
+        let before = SharedScreenCapture.count
+        var stopped: [Error] = []
+        let first = SharedScreenCapture.subscribe(key, frame: { _, _ in }, audio: { _ in }, started: { _ in },
+                                                  stopped: { stopped.append($0) })
+        let second = SharedScreenCapture.subscribe(key, frame: { _, _ in }, audio: { _ in }, started: { _ in },
+                                                   stopped: { stopped.append($0) })
+        XCTAssertEqual(made.count, 1)
+        XCTAssertEqual(SharedScreenCapture.count, before + 1)
+
+        made.first?.onStop?(MoonlightCaptureError.displayNotFound(7))
+        XCTAssertEqual(stopped.count, 2, "both streams hear")
+        XCTAssertEqual(SharedScreenCapture.count, before)
+        let third = SharedScreenCapture.subscribe(key, frame: { _, _ in }, audio: { _ in }, started: { _ in })
+        XCTAssertEqual(made.count, 2, "started afresh")
+        for subscription in [first, second, third] { subscription.cancel() }
+        XCTAssertEqual(SharedScreenCapture.count, before)
+    }
+
     func testACaptureThatCouldNotStartIsLetGo() {
         let makeCapture = SharedScreenCapture.makeCapture, startCapture = SharedScreenCapture.startCapture
         defer { SharedScreenCapture.makeCapture = makeCapture; SharedScreenCapture.startCapture = startCapture }

@@ -73,7 +73,7 @@ final class MP4FragmenterTests: XCTestCase {
         let mp4a = try XCTUnwrap(audioMedia.child("minf")?.child("stbl")?.child("stsd")?.children(from: 8).first)
         XCTAssertEqual(mp4a.type, "mp4a")
         let esds = try XCTUnwrap(mp4a.children(from: 28).first { $0.type == "esds" })
-        XCTAssertNotNil(esds.payload.range(of: Data([0x05, 0x02, 0x12, 0x10])), "AAC LC, 48 kHz, stereo")
+        XCTAssertNotNil(esds.payload.range(of: Data([0x05, 0x02, 0x11, 0x90])), "AAC LC, 48 kHz, stereo")
     }
 
     func testInitSegmentWithoutSoundHasOneTrack() throws {

@@ -126,7 +126,34 @@ final class WebStreamTests: XCTestCase {
         }
     }
 
+    func testFramesFasterThanTheGridDoNotRunAheadOfTheClock() {
+        var grid = FrameGrid(fps: 60)
+        let origin = CMTime(value: 3, timescale: 1)
+        var encoded = 0
+        // A second of a 120 Hz display, each frame handled a millisecond after it was captured.
+        for i in 0..<120 {
+            let time = CMTimeAdd(origin, CMTime(value: Int64(i) * 8_333_333, timescale: 1_000_000_000))
+            let now = CMTimeAdd(time, CMTime(value: 1, timescale: 1000))
+            guard let slot = grid.snap(time, now: now) else { continue }
+            encoded += 1
+            XCTAssertLessThanOrEqual(seconds(slot), seconds(now) + 1.0 / 60 + 1e-9, "frame \(i)")
+        }
+        XCTAssertLessThanOrEqual(grid.lastSlot, 61, "no further ahead after a second than at first")
+        XCTAssertGreaterThanOrEqual(encoded, 59)
+        XCTAssertLessThanOrEqual(encoded, 62, "the rest are kept as the last picture")
+    }
+
     // MARK: - Sound
+
+    func testSoundIsKeptInTimeWithTheTrack() {
+        XCTAssertEqual(WebStreamSession.alignment(gap: 0), .asIs)
+        XCTAssertEqual(WebStreamSession.alignment(gap: 1000), .asIs, "a few milliseconds late is let be")
+        XCTAssertEqual(WebStreamSession.alignment(gap: -1000), .asIs, "as is early")
+        XCTAssertEqual(WebStreamSession.alignment(gap: 4800), .silence(4800), "a gap is filled")
+        XCTAssertEqual(WebStreamSession.alignment(gap: -4800), .drop(4800),
+                       "sound overlapping silence put in for it loses as much")
+        XCTAssertEqual(WebStreamSession.alignment(gap: 3 * 48_000), .restart)
+    }
 
     func testAACEncoderGivesPacketsOfItsFrameLength() throws {
         var packets: [Data] = []
@@ -155,7 +182,8 @@ final class WebStreamTests: XCTestCase {
         let lock = NSLock()
         var received = Data()
 
-        init() throws {
+        /// A client that does not read takes nothing once the system's buffers are full.
+        init(reads: Bool = true) throws {
             let parameters = NWParameters.tcp
             parameters.allowLocalEndpointReuse = true
             let port = NWEndpoint.Port(rawValue: UInt16.random(in: 40000...59000))!
@@ -172,7 +200,7 @@ final class WebStreamTests: XCTestCase {
             listener.start(queue: .main)
             Self.spin(until: { listening })
             client.start(queue: .global())
-            read()
+            if reads { read() }
             Self.spin(until: { [self] in server != nil })
         }
 
@@ -258,11 +286,54 @@ final class WebStreamTests: XCTestCase {
         var outcomes: [WebStreamViewer.Outcome] = []
         for _ in 0..<40 {
             outcomes.append(viewer.take(video: big, keyFrame: false, codecs: "avc1", initSegment: initSegment))
-            if outcomes.last == .fellBehind { break }
+            if outcomes.last == .behind { break }
         }
-        XCTAssertEqual(outcomes.last, .fellBehind, "with megabytes unsent, the viewer is behind")
+        XCTAssertEqual(outcomes.last, .behind, "with megabytes unsent, the viewer is behind")
         XCTAssertEqual(viewer.take(video: Data(count: 10), keyFrame: false, codecs: "avc1", initSegment: initSegment),
-                       .waitingForKeyFrame)
+                       .behind)
+        XCTAssertEqual(viewer.take(video: Data(count: 10), keyFrame: true, codecs: "avc1", initSegment: initSegment),
+                       .behind, "a keyframe would only queue behind what it has unsent")
+        // The client reads on; once most has gone out, the next keyframe resumes it.
+        var outcome = WebStreamViewer.Outcome.behind
+        let deadline = Date().addingTimeInterval(10)
+        while outcome == .behind, Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+            outcome = viewer.take(video: Data(count: 10), keyFrame: false, codecs: "avc1", initSegment: initSegment)
+        }
+        XCTAssertEqual(outcome, .catchingUp)
+        XCTAssertEqual(viewer.take(video: Data("K".utf8), keyFrame: true, codecs: "avc1", initSegment: initSegment), .taken)
+        XCTAssertEqual(viewer.take(video: Data("P".utf8), keyFrame: false, codecs: "avc1", initSegment: initSegment), .taken)
+        viewer.close()
+    }
+
+    /// A viewer that takes nothing, as a tab in the background, gets no keyframes, and is
+    /// let go once it has been behind for its patience.
+    func testViewerThatTakesNothingIsLetGo() throws {
+        let loopback = try Loopback(reads: false)
+        let viewer = WebStreamViewer(connection: try XCTUnwrap(loopback.server), maxInFlight: 256 * 1024, patience: 0.5)
+        let closed = expectation(description: "let go")
+        viewer.onClose = { closed.fulfill() }
+        // More than the system buffers between the two ends.
+        XCTAssertEqual(viewer.take(video: Data(count: 32 << 20), keyFrame: true, codecs: "avc1", initSegment: Data()),
+                       .taken)
+        XCTAssertEqual(viewer.take(video: Data(count: 10), keyFrame: false, codecs: "avc1", initSegment: Data()), .behind)
+        let behindAt = Date()
+        Loopback.spin(until: { Date() > behindAt.addingTimeInterval(0.2) })
+        XCTAssertEqual(viewer.take(video: Data(count: 10), keyFrame: true, codecs: "avc1", initSegment: Data()), .behind)
+        Loopback.spin(until: { Date() > behindAt.addingTimeInterval(0.7) })
+        _ = viewer.take(video: Data(count: 10), keyFrame: false, codecs: "avc1", initSegment: Data())
+        wait(for: [closed], timeout: 2)
+    }
+
+    /// A session that has ended takes no viewer, so the server makes another for it.
+    func testEndedSessionTakesNoViewer() throws {
+        let loopback = try Loopback()
+        let session = try WebStreamSession(key: .init(displayID: 1, profile: .interactive, bitrateKbps: 10_000, fps: 30,
+                                                      width: 640, height: 360, lowLatency: false))
+        session.stop()
+        let viewer = WebStreamViewer(connection: try XCTUnwrap(loopback.server), maxInFlight: 1 << 20)
+        XCTAssertFalse(session.add(viewer))
+        XCTAssertEqual(session.viewerCount, 0)
         viewer.close()
     }
 
@@ -407,6 +478,80 @@ final class WebStreamTests: XCTestCase {
         // Stopped, it answers nothing.
         server.stop()
         XCTAssertEqual(try get("/watch").status, 0)
+    }
+
+    /// A server on ports of its own, listening.
+    private func startedServer(directory: URL) -> WebStreamServer {
+        let port = NWEndpoint.Port(rawValue: UInt16.random(in: 40000...48000) & ~1)!
+        let server = WebStreamServer(port: port, directory: directory)
+        server.start()
+        let deadline = Date().addingTimeInterval(5)
+        while !server.isListening, server.lastError == nil, Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+        XCTAssertTrue(server.isListening, server.lastError ?? "")
+        return server
+    }
+
+    func testConnectionThatSendsNoRequestIsClosed() throws {
+        let saved = WebStreamServer.requestTimeout
+        WebStreamServer.requestTimeout = 0.3
+        defer { WebStreamServer.requestTimeout = saved }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let server = startedServer(directory: directory)
+        defer { server.stop() }
+        let client = NWConnection(host: "127.0.0.1", port: server.port, using: .tcp)
+        defer { client.cancel() }
+        let closed = expectation(description: "closed")
+        client.stateUpdateHandler = { state in
+            guard case .ready = state else { return }
+            client.receive(minimumIncompleteLength: 1, maximumLength: 1024) { _, _, complete, error in
+                if complete || error != nil { closed.fulfill() }
+            }
+        }
+        client.start(queue: .global())
+        wait(for: [closed], timeout: 5)
+    }
+
+    /// One display is made at a time; one that comes once everyone who wanted it was
+    /// stopped is removed, and one a request after the stop waited for is kept.
+    func testDisplaysMadeForStreamsAreNeverLeftBehind() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let server = startedServer(directory: directory)
+        defer { server.stop() }
+        var made: [(CGDirectDisplayID?) -> Void] = []
+        var removed: [CGDirectDisplayID] = []
+        server.makeDisplay = { _, _, _, done in made.append(done) }
+        server.removeDisplay = { removed.append($0) }
+        let url = URL(string: "http://localhost:\(server.port.rawValue)/stream.mp4?token=\(server.devices.thisMac.token)")!
+        func ask() { session.dataTask(with: url).resume() }
+        func spin(_ seconds: TimeInterval) {
+            let until = Date().addingTimeInterval(seconds)
+            Loopback.spin(until: { Date() > until })
+        }
+
+        ask()
+        Loopback.spin(until: { made.count == 1 })
+        ask()
+        spin(0.3)
+        XCTAssertEqual(made.count, 1, "the second waits for the display being made")
+        server.stopAll()
+        made[0](42)
+        XCTAssertEqual(removed, [42], "no one wants it now")
+
+        ask()
+        Loopback.spin(until: { made.count == 2 })
+        XCTAssertEqual(made.count, 2, "the one removed is not the stream's")
+        server.stopAll()
+        ask()
+        spin(0.3)
+        XCTAssertEqual(made.count, 2)
+        made[1](43)
+        XCTAssertEqual(removed, [42], "the request after the stop has it")
+        server.stop()
+        XCTAssertEqual(removed, [42, 43])
     }
 
     /// Moonlight's HTTP port no longer serves the stream.
