@@ -235,6 +235,18 @@ final class OpenDisplaySender {
             var on = turnedOn
             for (name, id) in known where on.remove("bonjour:\(name)") != nil { on.insert(id) }
             if on != turnedOn { turnedOn = on }
+            // And its session goes with it, as when a hello gives the ID, or the next dial
+            // would make it a second one.
+            for (name, id) in known {
+                guard let session = sessions.removeValue(forKey: "bonjour:\(name)") else { continue }
+                if sessions[id] == nil {
+                    session.rekey(id, name: name)
+                    sessions[id] = session
+                } else {
+                    // The receiver keeps the newest connection.
+                    session.end(reason: "the same receiver is connected by its ID")
+                }
+            }
         }
         guard found.mapValues(\.name) != wifi.mapValues(\.name) || found.count != wifi.count else {
             wifi = found
@@ -260,10 +272,12 @@ final class OpenDisplaySender {
             if let at = retryAt[key], at > now { continue }
             let device = usbDevices.first { self.key(for: $0) == key }
             let cable = device != nil && (preferWiFiUntil[key] ?? .distantPast) < now
+            var takeOver = false
             if let session = sessions[key] {
                 if session.isDialing { continue }
                 // A cable plugged in mid-session takes the stream over from WiFi.
                 if session.hasLink && !(cable && session.transport == .wifi) { continue }
+                takeOver = session.hasLink
             }
             let channel: OpenDisplayChannel
             if cable, let device {
@@ -281,7 +295,7 @@ final class OpenDisplaySender {
             }
             let session = sessions[key] ?? makeSession(key: key)
             odLog.debug("dialing \(self.name(of: key), privacy: .public) over \(channel.transport.rawValue, privacy: .public)\((channel as? OpenDisplayTCPChannel)?.endpointDescription ?? "", privacy: .public)")
-            session.attach(channel)
+            if takeOver { session.takeOver(with: channel) } else { session.attach(channel) }
         }
     }
 
@@ -368,6 +382,8 @@ final class OpenDisplaySession {
     static let grace: TimeInterval = 10
 
     private var link: OpenDisplayChannel?
+    /// A cable being dialed to take the link over; see `takeOver(with:)`.
+    private var candidate: OpenDisplayChannel?
     private var linkReady = false
     private var deframer = OpenDisplayDeframer()
     private var lastHeard = Date()
@@ -384,6 +400,8 @@ final class OpenDisplaySession {
     private var injector: MoonlightInputInjector?
     private var capture: SharedScreenCapture.Subscription?
     private var cursor = OpenDisplayCursor()
+    /// Where the receiver last touched or hovered, from 0 to 1 across the display.
+    private var lastTouch: (x: Double, y: Double)?
     /// The pointer's positions over UDP, while the receiver offers a port (Wi-Fi only).
     private var cursorUDP: NWConnection?
     private var cursorUDPPort: UInt16?
@@ -414,7 +432,8 @@ final class OpenDisplaySession {
     }
 
     var hasLink: Bool { link != nil && linkReady }
-    var isDialing: Bool { link != nil && !linkReady }
+    /// Dialing, or dialing a cable to take a WiFi link over.
+    var isDialing: Bool { (link != nil && !linkReady) || candidate != nil }
 
     /// What it is doing, or nil while it only dials.
     var status: String? {
@@ -436,6 +455,44 @@ final class OpenDisplaySession {
 
     func attach(_ channel: OpenDisplayChannel) {
         guard !ended else { return }
+        adopt(channel)
+        channel.start()
+        if timers.isEmpty { startTimers() }
+        // A dial to a Bonjour name that has gone never ends of itself.
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.dialTimeout) { [weak self, weak channel] in
+            guard let self, let channel, self.link === channel, !self.linkReady else { return }
+            if let tcp = channel as? OpenDisplayTCPChannel { odLog.debug("\(self.name, privacy: .public): dial stuck: \(tcp.pathDescription, privacy: .public)") }
+            self.lose(channel, "no answer in \(Int(Self.dialTimeout)) s")
+        }
+    }
+
+    /// Dials `channel` beside the live link, and moves the stream to it only once it is
+    /// connected: one that fails leaves the live link as it was.
+    func takeOver(with channel: OpenDisplayChannel) {
+        guard !ended, candidate == nil else { return }
+        candidate = channel
+        let failed = { [weak self, weak channel] (reason: String) in
+            guard let self, let channel, self.candidate === channel else { return }
+            self.candidate = nil
+            channel.close()
+            odLog.debug("\(self.name, privacy: .public): \(channel.transport.rawValue, privacy: .public) dial failed, staying as it is: \(reason, privacy: .public)")
+            self.sender?.sessionLostLink(self, reason: reason, connected: false)
+        }
+        channel.onReady = { [weak self, weak channel] in
+            guard let self, let channel, self.candidate === channel else { return }
+            self.candidate = nil
+            self.adopt(channel)
+            self.connected(channel)
+        }
+        channel.onClose = { reason in failed(reason) }
+        channel.start()
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.dialTimeout) {
+            failed("no answer in \(Int(Self.dialTimeout)) s")
+        }
+    }
+
+    /// Makes `channel` the link, in place of any other.
+    private func adopt(_ channel: OpenDisplayChannel) {
         if let old = link {
             // As when a link is lost: nothing more to the old one, and nothing left held.
             old.close()
@@ -452,11 +509,7 @@ final class OpenDisplaySession {
         cursorSequence = 0
         channel.onReady = { [weak self, weak channel] in
             guard let self, let channel, self.link === channel else { return }
-            self.linkReady = true
-            self.lastHeard = Date()
-            self.lostAt = nil
-            odLog.debug("\(self.name, privacy: .public): connected over \(channel.transport.rawValue, privacy: .public)")
-            self.sender?.sessionConnected(self, over: channel)
+            self.connected(channel)
         }
         channel.onReceive = { [weak self, weak channel] data in
             guard let self, let channel, self.link === channel else { return }
@@ -474,14 +527,14 @@ final class OpenDisplaySession {
             guard let self, let channel else { return }
             self.lose(channel, reason)
         }
-        channel.start()
-        if timers.isEmpty { startTimers() }
-        // A dial to a Bonjour name that has gone never ends of itself.
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.dialTimeout) { [weak self, weak channel] in
-            guard let self, let channel, self.link === channel, !self.linkReady else { return }
-            if let tcp = channel as? OpenDisplayTCPChannel { odLog.debug("\(self.name, privacy: .public): dial stuck: \(tcp.pathDescription, privacy: .public)") }
-            self.lose(channel, "no answer in \(Int(Self.dialTimeout)) s")
-        }
+    }
+
+    private func connected(_ channel: OpenDisplayChannel) {
+        linkReady = true
+        lastHeard = Date()
+        lostAt = nil
+        odLog.debug("\(self.name, privacy: .public): connected over \(channel.transport.rawValue, privacy: .public)")
+        sender?.sessionConnected(self, over: channel)
     }
 
     static let dialTimeout: TimeInterval = 5
@@ -521,6 +574,8 @@ final class OpenDisplaySession {
         ended = true
         odLog.debug("\(self.name, privacy: .public): ended: \(reason, privacy: .public)")
         pendingHello?.cancel()
+        candidate?.close()
+        candidate = nil
         link?.close()
         link = nil
         closeCursorUDP()
@@ -562,13 +617,21 @@ final class OpenDisplaySession {
                 cursorAcked = true
                 odLog.debug("\(self.name, privacy: .public): pointer over UDP")
             }
-        case .touch(_, _, _, let t?), .pencil(_, _, _, let t?):
+        case .touch(_, let x, let y, let t?), .pencil(_, let x, let y, let t?):
             if inputDelays.count < 1000 { inputDelays.append(max(Double(OpenDisplayWire.nowMs()) - t, 0)) }
+            lastTouch = (x, y)
             injector?.handle(OpenDisplayTouches.events(for: message))
-        case .touch, .pencil:
+        case .touch(_, let x, let y, .none), .pencil(_, let x, let y, .none):
+            lastTouch = (x, y)
             injector?.handle(OpenDisplayTouches.events(for: message))
         case let .scroll(dx, dy):
             guard let desktop, let displayID else { return }
+            // A scroll says no place: it goes where the pointer is, so onto this display
+            // first if the Mac's own mouse took it elsewhere, where the receiver last touched.
+            if let pointer = CGEvent(source: nil)?.location, !CGDisplayBounds(displayID).contains(pointer) {
+                let (x, y) = lastTouch ?? (0.5, 0.5)
+                injector?.handle([OpenDisplayTouches.move(x, y)])
+            }
             // Video pixels to the display's points.
             let factor = CGDisplayBounds(displayID).width / CGFloat(max(desktop.streamWidth, 1))
             // Clamped, since Int32(_:) traps on a delta out of its range.
@@ -619,8 +682,12 @@ final class OpenDisplaySession {
         let identity = VideoManager.StreamingIdentity(name: name, seed: "opendisplay:\(key)")
         odLog.debug("\(self.name, privacy: .public): making a display \(wanted.mode.width)×\(wanted.mode.height)\(wanted.mode.hiDPI ? " HiDPI" : "") for a \(wanted.streamWidth)×\(wanted.streamHeight)@\(wanted.fps) stream")
         guard let makeDisplay = sender.makeDisplay else { return fail("no displays") }
-        makeDisplay(wanted.mode, identity) { [weak self] id in
-            guard let self else { return }
+        makeDisplay(wanted.mode, identity) { [weak self, weak sender] id in
+            // Ended and freed while it was being made: nothing else would remove it.
+            guard let self else {
+                if let id { sender?.removeDisplay?(id) }
+                return
+            }
             self.settingUp = false
             guard !self.ended else {
                 if let id { self.sender?.removeDisplay?(id) }

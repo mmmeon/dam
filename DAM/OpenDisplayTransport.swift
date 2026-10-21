@@ -257,7 +257,11 @@ final class OpenDisplaySocketChannel: OpenDisplayChannel {
             }
             if failed {
                 let reason = String(cString: strerror(errno))
-                DispatchQueue.main.async { self.finish(reason) }
+                // A write cut short by close() is no news.
+                self.lock.lock()
+                let closedSince = self.closed
+                self.lock.unlock()
+                if !closedSince { DispatchQueue.main.async { self.finish(reason) } }
             }
         }
     }
@@ -277,6 +281,9 @@ final class OpenDisplaySocketChannel: OpenDisplayChannel {
         // After the writes queued before it, and after the read source lets go of it:
         // Dispatch needs the descriptor open until its cancel handler runs.
         let close = { [writes] in if fd >= 0 { writes.async { Darwin.close(fd) } } }
+        // At once, not behind the writes: one blocked on a receiver that stopped reading
+        // returns, so the close queued after it runs.
+        if fd >= 0 { shutdown(fd, SHUT_RDWR) }
         if let source {
             source.setCancelHandler(handler: close)
             source.cancel()
@@ -411,6 +418,9 @@ enum Usbmuxd {
     /// Connects to `port` on `device`; the descriptor then carries the device's bytes. Blocking.
     static func connect(to device: Device, port: UInt16) throws -> Int32 {
         let fd = try openSocket()
+        // A usbmuxd that never answers fails the dial as a refusal does, not holding the
+        // thread for good; the tunnel it becomes has no timeouts.
+        setTimeouts(fd, connectTimeout)
         guard let request = message(["MessageType": "Connect", "DeviceID": device.deviceID,
                                      "PortNumber": portNumber(port)], tag: 1),
               writeAll(fd, request), let reply = readMessage(fd) else {
@@ -422,7 +432,19 @@ enum Usbmuxd {
             Darwin.close(fd)
             throw MuxError.refused(number)
         }
+        setTimeouts(fd, 0)
         return fd
+    }
+
+    /// How long a dial waits on usbmuxd, as long as the sender waits on a dial.
+    static let connectTimeout: TimeInterval = 5
+
+    /// Reads and writes on `fd` give up after `seconds`; 0 for never.
+    private static func setTimeouts(_ fd: Int32, _ seconds: TimeInterval) {
+        var limit = timeval(tv_sec: Int(seconds), tv_usec: 0)
+        let size = socklen_t(MemoryLayout<timeval>.size)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &limit, size)
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &limit, size)
     }
 
     /// Watches devices come and go: `changed` gets the whole list on the main queue each

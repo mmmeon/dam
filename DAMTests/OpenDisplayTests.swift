@@ -233,6 +233,50 @@ final class OpenDisplayTests: XCTestCase {
 
     // MARK: Channels
 
+    private final class FakeChannel: OpenDisplayChannel {
+        var onReady: (() -> Void)?
+        var onReceive: ((Data) -> Void)?
+        var onClose: ((String) -> Void)?
+        let pendingBytes = 0
+        let pendingSends = 0
+        let transport: OpenDisplayTransport
+        var started = false, closed = false
+        init(_ transport: OpenDisplayTransport) { self.transport = transport }
+        func start() { started = true }
+        func send(_ data: Data) {}
+        func close() { closed = true }
+    }
+
+    func testACableTakesOverOnlyOnceItConnects() {
+        let sender = OpenDisplaySender()
+        let session = OpenDisplaySession(key: "A-1", name: "iPad", sender: sender)
+        defer { session.end(reason: "test over") }
+        let wifi = FakeChannel(.wifi)
+        session.attach(wifi)
+        wifi.onReady?()
+        XCTAssertEqual(session.transport, .wifi)
+
+        // A cable that fails leaves the stream on WiFi.
+        let refused = FakeChannel(.usb)
+        session.takeOver(with: refused)
+        XCTAssertTrue(refused.started)
+        XCTAssertTrue(session.isDialing)
+        XCTAssertEqual(session.transport, .wifi)
+        refused.onClose?("refused")
+        XCTAssertFalse(wifi.closed)
+        XCTAssertFalse(session.isDialing)
+        XCTAssertEqual(session.transport, .wifi)
+
+        // One that connects takes it over, and only then is WiFi let go.
+        let cable = FakeChannel(.usb)
+        session.takeOver(with: cable)
+        XCTAssertFalse(wifi.closed)
+        cable.onReady?()
+        XCTAssertTrue(wifi.closed)
+        XCTAssertEqual(session.transport, .usb)
+        XCTAssertTrue(session.hasLink)
+    }
+
     func testTCPChannelTalksToAListener() throws {
         let listener = try NWListener(using: .tcp, on: .any)
         var received = Data()

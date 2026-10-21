@@ -232,7 +232,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func startRemoteSessions() {
         let displays = LiveSessionDisplays(video: videoManager, audio: audioManager)
         let coordinator = RemoteSessionCoordinator(displays: displays)
-        coordinator.onChange = { [weak self] in self?.rebuild() }
+        coordinator.onChange = { [weak self] in
+            self?.rebuild()
+            // A detector change held for a session that has just ended; later, as this can
+            // come from inside that detector.
+            DispatchQueue.main.async { self?.sessionWatcher?.update() }
+        }
         coordinator.onLearn = { [weak self] in self?.settingsWindow?.reloadSessions() }
         let handler = ControlHandler(coordinator: coordinator, video: videoManager, sessionDisplays: displays)
         let server = ControlServer { request, reply in handler.handle(request, reply: reply) }
@@ -670,6 +675,7 @@ extension AppDelegate: NSMenuDelegate {
         wc.onForgetMoonlightClient = { [weak self] in self?.forget($0) }
         wc.onUseExternalSunshine = { [weak self] in self?.useExternalSunshine($0) }
         wc.onSessionProfilesChanged = { [weak self] in self?.sessionWatcher?.update() }
+        wc.sessionWaitsToApply = { [weak self] app in self?.sessionWatcher?.waitsForSessionEnd(app) ?? false }
         wc.onToggleWebStream = { [weak self] in self?.toggleWebStream(nil) }
         settingsWindow = wc
         wc.show()

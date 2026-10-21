@@ -57,9 +57,14 @@ enum SessionLogLines {
     /// connection), `Option update: OptionMessage { … }` and video capture starting
     /// (`video_service.rs:485] #displays=2, current=0, …`). A terminal's: `require display on:
     /// false` and `terminal_service.rs` lines. Holds an opened connection until one comes; one
-    /// still held when the next opens counts as a desktop.
+    /// still held when the next opens counts as a desktop. With the log's timestamps, only
+    /// lines within `window` of the open count, as another connection's may come later, and
+    /// one held past it counts as a desktop at the next line.
     final class RustDeskConnections {
         private var pending: SessionEvent?
+        /// When the held connection opened, by the log.
+        private var pendingAt: TimeInterval?
+        static let window: TimeInterval = 0.5
 
         func parse(_ line: String) -> SessionEvent? {
             // A connection held over a restart never shows what it was, nor closes.
@@ -67,11 +72,13 @@ enum SessionLogLines {
                 pending = nil
                 return nil
             }
+            let at = Self.time(of: line)
             if let event = SessionLogLines.rustDesk(line) {
                 switch event {
                 case .opened:
                     let earlier = pending
                     pending = event
+                    pendingAt = at
                     return earlier
                 case .closed(let key):
                     if case .opened(key, _, _)? = pending { pending = nil }
@@ -79,6 +86,10 @@ enum SessionLogLines {
                 }
             }
             guard let held = pending else { return nil }
+            if let opened = pendingAt, let at, at - opened > Self.window || at < opened {
+                pending = nil
+                return held
+            }
             if line.contains("require display on: false") || line.contains("terminal_service.rs") {
                 pending = nil
                 return nil
@@ -89,6 +100,25 @@ enum SessionLogLines {
                 return held
             }
             return nil
+        }
+
+        /// Seconds into the day of a line's `[2026-10-20 15:26:04.995863 -04:00]`, or nil
+        /// for a line without one. A new day reads as earlier, which ends the window too.
+        static func time(of line: String) -> TimeInterval? {
+            let chars = Array(line.utf8.prefix(28))
+            guard chars.count == 28, chars[0] == UInt8(ascii: "["), chars[11] == UInt8(ascii: " "),
+                  chars[14] == UInt8(ascii: ":"), chars[17] == UInt8(ascii: ":"), chars[20] == UInt8(ascii: ".") else { return nil }
+            func number(_ range: Range<Int>) -> Double? {
+                var value = 0.0
+                for c in chars[range] {
+                    guard c >= UInt8(ascii: "0"), c <= UInt8(ascii: "9") else { return nil }
+                    value = value * 10 + Double(c - UInt8(ascii: "0"))
+                }
+                return value
+            }
+            guard let h = number(12..<14), let m = number(15..<17), let s = number(18..<20),
+                  let f = number(21..<27) else { return nil }
+            return h * 3600 + m * 60 + s + f / 1_000_000
         }
     }
 
@@ -627,10 +657,10 @@ final class SessionWatcher {
         for app in SessionDetectors.watchable.union(added).union(detectors.keys) {
             let profile = coordinator.profile(for: app)
             let wanted = profile.enabled && profile.watch && (SessionDetectors.watchable.contains(app) || added.contains(app))
-            // An added app's detector is made again once what it watches changes.
-            if added.contains(app), let made = madeFrom[app],
-               made.detection != profile.detection
-                || (profile.detection?.kind == .display && made.adoptName != profile.adoptName),
+            // An added app's detector is made again once what it watches changes, but not
+            // during a session: stopping it would end the session, and the new one wouldn't
+            // see the connection already open. The change waits for the session to end.
+            if added.contains(app), coordinator.sessions[app] == nil || !wanted, changed(app, profile),
                let detector = detectors.removeValue(forKey: app) {
                 detector.stop()
             }
@@ -644,6 +674,17 @@ final class SessionWatcher {
                 madeFrom[app] = nil
             }
         }
+    }
+
+    /// Whether `app` was changed in a way its detector takes up only once its session ends.
+    func waitsForSessionEnd(_ app: String) -> Bool {
+        coordinator.sessions[app] != nil && detectors[app] != nil && changed(app, coordinator.profile(for: app))
+    }
+
+    private func changed(_ app: String, _ profile: SessionProfile) -> Bool {
+        guard let made = madeFrom[app] else { return false }
+        return made.detection != profile.detection
+            || (profile.detection?.kind == .display && made.adoptName != profile.adoptName)
     }
 
     func stop() {

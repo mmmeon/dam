@@ -40,6 +40,8 @@ final class SettingsWindowController: NSWindowController {
     var onUseExternalSunshine: ((Bool) -> Void)?
     /// Called when a remote-session profile changes, so the watching follows it.
     var onSessionProfilesChanged: (() -> Void)?
+    /// Whether an app's changed detection waits for its session to end.
+    var sessionWaitsToApply: ((String) -> Bool)?
     /// Turns the browser stream on or off, as the menu does.
     var onToggleWebStream: (() -> Void)?
 
@@ -898,7 +900,8 @@ final class SettingsWindowController: NSWindowController {
     private func sessionStatus(_ app: String, _ coordinator: RemoteSessionCoordinator) -> (text: String, color: NSColor) {
         let profile = coordinator.profile(for: app)
         if let session = coordinator.sessions[app] {
-            return ("Session on" + (session.client.map { " with \($0)" } ?? ""), .systemGreen)
+            let waits = sessionWaitsToApply?(app) == true ? "; changes apply when it ends" : ""
+            return ("Session on" + (session.client.map { " with \($0)" } ?? "") + waits, .systemGreen)
         }
         if app == "sunshine" {
             return profile.enabled ? ("Started by Sunshine's prep commands", .systemBlue) : ("Off", .systemGray)
@@ -1191,10 +1194,13 @@ final class SettingsWindowController: NSWindowController {
                                           ("A display it makes", SessionDetection.Kind.display.rawValue)]
         let kind = popup(kinds, selected: detection.kind.rawValue) { [weak self] raw in
             guard let kind = raw.flatMap(SessionDetection.Kind.init(rawValue:)), kind != detection.kind else { return }
+            let wasDisplay = detection.kind == .display
             store { $0.kind = kind }
-            if kind == .display {
+            // A display it makes is placed, not made; one told otherwise gets a display made
+            // again, as when added.
+            if kind == .display || wasDisplay {
                 var next = profile()
-                next.display = .adopt
+                next.display = kind == .display ? .adopt : SessionProfile().display
                 save(next)
             }
             self?.reloadSessions()

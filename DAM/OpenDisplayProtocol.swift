@@ -361,11 +361,14 @@ enum OpenDisplayTouches {
     /// The grid the injector maps normalized points through.
     static let grid = 10_000
 
+    /// The pointer moved to `x`, `y`, from 0 to 1 across the display.
+    static func move(_ x: Double, _ y: Double) -> MoonlightInput {
+        func clamp(_ v: Double) -> Int { Int((min(max(v, 0), 1) * Double(Self.grid - 1)).rounded()) }
+        return .moveTo(x: clamp(x), y: clamp(y), width: Self.grid, height: Self.grid)
+    }
+
     static func events(for message: OpenDisplayMessage) -> [MoonlightInput] {
-        func at(_ x: Double, _ y: Double) -> MoonlightInput {
-            func clamp(_ v: Double) -> Int { Int((min(max(v, 0), 1) * Double(Self.grid - 1)).rounded()) }
-            return .moveTo(x: clamp(x), y: clamp(y), width: Self.grid, height: Self.grid)
-        }
+        let at = move
         switch message {
         case let .touch(phase, x, y, _):
             switch phase {

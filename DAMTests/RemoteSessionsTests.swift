@@ -557,6 +557,23 @@ final class RemoteSessionsTests: XCTestCase {
         XCTAssertEqual(lines.parse("video_service.rs:485] #displays=2, current=0, origin: (0, 0)"), .opened(key: "5", client: "10.0.0.5"))
     }
 
+    func testRustDeskCountsOnlyLinesSoonAfterAnOpen() throws {
+        let lines = SessionLogLines.RustDeskConnections()
+        XCTAssertEqual(try XCTUnwrap(SessionLogLines.RustDeskConnections.time(of: "[2026-10-20 15:26:04.995863 -04:00] INFO x")), 55564.995863, accuracy: 1e-6)
+        XCTAssertNil(SessionLogLines.RustDeskConnections.time(of: "#3 Connection opened from 10.0.0.3:1."))
+        // A terminal already on logs on; a desktop opened since isn't taken for one by it.
+        XCTAssertNil(lines.parse("[2026-10-20 15:30:00.000000 -04:00] DEBUG [src/server/connection.rs:1498] #7 Connection opened from 10.0.0.7:1."))
+        XCTAssertEqual(lines.parse("[2026-10-20 15:30:02.000000 -04:00] INFO [src/server/terminal_service.rs:200] ts_1 output"),
+                       .opened(key: "7", client: "10.0.0.7"))
+        // Within the window, a terminal's line still makes none.
+        XCTAssertNil(lines.parse("[2026-10-20 15:31:00.000000 -04:00] DEBUG [src/server/connection.rs:1498] #8 Connection opened from 10.0.0.8:1."))
+        XCTAssertNil(lines.parse("[2026-10-20 15:31:00.010000 -04:00] INFO [src/server/terminal_service.rs:180] Creating new terminal service: ts_2"))
+        // Past midnight reads as past the window.
+        XCTAssertNil(lines.parse("[2026-10-20 23:59:59.900000 -04:00] DEBUG [src/server/connection.rs:1498] #9 Connection opened from 10.0.0.9:1."))
+        XCTAssertEqual(lines.parse("[2026-10-21 00:00:00.100000 -04:00] INFO [src/server/connection.rs:300] something else"),
+                       .opened(key: "9", client: "10.0.0.9"))
+    }
+
     func testParsecLines() {
         XCTAssertEqual(SessionLogLines.parsec("[I 2026-10-18 12:00:00] friend#1234 connected."),
                        .opened(key: "friend#1234", client: "friend"))
@@ -1028,9 +1045,23 @@ final class RemoteSessionsTests: XCTestCase {
         XCTAssertEqual(made.count, 2)
         XCTAssertEqual(made[0].running, false)
         XCTAssertEqual(made[1].running, true)
+        // Not during a session, which stopping it would end: once it ends.
+        made[1].onEvent?(.opened(key: "minehost", client: nil))
+        XCTAssertNotNil(c.sessions[app])
+        profile.detection?.processName = "minehost2"
+        c.setProfile(profile, for: app)
+        watcher.update()
+        XCTAssertEqual(made.count, 2)
+        XCTAssertNotNil(c.sessions[app])
+        XCTAssertTrue(watcher.waitsForSessionEnd(app))
+        made[1].onEvent?(.closed(key: "minehost"))
+        XCTAssertNil(c.sessions[app])
+        watcher.update()
+        XCTAssertEqual(made.count, 3)
+        XCTAssertFalse(watcher.waitsForSessionEnd(app))
         c.removeApp(app)
         watcher.update()
-        XCTAssertEqual(made[1].running, false)
+        XCTAssertEqual(made[2].running, false)
         XCTAssertNil(watcher.detectors[app])
     }
 }
