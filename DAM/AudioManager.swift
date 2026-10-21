@@ -250,14 +250,7 @@ final class AudioManager: ObservableObject {
     /// Virtual devices (Teams, Zoom, BlackHole, Loopback, etc.) use
     /// kAudioDeviceTransportTypeVirtual or kAudioDeviceTransportTypeAggregate.
     private func isHardwareDevice(_ id: AudioDeviceID) -> Bool {
-        var addr = AudioObjectPropertyAddress(
-            mSelector: kAudioDevicePropertyTransportType,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        var transport: UInt32 = 0
-        var size = UInt32(MemoryLayout<UInt32>.size)
-        guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &transport) == noErr else {
+        guard let transport = transportType(id) else {
             return true   // if we can't read it, include it to be safe
         }
         switch transport {

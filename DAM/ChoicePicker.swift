@@ -17,6 +17,14 @@ extension HUDHint {
     static let picking = HUDHint(leading: "Hotkey for next, or press a number", trailing: "Esc to cancel")
 }
 
+extension String {
+    /// At most `max` characters, the last an ellipsis when some are cut, for a Touch Bar
+    /// button or label.
+    func truncated(to max: Int) -> String {
+        count > max ? String(prefix(max - 1)) + "…" : self
+    }
+}
+
 final class ChoicePicker: NSObject {
 
     /// Where a picker opens for the choice that is current now: on it, or on the one after
@@ -221,10 +229,6 @@ final class ChoicePicker: NSObject {
         close()
     }
 
-    private func truncated(_ s: String, maxLength: Int = 16) -> String {
-        s.count > maxLength ? String(s.prefix(maxLength - 1)) + "…" : s
-    }
-
     // MARK: - Keys
 
     private func installMonitors() {
@@ -275,7 +279,7 @@ extension ChoicePicker: NSTouchBarDelegate {
         guard let i = choices.indices.first(where: { choiceID($0) == identifier }) else {
             return nil
         }
-        let btn = NSButton(title: (hudNumber(at: i).map { "\($0).  " } ?? "") + truncated(choices[i]),
+        let btn = NSButton(title: (hudNumber(at: i).map { "\($0).  " } ?? "") + choices[i].truncated(to: 16),
                            target: self, action: #selector(touchBarChoiceTapped(_:)))
         btn.tag = i
         btn.bezelColor = i == cursor ? .controlAccentColor : nil
