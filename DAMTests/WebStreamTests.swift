@@ -514,6 +514,34 @@ final class WebStreamTests: XCTestCase {
         wait(for: [closed], timeout: 5)
     }
 
+    /// As the Moonlight host's: no more than 16 connections from one address at once.
+    func testConnectionsFromOneAddressAreCapped() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let server = startedServer(directory: directory)
+        defer { server.stop() }
+        func idle() -> NWConnection {
+            let connection = NWConnection(host: "127.0.0.1", port: server.port, using: .tcp)
+            connection.start(queue: .global())
+            return connection
+        }
+        let waiting = (0..<16).map { _ in idle() }
+        defer { waiting.forEach { $0.cancel() } }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        let turnedAway = idle()
+        defer { turnedAway.cancel() }
+        let closed = expectation(description: "closed")
+        turnedAway.receive(minimumIncompleteLength: 1, maximumLength: 1024) { _, _, complete, error in
+            if complete || error != nil { closed.fulfill() }
+        }
+        wait(for: [closed], timeout: 2)
+
+        // Served again once they have gone.
+        waiting.forEach { $0.cancel() }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertEqual(try get("/watch", port: server.port).status, 200)
+    }
+
     /// One display is made at a time; one that comes once everyone who wanted it was
     /// stopped is removed, and one a request after the stop waited for is kept.
     func testDisplaysMadeForStreamsAreNeverLeftBehind() throws {

@@ -12,7 +12,7 @@ final class MoonlightPairingTests: XCTestCase {
 
         static func make(_ name: String) throws -> Party {
             let key = try MoonlightCrypto.generatePrivateKey()
-            return Party(key: key, certificate: try MoonlightCrypto.selfSignedCertificate(key: key, commonName: name))
+            return Party(key: key, certificate: try MoonlightCrypto.certificate(key: key, subject: name, days: 20 * 365))
         }
     }
 
@@ -155,6 +155,42 @@ final class MoonlightPairingTests: XCTestCase {
         XCTAssertEqual(DER.length(127), Data([0x7F]))
         XCTAssertEqual(DER.length(128), Data([0x81, 0x80]))
         XCTAssertEqual(DER.length(300), Data([0x82, 0x01, 0x2C]))
+    }
+
+    func testDERIntegersTakeAsFewBytesAsTheyCan() {
+        XCTAssertEqual(DER.integer(Data([2])), Data([0x02, 0x01, 0x02]))
+        XCTAssertEqual(DER.integer(Data([0x00, 0x12, 0x34])), Data([0x02, 0x02, 0x12, 0x34]), "a zero it need not keep")
+        XCTAssertEqual(DER.integer(Data([0x00, 0x00, 0x80])), Data([0x02, 0x02, 0x00, 0x80]), "one zero kept, for the sign")
+        XCTAssertEqual(DER.integer(Data([0x80])), Data([0x02, 0x02, 0x00, 0x80]))
+        XCTAssertEqual(DER.integer(Data([0x00, 0x00])), Data([0x02, 0x01, 0x00]))
+        XCTAssertEqual(DER.integer(Data()), Data([0x02, 0x01, 0x00]))
+    }
+
+    func testASerialWithAZeroItNeedNotKeepIsFoundOut() throws {
+        func certificate(serial: Data) -> Data {
+            DER.sequence(DER.sequence(DER.explicit(0, DER.integer(Data([2]))), serial, DER.null))
+        }
+        XCTAssertFalse(DER.hasMinimalSerial(certificate(serial: DER.tlv(0x02, Data([0x00, 0x12, 0x34])))))
+        XCTAssertTrue(DER.hasMinimalSerial(certificate(serial: DER.tlv(0x02, Data([0x00, 0x92, 0x34])))))
+        XCTAssertTrue(DER.hasMinimalSerial(certificate(serial: DER.integer(Data([0x00, 0x12, 0x34])))))
+        XCTAssertTrue(DER.hasMinimalSerial(try Party.make("p").certificate))
+    }
+
+    func testValidityPast2049IsAGeneralizedTime() throws {
+        func date(_ text: String) -> Date { ISO8601DateFormatter().date(from: text)! }
+        XCTAssertEqual(DER.time(date("2049-12-31T23:59:59Z")), DER.tlv(0x17, Data("491231235959Z".utf8)))
+        XCTAssertEqual(DER.time(date("2050-01-01T00:00:00Z")), DER.tlv(0x18, Data("20500101000000Z".utf8)))
+
+        // A certificate made in 2035 for 20 years ends in 2055, not 1955.
+        let key = try MoonlightCrypto.generatePrivateKey()
+        let made = date("2035-06-01T00:00:00Z")
+        let der = try MoonlightCrypto.certificate(key: key, subject: "p", days: 20 * 365, now: made)
+        let certificate = try XCTUnwrap(SecCertificateCreateWithData(nil, der as CFData))
+        let values = try XCTUnwrap(SecCertificateCopyValues(certificate, [kSecOIDX509V1ValidityNotAfter] as CFArray, nil)
+                                       as? [CFString: [CFString: Any]])
+        let notAfter = try XCTUnwrap(values[kSecOIDX509V1ValidityNotAfter]?[kSecPropertyKeyValue] as? NSNumber)
+        XCTAssertEqual(Date(timeIntervalSinceReferenceDate: notAfter.doubleValue).timeIntervalSince(made),
+                       Double(20 * 365 * 24 * 3600), accuracy: 1)
     }
 
     func testXMLEscapesText() {

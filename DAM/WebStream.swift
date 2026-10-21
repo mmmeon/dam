@@ -215,7 +215,6 @@ final class WebStreamServer {
 
     private var listeners: [NWListener] = []
     private var readyListeners: Set<ObjectIdentifier> = []
-    private var connections: [ObjectIdentifier: NWConnection] = [:]
     private(set) var isRunning = false
     /// Whether both ports are accepting connections.
     var isListening: Bool { !listeners.isEmpty && readyListeners.count == listeners.count }
@@ -301,8 +300,7 @@ final class WebStreamServer {
         listeners.forEach { $0.cancel() }
         listeners = []
         readyListeners = []
-        connections.values.forEach { $0.cancel() }
-        connections = [:]
+        http.closeAll()
         stopAll()
         isRunning = false
         lastError = error
@@ -312,25 +310,22 @@ final class WebStreamServer {
     /// Seconds a connection has to send a whole request head, from when it is accepted.
     static var requestTimeout: TimeInterval = 10
 
-    private func accept(_ connection: NWConnection, secure: Bool) {
-        connections[ObjectIdentifier(connection)] = connection
-        connection.stateUpdateHandler = { [weak self, weak connection] state in
-            guard let self, let connection else { return }
-            switch state {
-            case .ready: self.receive(on: connection, secure: secure, buffer: Data())
-            case .failed: connection.cancel()
-            case .cancelled: self.connections[ObjectIdentifier(connection)] = nil
-            default: break
+    /// The connections being served, as many and from one address as the host's may be.
+    private lazy var http: MoonlightHTTPConnections = {
+        let http = MoonlightHTTPConnections(limits: MoonlightConnectionLimits(deadline: Self.requestTimeout))
+        http.onRequest = { [weak self] head, connection, secure in
+            guard let self else { return }
+            guard let request = Request.parse(head, secure: secure,
+                                              peer: connection.currentPath?.remoteEndpoint ?? connection.endpoint) else {
+                return self.send(status: "400 Bad Request", body: Data(), to: connection)
             }
+            self.handle(request, on: connection)
         }
-        connection.start(queue: .main)
-        // Until its head is complete a connection is in `connections`; one that never
-        // sends it is closed rather than kept forever.
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.requestTimeout) { [weak self, weak connection] in
-            guard let self, let connection, self.connections[ObjectIdentifier(connection)] === connection else { return }
-            wsLog.debug("closing a connection that sent no request")
-            connection.cancel()
-        }
+        return http
+    }()
+
+    private func accept(_ connection: NWConnection, secure: Bool) {
+        http.accept(connection, secure: secure)
     }
 
     /// One GET request: its path, query and headers, and where it came from.
@@ -352,45 +347,11 @@ final class WebStreamServer {
         }
 
         /// The peer's address, without its port.
-        var address: String {
-            guard case .hostPort(let host, _) = peer else { return "" }
-            var text = "\(host)"
-            if let percent = text.firstIndex(of: "%") { text = String(text[..<percent]) }
-            if text.hasPrefix("::ffff:") { text.removeFirst("::ffff:".count) }
-            return text
-        }
+        var address: String { MoonlightHost.address(peer) }
 
         static func parse(_ head: String, secure: Bool, peer: NWEndpoint?) -> Request? {
-            var lines = head.components(separatedBy: "\r\n")
-            let parts = lines.removeFirst().split(separator: " ")
-            guard parts.count >= 2, parts[0] == "GET", let url = URLComponents(string: String(parts[1])) else { return nil }
-            var query: [String: String] = [:]
-            for item in url.queryItems ?? [] where query[item.name] == nil { query[item.name] = item.value ?? "" }
-            var headers: [String: String] = [:]
-            for line in lines {
-                guard let colon = line.firstIndex(of: ":") else { continue }
-                headers[line[..<colon].lowercased()] = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
-            }
-            return Request(path: url.path, query: query, headers: headers, secure: secure, peer: peer)
-        }
-    }
-
-    /// Reads a request's head, then answers it. A viewer's connection is the session's from then.
-    private func receive(on connection: NWConnection, secure: Bool, buffer: Data) {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 16384) { [weak self] data, _, isComplete, error in
-            guard let self else { return }
-            let buffer = buffer + (data ?? Data())
-            if let end = buffer.range(of: Data("\r\n\r\n".utf8)) {
-                self.connections[ObjectIdentifier(connection)] = nil
-                guard let request = Request.parse(String(decoding: buffer[..<end.lowerBound], as: UTF8.self), secure: secure,
-                                                  peer: connection.currentPath?.remoteEndpoint ?? connection.endpoint) else {
-                    return self.send(status: "400 Bad Request", body: Data(), to: connection)
-                }
-                self.handle(request, on: connection)
-                return
-            }
-            guard !isComplete, error == nil, buffer.count < 16384 else { return connection.cancel() }
-            self.receive(on: connection, secure: secure, buffer: buffer)
+            guard let parsed = MoonlightHTTPConnections.parse(head) else { return nil }
+            return Request(path: parsed.path, query: parsed.query, headers: parsed.headers, secure: secure, peer: peer)
         }
     }
 
@@ -696,10 +657,8 @@ final class WebStreamServer {
 
     private func send(status: String, contentType: String = "text/plain", headers: [String] = [], body: Data,
                       to connection: NWConnection) {
-        let head = "HTTP/1.1 \(status)\r\nContent-Type: \(contentType)\r\nContent-Length: \(body.count)\r\n" +
-                   headers.map { "\($0)\r\n" }.joined() +
-                   "Cache-Control: no-store\r\nConnection: close\r\n\r\n"
-        connection.send(content: Data(head.utf8) + body, completion: .contentProcessed { _ in connection.cancel() })
+        MoonlightHTTPConnections.send(status: status, contentType: contentType, headers: headers + ["Cache-Control: no-store"],
+                                      body: body, to: connection)
     }
 }
 
