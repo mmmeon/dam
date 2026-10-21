@@ -265,14 +265,15 @@ final class MoonlightVideoEncoder {
                 self.lock.lock()
                 let held = self.pending > 0
                 self.lock.unlock()
-                if held { _ = self.submit(last, at: self.lastTime, keyFrame: false) }
+                if held { _ = self.submit(last, at: self.lastTime, keyFrame: false, counted: false) }
             }
         }
     }
 
     /// Gives the encoder one frame; it is handed back on the encoder's own thread, in order.
-    /// Returns false when the encoder would not take it.
-    private func submit(_ buffer: CVPixelBuffer, at time: CMTime, keyFrame: Bool) -> Bool {
+    /// Returns false when the encoder would not take it. One not `counted` (a picture given
+    /// again to nudge the last out) isn't a frame lost when it doesn't come out.
+    private func submit(_ buffer: CVPixelBuffer, at time: CMTime, keyFrame: Bool, counted: Bool = true) -> Bool {
         // A picture given again comes with the time it had; move it past the last one.
         let rising = time > lastTime ? time : CMTimeAdd(lastTime, CMTime(value: 1, timescale: 1000))
         lastTime = rising
@@ -291,9 +292,11 @@ final class MoonlightVideoEncoder {
             self.lock.unlock()
             guard status == noErr, !flags.contains(.frameDropped), let sample,
                   let (sets, _) = Self.parameterSets(sample), var units = Self.nalUnits(sample) else {
-                self.lock.lock()
-                self.dropped += 1
-                self.lock.unlock()
+                if counted {
+                    self.lock.lock()
+                    self.dropped += 1
+                    self.lock.unlock()
+                }
                 veLog.error("encode: \(status)")
                 if keyFrame { self.requestKeyFrame() }
                 return
@@ -322,6 +325,7 @@ final class MoonlightVideoEncoder {
             veLog.error("encode frame: \(status)")
             lock.lock()
             pending -= 1
+            if counted { dropped += 1 }
             lock.unlock()
             return false
         }

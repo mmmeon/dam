@@ -236,6 +236,21 @@ final class RemoteSessionsTests: XCTestCase {
         XCTAssertTrue(c.sessions.isEmpty)
     }
 
+    func testAnAppRemovedWhileStartingLeavesNoProfile() {
+        let fake = FakeSessionDisplays()
+        fake.pendingMakes = []
+        let c = coordinator(fake)
+        let app = c.addApp(named: "Mine", kind: .process)
+        c.begin(SessionRequest(app: app)) { _ in }
+        c.removeApp(app)
+        // Resized during the session, which would otherwise be kept for the next one.
+        fake.modes[100] = StreamingDisplayModes.Mode(width: 800, height: 600, refreshRate: 30)
+        fake.pendingMakes?.forEach { $0() }
+        XCTAssertTrue(c.sessions.isEmpty)
+        XCTAssertEqual(fake.removed, [100])
+        XCTAssertEqual(c.addApp(named: "Mine", kind: .process), app, "no profile left to take its ID")
+    }
+
     func testJoiningWhileStartingWaitsForTheDisplay() {
         let fake = FakeSessionDisplays()
         fake.pendingMakes = []
@@ -561,17 +576,23 @@ final class RemoteSessionsTests: XCTestCase {
         let lines = SessionLogLines.RustDeskConnections()
         XCTAssertEqual(try XCTUnwrap(SessionLogLines.RustDeskConnections.time(of: "[2026-10-20 15:26:04.995863 -04:00] INFO x")), 55564.995863, accuracy: 1e-6)
         XCTAssertNil(SessionLogLines.RustDeskConnections.time(of: "#3 Connection opened from 10.0.0.3:1."))
-        // A terminal already on logs on; a desktop opened since isn't taken for one by it.
+        // No desktop's line soon after: no screen, as a file transfer, so no session, even
+        // when another desktop's line comes later.
         XCTAssertNil(lines.parse("[2026-10-20 15:30:00.000000 -04:00] DEBUG [src/server/connection.rs:1498] #7 Connection opened from 10.0.0.7:1."))
-        XCTAssertEqual(lines.parse("[2026-10-20 15:30:02.000000 -04:00] INFO [src/server/terminal_service.rs:200] ts_1 output"),
-                       .opened(key: "7", client: "10.0.0.7"))
+        XCTAssertNil(lines.parse("[2026-10-20 15:30:02.000000 -04:00] INFO [src/server/connection.rs:4857] Option update: OptionMessage { custom_fps: 30 }"))
+        XCTAssertNil(lines.parse("[2026-10-20 15:30:03.000000 -04:00] DEBUG [src/server/video_service.rs:485] #displays=2, current=0"))
+        // Nor is it taken for a desktop when the next opens.
+        XCTAssertNil(lines.parse("[2026-10-20 15:30:10.000000 -04:00] DEBUG [src/server/connection.rs:1498] #10 Connection opened from 10.0.0.10:1."))
+        XCTAssertEqual(lines.parse("[2026-10-20 15:30:10.009000 -04:00] INFO [src/platform/mod.rs:112] new wakelock, require display on: true"),
+                       .opened(key: "10", client: "10.0.0.10"))
+        XCTAssertNil(lines.parse("[2026-10-20 15:30:20.000000 -04:00] DEBUG [src/server/connection.rs:1498] #11 Connection opened from 10.0.0.11:1."))
+        XCTAssertNil(lines.parse("[2026-10-20 15:30:25.000000 -04:00] DEBUG [src/server/connection.rs:1498] #12 Connection opened from 10.0.0.12:1."))
         // Within the window, a terminal's line still makes none.
         XCTAssertNil(lines.parse("[2026-10-20 15:31:00.000000 -04:00] DEBUG [src/server/connection.rs:1498] #8 Connection opened from 10.0.0.8:1."))
         XCTAssertNil(lines.parse("[2026-10-20 15:31:00.010000 -04:00] INFO [src/server/terminal_service.rs:180] Creating new terminal service: ts_2"))
         // Past midnight reads as past the window.
         XCTAssertNil(lines.parse("[2026-10-20 23:59:59.900000 -04:00] DEBUG [src/server/connection.rs:1498] #9 Connection opened from 10.0.0.9:1."))
-        XCTAssertEqual(lines.parse("[2026-10-21 00:00:00.100000 -04:00] INFO [src/server/connection.rs:300] something else"),
-                       .opened(key: "9", client: "10.0.0.9"))
+        XCTAssertNil(lines.parse("[2026-10-21 00:00:00.100000 -04:00] INFO [src/server/connection.rs:4857] Option update: OptionMessage { }"))
     }
 
     func testParsecLines() {

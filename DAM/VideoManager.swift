@@ -188,7 +188,15 @@ final class VideoManager: ObservableObject {
     var bootstrapDisplay: AnyObject?
     var bootstrapDisplayID: CGDirectDisplayID = 0
     /// The streaming displays, in the order they were added.
-    var streamingDisplays: [StreamingDisplay] = []
+    var streamingDisplays: [StreamingDisplay] = [] {
+        didSet {
+            let gone = Set(oldValue.map(\.id)).subtracting(streamingDisplays.map(\.id))
+            for id in gone where id != 0 { onStreamingDisplayGone?(id) }
+        }
+    }
+    /// Called with a streaming display's ID once it is gone, however it went: asked for,
+    /// ended by the system, or never come online.
+    var onStreamingDisplayGone: ((CGDirectDisplayID) -> Void)?
     /// Displays shown turned through a stand-in, by the name of the display shown on.
     var rotatedPresentations: [String: RotatedPresentation] = [:]
     /// The connections of displays whose saved rotation was put back, or is about to be, as

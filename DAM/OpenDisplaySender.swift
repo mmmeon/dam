@@ -362,6 +362,12 @@ final class OpenDisplaySender {
         onChange?()
     }
 
+    /// Ends the session whose display `id` went without it asking, as when removed from the
+    /// menu or ended by the system, rather than streaming a display that isn't there.
+    func displayGone(_ id: CGDirectDisplayID) {
+        sessions.values.first { $0.displayID == id }?.displayGone()
+    }
+
     fileprivate func changed() { onChange?() }
 
     fileprivate func holdDialing(_ key: String, for seconds: TimeInterval) {
@@ -387,7 +393,7 @@ final class OpenDisplaySession {
     private var linkReady = false
     private var deframer = OpenDisplayDeframer()
     private var lastHeard = Date()
-    private var displayID: CGDirectDisplayID?
+    private(set) var displayID: CGDirectDisplayID?
     private var desktop: OpenDisplayHello.Desktop?
     /// A hello waiting out the debounce, as the receiver turns.
     private var pendingHello: DispatchWorkItem?
@@ -558,6 +564,12 @@ final class OpenDisplaySession {
             stopTimers()
         }
         sender?.sessionLostLink(self, reason: reason, connected: wasReady)
+    }
+
+    fileprivate func displayGone() {
+        // Gone already: nothing to remove, nor an ID to keep, which another display may take.
+        displayID = nil
+        fail("its display was removed")
     }
 
     /// Ends a session whose setup failed. The receiver is dialed again only after the

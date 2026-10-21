@@ -585,6 +585,8 @@ final class RemoteSessionCoordinator {
     /// just ended, for the next one; but not in the settings locked in Settings.
     private func learn(from session: Session) {
         let asked = session.profile
+        // An app removed while its session was starting: nothing of it to keep.
+        if asked.isAdded && profiles[session.app] == nil { return }
         let saved = profile(for: session.app)
         var next = saved
         // An app's own display can be gone already, ending the session.

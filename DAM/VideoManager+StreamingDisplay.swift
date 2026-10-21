@@ -670,6 +670,11 @@ extension VideoManager {
         }
         var config: CGDisplayConfigRef?
         guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else {
+            // Told none was made, so none is left: dropping it removes it, as for one that
+            // never came online.
+            sdLog.error("place: could not begin a configuration — dropping \(id)")
+            streamingDisplays.removeAll { $0.id == id }
+            if streamingDisplays.isEmpty { streamingArrangement = nil }
             mergeDevices()
             finishStreamingChange()
             return

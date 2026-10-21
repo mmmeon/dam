@@ -112,6 +112,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.videoManager.createStreamingDisplay(mode: mode, identity: identity, completion: done)
         }
         openDisplay.removeDisplay = { [weak self] id in self?.videoManager.removeStreamingDisplay(id: id) }
+        // Later, not from inside VideoManager's change.
+        videoManager.onStreamingDisplayGone = { [weak self] id in
+            DispatchQueue.main.async { self?.openDisplay.displayGone(id) }
+        }
         openDisplay.resizeDisplay = { [weak self] id, mode, done in
             guard let self else { return done(false) }
             self.videoManager.resizeStreamingDisplay(id: id, to: mode, completion: done)

@@ -256,6 +256,10 @@ final class MenuBarIconAnimator {
     private var ripplePhase: CGFloat = 0
     /// 1 when the outflow is widening, so ripples swell it; -1 when narrowing, so they pinch it.
     private var rippleDirection: CGFloat = 1
+    /// The direction drawn, which goes over to `rippleDirection` through flat water in
+    /// `rippleTurn` rather than in one frame when a change reverses mid-animation.
+    private var rippleSign: CGFloat = 1
+    private static let rippleTurn: CGFloat = 0.25
     private var reduceMotion = false
     private var timer: Timer?
 
@@ -293,6 +297,7 @@ final class MenuBarIconAnimator {
         slosh.velocity = 0
         spin = 0
         ripple = 0
+        rippleSign = rippleDirection
     }
 
     private func animate() {
@@ -300,6 +305,7 @@ final class MenuBarIconAnimator {
         let spacing = MenuBarIcon.ridgeSpacing
         let startSpin = spin, startTarget = target
         rippleDirection = newTarget < startTarget ? -1 : 1
+        if ripple < 0.02 { rippleSign = rippleDirection }
         let turns = reduceMotion ? 0 : max(1, (CGFloat(Self.duration) * Self.turnRate / spacing).rounded())
         let turnDuration = reduceMotion ? 0 : Self.duration
         // Up when there are no turns to add, so a change mid-turn never snaps the ridges back.
@@ -322,6 +328,8 @@ final class MenuBarIconAnimator {
             let stirred = self.reduceMotion ? 0 : min(1, abs(self.outflow.velocity))
             self.ripple = max(stirred, self.ripple * exp(-elapsed / Self.rippleFade))
             self.ripplePhase += elapsed * Self.rippleRate
+            let turn = 2 * elapsed / Self.rippleTurn
+            self.rippleSign = min(1, max(-1, self.rippleSign + max(-turn, min(turn, self.rippleDirection - self.rippleSign))))
             self.slosh.step(toward: stirred, by: elapsed, bouncing: true)
             if progress >= 1, self.ripple < 0.02, self.slosh.isSettled(at: 0),
                self.upstream.isSettled(at: self.target), self.outflow.isSettled(at: self.target) {
@@ -340,6 +348,6 @@ final class MenuBarIconAnimator {
         // An overshoot past no width at all would cross the stream's sides; pinch it shut instead.
         button?.image = MenuBarIcon.image(fraction: max(0, outflow.value), spin: spin,
                                           upstream: max(0, upstream.value),
-                                          ripple: ripple * rippleDirection, ripplePhase: ripplePhase, sway: slosh.value)
+                                          ripple: ripple * rippleSign, ripplePhase: ripplePhase, sway: slosh.value)
     }
 }

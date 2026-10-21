@@ -227,6 +227,13 @@ func pointer() {
         .post(tap: .cghidEventTap)
 }
 
+// At the login window a capture call can hang until someone logs in; the report then says
+// so, and that the step above it is the one.
+DispatchQueue.global().asyncAfter(deadline: .now() + delay + 120) {
+    note("timed out after \(Int(delay) + 120) s: the step above never finished")
+    exit(1)
+}
+
 Task {
     note("loginprobe, macOS \(ProcessInfo.processInfo.operatingSystemVersionString)")
     if delay > 0 {

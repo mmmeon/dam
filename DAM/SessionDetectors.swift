@@ -58,8 +58,9 @@ enum SessionLogLines {
     /// (`video_service.rs:485] #displays=2, current=0, …`). A terminal's: `require display on:
     /// false` and `terminal_service.rs` lines. Holds an opened connection until one comes; one
     /// still held when the next opens counts as a desktop. With the log's timestamps, only
-    /// lines within `window` of the open count, as another connection's may come later, and
-    /// one held past it counts as a desktop at the next line.
+    /// lines within `window` of the open count, as another connection's may come later; one
+    /// with no desktop's line by then has no screen (a terminal, a file transfer) and makes
+    /// no session. A desktop's come within about 20 ms, over the internet too.
     final class RustDeskConnections {
         private var pending: SessionEvent?
         /// When the held connection opened, by the log.
@@ -76,7 +77,7 @@ enum SessionLogLines {
             if let event = SessionLogLines.rustDesk(line) {
                 switch event {
                 case .opened:
-                    let earlier = pending
+                    let earlier = expired(at) ? nil : pending
                     pending = event
                     pendingAt = at
                     return earlier
@@ -86,9 +87,9 @@ enum SessionLogLines {
                 }
             }
             guard let held = pending else { return nil }
-            if let opened = pendingAt, let at, at - opened > Self.window || at < opened {
+            if expired(at) {
                 pending = nil
-                return held
+                return nil
             }
             if line.contains("require display on: false") || line.contains("terminal_service.rs") {
                 pending = nil
@@ -100,6 +101,13 @@ enum SessionLogLines {
                 return held
             }
             return nil
+        }
+
+        /// Whether a line at `at` comes too long after the held connection opened to say
+        /// what it was.
+        private func expired(_ at: TimeInterval?) -> Bool {
+            guard let opened = pendingAt, let at else { return false }
+            return at - opened > Self.window || at < opened
         }
 
         /// Seconds into the day of a line's `[2026-10-20 15:26:04.995863 -04:00]`, or nil
