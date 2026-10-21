@@ -822,6 +822,27 @@ final class RemoteSessionsTests: XCTestCase {
         XCTAssertEqual(lines, ["first", "half done", "second"])
     }
 
+    func testLogFollowerThroughALinkReadsEachLineOnce() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let real = dir.appendingPathComponent("real.log")
+        let link = dir.appendingPathComponent("link.log")
+        try "old line\n".write(to: real, atomically: false, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
+        var lines: [String] = []
+        let follower = LogFollower(url: link) { lines.append($0) }
+        follower.start()
+        defer { follower.stop() }
+        let handle = try FileHandle(forWritingTo: real)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("first\n".utf8))
+        try handle.close()
+        // Past its look at the path, which took the link for another file and read it all again.
+        RunLoop.main.run(until: Date().addingTimeInterval(2.5))
+        XCTAssertEqual(lines, ["first"])
+    }
+
     func testWatcherStartsAndEndsSessionsAsTheDetectorSays() {
         final class FakeDetector: SessionDetector {
             let app: String

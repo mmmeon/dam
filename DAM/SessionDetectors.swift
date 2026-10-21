@@ -271,7 +271,8 @@ final class LogFollower {
         var opened = stat()
         var atPath = stat()
         guard fstat(handle.fileDescriptor, &opened) == 0 else { return }
-        if lstat(url.path, &atPath) != 0 || atPath.st_ino != opened.st_ino {
+        // Through a link to the log, the file it leads to.
+        if stat(url.path, &atPath) != 0 || atPath.st_ino != opened.st_ino || atPath.st_dev != opened.st_dev {
             readNew()
             self.open(fromEnd: false)
         } else {
