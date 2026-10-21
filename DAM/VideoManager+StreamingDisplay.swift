@@ -232,6 +232,8 @@ extension VideoManager {
             return noteSettledFrames()
         }
         displaySetChangedUntil = Date().addingTimeInterval(45)
+        // Noted again once the set has settled, with any streaming display placed meanwhile.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 46) { [weak self] in self?.noteSettledFrames() }
     }
 
     /// Notes where each display is while the set is settled, once a change of DAM's own (a
@@ -345,8 +347,14 @@ extension VideoManager {
                                main: mainID)
         guard !free.isEmpty || !modes.isEmpty || !origins.isEmpty else { return }
         sdLog.debug("the display set changed; freeing \(free) from mirrors, modes back on \(modes.map(\.0)), moving \(Array(origins.keys))")
-        // So no layout DAM puts back (an anchor's, the streaming one) mirrors them again.
+        // So no layout DAM puts back (an anchor's, the streaming one) mirrors or moves them again.
         if !free.isEmpty { keepUserMirror(free, on: 0) }
+        if !origins.isEmpty {
+            streamingSettle = streamingSettle.map { ($0.arrangement.replacingOrigins(origins), $0.until) }
+            for (name, arrangement) in virtualAnchorArrangements {
+                virtualAnchorArrangements[name] = arrangement.replacingOrigins(origins)
+            }
+        }
         streamingMirrorReleaseInFlight = true
         commitDisplayChange({ cfg in
             for id in free { CGConfigureDisplayMirrorOfDisplay(cfg, id, CGDirectDisplayID(0)) }
