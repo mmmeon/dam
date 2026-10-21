@@ -1,5 +1,6 @@
 import XCTest
 import AudioToolbox
+import CoreMedia
 @testable import DAM
 
 final class MoonlightAudioEncoderTests: XCTestCase {
@@ -34,6 +35,44 @@ final class MoonlightAudioEncoderTests: XCTestCase {
         }
         XCTAssertEqual(packets.count, 20)
         XCTAssertTrue(packets.allSatisfy { !$0.isEmpty && $0.count < 400 }, "\(packets.map(\.count))")
+    }
+
+    /// Captured sound as macOS hands it over: interleaved float stereo.
+    private func sampleBuffer(_ samples: [Float]) throws -> CMSampleBuffer {
+        var format = MoonlightAudioEncoder.pcmFormat
+        var description: CMAudioFormatDescription?
+        XCTAssertEqual(CMAudioFormatDescriptionCreate(allocator: nil, asbd: &format, layoutSize: 0, layout: nil,
+                                                      magicCookieSize: 0, magicCookie: nil, extensions: nil,
+                                                      formatDescriptionOut: &description), noErr)
+        let length = samples.count * MemoryLayout<Float>.size
+        var block: CMBlockBuffer?
+        XCTAssertEqual(CMBlockBufferCreateWithMemoryBlock(allocator: nil, memoryBlock: nil, blockLength: length,
+                                                          blockAllocator: nil, customBlockSource: nil, offsetToData: 0,
+                                                          dataLength: length, flags: kCMBlockBufferAssureMemoryNowFlag,
+                                                          blockBufferOut: &block), noErr)
+        let data = try XCTUnwrap(block)
+        samples.withUnsafeBytes {
+            _ = CMBlockBufferReplaceDataBytes(with: $0.baseAddress!, blockBuffer: data, offsetIntoDestination: 0,
+                                              dataLength: length)
+        }
+        var sample: CMSampleBuffer?
+        XCTAssertEqual(CMAudioSampleBufferCreateReadyWithPacketDescriptions(
+            allocator: nil, dataBuffer: data, formatDescription: try XCTUnwrap(description),
+            sampleCount: samples.count / 2, presentationTimeStamp: .zero, packetDescriptions: nil,
+            sampleBufferOut: &sample), noErr)
+        return try XCTUnwrap(sample)
+    }
+
+    func testSkipsTheFirstSamplesOfCapturedSoundWhenAsked() throws {
+        var packets = 0
+        let encoder = try MoonlightAudioEncoder(packetDuration: 5) { _ in packets += 1 }
+        let sample = try sampleBuffer(tone(seconds: 0.01))
+        encoder.encode(sample)
+        XCTAssertEqual(packets, 2, "480 samples, two packets")
+        encoder.encode(sample, skipping: 240)
+        XCTAssertEqual(packets, 3, "half of them")
+        encoder.encode(sample, skipping: 1000)
+        XCTAssertEqual(packets, 3, "none")
     }
 
     func testPacketsDecodeBackToTheTone() throws {

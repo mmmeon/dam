@@ -802,6 +802,7 @@ final class MoonlightStream {
         self.capture = nil
         repeater?.cancel()
         repeater = nil
+        encoder = nil
         lock.unlock()
         capture?.cancel()
         input.close()
@@ -841,6 +842,7 @@ final class MoonlightStream {
     private func end(_ reason: String) {
         lock.lock()
         let first = !ended
+        ended = true
         lock.unlock()
         guard first else { return }
         msLog.debug("stream ended: \(reason, privacy: .public)")
@@ -850,6 +852,10 @@ final class MoonlightStream {
 
     /// Starts capturing and encoding once Moonlight is listening for video.
     private func startPicture() {
+        lock.lock()
+        let ended = self.ended
+        lock.unlock()
+        guard !ended else { return }
         do {
             let encoder = try MoonlightVideoEncoder(
                 settings: .init(width: config.width, height: config.height, fps: config.fps,
@@ -862,8 +868,10 @@ final class MoonlightStream {
             let key = SharedScreenCapture.Key(displayID: displayID, width: config.width, height: config.height,
                                               fps: config.fps, showsCursor: Self.showsPointer)
             lock.lock()
-            self.encoder = encoder
+            let stopped = self.ended
+            if !stopped { self.encoder = encoder }
             lock.unlock()
+            guard !stopped else { return }
             let capture = SharedScreenCapture.subscribe(key, frame: { [weak self] buffer, time in
                 guard let self else { return }
                 self.lock.lock()
@@ -885,6 +893,9 @@ final class MoonlightStream {
                 default:
                     self?.end("Capture failed: \(error.localizedDescription)")
                 }
+            }, stopped: { [weak self] error in
+                // Repeating the last picture would hide that nothing more comes.
+                self?.end("Screen capture stopped: \(error.localizedDescription)")
             })
             lock.lock()
             let ended = self.ended
@@ -940,6 +951,10 @@ final class MoonlightStream {
     /// Sends the last picture again while the screen is still, at most every half second,
     /// so the client's decoder never idles for long.
     private func startRepeating() {
+        lock.lock()
+        defer { lock.unlock() }
+        // Stopped meanwhile: no timer outlives the stream.
+        guard !ended else { return }
         let timer = DispatchSource.makeTimerSource(queue: .global(qos: .userInitiated))
         timer.schedule(deadline: .now() + 0.5, repeating: 0.5)
         timer.setEventHandler { [weak self] in
@@ -953,9 +968,7 @@ final class MoonlightStream {
                                                    timescale: 1_000_000_000))
             encoder?.encode(last.buffer, at: time)
         }
-        lock.lock()
         repeater = timer
-        lock.unlock()
         timer.resume()
     }
 }

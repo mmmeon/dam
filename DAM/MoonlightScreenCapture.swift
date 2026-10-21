@@ -32,6 +32,7 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     private let pixelFormat: OSType
     private let frame: (CVPixelBuffer, CMTime) -> Void
     private let queue = DispatchQueue(label: "\(AppIdentity.bundleID).moonlight.capture", qos: .userInteractive)
+    /// It and `rotationObserver` are under `lock`, with `stopped`.
     private var stream: SCStream?
     private let lock = NSLock()
     private var stopped = false
@@ -151,11 +152,20 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         } catch {
             return completion(error)
         }
-        self.stream = stream
-        rotationObserver = NotificationCenter.default.addObserver(
-            forName: StreamRotations.didChange, object: nil, queue: nil) { [weak self] _ in self?.rotationChanged() }
-        stream.startCapture { error in
+        // Under the lock with `stopped`, so a stop either finds the stream or keeps it from starting.
+        lock.lock()
+        let stopped = self.stopped
+        if !stopped {
+            self.stream = stream
+            rotationObserver = NotificationCenter.default.addObserver(
+                forName: StreamRotations.didChange, object: nil, queue: nil) { [weak self] _ in self?.rotationChanged() }
+        }
+        lock.unlock()
+        guard !stopped else { return }
+        stream.startCapture { [weak self] error in
             if let error { scLog.error("start: \(error.localizedDescription, privacy: .public)") }
+            // Stopped while it started: stopping it then may not have taken.
+            if error == nil, self?.isStopped ?? true { stream.stopCapture { _ in } }
             completion(error)
         }
     }
@@ -184,11 +194,13 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     func stop() {
         lock.lock()
         stopped = true
+        let stream = self.stream
+        self.stream = nil
+        let rotationObserver = self.rotationObserver
+        self.rotationObserver = nil
         lock.unlock()
         stream?.stopCapture { _ in }
-        stream = nil
         if let rotationObserver { NotificationCenter.default.removeObserver(rotationObserver) }
-        rotationObserver = nil
     }
 
     /// Follows the display being turned while it is captured: captures it the new way up
@@ -196,7 +208,11 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     private func rotationChanged() {
         let rotation = StreamRotations.shared.rotation(of: displayID)
         queue.async { [weak self] in
-            guard let self, let stream = self.stream, rotation != self.rotation, !self.isStopped else { return }
+            guard let self, rotation != self.rotation else { return }
+            self.lock.lock()
+            let stream = self.stopped ? nil : self.stream
+            self.lock.unlock()
+            guard let stream else { return }
             scLog.debug("display \(self.displayID) turned to \(rotation.rawValue)")
             self.setRotation(rotation)
             let configuration = self.makeConfiguration(rotation: rotation)
@@ -339,10 +355,13 @@ final class SharedScreenCapture {
         fileprivate weak var capture: SharedScreenCapture?
         fileprivate let frame: (CVPixelBuffer, CMTime) -> Void
         fileprivate let audio: (CMSampleBuffer) -> Void
+        fileprivate let stopped: (Error) -> Void
 
-        fileprivate init(frame: @escaping (CVPixelBuffer, CMTime) -> Void, audio: @escaping (CMSampleBuffer) -> Void) {
+        fileprivate init(frame: @escaping (CVPixelBuffer, CMTime) -> Void, audio: @escaping (CMSampleBuffer) -> Void,
+                         stopped: @escaping (Error) -> Void) {
             self.frame = frame
             self.audio = audio
+            self.stopped = stopped
         }
 
         func cancel() { capture?.remove(self) }
@@ -366,11 +385,14 @@ final class SharedScreenCapture {
 
     /// Joins the capture for `key`, starting it if none runs. `frame` is called on the capture
     /// thread, `audio` on a queue of the capture's own; `started` once, with whether capture
-    /// started.
+    /// started; `stopped` if capture stops on its own once started, as when replayd dies or
+    /// the display goes away. The capture is let go then, and the next to subscribe starts
+    /// another.
     static func subscribe(_ key: Key, frame: @escaping (CVPixelBuffer, CMTime) -> Void,
                           audio: @escaping (CMSampleBuffer) -> Void,
-                          started: @escaping (Error?) -> Void) -> Subscription {
-        let subscription = Subscription(frame: frame, audio: audio)
+                          started: @escaping (Error?) -> Void,
+                          stopped: @escaping (Error) -> Void = { _ in }) -> Subscription {
+        let subscription = Subscription(frame: frame, audio: audio, stopped: stopped)
         registryLock.lock()
         let shared: SharedScreenCapture
         let isNew: Bool
@@ -406,10 +428,20 @@ final class SharedScreenCapture {
         let capture = Self.makeCapture(key) { [weak self] buffer, time in self?.took(buffer, time) }
         capture.showsCursor = key.showsCursor
         capture.audio = { [weak self] sample in self?.took(sample) }
+        capture.onStop = { [weak self] error in self?.stoppedOnItsOwn(error) }
         lock.lock()
         self.capture = capture
         lock.unlock()
         Self.startCapture(capture) { [weak self] error in self?.started(error) }
+    }
+
+    /// Lets the capture go, so no stream joins it, and tells those on it.
+    private func stoppedOnItsOwn(_ error: Error) {
+        stop()
+        lock.lock()
+        let subscriptions = self.subscriptions
+        lock.unlock()
+        subscriptions.forEach { $0.stopped(error) }
     }
 
     private func add(_ subscription: Subscription, started: @escaping (Error?) -> Void) {

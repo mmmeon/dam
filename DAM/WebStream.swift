@@ -12,8 +12,9 @@
 //
 //  Viewers of one display with the same settings share a session: one capture, one
 //  encoder, and each frame fragmented once. A viewer joining waits for a keyframe, and
-//  one that cannot keep up (more than a second of the stream unsent) skips to the next
-//  keyframe rather than fall ever further behind.
+//  one that cannot keep up (more than a second of the stream unsent) skips to a keyframe
+//  once most of that has gone out, rather than fall ever further behind; one that stays
+//  behind for 10 seconds is let go.
 //
 
 import CoreGraphics
@@ -308,6 +309,9 @@ final class WebStreamServer {
         onChange?()
     }
 
+    /// Seconds a connection has to send a whole request head, from when it is accepted.
+    static var requestTimeout: TimeInterval = 10
+
     private func accept(_ connection: NWConnection, secure: Bool) {
         connections[ObjectIdentifier(connection)] = connection
         connection.stateUpdateHandler = { [weak self, weak connection] state in
@@ -320,6 +324,13 @@ final class WebStreamServer {
             }
         }
         connection.start(queue: .main)
+        // Until its head is complete a connection is in `connections`; one that never
+        // sends it is closed rather than kept forever.
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.requestTimeout) { [weak self, weak connection] in
+            guard let self, let connection, self.connections[ObjectIdentifier(connection)] === connection else { return }
+            wsLog.debug("closing a connection that sent no request")
+            connection.cancel()
+        }
     }
 
     /// One GET request: its path, query and headers, and where it came from.
@@ -435,6 +446,9 @@ final class WebStreamServer {
     private var ownedDisplay: CGDirectDisplayID?
     /// Requests waiting for the display being made.
     private var waitingForDisplay: [(WebStreamRequest, NWConnection)] = []
+    private var makingDisplay = false
+    /// Counts `stopAll`s, so a request that waited on a display through one is let go.
+    private var generation = 0
 
     var viewerCount: Int { sessions.values.reduce(0) { $0 + $1.viewerCount } }
 
@@ -533,6 +547,7 @@ final class WebStreamServer {
 
     /// Ends every session; their viewers' connections are closed.
     func stopAll() {
+        generation += 1
         for session in sessions.values { session.stop() }
         sessions = [:]
         for (_, connection) in waitingForDisplay { connection.cancel() }
@@ -568,12 +583,16 @@ final class WebStreamServer {
             guard let makeDisplay else {
                 return send(status: "503 Service Unavailable", body: Data("No display to stream\n".utf8), to: connection)
             }
+            // One display at a time: requests while it is made wait for it, even those
+            // after a stop.
             waitingForDisplay.append((request, connection))
-            guard waitingForDisplay.count == 1 else { return }
+            guard !makingDisplay else { return }
+            makingDisplay = true
             let (width, height, fps) = request.newDisplay
             wsLog.debug("making a \(width)×\(height)@\(fps) display to stream")
             makeDisplay(width, height, fps) { [weak self] id in
                 guard let self else { return }
+                self.makingDisplay = false
                 let waiting = self.waitingForDisplay
                 self.waitingForDisplay = []
                 guard let id else {
@@ -583,6 +602,12 @@ final class WebStreamServer {
                     }
                     return
                 }
+                // Everyone who asked for it was stopped meanwhile.
+                guard !waiting.isEmpty else {
+                    self.removeDisplay?(id)
+                    return
+                }
+                if let old = self.ownedDisplay, old != id { self.removeDisplay?(old) }
                 self.ownedDisplay = id
                 for (request, connection) in waiting { self.serve(request, on: connection) }
             }
@@ -592,10 +617,13 @@ final class WebStreamServer {
         // page asks again when it is.
         if displayID == ownedDisplay, let resizeDisplay, let wanted = Self.turnedSize(of: displayID, for: request) {
             wsLog.debug("turning display \(displayID) to \(wanted.width)×\(wanted.height) for the viewer")
+            let generation = self.generation
             return resizeDisplay(displayID, wanted.width, wanted.height, wanted.fps) { [weak self] _ in
+                // Stopped meanwhile: the request goes with everything else.
+                guard let self, self.generation == generation else { return connection.cancel() }
                 var request = request
                 request.portrait = nil
-                self?.serve(request, on: connection)
+                self.serve(request, on: connection)
             }
         }
         guard let size = Self.pictureSize(of: displayID, request: request) else {
@@ -604,22 +632,20 @@ final class WebStreamServer {
         let key = WebStreamSession.Key(displayID: displayID, profile: request.profile, bitrateKbps: request.bitrateKbps,
                                        fps: size.fps, width: size.width, height: size.height,
                                        lowLatency: request.lowLatency)
-        let session: WebStreamSession
-        if let running = sessions[key] {
-            session = running
-        } else {
-            do {
-                session = try WebStreamSession(key: key)
-            } catch {
-                wsLog.error("session: \(String(describing: error), privacy: .public)")
-                return send(status: "503 Service Unavailable", body: Data("The encoder could not start\n".utf8), to: connection)
-            }
-            session.onEnd = { [weak self] ended in self?.ended(ended) }
-            session.onChange = { [weak self] in self?.onChange?() }
-            sessions[key] = session
-            session.start()
-        }
         let viewer = WebStreamViewer(connection: connection, maxInFlight: request.bitrateKbps * 125, audio: request.audio)
+        // A session that has just ended, and is still to be let go here, takes no one.
+        if let running = sessions[key], running.add(viewer) { return }
+        let session: WebStreamSession
+        do {
+            session = try WebStreamSession(key: key)
+        } catch {
+            wsLog.error("session: \(String(describing: error), privacy: .public)")
+            return send(status: "503 Service Unavailable", body: Data("The encoder could not start\n".utf8), to: connection)
+        }
+        session.onEnd = { [weak self] ended in self?.ended(ended) }
+        session.onChange = { [weak self] in self?.onChange?() }
+        sessions[key] = session
+        session.start()
         session.add(viewer)
     }
 
@@ -711,10 +737,12 @@ final class WebStreamSession {
     /// Whether the last viewer has left and the session ends unless one comes.
     private var closing = false
     private let lock = NSLock()
-    /// The last picture captured, its slot on the grid, and when it came.
-    private var lastFrame: (buffer: CVPixelBuffer, time: CMTime, at: UInt64)?
+    /// The last picture captured, and when it came.
+    private var lastFrame: (buffer: CVPixelBuffer, at: UInt64)?
     /// Frames' slots; on `queue`.
     private var grid: FrameGrid
+    /// Fills the grid's empty slots. It, `silenceTimer`, `statsTimer` and `activity` are
+    /// under `lock`.
     private var repeater: DispatchSourceTimer?
     private var keyFrames = MoonlightKeyFrameThrottle()
     /// Keyframes for viewers that fell behind come rarer: each costs everyone.
@@ -762,7 +790,7 @@ final class WebStreamSession {
     }
 
     func start() {
-        activity = ProcessInfo.processInfo.beginActivity(
+        let activity = ProcessInfo.processInfo.beginActivity(
             options: [.userInitiated, .latencyCritical, .idleSystemSleepDisabled, .idleDisplaySleepDisabled],
             reason: "Streaming a display")
         let capture = MoonlightScreenCapture(displayID: key.displayID, width: key.width, height: key.height,
@@ -775,23 +803,12 @@ final class WebStreamSession {
         capture.audioQueue = queue
         capture.audio = { [weak self] sample in self?.took(audio: sample) }
         capture.onStop = { [weak self] error in self?.end("capture stopped: \(error.localizedDescription)") }
-        lock.lock()
-        self.capture = capture
-        lock.unlock()
-        capture.start { [weak self] error in
-            guard let error else { return }
-            self?.end("capture: \(error.localizedDescription)")
-        }
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + 0.5, repeating: 1 / Double(key.fps), leeway: .milliseconds(2))
         timer.setEventHandler { [weak self] in self?.repeatIfStill() }
-        repeater = timer
-        timer.resume()
         let silence = DispatchSource.makeTimerSource(queue: queue)
         silence.schedule(deadline: .now() + 0.1, repeating: 0.02, leeway: .milliseconds(5))
         silence.setEventHandler { [weak self] in self?.padSilence() }
-        silenceTimer = silence
-        silence.resume()
         let statsTimer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
         statsTimer.schedule(deadline: .now() + 5, repeating: 5)
         statsTimer.setEventHandler { [weak self] in
@@ -805,14 +822,27 @@ final class WebStreamSession {
             let encodeMs = encode.frames > 0 ? Double(encode.total / UInt64(encode.frames)) / 1e6 : 0
             wsLog.debug("stats (\(self.viewerCount) watching): \(self.stats.take(seconds: 5), privacy: .public); given \(given.real) captured + \(given.repeats) repeats; encode \(encodeMs, format: .fixed(precision: 1)) ms")
         }
-        self.statsTimer = statsTimer
-        statsTimer.resume()
+        // Under the lock, as `stop` may come from any thread, and before capture starts,
+        // which can end the session on its own.
+        lock.lock()
+        self.activity = activity
+        self.capture = capture
+        (repeater, silenceTimer, self.statsTimer) = (timer, silence, statsTimer)
+        lock.unlock()
+        [timer, silence, statsTimer].forEach { $0.resume() }
+        capture.start { [weak self] error in
+            guard let error else { return }
+            self?.end("capture: \(error.localizedDescription)")
+        }
         wsLog.debug("session \(self.key.width)×\(self.key.height)@\(self.key.fps) \(self.key.profile.rawValue, privacy: .public) \(self.key.bitrateKbps) kbps from display \(self.key.displayID)")
     }
 
-    /// Takes `viewer` in; it gets the stream from the next keyframe.
-    func add(_ viewer: WebStreamViewer) {
+    /// Takes `viewer` in; it gets the stream from the next keyframe. False, and the viewer
+    /// left alone, once the session has ended.
+    @discardableResult
+    func add(_ viewer: WebStreamViewer) -> Bool {
         lock.lock()
+        guard !ended else { lock.unlock(); return false }
         viewers.append(viewer)
         closing = false
         lock.unlock()
@@ -824,6 +854,7 @@ final class WebStreamSession {
         wsLog.debug("viewer joined: \(self.viewerCount) watching")
         queue.async { [weak self] in self?.requestKeyFrame(catchingUp: false) }
         DispatchQueue.main.async { self.onChange?() }
+        return true
     }
 
     private func remove(_ viewer: WebStreamViewer) {
@@ -854,26 +885,25 @@ final class WebStreamSession {
         self.encoder = nil
         let viewers = self.viewers
         self.viewers = []
+        let timers = [repeater, silenceTimer, statsTimer]
+        (repeater, silenceTimer, statsTimer) = (nil, nil, nil)
+        let activity = self.activity
+        self.activity = nil
         lock.unlock()
         capture?.stop()
         for viewer in viewers {
             viewer.onClose = nil
             viewer.close()
         }
-        queue.async { [self] in
-            repeater?.cancel(); repeater = nil
-            silenceTimer?.cancel(); silenceTimer = nil
-            aac = nil
-        }
-        statsTimer?.cancel()
-        statsTimer = nil
+        timers.forEach { $0?.cancel() }
+        queue.async { [self] in aac = nil }
         if let activity { ProcessInfo.processInfo.endActivity(activity) }
-        activity = nil
     }
 
     private func end(_ reason: String) {
         lock.lock()
         let first = !ended
+        ended = true
         lock.unlock()
         guard first else { return }
         wsLog.debug("session ended: \(reason, privacy: .public)")
@@ -887,15 +917,17 @@ final class WebStreamSession {
     private var interval: UInt64 { 1_000_000_000 / UInt64(key.fps) }
 
     /// Gives the encoder a fresh picture, in its slot on the grid. Everything the encoder
-    /// is given comes through `queue`, so frames reach it in the order of their slots.
+    /// is given comes through `queue`, so frames reach it in the order of their slots. A
+    /// frame whose slot is still to come, from a display faster than the stream, is only
+    /// kept as the last picture, for the grid's next empty slot.
     private func encode(_ buffer: CVPixelBuffer, captured time: CMTime, at: UInt64) {
-        let slot = grid.snap(time)
+        let slot = grid.snap(time, now: CMClockGetTime(CMClockGetHostTimeClock()))
         lock.lock()
-        lastFrame = (buffer, slot, at)
-        given.real += 1
+        lastFrame = (buffer, at)
+        if slot != nil { given.real += 1 }
         let encoder = self.encoder
         lock.unlock()
-        encoder?.encode(buffer, at: slot)
+        if let slot { encoder?.encode(buffer, at: slot) }
     }
 
     /// `time` on the stream's clock, in its timescale, snapped to the nearest slot.
@@ -932,18 +964,18 @@ final class WebStreamSession {
         encodeTime.total += frame.encoded - frame.submitted
         encodeTime.frames += 1
         lock.unlock()
-        var waiting = false, behind = false
+        var waiting = false, catchingUp = false
         for viewer in viewers {
             switch viewer.take(video: fragment, keyFrame: frame.isKeyFrame,
                                codecs: viewer.audio ? codecs.sound : codecs.silent,
                                initSegment: viewer.audio ? initSegment.sound : initSegment.silent) {
-            case .taken: break
+            case .taken, .behind: break
             case .waitingForKeyFrame: waiting = true
-            case .fellBehind: behind = true
+            case .catchingUp: catchingUp = true
             }
         }
         if waiting { requestKeyFrame(catchingUp: false) }
-        if behind { requestKeyFrame(catchingUp: true) }
+        if catchingUp { requestKeyFrame(catchingUp: true) }
         stats.video(packets: 1, bytes: fragment.count, refused: 0, keyFrame: frame.isKeyFrame)
     }
 
@@ -1007,24 +1039,47 @@ final class WebStreamSession {
 
     /// Encodes a piece of captured sound and hands the packets out; on `queue`. Sound is
     /// kept continuous on the stream's clock: a gap since the last piece is filled with
-    /// silence first, so each packet's time follows from how many samples came before it.
+    /// silence first, so each packet's time follows from how many samples came before it,
+    /// and a piece that overlaps silence put in for it, as it came late, loses as much.
     private func took(audio sample: CMSampleBuffer) {
         guard let anchor else { return }
         let time = CMTimeSubtract(CMSampleBufferGetPresentationTimeStamp(sample), anchor)
         let actual = CMTimeConvertScale(time, timescale: Int32(MP4Fragmenter.audioTimescale), method: .default).value
+        var skipped = 0
         if let start = audioStart {
-            let gap = actual - (start + Int64(audioFed))
-            if gap > 2 * Int64(MP4Fragmenter.audioTimescale) {
-                audioStart = actual - Int64(audioFed)
-            } else if gap > 1920 {
-                feedSilence(samples: Int(gap))
+            switch Self.alignment(gap: actual - (start + Int64(audioFed))) {
+            case .asIs: break
+            case .restart: audioStart = actual - Int64(audioFed)
+            case .silence(let samples): feedSilence(samples: samples)
+            case .drop(let samples): skipped = min(samples, CMSampleBufferGetNumSamples(sample))
             }
         } else {
             audioStart = max(actual, 0)
         }
-        audioFed += CMSampleBufferGetNumSamples(sample)
-        aac?.encode(sample)
+        let kept = CMSampleBufferGetNumSamples(sample) - skipped
+        guard kept > 0 else { return }
+        audioFed += kept
+        aac?.encode(sample, skipping: skipped)
         flushAAC()
+    }
+
+    enum SoundAlignment: Equatable {
+        case asIs
+        /// So far off that the track starts again from here.
+        case restart
+        /// This many samples of silence first, for a gap.
+        case silence(Int)
+        /// This many of the piece's samples left out, for an overlap.
+        case drop(Int)
+    }
+
+    /// What a piece of sound needs that arrives `gap` samples after where the track
+    /// stands; a few milliseconds either way are let be.
+    static func alignment(gap: Int64) -> SoundAlignment {
+        if gap > 2 * Int64(MP4Fragmenter.audioTimescale) { return .restart }
+        if gap > 1920 { return .silence(Int(gap)) }
+        if gap < -Int64(MP4Fragmenter.aacFrameLength) { return .drop(Int(-gap)) }
+        return .asIs
     }
 
     /// Fills the sound up to 50 ms ago with silence when nothing is playing, so the sound
@@ -1100,6 +1155,19 @@ struct FrameGrid {
         return CMTimeAdd(origin, CMTime(value: slot, timescale: CMTimeScale(fps)))
     }
 
+    /// As `snap`, unless that slot is more than a slot's time after `now`: then nil, and no
+    /// slot is taken. Frames coming faster than the grid would otherwise run its times ever
+    /// further ahead of the clock.
+    mutating func snap(_ time: CMTime, now: CMTime) -> CMTime? {
+        if let origin {
+            let seconds = CMTimeGetSeconds(CMTimeSubtract(time, origin))
+            let slot = max(Int64((seconds * Double(fps)).rounded(.down)), lastSlot + 1)
+            let limit = CMTimeAdd(now, CMTime(value: 1, timescale: CMTimeScale(fps)))
+            guard CMTimeAdd(origin, CMTime(value: slot, timescale: CMTimeScale(fps))) <= limit else { return nil }
+        }
+        return snap(time)
+    }
+
     /// Takes the slot after the last if its time is no later than `time`; nil if it is
     /// still to come, or nothing has been snapped yet.
     mutating func nextSlot(before time: CMTime) -> CMTime? {
@@ -1118,15 +1186,21 @@ final class WebStreamViewer {
 
     enum Outcome {
         case taken
-        /// Not yet watching, or skipping ahead: the next keyframe starts it.
+        /// Not yet watching: the next keyframe starts it.
         case waitingForKeyFrame
-        /// Just fell behind, by more than `maxInFlight`: skipping to the next keyframe.
-        case fellBehind
+        /// Fell behind, by more than `maxInFlight`, and still has most of that to send: a
+        /// keyframe now would only queue behind it.
+        case behind
+        /// Fell behind and has since sent most of what it held: the next keyframe resumes it.
+        case catchingUp
     }
 
     private let connection: NWConnection
     /// Bytes handed to the connection and not yet taken by the network.
     private let maxInFlight: Int
+    /// Seconds a viewer may stay behind before it is let go, as a tab in the background
+    /// that takes nothing would forever.
+    private let patience: TimeInterval
     /// Whether the viewer takes the sound track.
     let audio: Bool
     private let lock = NSLock()
@@ -1134,13 +1208,21 @@ final class WebStreamViewer {
     private var closed = false
     private var started = false
     private var waitingForKeyFrame = true
-    /// Called once, from any thread, when the client has gone.
-    var onClose: (() -> Void)?
+    /// When it fell behind, while it skips to a keyframe.
+    private var behindSince: UInt64?
+    private var closeHandler: (() -> Void)?
 
-    init(connection: NWConnection, maxInFlight: Int, audio: Bool = true) {
+    /// Called once, from any thread, when the client has gone.
+    var onClose: (() -> Void)? {
+        get { lock.lock(); defer { lock.unlock() }; return closeHandler }
+        set { lock.lock(); closeHandler = newValue; lock.unlock() }
+    }
+
+    init(connection: NWConnection, maxInFlight: Int, audio: Bool = true, patience: TimeInterval = 10) {
         self.connection = connection
         self.maxInFlight = max(maxInFlight, 256 * 1024)
         self.audio = audio
+        self.patience = patience
     }
 
     /// Notices the client closing the connection.
@@ -1158,22 +1240,32 @@ final class WebStreamViewer {
     func take(video fragment: Data, keyFrame: Bool, codecs: String, initSegment: Data) -> Outcome {
         lock.lock()
         guard !closed else { lock.unlock(); return .taken }
-        if waitingForKeyFrame {
+        if let behindSince {
+            // Skipping: resumed at a keyframe once most of what it held has gone out.
+            if DispatchTime.now().uptimeNanoseconds - behindSince > UInt64(patience * 1e9) {
+                lock.unlock()
+                wsLog.debug("viewer behind for \(self.patience, format: .fixed(precision: 1)) s; letting it go")
+                close()
+                return .taken
+            }
+            guard inFlight <= maxInFlight / 2 else { lock.unlock(); return .behind }
+            guard keyFrame else { lock.unlock(); return .catchingUp }
+            self.behindSince = nil
+            waitingForKeyFrame = false
+            lock.unlock()
+        } else if waitingForKeyFrame {
             guard keyFrame else { lock.unlock(); return .waitingForKeyFrame }
             waitingForKeyFrame = false
-            if !started {
-                started = true
-                lock.unlock()
-                send(Data(Self.head(codecs: codecs).utf8))
-                send(initSegment)
-            } else {
-                lock.unlock()
-            }
+            started = true
+            lock.unlock()
+            send(Data(Self.head(codecs: codecs).utf8))
+            send(initSegment)
         } else if inFlight > maxInFlight {
             waitingForKeyFrame = true
+            behindSince = DispatchTime.now().uptimeNanoseconds
             lock.unlock()
             wsLog.debug("viewer behind by \(self.inFlight) bytes; waiting for a keyframe")
-            return .fellBehind
+            return .behind
         } else {
             lock.unlock()
         }
@@ -1213,6 +1305,8 @@ final class WebStreamViewer {
         lock.lock()
         let first = !closed
         closed = true
+        let onClose = closeHandler
+        closeHandler = nil
         lock.unlock()
         guard first else { return }
         connection.cancel()
