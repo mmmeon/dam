@@ -551,6 +551,9 @@ enum SessionDetectors {
     /// The apps DAM can watch for sessions of.
     static let watchable: Set<String> = ["rustdesk", "parsec", "screensharing", "chromeremotedesktop", "teamviewer", "opendisplay", "display"]
 
+    /// OpenDisplay's process and log folder; its Debug build's are called "OpenDisplay Dev".
+    static let openDisplayNames = ["OpenDisplay", "OpenDisplay Dev"]
+
     /// For "display": the displays online, and the name to watch for; set by the app.
     static var displayNames: () -> [(id: CGDirectDisplayID, name: String)] = { [] }
     static var adoptName: () -> String? = { nil }
@@ -589,9 +592,9 @@ enum SessionDetectors {
         case "opendisplay":
             // The Debug build logs to a folder of its own.
             let logs = home.appendingPathComponent("Library/Logs")
-            let standard = newest(["OpenDisplay", "OpenDisplay Dev"].map { logs.appendingPathComponent("\($0)/opendisplay.log") })
+            let standard = newest(openDisplayNames.map { logs.appendingPathComponent("\($0)/opendisplay.log") })
             return LogSessionDetector(app: app, url: logURL(for: app, standard: standard), parse: SessionLogLines.openDisplay,
-                                      isRunning: { !RunningProcesses.names().isDisjoint(with: ["OpenDisplay", "OpenDisplay Dev"]) })
+                                      isRunning: { !RunningProcesses.names().isDisjoint(with: openDisplayNames) })
         case "display":
             return DisplaySessionDetector(app: app, name: adoptName, displays: displayNames)
         default:
@@ -634,8 +637,8 @@ enum SessionDetectors {
         case "opendisplay":
             // Often built from source, so its log tells too.
             let logs = home.appendingPathComponent("Library/Logs").path
-            return fm.fileExists(atPath: "/Applications/OpenDisplay.app") || fm.fileExists(atPath: "\(logs)/OpenDisplay")
-                || fm.fileExists(atPath: "\(logs)/OpenDisplay Dev")
+            return fm.fileExists(atPath: "/Applications/OpenDisplay.app")
+                || openDisplayNames.contains { fm.fileExists(atPath: "\(logs)/\($0)") }
         case "sunshine":
             return ["/Applications/Sunshine.app", "/usr/local/bin/sunshine", "/opt/homebrew/bin/sunshine"]
                 .contains { fm.fileExists(atPath: $0) }
