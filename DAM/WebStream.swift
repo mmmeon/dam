@@ -745,8 +745,6 @@ final class WebStreamSession {
     /// under `lock`.
     private var repeater: DispatchSourceTimer?
     private var keyFrames = MoonlightKeyFrameThrottle()
-    /// Keyframes for viewers that fell behind come rarer: each costs everyone.
-    private var catchUpKeyFrames = MoonlightKeyFrameThrottle(interval: 2_000_000_000)
     private var activity: NSObjectProtocol?
     private var statsTimer: DispatchSourceTimer?
     private let stats = MoonlightStreamStats()
@@ -852,7 +850,7 @@ final class WebStreamSession {
         }
         viewer.watch()
         wsLog.debug("viewer joined: \(self.viewerCount) watching")
-        queue.async { [weak self] in self?.requestKeyFrame(catchingUp: false) }
+        queue.async { [weak self] in self?.requestKeyFrame() }
         DispatchQueue.main.async { self.onChange?() }
         return true
     }
@@ -964,33 +962,33 @@ final class WebStreamSession {
         encodeTime.total += frame.encoded - frame.submitted
         encodeTime.frames += 1
         lock.unlock()
-        var waiting = false, catchingUp = false
+        // A viewer still sending what it held asks for none: one that has stalled (a tab in
+        // the background) would otherwise have every viewer's picture made of keyframes. Once
+        // it has sent most of it, it resumes at a keyframe as soon as one can be had.
+        var waiting = false
         for viewer in viewers {
             switch viewer.take(video: fragment, keyFrame: frame.isKeyFrame,
                                codecs: viewer.audio ? codecs.sound : codecs.silent,
                                initSegment: viewer.audio ? initSegment.sound : initSegment.silent) {
             case .taken, .behind: break
-            case .waitingForKeyFrame: waiting = true
-            case .catchingUp: catchingUp = true
+            case .waitingForKeyFrame, .catchingUp: waiting = true
             }
         }
-        if waiting { requestKeyFrame(catchingUp: false) }
-        if catchingUp { requestKeyFrame(catchingUp: true) }
+        if waiting { requestKeyFrame() }
         stats.video(packets: 1, bytes: fragment.count, refused: 0, keyFrame: frame.isKeyFrame)
     }
 
     /// The next frame as a keyframe, from the last picture at once if the screen is still.
-    private func requestKeyFrame(catchingUp: Bool) {
+    private func requestKeyFrame() {
         lock.lock()
-        let decision = catchingUp ? catchUpKeyFrames.request(at: DispatchTime.now().uptimeNanoseconds)
-                                  : keyFrames.request(at: DispatchTime.now().uptimeNanoseconds)
+        let decision = keyFrames.request(at: DispatchTime.now().uptimeNanoseconds)
         switch decision {
         case .now:
             break
         case .later(let wait):
             lock.unlock()
             queue.asyncAfter(deadline: .now() + .nanoseconds(Int(wait))) { [weak self] in
-                self?.requestKeyFrame(catchingUp: catchingUp)
+                self?.requestKeyFrame()
             }
             return
         case .alreadyDue:
