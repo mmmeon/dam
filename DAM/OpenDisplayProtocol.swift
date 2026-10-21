@@ -151,6 +151,10 @@ struct OpenDisplayHello: Equatable {
         }
     }
 
+    /// The largest side DAM encodes and makes a display at, and its highest frame rate.
+    static let maxSide = 4096
+    static let maxFPS = 60
+
     /// What DAM makes for it: the display's mode, and the stream's size and rate.
     struct Desktop: Equatable {
         var mode: StreamingDisplayModes.Mode
@@ -165,7 +169,7 @@ struct OpenDisplayHello: Equatable {
     /// `maxSide` (the encoder's and the display's limit), shrinks to fit, so capture stays
     /// 1:1; the stream is its pixels, scaled down to the panel's when they are more.
     /// Nil when it gives no usable size.
-    func desktop(maxSide: Int = 4096, maxFPS: Int = 60) -> Desktop? {
+    func desktop() -> Desktop? {
         var width: Int, height: Int, hiDPI: Bool
         var panelPixels: (w: Int, h: Int)?
         if let panel {
@@ -184,10 +188,10 @@ struct OpenDisplayHello: Equatable {
         }
         guard width >= 2, height >= 2 else { return nil }
         let factor = hiDPI ? 2 : 1
-        var limitW = maxSide, limitH = maxSide
+        var limitW = Self.maxSide, limitH = Self.maxSide
         if let w = maxEncodeWide { limitW = min(limitW, w) }
         if let h = maxEncodeHigh { limitH = min(limitH, h) }
-        var fps = min(displayMaxFrameRate ?? 60, maxFPS)
+        var fps = min(displayMaxFrameRate ?? 60, Self.maxFPS)
         // The roomiest H.264 envelope it offers.
         // In Double: a missing side is unbounded, and Int.max × anything traps.
         func area(_ cap: (maxWidth: Int?, maxHeight: Int?, maxFrameRate: Int?)) -> Double { Double(cap.maxWidth ?? .max) * Double(cap.maxHeight ?? .max) }

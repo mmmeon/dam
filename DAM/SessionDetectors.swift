@@ -561,7 +561,7 @@ enum SessionDetectors {
     }
 
     /// The detector for `app`; for an app added in Settings, as its `profile` says.
-    static func make(for app: String, profile: SessionProfile? = nil) -> SessionDetector? {
+    static func make(for app: String, profile: SessionProfile?) -> SessionDetector? {
         if let profile, let detection = profile.detection {
             return make(added: app, detection, adoptName: profile.adoptName)
         }

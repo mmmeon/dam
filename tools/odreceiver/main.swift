@@ -2,6 +2,9 @@
 // listens on TCP 9000, advertises _opensidecar._tcp with an id, sends an iPad's hello and
 // pings, and checks what comes back. It decodes nothing; it reads the NAL units.
 //
+// Build (the binary is ignored by git):
+//   swiftc -O -o tools/odreceiver/odreceiver tools/odreceiver/main.swift
+//
 //   tools/odreceiver/odreceiver [--seconds N] [--size WxH] [--id ID] [--touch] [--hover] [--no-udp] [--no-ack] [--no-close]
 //
 // --no-close drops the connection at the end without saying closing, as a cut cable does.

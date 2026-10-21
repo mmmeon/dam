@@ -604,6 +604,9 @@ final class OpenDisplaySession {
     private func handle(_ message: OpenDisplayMessage) {
         switch message {
         case .hello(let hello):
+            // Its version isn't checked here: the welcome gives the oldest DAM takes, and
+            // the receiver goes by that.
+            odLog.debug("\(self.name, privacy: .public): hello, protocol \(hello.pv)\(hello.device.map { " from \($0)" } ?? "", privacy: .public)")
             send(OpenDisplayReply.welcome())
             sender?.session(self, saidID: hello.id, device: hello.device)
             offerCursorUDP(hello.cursorPort)

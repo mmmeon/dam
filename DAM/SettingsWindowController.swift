@@ -1553,13 +1553,6 @@ final class SettingsWindowController: NSWindowController {
         return grid
     }
 
-    private func columnHeader(_ title: String) -> NSView {
-        let tf = NSTextField(labelWithString: title)
-        tf.font      = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        tf.textColor = .secondaryLabelColor
-        return tf
-    }
-
     /// Column header with its text rotated 90° counter-clockwise (reads bottom to top),
     /// so each column is only as wide as a checkbox.
     private func rotatedColumnHeader(_ title: String) -> NSView {
