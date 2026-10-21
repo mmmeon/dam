@@ -45,11 +45,14 @@ extension ControlRequest {
 
     /// The highest frame rate a session can ask for.
     static let maxFPS = 240
+    /// The widest or tallest client a session can ask for: 8K. Past the streaming display's
+    /// own sizes on purpose, as a 5K or ultrawide client gets a HiDPI display of half its size.
+    static let maxSide = 7680
 
     /// Why the request's values can't be used, or nil when they can. Every request is
     /// checked here, from the command line, the socket or a URL.
     var problem: String? {
-        let side = StreamingDisplayModes.maxPixelsSide
+        let side = Self.maxSide
         if let width, !(1...side).contains(width) { return "The width must be from 1 to \(side) pixels." }
         if let height, !(1...side).contains(height) { return "The height must be from 1 to \(side) pixels." }
         if let fps, !(1...Self.maxFPS).contains(fps) { return "The frame rate must be from 1 to \(Self.maxFPS)." }
