@@ -1368,7 +1368,7 @@ enum WebStreamPage {
       let profile = params.get('profile'), bitrate = params.get('bitrate'), app = params.get('app');
       let buffer = params.get('buffer'), lowlatency = params.get('lowlatency');
       const token = params.get('token') || '';
-      let abort = null, source = null, sb = null, queue = [], bytes = 0, held = true, stalls = 0;
+      let abort = null, source = null, sb = null, queue = [], bytes = 0, held = true, stalls = 0, cutOff = false;
 
       const MS = window.ManagedMediaSource || window.MediaSource;
       if (!MS) { $('msg').hidden = false; $('msg').textContent = 'This browser cannot play streams (no Media Source Extensions).'; return; }
@@ -1387,10 +1387,13 @@ enum WebStreamPage {
       // A display made for the stream stands the way this screen does; ask again when it turns.
       const portrait = matchMedia('(orientation: portrait)');
       portrait.addEventListener('change', () => { if (source) start(); });
+      // A tab in the background stops reading, and DAM lets a viewer go that falls far
+      // behind; back in front, it starts again.
+      document.addEventListener('visibilitychange', () => { if (!document.hidden && cutOff) start(); });
 
       function start() {
         stop();
-        queue = []; bytes = 0; held = true; stalls = 0;
+        queue = []; bytes = 0; held = true; stalls = 0; cutOff = false;
         source = new MS();
         video.disableRemotePlayback = true;
         video.src = URL.createObjectURL(source);
@@ -1431,8 +1434,9 @@ enum WebStreamPage {
             queue.push(value); bytes += value.length;
             pump();
           }
+          cutOff = true;
           fail('The stream ended.');
-        } catch (e) { if (!abort || !abort.signal.aborted) fail('The stream broke off.'); }
+        } catch (e) { if (!abort || !abort.signal.aborted) { cutOff = true; fail('The stream broke off.'); } }
       }
 
       function pump() {
