@@ -755,15 +755,17 @@ final class VideoManager: ObservableObject {
             ?? display.cgDisplayID
         let master = CGDisplayMirrorsDisplay(ownID)
         let mainID = master != CGDirectDisplayID(0) ? master : ownID
+        // Places the display in arrangements captured before it came.
+        let live = DisplayArrangement.current()
         // An anchor's default layout can have made the display main already; the captured
         // arrangements still need re-basing, or releasing the anchor would undo it.
         let rebase = { [weak self] in
             guard let self else { return }
             for (name, arrangement) in self.virtualAnchorArrangements {
-                self.virtualAnchorArrangements[name] = arrangement.makingMain(ownID)
+                self.virtualAnchorArrangements[name] = arrangement.makingMain(ownID, live: live)
             }
             if !self.holdsStreamingArrangement {
-                self.streamingArrangement = self.streamingArrangement?.makingMain(ownID)
+                self.streamingArrangement = self.streamingArrangement?.makingMain(ownID, live: live)
             }
         }
         let byChoice = streamingDisplayIDs.contains(ownID)
@@ -772,7 +774,7 @@ final class VideoManager: ObservableObject {
             guard let self else { return }
             self.streamingDisplayIsMainByChoice = byChoice
             // Or the layout kept after a streaming display came would undo it.
-            self.streamingSettle = self.streamingSettle.map { ($0.arrangement.makingMain(ownID), $0.until) }
+            self.streamingSettle = self.streamingSettle.map { ($0.arrangement.makingMain(ownID, live: live), $0.until) }
         }
         guard CGDisplayIsMain(mainID) == 0 else { choose(); rebase(); completion?(.success(())); return }
         let online  = DisplayArrangement.onlineDisplayIDs()

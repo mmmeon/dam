@@ -163,6 +163,31 @@ final class ArrangementMainTests: XCTestCase {
         let captured = DisplayArrangement(origins: [1: .zero], mirrorMasters: [1: 0])
         XCTAssertEqual(captured.makingMain(9).origins, captured.origins)
     }
+
+    func testMakingMain_displayThatCameSince_isPlacedByTheLiveLayoutAndAdded() {
+        let captured = DisplayArrangement(origins: [1: .zero, 2: CGPoint(x: 1920, y: 0)], mirrorMasters: [1: 0, 2: 0])
+        let live = DisplayArrangement(origins: [1: .zero, 2: CGPoint(x: 1920, y: 0), 9: CGPoint(x: -1280, y: 0)],
+                                      mirrorMasters: [1: 0, 2: 0, 9: 0])
+        let rebased = captured.makingMain(9, live: live)
+        XCTAssertEqual(rebased.origins, [1: CGPoint(x: 1280, y: 0), 2: CGPoint(x: 3200, y: 0), 9: .zero])
+        XCTAssertEqual(rebased.mirrorMasters[9], 0)
+    }
+
+    func testMakingMain_displayThatCameSince_followsALayoutThatMovedSince() {
+        // Since the capture 2 became main, so everything sits 1920 points further left.
+        let captured = DisplayArrangement(origins: [1: .zero, 2: CGPoint(x: 1920, y: 0)], mirrorMasters: [1: 0, 2: 0])
+        let live = DisplayArrangement(origins: [1: CGPoint(x: -1920, y: 0), 2: .zero, 9: CGPoint(x: 1920, y: 0)],
+                                      mirrorMasters: [1: 0, 2: 0, 9: 0])
+        XCTAssertEqual(captured.makingMain(9, live: live).origins,
+                       [1: CGPoint(x: -3840, y: 0), 2: CGPoint(x: -1920, y: 0), 9: .zero])
+    }
+
+    func testMakingMain_displayThatCameSinceMirroringACapturedOne_usesItsOrigin() {
+        let captured = DisplayArrangement(origins: [1: .zero, 2: CGPoint(x: 1920, y: 0)], mirrorMasters: [1: 0, 2: 0])
+        let live = DisplayArrangement(origins: [1: .zero, 2: CGPoint(x: 1920, y: 0), 9: CGPoint(x: 1920, y: 0)],
+                                      mirrorMasters: [1: 0, 2: 0, 9: 2])
+        XCTAssertEqual(captured.makingMain(9, live: live).origins, captured.makingMain(2).origins)
+    }
 }
 
 /// Which displays make up the mirror set a display is in.

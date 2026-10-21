@@ -37,12 +37,30 @@ struct DisplayArrangement {
     }
 
     /// The same arrangement with display `id` (or, if it was a mirror slave, its master) at
-    /// the origin, so that restoring it keeps a change of main display made meanwhile.
-    func makingMain(_ id: CGDirectDisplayID) -> DisplayArrangement {
+    /// the origin, so that restoring it keeps a change of main display made meanwhile. One that
+    /// came after the arrangement was captured is placed by `live`, the arrangement before the
+    /// change: where it is there, moved by as much as a captured display has moved since, and
+    /// it is added, at the origin, showing its own desktop.
+    func makingMain(_ id: CGDirectDisplayID, live: DisplayArrangement? = nil) -> DisplayArrangement {
         let master = mirrorMasters[id] ?? 0
-        guard let origin = origins[master != 0 ? master : id] else { return self }
-        return DisplayArrangement(origins: origins.mapValues { CGPoint(x: $0.x - origin.x, y: $0.y - origin.y) },
-                                  mirrorMasters: mirrorMasters, modes: modes)
+        if let origin = origins[master != 0 ? master : id] { return shifted(by: origin) }
+        guard let live else { return self }
+        let liveMaster = live.mirrorMasters[id] ?? 0
+        let placement = liveMaster != 0 ? liveMaster : id
+        if let origin = origins[placement] { return shifted(by: origin) }
+        guard let now = live.origins[placement] else { return self }
+        let common = origins.keys.sorted().first { mirrorMasters[$0] == 0 && live.origins[$0] != nil }
+        let drift = common.map { CGPoint(x: origins[$0]!.x - live.origins[$0]!.x, y: origins[$0]!.y - live.origins[$0]!.y) }
+        let origin = CGPoint(x: now.x + (drift?.x ?? 0), y: now.y + (drift?.y ?? 0))
+        return DisplayArrangement(origins: origins.merging([placement: origin]) { $1 },
+                                  mirrorMasters: mirrorMasters.merging([placement: 0]) { $1 }, modes: modes)
+            .shifted(by: origin)
+    }
+
+    /// The same arrangement moved so that `origin` is at the origin.
+    private func shifted(by origin: CGPoint) -> DisplayArrangement {
+        DisplayArrangement(origins: origins.mapValues { CGPoint(x: $0.x - origin.x, y: $0.y - origin.y) },
+                           mirrorMasters: mirrorMasters, modes: modes)
     }
 
     /// The same arrangement with `slaves` mirroring `master`, or extended for a master of 0,
