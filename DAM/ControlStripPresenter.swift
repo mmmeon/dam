@@ -229,6 +229,9 @@ final class ControlStripPresenter: NSObject {
         for id in ids {
             guard let item = bar.item(forIdentifier: id) as? NSCustomTouchBarItem,
                   let made = touchBar(bar, makeItemForIdentifier: id) as? NSCustomTouchBarItem else { continue }
+            // The replaced view's entries go, as updateModalBar's do, so the maps don't grow.
+            resolutionSegMap.removeValue(forKey: ObjectIdentifier(item.view))
+            displayButtonMap.removeValue(forKey: ObjectIdentifier(item.view))
             item.view = made.view
         }
     }
@@ -581,12 +584,8 @@ final class ControlStripPresenter: NSObject {
                                   modes: [DisplayMode], labels: [String], selected: Int?,
                                   action: Selector) -> NSTouchBarItem {
         let item = NSCustomTouchBarItem(identifier: id)
-        NSLog("\(AppIdentity.name) segItem: display='%@' id=%@ cgID=%u selected=%d",
-              display.name, id.rawValue, display.cgDisplayID, selected ?? -1)
-        for (i, m) in modes.enumerated() {
-            NSLog("\(AppIdentity.name) segItem:   modes[%d] %dx%d @%.1fHz virtual=%d ioModeID=%d label='%@'",
-                  i, m.width, m.height, m.refreshRate, m.isVirtual, m.ioModeID, labels[i])
-        }
+        NSLog("\(AppIdentity.name) segItem: display='%@' id=%@ cgID=%u modes=%d selected=%d",
+              display.name, id.rawValue, display.cgDisplayID, modes.count, selected ?? -1)
         guard !modes.isEmpty else {
             let tf = NSTextField(labelWithString: display.cgDisplayID == 0 ? "No display ID" : "No modes")
             tf.textColor = .white
