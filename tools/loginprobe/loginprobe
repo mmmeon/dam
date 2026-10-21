@@ -37,6 +37,8 @@ say() { print "loginprobe: $*" }
 
 build() {
     mkdir -p $cache
+    # What's built here is installed as root: not from a folder someone else made.
+    [[ -O $cache ]] || die "$cache is not yours"
     local source=$here/loginprobe.swift
     if [[ ! -x $binary || $source -nt $binary ]]; then
         DEVELOPER_DIR=${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer} \
@@ -90,7 +92,7 @@ EOF
         install -o root -g wheel -m 644 '$staged' '$plist'
         chmod 755 '$logs'
     " || die "install failed"
-    say "installed. Log out, wait ~30 s at the login window, log in, then: $0 results"
+    say "installed. Log out, wait ~30 s at the login window, log in, then: $0 results (it runs at every login window until $0 uninstall)"
 }
 
 cmd_results() {

@@ -62,6 +62,11 @@ enum SessionLogLines {
         private var pending: SessionEvent?
 
         func parse(_ line: String) -> SessionEvent? {
+            // A connection held over a restart never shows what it was, nor closes.
+            if SessionLogLines.rustDeskRestarted(line) {
+                pending = nil
+                return nil
+            }
             if let event = SessionLogLines.rustDesk(line) {
                 switch event {
                 case .opened:
@@ -326,6 +331,8 @@ final class LogSessionDetector: SessionDetector {
     func handle(_ line: String) {
         if let restarted, restarted(line) {
             if !open.isEmpty { detLog.debug("\(self.app): restarted") }
+            // For the parser, which may hold a connection it should forget.
+            _ = parse(line)
             closeAll()
         } else if let event = parse(line) {
             report(event)
@@ -350,7 +357,7 @@ extension LogSessionDetector {
                           restarted: ((String) -> Bool)? = nil) -> [SessionEvent] {
         var open: [(key: String, event: SessionEvent)] = []
         for line in lines {
-            if let restarted, restarted(line) { open.removeAll(); continue }
+            if let restarted, restarted(line) { _ = parse(line); open.removeAll(); continue }
             guard let event = parse(line) else { continue }
             switch event {
             case .opened(let key, _, _):
@@ -622,7 +629,8 @@ final class SessionWatcher {
             let wanted = profile.enabled && profile.watch && (SessionDetectors.watchable.contains(app) || added.contains(app))
             // An added app's detector is made again once what it watches changes.
             if added.contains(app), let made = madeFrom[app],
-               made.detection != profile.detection || made.adoptName != profile.adoptName,
+               made.detection != profile.detection
+                || (profile.detection?.kind == .display && made.adoptName != profile.adoptName),
                let detector = detectors.removeValue(forKey: app) {
                 detector.stop()
             }

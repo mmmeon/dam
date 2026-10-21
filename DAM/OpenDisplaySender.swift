@@ -131,7 +131,7 @@ final class OpenDisplaySender {
         browser.start(queue: .main)
         self.browser = browser
         usbWatcher.changed = { [weak self] devices in
-            guard let self, self.usbDevices != devices else { return }
+            guard let self, self.isRunning, self.usbDevices != devices else { return }
             self.usbDevices = devices
             odLog.debug("usb: \(devices.map(\.serial), privacy: .public)")
             self.dialWhatIsOn()
@@ -436,7 +436,14 @@ final class OpenDisplaySession {
 
     func attach(_ channel: OpenDisplayChannel) {
         guard !ended else { return }
-        link?.close()
+        if let old = link {
+            // As when a link is lost: nothing more to the old one, and nothing left held.
+            old.close()
+            lock.lock()
+            sendLink = nil
+            lock.unlock()
+            injector?.releaseAll()
+        }
         link = channel
         linkReady = false
         deframer = OpenDisplayDeframer()
@@ -500,6 +507,14 @@ final class OpenDisplaySession {
         sender?.sessionLostLink(self, reason: reason, connected: wasReady)
     }
 
+    /// Ends a session whose setup failed. The receiver is dialed again only after the
+    /// slower retry's wait, so a failure that persists (no Screen Recording permission, say)
+    /// doesn't connect and remake the display every second.
+    private func fail(_ reason: String) {
+        sender?.holdDialing(key, for: 5)
+        end(reason: reason)
+    }
+
     /// Ends the session: closes the connection and removes the display.
     func end(reason: String) {
         guard !ended else { return }
@@ -556,7 +571,9 @@ final class OpenDisplaySession {
             guard let desktop, let displayID else { return }
             // Video pixels to the display's points.
             let factor = CGDisplayBounds(displayID).width / CGFloat(max(desktop.streamWidth, 1))
-            injector?.scrollPixels(dx: Int32((CGFloat(dx) * factor).rounded()), dy: Int32((CGFloat(dy) * factor).rounded()))
+            // Clamped, since Int32(_:) traps on a delta out of its range.
+            func points(_ v: Double) -> Int32 { Int32(min(max((CGFloat(v) * factor).rounded(), CGFloat(Int32.min)), CGFloat(Int32.max))) }
+            injector?.scrollPixels(dx: points(dx), dy: points(dy))
         case .sleeping, .closing:
             // It closes the connection next; dialing again at once would find it still there.
             sender?.holdDialing(key, for: 3)
@@ -591,7 +608,7 @@ final class OpenDisplaySession {
             sender.resizeDisplay?(displayID, wanted.mode) { [weak self] done in
                 guard let self, !self.ended else { return }
                 self.settingUp = false
-                guard done else { return self.end(reason: "the display could not be resized") }
+                guard done else { return self.fail("the display could not be resized") }
                 self.desktop = wanted
                 self.startMedia()
                 self.applyQueued()
@@ -601,7 +618,7 @@ final class OpenDisplaySession {
         settingUp = true
         let identity = VideoManager.StreamingIdentity(name: name, seed: "opendisplay:\(key)")
         odLog.debug("\(self.name, privacy: .public): making a display \(wanted.mode.width)×\(wanted.mode.height)\(wanted.mode.hiDPI ? " HiDPI" : "") for a \(wanted.streamWidth)×\(wanted.streamHeight)@\(wanted.fps) stream")
-        guard let makeDisplay = sender.makeDisplay else { return end(reason: "no displays") }
+        guard let makeDisplay = sender.makeDisplay else { return fail("no displays") }
         makeDisplay(wanted.mode, identity) { [weak self] id in
             guard let self else { return }
             self.settingUp = false
@@ -609,7 +626,7 @@ final class OpenDisplaySession {
                 if let id { self.sender?.removeDisplay?(id) }
                 return
             }
-            guard let id else { return self.end(reason: "no display could be made") }
+            guard let id else { return self.fail("no display could be made") }
             self.displayID = id
             self.desktop = wanted
             self.startMedia()
@@ -633,7 +650,7 @@ final class OpenDisplaySession {
                 [weak self] frame in self?.took(frame)
             }
         } catch {
-            return end(reason: "the encoder could not start")
+            return fail("the encoder could not start")
         }
         injector = MoonlightInputInjector(displayID: displayID, streamWidth: desktop.streamWidth,
                                           streamHeight: desktop.streamHeight)
@@ -653,7 +670,7 @@ final class OpenDisplaySession {
         }, audio: { _ in }, started: { [weak self] error in
             guard let error else { return }
             DispatchQueue.main.async {
-                self?.end(reason: "capture failed: \(error.localizedDescription)")
+                self?.fail("capture failed: \(error.localizedDescription)")
             }
         })
         cursor = OpenDisplayCursor()
@@ -782,7 +799,12 @@ final class OpenDisplaySession {
             health.inp95 = OpenDisplayHealth.percentile(inputDelays, 0.95)
             inputDelays = []
             send(OpenDisplayReply.ping(health))
-        } else if let lostAt, Date().timeIntervalSince(lostAt) > Self.grace {
+        } else {
+            // Not counted toward the first ping after a reconnect.
+            lock.lock()
+            captured = 0
+            lock.unlock()
+            guard let lostAt, Date().timeIntervalSince(lostAt) > Self.grace else { return }
             end(reason: "the receiver didn't come back")
         }
     }

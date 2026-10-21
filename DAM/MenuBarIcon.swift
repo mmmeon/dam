@@ -302,7 +302,8 @@ final class MenuBarIconAnimator {
         rippleDirection = newTarget < startTarget ? -1 : 1
         let turns = reduceMotion ? 0 : max(1, (CGFloat(Self.duration) * Self.turnRate / spacing).rounded())
         let turnDuration = reduceMotion ? 0 : Self.duration
-        let endSpin = ((startSpin / spacing).rounded(.down) + turns) * spacing
+        // Up when there are no turns to add, so a change mid-turn never snaps the ridges back.
+        let endSpin = ((startSpin / spacing).rounded(turns > 0 ? .down : .up) + turns) * spacing
         let start = ProcessInfo.processInfo.systemUptime
         var last = start
         let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] timer in

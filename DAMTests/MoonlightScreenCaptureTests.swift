@@ -178,7 +178,7 @@ final class MoonlightScreenCaptureTests: XCTestCase {
         XCTAssertEqual(SharedScreenCapture.count, before + 1, "still one stream on it")
         second.cancel()
         XCTAssertEqual(SharedScreenCapture.count, before)
-        _ = SharedScreenCapture.subscribe(key, frame: { _, _ in }, audio: { _ in }, started: { _ in }).cancel()
+        SharedScreenCapture.subscribe(key, frame: { _, _ in }, audio: { _ in }, started: { _ in }).cancel()
         XCTAssertEqual(made.count, 3, "started afresh")
     }
 

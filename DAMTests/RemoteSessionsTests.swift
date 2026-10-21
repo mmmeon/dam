@@ -598,6 +598,25 @@ final class RemoteSessionsTests: XCTestCase {
                                                    restarted: SessionLogLines.rustDeskRestarted).isEmpty)
     }
 
+    func testRustDeskForgetsAConnectionHeldOverARestart() {
+        let detector = LogSessionDetector(app: "rustdesk", url: URL(fileURLWithPath: "/nonexistent"),
+                                          parse: SessionLogLines.RustDeskConnections().parse,
+                                          restarted: SessionLogLines.rustDeskRestarted)
+        var events: [SessionEvent] = []
+        detector.onEvent = { events.append($0) }
+        // #5 is held, not yet known as a desktop, when RustDesk starts again.
+        detector.handle("#5 Connection opened from 10.0.0.5:1.")
+        detector.handle("try start server")
+        detector.handle("#6 Connection opened from 10.0.0.6:1.")
+        detector.handle("new wakelock, require display on: true")
+        detector.handle("#6 Connection closed: Peer close")
+        XCTAssertEqual(events, [.opened(key: "6", client: "10.0.0.6"), .closed(key: "6")])
+        let parse = SessionLogLines.RustDeskConnections().parse
+        XCTAssertTrue(LogSessionDetector.stillOpen(in: ["#5 Connection opened from 10.0.0.5:1.", "try start server",
+                                                        "#6 Connection opened from 10.0.0.6:1."],
+                                                   parse: parse, restarted: SessionLogLines.rustDeskRestarted).isEmpty)
+    }
+
     func testProcessDetectorWaitsBeforeEnding() {
         var running = true
         let detector = ProcessSessionDetector(app: "screensharing", processName: "screensharingd", grace: 5,
@@ -961,7 +980,12 @@ final class RemoteSessionsTests: XCTestCase {
         XCTAssertTrue(c.addedApps.isEmpty)
         XCTAssertEqual(RemoteSessionApp.name(of: app), app)
         // A known app isn't removed.
+        var rustDesk = c.profile(for: "rustdesk")
+        rustDesk.watch = false
+        c.setProfile(rustDesk, for: "rustdesk")
         c.removeApp("rustdesk")
+        XCTAssertEqual(c.profile(for: "rustdesk"), rustDesk)
+        XCTAssertTrue(c.addedApps.isEmpty)
     }
 
     func testAddedProfileRoundTrips() throws {

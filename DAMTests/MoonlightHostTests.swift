@@ -618,7 +618,7 @@ final class MoonlightHostTests: XCTestCase {
         let sessionKey = SymmetricKey(data: key)
         let start = try MoonlightControlCrypto.seal(type: 0x0302, payload: Data([0, 0]), sequence: 0, key: sessionKey,
                                                     direction: .clientToHost)
-        start.withUnsafeBytes { enet_peer_send(peer, 1, enet_packet_create($0.baseAddress, start.count, ENET_PACKET_FLAG_RELIABLE.rawValue)) }
+        _ = start.withUnsafeBytes { enet_peer_send(peer, 1, enet_packet_create($0.baseAddress, start.count, ENET_PACKET_FLAG_RELIABLE.rawValue)) }
         enet_host_flush(enet)
 
         // Audio: ping as Moonlight does after SETUP; silence comes until sound is captured,

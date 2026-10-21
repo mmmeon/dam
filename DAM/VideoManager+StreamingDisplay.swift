@@ -658,11 +658,7 @@ extension VideoManager {
         }
         let origin = Self.streamingDisplayOrigin(others: others)
         var placed = before.adding(id, origin: origin, mode: startMode ?? CGDisplayCopyDisplayMode(id))
-        if main {
-            placed = placed.makingMain(id)
-            // Set before the commit, or the check after it would hand main back.
-            streamingDisplayIsMainByChoice = true
-        }
+        if main { placed = placed.makingMain(id) }
         let settle = { [weak self] in
             // WindowServer can still change the others' resolutions for the new set.
             self?.streamingSettle = (placed, Date().addingTimeInterval(5))
@@ -678,6 +674,9 @@ extension VideoManager {
             finishStreamingChange()
             return
         }
+        // Set before the commit, or the check after it would hand main back; not before
+        // the configuration begins, or a failure there would leave it set.
+        if main { streamingDisplayIsMainByChoice = true }
         // WindowServer may have mirrored, moved or changed the resolutions of the others for the
         // new set, or laid it out as placed already, from a layout it saved for the set.
         let moved = placed.restore(in: cfg, excluding: [])

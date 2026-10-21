@@ -10,7 +10,7 @@ final class MoonlightVideoEncoderTests: XCTestCase {
     /// A 4:2:0 frame like the ones screen capture hands over, with a pattern that moves with `seed`.
     private func frame(_ seed: Int) throws -> CVPixelBuffer {
         var buffer: CVPixelBuffer?
-        let attributes = [kCVPixelBufferIOSurfacePropertiesKey: [:]] as CFDictionary
+        let attributes = [kCVPixelBufferIOSurfacePropertiesKey: [:] as [String: Any]] as CFDictionary
         XCTAssertEqual(CVPixelBufferCreate(nil, settings.width, settings.height,
                                            kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, attributes, &buffer),
                        kCVReturnSuccess)

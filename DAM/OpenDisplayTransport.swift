@@ -270,14 +270,20 @@ final class OpenDisplaySocketChannel: OpenDisplayChannel {
     }
 
     private func teardown() {
-        source?.cancel()
-        source = nil
         lock.lock()
         let fd = self.fd
         self.fd = -1
         lock.unlock()
-        // After the writes queued before it.
-        if fd >= 0 { writes.async { Darwin.close(fd) } }
+        // After the writes queued before it, and after the read source lets go of it:
+        // Dispatch needs the descriptor open until its cancel handler runs.
+        let close = { [writes] in if fd >= 0 { writes.async { Darwin.close(fd) } } }
+        if let source {
+            source.setCancelHandler(handler: close)
+            source.cancel()
+        } else {
+            close()
+        }
+        source = nil
     }
 
     private func finish(_ reason: String) {
@@ -438,11 +444,10 @@ enum Usbmuxd {
         func stop() {
             lock.lock()
             stopped = true
-            let fd = self.fd
-            self.fd = -1
+            // Unblocks the read on the watching queue, which closes it: closed here, its
+            // number could be reused while that queue still reads from it.
+            if fd >= 0 { shutdown(fd, SHUT_RDWR) }
             lock.unlock()
-            // Unblocks the read on the watching queue.
-            if fd >= 0 { shutdown(fd, SHUT_RDWR); Darwin.close(fd) }
         }
 
         private var isStopped: Bool {
@@ -456,8 +461,11 @@ enum Usbmuxd {
                 var devices: [Int: Device] = [:]
                 if let fd = try? Usbmuxd.openSocket() {
                     lock.lock()
-                    self.fd = fd
+                    // Stopped while opening: stop() had no socket to shut down.
+                    let stopped = self.stopped
+                    if !stopped { self.fd = fd }
                     lock.unlock()
+                    if stopped { Darwin.close(fd); return }
                     if let request = Usbmuxd.message(["MessageType": "Listen"], tag: 1), Usbmuxd.writeAll(fd, request) {
                         while let message = Usbmuxd.readMessage(fd) {
                             switch message["MessageType"] as? String {
@@ -469,12 +477,16 @@ enum Usbmuxd {
                                 continue
                             }
                             let list = devices.values.sorted { $0.deviceID < $1.deviceID }
-                            DispatchQueue.main.async { [weak self] in self?.changed?(list) }
+                            DispatchQueue.main.async { [weak self] in
+                                guard let self, !self.isStopped else { return }
+                                self.changed?(list)
+                            }
                         }
                     }
                     lock.lock()
-                    if self.fd == fd { Darwin.close(fd); self.fd = -1 }
+                    self.fd = -1
                     lock.unlock()
+                    Darwin.close(fd)
                 }
                 guard !isStopped else { return }
                 DispatchQueue.main.async { [weak self] in self?.changed?([]) }

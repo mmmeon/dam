@@ -30,7 +30,10 @@ let folder = URL(fileURLWithPath: folderPath)
 try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
 
 var report = ""
+let reportLock = NSLock()
+/// Callable from any queue: the virtual display's termination handler notes on its own.
 func note(_ line: String) {
+    reportLock.lock(); defer { reportLock.unlock() }
     let stamped = String(format: "%8.3f  ", ProcessInfo.processInfo.systemUptime) + line
     report += stamped + "\n"
     print(stamped)
@@ -194,20 +197,21 @@ func virtualDisplay() {
     let settings = CGVirtualDisplaySettings()
     settings.hiDPI = 0
     settings.modes = [CGVirtualDisplayMode(width: 1920, height: 1080, refreshRate: 60)]
-    guard let display = vd, display.apply(settings) else {
+    // Only its ID past here: a reference kept to it would hold it up past `vd = nil`.
+    guard let id = vd.flatMap({ $0.apply(settings) ? $0.displayID : nil }) else {
         return note("CGVirtualDisplay: applySettings failed")
     }
-    note("CGVirtualDisplay: made \(display.displayID)")
+    note("CGVirtualDisplay: made \(id)")
     // WindowServer takes a moment to bring a new display online.
-    for _ in 0..<50 where !displays().contains(display.displayID) { usleep(100_000) }
-    note("CGVirtualDisplay: online \(displays().contains(display.displayID)); new: \(Set(displays()).subtracting(before).sorted())")
+    for _ in 0..<50 where !displays().contains(id) { usleep(100_000) }
+    note("CGVirtualDisplay: online \(displays().contains(id)); new: \(Set(displays()).subtracting(before).sorted())")
     listDisplays()
     sleep(2)
-    displayImage(display.displayID, "virtual")
-    displayStream(display.displayID)
+    displayImage(id, "virtual")
+    displayStream(id)
     vd = nil
     sleep(1)
-    note("CGVirtualDisplay: released; still online \(displays().contains(display.displayID))")
+    note("CGVirtualDisplay: released; still online \(displays().contains(id))")
 }
 
 func pointer() {

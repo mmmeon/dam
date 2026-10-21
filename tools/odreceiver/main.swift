@@ -2,7 +2,7 @@
 // listens on TCP 9000, advertises _opensidecar._tcp with an id, sends an iPad's hello and
 // pings, and checks what comes back. It decodes nothing; it reads the NAL units.
 //
-//   tools/odreceiver/odreceiver [--seconds N] [--size WxH] [--id ID] [--touch] [--no-close]
+//   tools/odreceiver/odreceiver [--seconds N] [--size WxH] [--id ID] [--touch] [--hover] [--no-udp] [--no-ack] [--no-close]
 //
 // --no-close drops the connection at the end without saying closing, as a cut cable does.
 // --hover moves the Mac's pointer across the display (stylus hover: no clicks), to see
@@ -151,6 +151,7 @@ if udp {
         var buffer = [UInt8](repeating: 0, count: 2048)
         while true {
             let n = recv(fd, &buffer, buffer.count, 0)
+            if n < 0 && errno != EINTR { break }
             guard n > 0 else { continue }
             let data = Data(buffer[0..<n])
             DispatchQueue.main.async {

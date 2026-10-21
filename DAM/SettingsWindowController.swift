@@ -705,6 +705,9 @@ final class SettingsWindowController: NSWindowController {
                                                             : "Receiver ID \(receiver.key)"
             let via = placeholderLabel(receiver.transports.map(\.rawValue).joined(separator: ", "))
             let status = placeholderLabel(receiver.status)
+            // The page's width is set before receivers turn up, so a long status may not fit.
+            (status as? NSTextField)?.lineBreakMode = .byTruncatingTail
+            status.toolTip = receiver.status
             var row: [NSView] = [toggle, via, status]
             if receiver.transports.isEmpty {
                 let forget = ClosureButton(title: "Forget") { [weak sender] _ in sender?.forget(key: receiver.key) }
@@ -868,7 +871,9 @@ final class SettingsWindowController: NSWindowController {
 
     /// The apps DAM knows, then those added, as in System Settings' Network pane.
     private func sessionApps(_ coordinator: RemoteSessionCoordinator) -> [String] {
-        RemoteSessionApp.known.map(\.id) + coordinator.addedApps
+        let known = RemoteSessionApp.known.map(\.id)
+        // Once each, even if a hand-edited profile marks a known app as added.
+        return known + coordinator.addedApps.filter { !known.contains($0) }
     }
 
     private func buildSessionsList(coordinator: RemoteSessionCoordinator) -> NSView {
@@ -1016,7 +1021,7 @@ final class SettingsWindowController: NSWindowController {
             coordinator.setProfile(new, for: app)
             self?.onSessionProfilesChanged?()
             // The page stays, for the next field; only its status changes.
-            guard let self else { return }
+            guard let self, self.sessionsApp == app else { return }
             let status = self.sessionStatus(app, coordinator)
             self.sessionSummary?.show(status: status.text, dot: status.color)
             self.sessionsShown = self.sessionStatuses()
@@ -1716,7 +1721,18 @@ final class SettingsWindowController: NSWindowController {
     /// Rebuilds the Remote Sessions page if what it shows of the apps has changed, as when
     /// a session starts or ends.
     func sessionsDidChange() {
-        if sessionStatuses() != sessionsShown { reloadSessions() }
+        let statuses = sessionStatuses()
+        guard statuses != sessionsShown else { return }
+        // An app's page stays, so a field being typed in isn't rebuilt from under the user;
+        // only its status changes, as when it saves.
+        if let app = sessionsApp, let coordinator = sessionCoordinator, let summary = sessionSummary,
+           Set(statuses.keys) == Set(sessionsShown.keys) {
+            let status = sessionStatus(app, coordinator)
+            summary.show(status: status.text, dot: status.color)
+            sessionsShown = statuses
+        } else {
+            reloadSessions()
+        }
     }
 
     private func sessionStatuses() -> [String: String] {

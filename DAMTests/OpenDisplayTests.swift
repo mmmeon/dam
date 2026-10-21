@@ -125,6 +125,19 @@ final class OpenDisplayTests: XCTestCase {
         XCTAssertEqual(desktop.fps, 50)
     }
 
+    func testOutlandishSizesAreSizedWithoutOverflowing() throws {
+        // An H.264 envelope with a side left out is unbounded on that side, so the roomier.
+        let open = try XCTUnwrap(hello("""
+        {"type":"hello","panel":{"pixelsWide":2048,"pixelsHigh":1536,"scale":2},
+         "videoCaps":[{"codec":"h264","maxWidth":1024,"maxHeight":768},{"codec":"h264","maxWidth":4096}]}
+        """))
+        XCTAssertEqual(try XCTUnwrap(open.desktop()).streamWidth, 2048)
+        let huge = try XCTUnwrap(hello("""
+        {"type":"hello","panel":{"pixelsWide":4,"pixelsHigh":4,"scale":2,"pointsWide":9223372036854775807,"pointsHigh":4}}
+        """))
+        XCTAssertNil(huge.desktop())
+    }
+
     func testAHelloWithNoSizeMakesNoDesktop() throws {
         XCTAssertNil(try XCTUnwrap(hello(#"{"type":"hello"}"#)).desktop())
     }
@@ -211,7 +224,7 @@ final class OpenDisplayTests: XCTestCase {
 
     func testUsbmuxdTakesOnlyCabledDevices() {
         let usb: [String: Any] = ["MessageType": "Attached", "DeviceID": 4,
-                                  "Properties": ["ConnectionType": "USB", "SerialNumber": "00008027-AB", "DeviceID": 4]]
+                                  "Properties": ["ConnectionType": "USB", "SerialNumber": "00008027-AB", "DeviceID": 4] as [String: Any]]
         XCTAssertEqual(Usbmuxd.device(usb), Usbmuxd.Device(deviceID: 4, serial: "00008027-AB"))
         let network: [String: Any] = ["MessageType": "Attached", "DeviceID": 5,
                                       "Properties": ["ConnectionType": "Network", "SerialNumber": "00008027-AB"]]
@@ -240,7 +253,7 @@ final class OpenDisplayTests: XCTestCase {
         let port = try XCTUnwrap(listener.port)
         let channel = OpenDisplayTCPChannel(endpoint: .hostPort(host: "127.0.0.1", port: port))
         var deframer = OpenDisplayDeframer()
-        channel.onReady = { channel.send(Data("hello".utf8)) }
+        channel.onReady = { [weak channel] in channel?.send(Data("hello".utf8)) }
         channel.onReceive = { data in
             if deframer.append(data)?.first.flatMap(OpenDisplayMessage.parse) == .keyFrame { gotReply.fulfill() }
         }

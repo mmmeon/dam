@@ -189,7 +189,9 @@ struct OpenDisplayHello: Equatable {
         if let h = maxEncodeHigh { limitH = min(limitH, h) }
         var fps = min(displayMaxFrameRate ?? 60, maxFPS)
         // The roomiest H.264 envelope it offers.
-        if let cap = h264Caps.max(by: { ($0.maxWidth ?? .max) * ($0.maxHeight ?? .max) < ($1.maxWidth ?? .max) * ($1.maxHeight ?? .max) }) {
+        // In Double: a missing side is unbounded, and Int.max × anything traps.
+        func area(_ cap: (maxWidth: Int?, maxHeight: Int?, maxFrameRate: Int?)) -> Double { Double(cap.maxWidth ?? .max) * Double(cap.maxHeight ?? .max) }
+        if let cap = h264Caps.max(by: { area($0) < area($1) }) {
             if let w = cap.maxWidth { limitW = min(limitW, w) }
             if let h = cap.maxHeight { limitH = min(limitH, h) }
             if let r = cap.maxFrameRate, r > 0 { fps = min(fps, r) }
@@ -198,7 +200,7 @@ struct OpenDisplayHello: Equatable {
         func shrunk(_ w: Int, _ h: Int, by scale: Double, step: Int) -> (Int, Int) {
             (Int(Double(w) * scale) / step * step, Int(Double(h) * scale) / step * step)
         }
-        let fit = min(1, Double(limitW) / Double(width * factor), Double(limitH) / Double(height * factor))
+        let fit = min(1, Double(limitW) / (Double(width) * Double(factor)), Double(limitH) / (Double(height) * Double(factor)))
         (width, height) = fit < 1 ? shrunk(width, height, by: fit, step: 2) : (width - width % 2, height - height % 2)
         guard width >= 2, height >= 2 else { return nil }
         let mode = StreamingDisplayModes.Mode(width: width, height: height, refreshRate: fps, hiDPI: hiDPI)
