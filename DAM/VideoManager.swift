@@ -214,6 +214,8 @@ final class VideoManager: ObservableObject {
     /// The streaming displays the others were mirrored onto through DAM, not by WindowServer
     /// applying a layout it saved for them.
     var streamingDisplaysMirroredByChoice: Set<CGDirectDisplayID> = []
+    /// The streaming displays set to mirror another display through DAM, which a resize keeps.
+    var streamingDisplaysMirroringByChoice: Set<CGDirectDisplayID> = []
     /// Whether a change of main or of positions leaves `streamingArrangement` as it is, so
     /// the layout from before is put back once the streaming displays go: while a remote
     /// session is on (RemoteSessions.swift). Otherwise the change is kept after them.
@@ -227,6 +229,18 @@ final class VideoManager: ObservableObject {
     var streamingSettle: (arrangement: DisplayArrangement, until: Date)?
     /// Whether that layout is being put back; later changes wait for the one it causes.
     var streamingReassertInFlight = false
+
+    /// Whether DAM is in the middle of a display change of its own: putting an anchor's or the
+    /// streaming layout back, adding, removing or resizing a streaming display, or handing main
+    /// back from one. A change made on top would race it; the reconfiguration it causes on
+    /// landing brings the next look.
+    var displayChangeInFlight: Bool {
+        virtualAnchorReassertInFlight || streamingChangeInFlight || streamingReassertInFlight
+            || streamingMainHandBackInFlight
+    }
+    /// How many changes the user asked for (mirror, extend, main, positions, resolution) have
+    /// been begun, so a step DAM takes later can tell that one came meanwhile.
+    var displayChangesBegun = 0
 
     /// Start continuous Bonjour discovery. Call once on launch; runs until the app quits.
     func startDiscovery() {
@@ -288,11 +302,9 @@ final class VideoManager: ObservableObject {
         var current: [CGDirectDisplayID: ModeShape] = [:]
         var available: [CGDirectDisplayID: [ModeShape: CGDisplayMode]] = [:]
         var skip = Set(virtualAnchorCGIDs.values)
-        let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
         for id in DisplayArrangement.onlineDisplayIDs() {
             current[id] = CGDisplayCopyDisplayMode(id).map(ModeShape.init)
-            let modes = CGDisplayCopyAllDisplayModes(id, options) as? [CGDisplayMode] ?? []
-            available[id] = Dictionary(modes.map { (ModeShape($0), $0) }) { first, _ in first }
+            available[id] = Dictionary(DisplayArrangement.listedModes(of: id).map { (ModeShape($0), $0) }) { first, _ in first }
             if CGDisplayMirrorsDisplay(id) != 0 { skip.insert(id) }
         }
         let restore = Self.modesToRestore(saved: modesBeforeSleep, current: current,
@@ -324,6 +336,7 @@ final class VideoManager: ObservableObject {
     }
 
     /// What a mode is, as opposed to its ID, which a display can renumber when it comes back.
+    /// Equal when `DisplayArrangement.sameMode(_:_:rate: .exact)` is, as a key.
     struct ModeShape: Hashable {
         let width: Int, height: Int, pixelWidth: Int, pixelHeight: Int
         /// In hundredths of a hertz, so 59.94 and 60 stay apart but rounding noise does not.
@@ -349,7 +362,7 @@ final class VideoManager: ObservableObject {
             self?.keepStreamingDisplayOffMain()
             // WindowServer places a display that arrives beside a virtual anchor on top of
             // it (an AirPlay TV joining an anchored iPad); move it off.
-            if let self, !self.virtualAnchorCGIDs.isEmpty, !self.virtualAnchorReassertInFlight {
+            if let self, !self.virtualAnchorCGIDs.isEmpty, !self.displayChangeInFlight {
                 self.separateOverlappingDisplays()
             }
             // A resolution or arrangement change leaves the display list as it was, yet the
@@ -687,7 +700,6 @@ final class VideoManager: ObservableObject {
                 if let keptAnchor, let name = self.virtualAnchorCGIDs.first(where: { $0.value == keptAnchor })?.key {
                     self.anchorSetSlaves[name, default: []].formUnion(slaveIDs)
                 }
-                if self.streamingDisplayIDs.contains(masterID) { self.streamingDisplaysMirroredByChoice.insert(masterID) }
                 self.commitDisplayChange({ cfg in
                     for slave in slaveIDs { CGConfigureDisplayMirrorOfDisplay(cfg, slave, masterID) }
                 }, completion: finish)
@@ -713,8 +725,21 @@ final class VideoManager: ObservableObject {
     /// Keeps a mirror change the user makes, `ids` mirroring `master` (0: each its own
     /// desktop), in the layouts DAM puts back, or they would undo it: the one kept after a
     /// streaming display came and the one each anchor restores. None of `ids` is an
-    /// anchor's set slave any more; one that is to be is added after.
+    /// anchor's set slave any more; one that is to be is added after. A streaming display
+    /// counts as mirrored by choice while a display mirrors it through DAM.
     func keepUserMirror(_ ids: [CGDirectDisplayID], on master: CGDirectDisplayID) {
+        if streamingDisplayIDs.contains(master) { streamingDisplaysMirroredByChoice.insert(master) }
+        let moving = Set(ids)
+        if master != 0 {
+            streamingDisplaysMirroringByChoice.formUnion(moving.intersection(streamingDisplayIDs))
+        } else {
+            streamingDisplaysMirroringByChoice.subtract(moving)
+        }
+        // The others only while a display not among `ids` still mirrors them.
+        let online = DisplayArrangement.onlineDisplayIDs()
+        streamingDisplaysMirroredByChoice = streamingDisplaysMirroredByChoice.filter { id in
+            id == master || online.contains { !moving.contains($0) && $0 != id && CGDisplayMirrorsDisplay($0) == id }
+        }
         for name in anchorSetSlaves.keys { anchorSetSlaves[name]?.subtract(ids) }
         streamingSettle = streamingSettle.map { ($0.arrangement.mirroring(ids, on: master), $0.until) }
         for (name, arrangement) in virtualAnchorArrangements {
@@ -748,15 +773,17 @@ final class VideoManager: ObservableObject {
             ?? display.cgDisplayID
         let master = CGDisplayMirrorsDisplay(ownID)
         let mainID = master != CGDirectDisplayID(0) ? master : ownID
+        // Places the display in arrangements captured before it came.
+        let live = DisplayArrangement.current()
         // An anchor's default layout can have made the display main already; the captured
         // arrangements still need re-basing, or releasing the anchor would undo it.
         let rebase = { [weak self] in
             guard let self else { return }
             for (name, arrangement) in self.virtualAnchorArrangements {
-                self.virtualAnchorArrangements[name] = arrangement.makingMain(ownID)
+                self.virtualAnchorArrangements[name] = arrangement.makingMain(ownID, live: live)
             }
             if !self.holdsStreamingArrangement {
-                self.streamingArrangement = self.streamingArrangement?.makingMain(ownID)
+                self.streamingArrangement = self.streamingArrangement?.makingMain(ownID, live: live)
             }
         }
         let byChoice = streamingDisplayIDs.contains(ownID)
@@ -765,7 +792,7 @@ final class VideoManager: ObservableObject {
             guard let self else { return }
             self.streamingDisplayIsMainByChoice = byChoice
             // Or the layout kept after a streaming display came would undo it.
-            self.streamingSettle = self.streamingSettle.map { ($0.arrangement.makingMain(ownID), $0.until) }
+            self.streamingSettle = self.streamingSettle.map { ($0.arrangement.makingMain(ownID, live: live), $0.until) }
         }
         guard CGDisplayIsMain(mainID) == 0 else { choose(); rebase(); completion?(.success(())); return }
         let online  = DisplayArrangement.onlineDisplayIDs()
@@ -842,6 +869,7 @@ final class VideoManager: ObservableObject {
                                              slavesOf: slaves(of:), anchorIDs: Set(virtualAnchorCGIDs.values))
         guard !toExtend.isEmpty else { return completion(.success(())) }
         mirrorLog.debug("dissolveMirrorSets: extending \(toExtend) first")
+        keepUserMirror(Array(toExtend), on: 0)
         commitDisplayChange({ cfg in
             for id in toExtend { CGConfigureDisplayMirrorOfDisplay(cfg, id, CGDirectDisplayID(0)) }
         }, settle: 1.0, completion: completion)
@@ -856,21 +884,10 @@ final class VideoManager: ObservableObject {
                                      settle: TimeInterval = 0.5,
                                      timeout: TimeInterval = 10,
                                      completion: @escaping (Result<Void, MirrorError>) -> Void) {
-        var config: CGDisplayConfigRef?
-        let begin = CGBeginDisplayConfiguration(&config)
-        guard begin == .success, let cfg = config else { return completion(.failure(.configuration(begin))) }
-        configure(cfg)
         // Touched on the main queue only: whichever of the commit and the timeout comes first
         // reports, and the other one does not.
         var reported = false
-        DispatchQueue.main.asyncAfter(deadline: .now() + timeout) {
-            guard !reported else { return }
-            reported = true
-            mirrorLog.error("CompleteDisplayConfiguration still running after \(timeout) s")
-            completion(.failure(.timedOut))
-        }
-        DispatchQueue.global(qos: .userInitiated).async {
-            let err = CGCompleteDisplayConfiguration(cfg, .permanently)
+        let start = Self.configureDisplays(in: .permanently, { configure($0); return true }) { err in
             if err != .success { mirrorLog.error("CompleteDisplayConfiguration err=\(err.rawValue)") }
             DispatchQueue.main.asyncAfter(deadline: .now() + settle) { [weak self] in
                 self?.mergeDevices()
@@ -879,6 +896,45 @@ final class VideoManager: ObservableObject {
                 completion(err == .success ? .success(()) : .failure(.configuration(err)))
             }
         }
+        if case .failed(let begin) = start { return completion(.failure(.configuration(begin))) }
+        displayChangesBegun += 1
+        DispatchQueue.main.asyncAfter(deadline: .now() + timeout) {
+            guard !reported else { return }
+            reported = true
+            mirrorLog.error("CompleteDisplayConfiguration still running after \(timeout) s")
+            completion(.failure(.timedOut))
+        }
+    }
+
+    /// How a display configuration transaction started (see `configureDisplays`).
+    enum DisplayConfigurationStart {
+        /// Being committed; the result follows.
+        case committing
+        /// Cancelled, as it changed nothing.
+        case unchanged
+        /// It could not begin.
+        case failed(CGError)
+    }
+
+    /// One display configuration transaction: begins it and lets `queue` fill it. When `queue`
+    /// reports a change, it is completed in `scope` off the main queue, as that can block for
+    /// seconds, and `committed` gets the result on the main queue. One that changes nothing
+    /// is cancelled instead: committing it takes 10 s to return.
+    @discardableResult
+    static func configureDisplays(in scope: CGConfigureOption, _ queue: (CGDisplayConfigRef) -> Bool,
+                                  committed: @escaping (CGError) -> Void = { _ in }) -> DisplayConfigurationStart {
+        var config: CGDisplayConfigRef?
+        let begin = CGBeginDisplayConfiguration(&config)
+        guard begin == .success, let cfg = config else { return .failed(begin) }
+        guard queue(cfg) else {
+            CGCancelDisplayConfiguration(cfg)
+            return .unchanged
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let err = CGCompleteDisplayConfiguration(cfg, scope)
+            DispatchQueue.main.async { committed(err) }
+        }
+        return .committing
     }
 
     // MARK: - AirPlay
@@ -929,8 +985,7 @@ final class VideoManager: ObservableObject {
 
     func availableModes(for cgDisplayID: CGDirectDisplayID) -> [DisplayMode] {
         guard cgDisplayID != 0 else { return [] }
-        let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
-        guard let modeList = CGDisplayCopyAllDisplayModes(cgDisplayID, options) as? [CGDisplayMode] else { return [] }
+        let modeList = DisplayArrangement.listedModes(of: cgDisplayID)
 
         var seen = Set<String>()
         let panelRate = Self.panelRefreshRate(of: cgDisplayID)
@@ -953,11 +1008,10 @@ final class VideoManager: ObservableObject {
     }
 
     /// One mode per logical resolution, preferring HiDPI over non-HiDPI, then highest refresh rate.
-    /// Single pass over CGDisplayCopyAllDisplayModes — does not call availableModes().
+    /// Single pass over the listed modes — does not call availableModes().
     func availableModesDeduped(for cgDisplayID: CGDirectDisplayID) -> [DisplayMode] {
         guard cgDisplayID != 0 else { return [] }
-        let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
-        guard let modeList = CGDisplayCopyAllDisplayModes(cgDisplayID, options) as? [CGDisplayMode] else { return [] }
+        let modeList = DisplayArrangement.listedModes(of: cgDisplayID)
         var best: [String: DisplayMode] = [:]
         let panelRate = Self.panelRefreshRate(of: cgDisplayID)
         for cgMode in modeList {
@@ -1080,9 +1134,8 @@ final class VideoManager: ObservableObject {
     func setMode(_ mode: DisplayMode, for cgDisplayID: CGDirectDisplayID,
                  completion: ((Result<Void, MirrorError>) -> Void)? = nil) {
         guard cgDisplayID != 0 else { completion?(.failure(.notConnected)); return }
-        let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
-        guard let modeList = CGDisplayCopyAllDisplayModes(cgDisplayID, options) as? [CGDisplayMode],
-              let cgMode = modeList.first(where: { $0.ioDisplayModeID == mode.ioModeID }) else {
+        // By ID: the mode was picked from this display's list just now.
+        guard let cgMode = DisplayArrangement.listedModes(of: cgDisplayID).first(where: { $0.ioDisplayModeID == mode.ioModeID }) else {
             completion?(.failure(.configuration(.illegalArgument)))
             return
         }
@@ -1091,9 +1144,10 @@ final class VideoManager: ObservableObject {
         // wake from sleep.
         for name in virtualAnchorArrangements.keys { virtualAnchorArrangements[name]?.modes[cgDisplayID] = cgMode }
         modesBeforeSleep.removeValue(forKey: cgDisplayID)
-        // A commit that changes nothing takes 10 s to return.
+        // A commit that changes nothing takes 10 s to return. To the hundredth of a hertz:
+        // 59.94 Hz is another mode than the 60 Hz one it rounds to.
         if CGDisplayMirrorsDisplay(cgDisplayID) == 0, let current = CGDisplayCopyDisplayMode(cgDisplayID),
-           DisplayArrangement.sameMode(current, cgMode) {
+           DisplayArrangement.sameMode(current, cgMode, rate: .exact) {
             completion?(.success(()))
             return
         }
@@ -1138,10 +1192,7 @@ final class VideoManager: ObservableObject {
 
         // Use CGGetOnlineDisplayList to capture ALL connected displays, including
         // those hidden in a mirror set (which NSScreen.screens omits).
-        var onlineCount: UInt32 = 0
-        CGGetOnlineDisplayList(0, nil, &onlineCount)
-        var onlineIDs = [CGDirectDisplayID](repeating: 0, count: Int(onlineCount))
-        CGGetOnlineDisplayList(onlineCount, &onlineIDs, &onlineCount)
+        let onlineIDs = DisplayArrangement.onlineDisplayIDs()
 
         // Build a full id → name map, falling back to IOKit for external displays not in NSScreen:
         // their IODisplayConnect service on Intel, their framebuffer on Apple silicon.
