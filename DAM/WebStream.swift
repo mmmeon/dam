@@ -1385,10 +1385,10 @@ enum WebStreamPage {
       function start() {
         stop();
         queue = []; bytes = 0; held = true; stalls = 0; cutOff = false;
-        source = new MS();
+        const ms = source = new MS();
         video.disableRemotePlayback = true;
-        video.src = URL.createObjectURL(source);
-        source.addEventListener('sourceopen', open, { once: true });
+        video.src = URL.createObjectURL(ms);
+        ms.addEventListener('sourceopen', () => open(ms), { once: true });
         history.replaceState(null, '', '?' + new URLSearchParams({ ...(token ? { token } : {}), ...(app ? { app } : {}), profile, bitrate: Math.round(bitrate * 1000), buffer: Math.round(buffer * 1000), ...(lowlatency ? { lowlatency } : {}) }));
         // Making a display for the stream can take a while.
         $('msg').hidden = false; $('msg').textContent = 'Connecting…';
@@ -1401,18 +1401,24 @@ enum WebStreamPage {
         source = null;
       }
 
-      async function open() {
-        if (source.duration !== Infinity) try { source.duration = Infinity; } catch (e) {}
-        abort = new AbortController();
+      // Each stream has its own controller: one replaced by a restart (a turn, a new
+      // setting) was stopped on purpose, and leaves the stream that took its place alone.
+      async function open(ms) {
+        if (ms !== source) return;
+        const ctl = new AbortController();
+        abort = ctl;
+        const gone = () => ctl.signal.aborted || ms !== source;
+        if (ms.duration !== Infinity) try { ms.duration = Infinity; } catch (e) {}
         let response;
         try {
-          response = await fetch(url(), { signal: abort.signal, cache: 'no-store' });
-        } catch (e) { return fail('Could not reach the stream.'); }
-        if (!response.ok) return fail(await response.text());
+          response = await fetch(url(), { signal: ctl.signal, cache: 'no-store' });
+        } catch (e) { if (!gone()) fail('Could not reach the stream.'); return; }
+        if (gone()) return;
+        if (!response.ok) { const text = await response.text().catch(() => ''); if (!gone()) fail(text); return; }
         const codecs = response.headers.get('X-Codecs') || 'avc1.640028,mp4a.40.2';
         const mime = 'video/mp4; codecs="' + codecs + '"';
         if (!MS.isTypeSupported(mime)) return fail('This browser cannot decode ' + codecs + '.');
-        sb = source.addSourceBuffer(mime);
+        sb = ms.addSourceBuffer(mime);
         sb.mode = 'segments';
         sb.addEventListener('updateend', pump);
         sb.addEventListener('updateend', follow);
@@ -1420,6 +1426,7 @@ enum WebStreamPage {
         try {
           for (;;) {
             const { value, done } = await reader.read();
+            if (gone()) return;
             if (done) break;
             $('msg').hidden = true;
             queue.push(value); bytes += value.length;
@@ -1427,7 +1434,7 @@ enum WebStreamPage {
           }
           cutOff = true;
           fail('The stream ended.');
-        } catch (e) { if (!abort || !abort.signal.aborted) { cutOff = true; fail('The stream broke off.'); } }
+        } catch (e) { if (!gone()) { cutOff = true; fail('The stream broke off.'); } }
       }
 
       function pump() {
