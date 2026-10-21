@@ -56,13 +56,6 @@ final class SpeechSynthesizer {
 
     // MARK: - Public API
 
-    /// Called on the main thread when the current utterance finishes naturally
-    /// (not when stopped via stop()). Cleared automatically after firing once.
-    var onFinish: (() -> Void)? {
-        get { synthDel.onFinish }
-        set { synthDel.onFinish = newValue }
-    }
-
     /// Speak `text`, interrupting any in-progress speech.
     /// Pass `caption: false` to suppress the caption — useful when the caller shows the
     /// text itself or manages its own interactive Touch Bar that must not be rebuilt.
@@ -86,9 +79,8 @@ final class SpeechSynthesizer {
         }
     }
 
-    /// Stop any in-progress speech. Clears onFinish and removes the caption immediately.
+    /// Stop any in-progress speech and remove the caption immediately.
     func stop() {
-        synthDel.onFinish = nil
         clearTimer?.invalidate()
         synth.stopSpeaking()
         setDisplayText(nil)
@@ -131,10 +123,8 @@ final class SpeechSynthesizer {
 
 private final class SynthDelegate: NSObject, NSSpeechSynthesizerDelegate {
 
-    /// Fired on the main thread just before onFinish — used internally to start the linger timer.
+    /// Fired on the main thread when an utterance finishes naturally, to start the linger timer.
     var didFinish: (() -> Void)?
-    /// External one-shot callback set by callers via SpeechSynthesizer.onFinish.
-    var onFinish: (() -> Void)?
     /// Fired on the main thread just before each word, with its range in the spoken text.
     var willSpeakWord: ((NSRange) -> Void)?
 
@@ -150,9 +140,6 @@ private final class SynthDelegate: NSObject, NSSpeechSynthesizerDelegate {
         guard finishedSpeaking else { return }
         DispatchQueue.main.async { [weak self] in
             self?.didFinish?()
-            let cb = self?.onFinish
-            self?.onFinish = nil   // consume once
-            cb?()
         }
     }
 }
