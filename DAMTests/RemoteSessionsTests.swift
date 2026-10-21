@@ -67,6 +67,15 @@ private final class FakeSessionDisplays: SessionDisplays {
     }
 }
 
+/// A detector whose events a test sends through `onEvent`.
+private final class ScriptedDetector: SessionDetector {
+    let app: String
+    var onEvent: ((SessionEvent) -> Void)?
+    init(app: String) { self.app = app }
+    func start() {}
+    func stop() {}
+}
+
 final class RemoteSessionsTests: XCTestCase {
     private var defaults: UserDefaults!
     private var suiteName: String!
@@ -885,6 +894,54 @@ final class RemoteSessionsTests: XCTestCase {
         watcher.update()
         XCTAssertEqual(detector.running, false)
         XCTAssertTrue(watcher.detectors.isEmpty)
+    }
+
+    /// A watched app's detector, whose events the test sends; and its watcher.
+    private func watched(_ c: RemoteSessionCoordinator, app: String) -> (SessionWatcher, ScriptedDetector) {
+        let detector = ScriptedDetector(app: app)
+        let watcher = SessionWatcher(coordinator: c) { $0 == app ? detector : nil }
+        watcher.update()
+        return (watcher, detector)
+    }
+
+    func testAConnectionsCloseDoesntEndALaterSession() {
+        let fake = FakeSessionDisplays()
+        var profile = SessionProfile()
+        profile.watch = true
+        let c = coordinator(fake, profiles: ["rustdesk": profile])
+        let (watcher, detector) = watched(c, app: "rustdesk")
+        var said: [String] = []
+        watcher.announce = { said.append($0) }
+        detector.onEvent?(.opened(key: "1", client: nil))
+        // Ended by hand, as from the menu, while connection 1 stays open.
+        c.end(app: "rustdesk", all: true)
+        XCTAssertEqual(fake.removed, [100])
+        fake.nextID = 101
+        detector.onEvent?(.opened(key: "2", client: nil))
+        detector.onEvent?(.closed(key: "1"))
+        XCTAssertEqual(c.sessions["rustdesk"]?.displayID, 101)
+        XCTAssertEqual(fake.removed, [100])
+        detector.onEvent?(.closed(key: "2"))
+        XCTAssertNil(c.sessions["rustdesk"])
+        XCTAssertEqual(fake.removed, [100, 101])
+        XCTAssertEqual(said.count, 3)
+    }
+
+    func testAConnectionGoneBeforeItsDisplayCameIsntAnnounced() {
+        let fake = FakeSessionDisplays()
+        fake.pendingMakes = []
+        var profile = SessionProfile()
+        profile.watch = true
+        let c = coordinator(fake, profiles: ["parsec": profile])
+        let (watcher, detector) = watched(c, app: "parsec")
+        var said: [String] = []
+        watcher.announce = { said.append($0) }
+        detector.onEvent?(.opened(key: "guest#1", client: "guest"))
+        detector.onEvent?(.closed(key: "guest#1"))
+        fake.pendingMakes?.forEach { $0() }
+        XCTAssertNil(c.sessions["parsec"])
+        XCTAssertEqual(fake.removed, [100])
+        XCTAssertEqual(said, [])
     }
 
     func testFindsRunningProcesses() {

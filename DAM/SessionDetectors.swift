@@ -654,6 +654,9 @@ final class SessionWatcher {
     private var madeFrom: [String: SessionProfile] = [:]
     /// Called with what to announce when a watched session starts or ends.
     var announce: ((String) -> Void)?
+    /// The session each open connection joined, by app and the detector's key: a session
+    /// ended by hand leaves its connections open, and their closes mustn't end a later one.
+    private var joined: [String: [String: UUID]] = [:]
 
     init(coordinator: RemoteSessionCoordinator, make: ((String) -> SessionDetector?)? = nil) {
         self.coordinator = coordinator
@@ -706,7 +709,7 @@ final class SessionWatcher {
     func handle(_ event: SessionEvent, of app: String) {
         let name = RemoteSessionApp.name(of: app)
         switch event {
-        case .opened(_, let client, let display):
+        case .opened(let key, let client, let display):
             let first = coordinator.sessions[app] == nil
             var request = SessionRequest(app: app, client: client)
             switch display {
@@ -718,13 +721,19 @@ final class SessionWatcher {
                 switch result {
                 case .success(let start):
                     for warning in start.warnings { detLog.error("\(app): \(warning)") }
-                    if first { self?.announce?(Spoken.remoteSessionStarted(name)) }
+                    // Not when every connection closed while it was being set up: it ends now.
+                    let on = (self?.coordinator.sessions[app]?.count ?? 0) > 0
+                    if first, on { self?.announce?(Spoken.remoteSessionStarted(name)) }
                 case .failure(let error):
                     detLog.error("\(app): \(error.description)")
                 }
             }
-        case .closed:
-            let last = coordinator.sessions[app]?.count == 1
+            joined[app, default: [:]][key] = coordinator.sessions[app]?.id
+        case .closed(let key):
+            guard let id = joined[app]?.removeValue(forKey: key), let session = coordinator.sessions[app],
+                  session.id == id else { return }
+            // One still being set up was never announced.
+            let last = session.count == 1 && !session.starting
             if case .success = coordinator.end(app: app), last { announce?(Spoken.remoteSessionEnded(name)) }
         }
     }

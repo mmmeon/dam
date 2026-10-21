@@ -327,6 +327,8 @@ final class RemoteSessionCoordinator {
         /// Whether it is still being set up.
         var starting = true
         var started = Date()
+        /// Tells it from a later session of the same app.
+        let id = UUID()
     }
 
     private let displays: SessionDisplays
