@@ -226,17 +226,10 @@ struct DisplayArrangement {
     /// changed. Releasing an anchor shrinks the set, and WindowServer then applies the layout
     /// it last saved for that smaller set, which can undo a main display chosen meanwhile.
     func reapplyOriginsPermanently() {
-        var config: CGDisplayConfigRef?
-        guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else { return }
-        guard restoreOrigins(in: cfg, excluding: []) else {
-            CGCancelDisplayConfiguration(cfg)
-            return
-        }
-        vdLog.debug("reapply: positions differ from the captured arrangement; committing them")
-        DispatchQueue.global(qos: .userInitiated).async {
-            let err = CGCompleteDisplayConfiguration(cfg, .permanently)
+        let start = VideoManager.configureDisplays(in: .permanently, { restoreOrigins(in: $0, excluding: []) }) { err in
             vdLog.debug("reapply: CompleteDisplayConfiguration err=\(err.rawValue)")
         }
+        if case .committing = start { vdLog.debug("reapply: positions differ from the captured arrangement; committing them") }
     }
 }
 
@@ -757,29 +750,6 @@ extension VideoManager {
         // first leaves its slaves orphaned and lets WindowServer pick a new layout.
         let vd = forgetAnchor(display.name)
 
-        var config: CGDisplayConfigRef?
-        guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                self?.mergeDevices()
-                completion?()
-            }
-            return
-        }
-        let online = Set(DisplayArrangement.onlineDisplayIDs())
-        var changed = false
-        if airPlayCGID != 0 {
-            // The displays the user set to mirror the iPad go on mirroring it, without the anchor.
-            for id in setSlaves where online.contains(id) && id != airPlayCGID {
-                CGConfigureDisplayMirrorOfDisplay(cfg, id, airPlayCGID)
-                changed = true
-            }
-        }
-        // Its display, and any other WindowServer put in its set, leave it; mirroring as before
-        // the anchor came only while it settles (see anchorSettling(_:)).
-        let freed = Set(online.filter { anchorID != 0 && CGDisplayMirrorsDisplay($0) == anchorID && !setSlaves.contains($0) })
-            .union(airPlayCGID != 0 ? [airPlayCGID] : [])
-        let restored = (arrangement ?? DisplayArrangement(origins: [:], mirrorMasters: [:]))
-            .restore(in: cfg, excluding: Set([anchorID]).union(setSlaves), mirrors: settling, freeing: freed)
         // Once the set has settled without the anchor, put the positions back if WindowServer's
         // saved layout for that set moved them; not over a change made since, as when the
         // release was the first step of a mirror.
@@ -798,16 +768,38 @@ extension VideoManager {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.mergeDevices() }
             }
         }
-        guard changed || restored else {
-            // A commit that changes nothing takes 10 s to return.
-            vdLog.debug("disableVirtualAnchor: nothing to tear down")
-            CGCancelDisplayConfiguration(cfg)
-            return settle()
-        }
-        DispatchQueue.global(qos: .userInitiated).async {
-            let err = CGCompleteDisplayConfiguration(cfg, .forAppOnly)
+        let start = Self.configureDisplays(in: .forAppOnly, { cfg in
+            let online = Set(DisplayArrangement.onlineDisplayIDs())
+            var changed = false
+            if airPlayCGID != 0 {
+                // The displays the user set to mirror the iPad go on mirroring it, without the anchor.
+                for id in setSlaves where online.contains(id) && id != airPlayCGID {
+                    CGConfigureDisplayMirrorOfDisplay(cfg, id, airPlayCGID)
+                    changed = true
+                }
+            }
+            // Its display, and any other WindowServer put in its set, leave it; mirroring as
+            // before the anchor came only while it settles (see anchorSettling(_:)).
+            let freed = Set(online.filter {
+                anchorID != 0 && CGDisplayMirrorsDisplay($0) == anchorID && !setSlaves.contains($0)
+            }).union(airPlayCGID != 0 ? [airPlayCGID] : [])
+            let restored = (arrangement ?? DisplayArrangement(origins: [:], mirrorMasters: [:]))
+                .restore(in: cfg, excluding: Set([anchorID]).union(setSlaves), mirrors: settling, freeing: freed)
+            return changed || restored
+        }) { err in
             vdLog.debug("disableVirtualAnchor: teardown complete err=\(err.rawValue)")
-            DispatchQueue.main.async(execute: settle)
+            settle()
+        }
+        switch start {
+        case .committing: break
+        case .unchanged:
+            vdLog.debug("disableVirtualAnchor: nothing to tear down")
+            settle()
+        case .failed:
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                self?.mergeDevices()
+                completion?()
+            }
         }
     }
 
@@ -1160,22 +1152,19 @@ extension VideoManager {
         // anchor in one transaction (see anchorPendingSlaves).
         let hadExistingMirror = existingMirror != CGDirectDisplayID(0) && anchorPendingSlaves[name] == nil
         if hadExistingMirror {
-            var teardown: CGDisplayConfigRef?
-            let tearErr = CGBeginDisplayConfiguration(&teardown)
-            vdLog.debug("step1: BeginDisplayConfiguration err=\(tearErr.rawValue)")
-            if tearErr == .success, let tc = teardown {
-                CGConfigureDisplayMirrorOfDisplay(tc, airPlayID, CGDirectDisplayID(0))
-                DispatchQueue.global(qos: .userInitiated).async { [weak vd] in
-                    let completeErr = CGCompleteDisplayConfiguration(tc, .forAppOnly)
-                    vdLog.debug("step1: teardown complete err=\(completeErr.rawValue) — waiting 1 s before mirror")
-                    // Step 2 runs after teardown settles.
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self, weak vd] in
-                        guard let vd else { return }
-                        self?.applyMirror(vd, airPlayID: airPlayID, virtualID: virtualID, initialMode: initialMode)
-                    }
+            let start = Self.configureDisplays(in: .forAppOnly, { cfg in
+                CGConfigureDisplayMirrorOfDisplay(cfg, airPlayID, CGDirectDisplayID(0))
+                return true
+            }) { [weak vd] err in
+                vdLog.debug("step1: teardown complete err=\(err.rawValue) — waiting 1 s before mirror")
+                // Step 2 runs after teardown settles.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self, weak vd] in
+                    guard let vd else { return }
+                    self?.applyMirror(vd, airPlayID: airPlayID, virtualID: virtualID, initialMode: initialMode)
                 }
-                return   // step2 will be chained from the background completion above
             }
+            if case .failed(let err) = start { vdLog.debug("step1: BeginDisplayConfiguration err=\(err.rawValue)") }
+            if case .committing = start { return }   // step 2 is chained from the commit above
         }
 
         // Step 2 (no prior mirror to tear down): short settle delay then apply.
@@ -1204,52 +1193,44 @@ extension VideoManager {
             return
         }
         vdLog.debug("step2: configuring mirror airPlayID=\(airPlayID) → virtualID=\(virtualID)")
-        var config: CGDisplayConfigRef?
-        let beginErr = CGBeginDisplayConfiguration(&config)
-        vdLog.debug("step2: BeginDisplayConfiguration err=\(beginErr.rawValue)")
-        guard beginErr == .success, let cfg = config else {
-            vdLog.error("step2: BeginDisplayConfiguration failed — aborting")
-            return
-        }
-        // Displays waiting to join the iPad's set mirror the anchor in this same transaction,
-        // so the screens are reconfigured once, and are left out of the layout put back.
-        let online = Set(DisplayArrangement.onlineDisplayIDs())
-        let joining = (anchorPendingSlaves.removeValue(forKey: name) ?? []).filter(online.contains)
-        anchorSetSlaves[name, default: []].formUnion(joining)
-        let excluded = Set([airPlayID, virtualID] + joining)
-        // Undo the default layout WindowServer applied when the virtual display appeared,
-        // and put the new mirror set where the target display used to be.
-        let arrangement = virtualAnchorArrangements[name]
-        arrangement?.restore(in: cfg, excluding: excluded)
-        if let origin = arrangement?.origins[airPlayID] {
-            CGConfigureDisplayOrigin(cfg, virtualID, Int32(origin.x), Int32(origin.y))
-        }
-        // The default layout can make the virtual display a slave of the target; it must be
-        // the master.
-        if CGDisplayMirrorsDisplay(virtualID) != 0 {
-            CGConfigureDisplayMirrorOfDisplay(cfg, virtualID, CGDirectDisplayID(0))
-        }
-        if let startMode = anchorStartMode(initialMode, slaveID: airPlayID) {
-            virtualAnchorModes[name] = startMode
-        }
-        if let startMode = virtualAnchorModes[name],
-           !anchorRuns(startMode, anchorID: virtualID),
-           let cgMode = anchorDisplayMode(startMode, anchorID: virtualID) {
-            vdLog.debug("step2: anchor starts at \(cgMode.width)×\(cgMode.height) (pixels \(cgMode.pixelWidth)×\(cgMode.pixelHeight)) @\(cgMode.refreshRate)Hz")
-            CGConfigureDisplayWithDisplayMode(cfg, virtualID, cgMode, nil)
-        }
-        CGConfigureDisplayMirrorOfDisplay(cfg, airPlayID, virtualID)
-        if !joining.isEmpty { vdLog.debug("step2: \(joining) join the set on the anchor") }
-        for id in joining { CGConfigureDisplayMirrorOfDisplay(cfg, id, virtualID) }
-        // CGCompleteDisplayConfiguration can block for ~10 s on some systems while the
-        // display config settles — run on a background queue to keep the UI responsive.
-        DispatchQueue.global(qos: .userInitiated).async { [weak self, weak vd] in
-            // .forAppOnly: config reverts automatically when the app exits.
-            let mirrorErr = CGCompleteDisplayConfiguration(cfg, .forAppOnly)
+        var excluded: Set<CGDirectDisplayID> = []
+        // .forAppOnly: config reverts automatically when the app exits.
+        let start = Self.configureDisplays(in: .forAppOnly, { cfg in
+            // Displays waiting to join the iPad's set mirror the anchor in this same transaction,
+            // so the screens are reconfigured once, and are left out of the layout put back.
+            let online = Set(DisplayArrangement.onlineDisplayIDs())
+            let joining = (anchorPendingSlaves.removeValue(forKey: name) ?? []).filter(online.contains)
+            anchorSetSlaves[name, default: []].formUnion(joining)
+            excluded = Set([airPlayID, virtualID] + joining)
+            // Undo the default layout WindowServer applied when the virtual display appeared,
+            // and put the new mirror set where the target display used to be.
+            let arrangement = virtualAnchorArrangements[name]
+            arrangement?.restore(in: cfg, excluding: excluded)
+            if let origin = arrangement?.origins[airPlayID] {
+                CGConfigureDisplayOrigin(cfg, virtualID, Int32(origin.x), Int32(origin.y))
+            }
+            // The default layout can make the virtual display a slave of the target; it must be
+            // the master.
+            if CGDisplayMirrorsDisplay(virtualID) != 0 {
+                CGConfigureDisplayMirrorOfDisplay(cfg, virtualID, CGDirectDisplayID(0))
+            }
+            if let startMode = anchorStartMode(initialMode, slaveID: airPlayID) {
+                virtualAnchorModes[name] = startMode
+            }
+            if let startMode = virtualAnchorModes[name],
+               !anchorRuns(startMode, anchorID: virtualID),
+               let cgMode = anchorDisplayMode(startMode, anchorID: virtualID) {
+                vdLog.debug("step2: anchor starts at \(cgMode.width)×\(cgMode.height) (pixels \(cgMode.pixelWidth)×\(cgMode.pixelHeight)) @\(cgMode.refreshRate)Hz")
+                CGConfigureDisplayWithDisplayMode(cfg, virtualID, cgMode, nil)
+            }
+            CGConfigureDisplayMirrorOfDisplay(cfg, airPlayID, virtualID)
+            if !joining.isEmpty { vdLog.debug("step2: \(joining) join the set on the anchor") }
+            for id in joining { CGConfigureDisplayMirrorOfDisplay(cfg, id, virtualID) }
+            return true
+        }) { [weak self, weak vd] mirrorErr in
             vdLog.debug("step2: CompleteDisplayConfiguration err=\(mirrorErr.rawValue)")
             // By the name the anchor has now; not for one released meanwhile.
-            DispatchQueue.main.async { [weak self, weak vd] in
-                guard let self, let vd, let name = self.currentName(of: vd, anchorID: virtualID) else { return }
+            if let self, let vd, let name = self.currentName(of: vd, anchorID: virtualID) {
                 self.virtualAnchorSettleDeadlines[name] = Date().addingTimeInterval(Self.anchorSettleWindow)
             }
             // Step 3: let the system settle, then refresh the UI on the main queue.
@@ -1269,6 +1250,9 @@ extension VideoManager {
                 self.mergeDevices()
             }
         }
+        if case .failed(let err) = start {
+            vdLog.error("step2: BeginDisplayConfiguration failed err=\(err.rawValue) — aborting")
+        }
     }
 
     /// Once the mirror is in place WindowServer can lay the other displays out again, with
@@ -1277,19 +1261,11 @@ extension VideoManager {
         guard let arrangement = virtualAnchorArrangements[name] else { return }
         // Positions go back in a second transaction: a resolution change moves the display.
         let commit = { (label: String, queue: (CGDisplayConfigRef) -> Bool, then: (() -> Void)?) in
-            var config: CGDisplayConfigRef?
-            guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else { return }
-            // A commit that changes nothing takes 10 s to return.
-            guard queue(cfg) else {
-                CGCancelDisplayConfiguration(cfg)
-                then?()
-                return
-            }
-            DispatchQueue.global(qos: .userInitiated).async {
-                let err = CGCompleteDisplayConfiguration(cfg, .forAppOnly)
+            let start = Self.configureDisplays(in: .forAppOnly, queue) { err in
                 vdLog.debug("step3: \(label) restored err=\(err.rawValue)")
-                if let then { DispatchQueue.main.async(execute: then) }
+                then?()
             }
+            if case .unchanged = start { then?() }
         }
         commit("modes", { arrangement.restoreModes(in: $0, excluding: excluded) }) {
             commit("arrangement", { arrangement.restore(in: $0, excluding: excluded) }, nil)
@@ -1313,38 +1289,32 @@ extension VideoManager {
         virtualAnchorModes[name] = mode
         vdLog.debug("setModeOnVirtualAnchor: applying \(cgMode.pixelWidth)×\(cgMode.pixelHeight) @\(cgMode.refreshRate)Hz on master \(anchorID)")
 
-        var config: CGDisplayConfigRef?
-        let beginErr = CGBeginDisplayConfiguration(&config)
-        guard beginErr == .success, let cfg = config else {
-            vdLog.error("setModeOnVirtualAnchor: BeginDisplayConfiguration err=\(beginErr.rawValue)")
-            return
-        }
-        let setSlaves = anchorSetSlaves[name] ?? []
-        let strays = DisplayArrangement.onlineDisplayIDs().filter {
-            $0 != slaveID && CGDisplayMirrorsDisplay($0) == anchorID && !setSlaves.contains($0)
-        }
-        if !strays.isEmpty { vdLog.debug("setModeOnVirtualAnchor: releasing displays \(strays) from the anchor's mirror set") }
-        // Not the displays the user set to mirror the iPad: the arrangement is from before.
-        let restored = (virtualAnchorArrangements[name] ?? DisplayArrangement(origins: [:], mirrorMasters: [:]))
-            .restore(in: cfg, excluding: Set([anchorID, slaveID]).union(setSlaves),
-                     mirrors: anchorSettling(name), freeing: Set(strays))
-        let switching = !(CGDisplayCopyDisplayMode(anchorID).map { DisplayArrangement.sameMode($0, cgMode) } ?? false)
-        if switching { CGConfigureDisplayWithDisplayMode(cfg, anchorID, cgMode, nil) }
-        guard switching || restored else {
-            // A commit that changes nothing takes 10 s to return.
-            vdLog.debug("setModeOnVirtualAnchor: already in place")
-            CGCancelDisplayConfiguration(cfg)
-            return
-        }
         let before = currentLayout()
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let completeErr = CGCompleteDisplayConfiguration(cfg, .forAppOnly)
+        let start = Self.configureDisplays(in: .forAppOnly, { cfg in
+            let setSlaves = anchorSetSlaves[name] ?? []
+            let strays = DisplayArrangement.onlineDisplayIDs().filter {
+                $0 != slaveID && CGDisplayMirrorsDisplay($0) == anchorID && !setSlaves.contains($0)
+            }
+            if !strays.isEmpty { vdLog.debug("setModeOnVirtualAnchor: releasing displays \(strays) from the anchor's mirror set") }
+            // Not the displays the user set to mirror the iPad: the arrangement is from before.
+            let restored = (virtualAnchorArrangements[name] ?? DisplayArrangement(origins: [:], mirrorMasters: [:]))
+                .restore(in: cfg, excluding: Set([anchorID, slaveID]).union(setSlaves),
+                         mirrors: anchorSettling(name), freeing: Set(strays))
+            let switching = !(CGDisplayCopyDisplayMode(anchorID).map { DisplayArrangement.sameMode($0, cgMode) } ?? false)
+            if switching { CGConfigureDisplayWithDisplayMode(cfg, anchorID, cgMode, nil) }
+            return switching || restored
+        }) { [weak self] completeErr in
             vdLog.debug("setModeOnVirtualAnchor: CompleteDisplayConfiguration err=\(completeErr.rawValue)")
             // The anchor's neighbours keep their side of it as it grows or shrinks, and none
             // is left overlapping it.
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
                 self?.keepArrangement(before, around: anchorID)
             }
+        }
+        switch start {
+        case .committing: break
+        case .unchanged: vdLog.debug("setModeOnVirtualAnchor: already in place")
+        case .failed(let err): vdLog.error("setModeOnVirtualAnchor: BeginDisplayConfiguration err=\(err.rawValue)")
         }
     }
 
@@ -1417,66 +1387,54 @@ extension VideoManager {
         let excluded = anchorManagedDisplayIDs
         let online = Set(DisplayArrangement.onlineDisplayIDs())
 
-        var config: CGDisplayConfigRef?
-        guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else { return }
-        var changed = false
-        for (name, anchorID) in virtualAnchorCGIDs where online.contains(anchorID) {
-            // Not a display others now mirror: the user made it the master of a set.
-            if let target = virtualAnchorTargets[name], online.contains(target),
-               CGDisplayMirrorsDisplay(target) != anchorID,
-               !online.contains(where: { CGDisplayMirrorsDisplay($0) == target }) {
-                vdLog.debug("reassert: display \(target) back onto its anchor \(anchorID)")
-                CGConfigureDisplayMirrorOfDisplay(cfg, target, anchorID)
+        // A change that arrived while one of these was committed was skipped; look now.
+        let landed = { [weak self] in
+            self?.virtualAnchorReassertInFlight = false
+            self?.reassertAnchorLayout()
+        }
+        let sizes = Self.configureDisplays(in: .forAppOnly, { cfg in
+            var changed = false
+            for (name, anchorID) in virtualAnchorCGIDs where online.contains(anchorID) {
+                // Not a display others now mirror: the user made it the master of a set.
+                if let target = virtualAnchorTargets[name], online.contains(target),
+                   CGDisplayMirrorsDisplay(target) != anchorID,
+                   !online.contains(where: { CGDisplayMirrorsDisplay($0) == target }) {
+                    vdLog.debug("reassert: display \(target) back onto its anchor \(anchorID)")
+                    CGConfigureDisplayMirrorOfDisplay(cfg, target, anchorID)
+                    changed = true
+                }
+                if let mode = virtualAnchorModes[name], !anchorRuns(mode, anchorID: anchorID),
+                   let cgMode = anchorDisplayMode(mode, anchorID: anchorID) {
+                    vdLog.debug("reassert: anchor \(anchorID) back to \(cgMode.width)×\(cgMode.height) (pixels \(cgMode.pixelWidth)×\(cgMode.pixelHeight))")
+                    CGConfigureDisplayWithDisplayMode(cfg, anchorID, cgMode, nil)
+                    changed = true
+                }
+            }
+            for arrangement in arrangements where arrangement.restoreModes(in: cfg, excluding: excluded) {
                 changed = true
             }
-            if let mode = virtualAnchorModes[name], !anchorRuns(mode, anchorID: anchorID),
-               let cgMode = anchorDisplayMode(mode, anchorID: anchorID) {
-                vdLog.debug("reassert: anchor \(anchorID) back to \(cgMode.width)×\(cgMode.height) (pixels \(cgMode.pixelWidth)×\(cgMode.pixelHeight))")
-                CGConfigureDisplayWithDisplayMode(cfg, anchorID, cgMode, nil)
-                changed = true
-            }
-        }
-        for arrangement in arrangements where arrangement.restoreModes(in: cfg, excluding: excluded) {
-            changed = true
-        }
-        guard changed else {
-            CGCancelDisplayConfiguration(cfg)
-            if virtualAnchorPositionsPending {
-                virtualAnchorPositionsPending = false
-                commitIfChanged { cfg in arrangements.reduce(false) { $1.restore(in: cfg, excluding: excluded) || $0 } }
-            }
-            return
-        }
-        virtualAnchorPositionsPending = true
-        virtualAnchorReassertInFlight = true
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let err = CGCompleteDisplayConfiguration(cfg, .forAppOnly)
+            return changed
+        }) { err in
             vdLog.debug("reassert: sizes restored err=\(err.rawValue)")
             // Positions go in a later pass: the size change moves the displays and fires
             // another reconfiguration, which lands back here.
-            DispatchQueue.main.async {
-                // A change that arrived meanwhile was skipped; look now.
-                self?.virtualAnchorReassertInFlight = false
-                self?.reassertAnchorLayout()
-            }
+            landed()
         }
-    }
-
-    /// Begins a configuration, lets `queue` fill it, and commits it only when `queue` reports
-    /// a change.
-    private func commitIfChanged(_ queue: (CGDisplayConfigRef) -> Bool) {
-        var config: CGDisplayConfigRef?
-        guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else { return }
-        guard queue(cfg) else { CGCancelDisplayConfiguration(cfg); return }
-        virtualAnchorReassertInFlight = true
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let err = CGCompleteDisplayConfiguration(cfg, .forAppOnly)
-            vdLog.debug("reassert: positions restored err=\(err.rawValue)")
-            DispatchQueue.main.async {
-                // A change that arrived meanwhile was skipped; look now.
-                self?.virtualAnchorReassertInFlight = false
-                self?.reassertAnchorLayout()
+        switch sizes {
+        case .committing:
+            virtualAnchorPositionsPending = true
+            virtualAnchorReassertInFlight = true
+        case .unchanged where virtualAnchorPositionsPending:
+            virtualAnchorPositionsPending = false
+            let positions = Self.configureDisplays(in: .forAppOnly, { cfg in
+                arrangements.reduce(false) { $1.restore(in: cfg, excluding: excluded) || $0 }
+            }) { err in
+                vdLog.debug("reassert: positions restored err=\(err.rawValue)")
+                landed()
             }
+            if case .committing = positions { virtualAnchorReassertInFlight = true }
+        case .unchanged, .failed:
+            break
         }
     }
 

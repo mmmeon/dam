@@ -482,31 +482,24 @@ extension VideoManager {
         guard !streamingReassertInFlight, let settle = streamingSettle else { return }
         guard settle.until > Date() else { streamingSettle = nil; return }
         let arrangement = settle.arrangement
-        var config: CGDisplayConfigRef?
-        guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else { return }
-        // Resolutions only for the same displays, mirrored the same way (see sameSet).
-        let sameSet = DisplayArrangement.sameSet(captured: arrangement.mirrorMasters,
-                                                 online: DisplayArrangement.onlineDisplayIDs(),
-                                                 mirrorOf: { CGDisplayMirrorsDisplay($0) })
         // Not what the anchors keep: the layout can be from before an anchor came or went.
         let excluded = anchorManagedDisplayIDs
-        let resized = sameSet && arrangement.restoreModes(in: cfg, excluding: excluded)
-        guard arrangement.restore(in: cfg, excluding: excluded) || resized else {
-            CGCancelDisplayConfiguration(cfg)
-            return
-        }
-        streamingReassertInFlight = true
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let err = CGCompleteDisplayConfiguration(cfg, .permanently)
+        let start = Self.configureDisplays(in: .permanently, { cfg in
+            // Resolutions only for the same displays, mirrored the same way (see sameSet).
+            let sameSet = DisplayArrangement.sameSet(captured: arrangement.mirrorMasters,
+                                                     online: DisplayArrangement.onlineDisplayIDs(),
+                                                     mirrorOf: { CGDisplayMirrorsDisplay($0) })
+            let resized = sameSet && arrangement.restoreModes(in: cfg, excluding: excluded)
+            return arrangement.restore(in: cfg, excluding: excluded) || resized
+        }) { [weak self] err in
             sdLog.debug("reassert: CompleteDisplayConfiguration err=\(err.rawValue)")
-            DispatchQueue.main.async {
-                guard let self else { return }
-                // A change that arrived meanwhile was skipped; look now.
-                self.streamingReassertInFlight = false
-                self.reassertStreamingLayout()
-                self.processStreamingRequests()
-            }
+            guard let self else { return }
+            // A change that arrived meanwhile was skipped; look now.
+            self.streamingReassertInFlight = false
+            self.reassertStreamingLayout()
+            self.processStreamingRequests()
         }
+        if case .committing = start { streamingReassertInFlight = true }
     }
 
     /// Gives streaming display `id` a mode list starting with `mode`, then switches to it once
@@ -598,19 +591,7 @@ extension VideoManager {
             }
             return
         }
-        var config: CGDisplayConfigRef?
-        guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else {
-            completion(false)
-            return finishStreamingChange()
-        }
-        // WindowServer may mirror, move or resize the others for the new size.
         let master = keepingMirror ? CGDisplayMirrorsDisplay(id) : 0
-        if CGDisplayMirrorsDisplay(id) != master { CGConfigureDisplayMirrorOfDisplay(cfg, id, master) }
-        _ = before.restore(in: cfg, excluding: [id])
-        before.restoreModes(in: cfg, excluding: [id])
-        // Always: given a new mode list, the display reports `target` as its mode already
-        // (see resizeStreamingDisplay), so asking whether it runs it says nothing.
-        CGConfigureDisplayWithDisplayMode(cfg, id, target, nil)
         let origin = before.origins[id] ?? CGDisplayBounds(id).origin
         let resized = before.excluding(id).adding(id, origin: origin, mode: target, mirroring: master)
         let settle = { [weak self] (done: Bool) in
@@ -624,10 +605,22 @@ extension VideoManager {
             self.finishStreamingChange()
         }
         // For the session, as placing one is.
-        DispatchQueue.global(qos: .userInitiated).async {
-            let err = CGCompleteDisplayConfiguration(cfg, .forSession)
+        let start = Self.configureDisplays(in: .forSession, { cfg in
+            // WindowServer may mirror, move or resize the others for the new size.
+            if CGDisplayMirrorsDisplay(id) != master { CGConfigureDisplayMirrorOfDisplay(cfg, id, master) }
+            _ = before.restore(in: cfg, excluding: [id])
+            before.restoreModes(in: cfg, excluding: [id])
+            // Always: given a new mode list, the display reports `target` as its mode already
+            // (see resizeStreamingDisplay), so asking whether it runs it says nothing.
+            CGConfigureDisplayWithDisplayMode(cfg, id, target, nil)
+            return true
+        }) { err in
             sdLog.debug("resize: CompleteDisplayConfiguration err=\(err.rawValue)")
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { settle(err == .success) }
+        }
+        if case .failed = start {
+            completion(false)
+            finishStreamingChange()
         }
     }
 
@@ -719,8 +712,27 @@ extension VideoManager {
             // fires no reconfiguration to check this.
             self?.finishStreamingChange(placed: id)
         }
-        var config: CGDisplayConfigRef?
-        guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else {
+        // For the session, not the app: when another app's own changes end, WindowServer goes
+        // back to the session's layout, which would undo app-only ones.
+        let transaction = Self.configureDisplays(in: .forSession, { cfg in
+            // Set before the commit, or the check after it would hand main back; not before
+            // the configuration begins, or a failure there would leave it set.
+            if main { streamingDisplayIsMainByChoice = true }
+            // WindowServer may have mirrored, moved or changed the resolutions of the others for
+            // the new set, or laid it out as placed already, from a layout it saved for the set.
+            let moved = placed.restore(in: cfg, excluding: [])
+            return placed.restoreModes(in: cfg, excluding: []) || moved
+        }) { err in
+            sdLog.debug("place: CompleteDisplayConfiguration err=\(err.rawValue)")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: settle)
+        }
+        switch transaction {
+        case .committing:
+            break
+        case .unchanged:
+            sdLog.debug("place: already in place")
+            settle()
+        case .failed:
             // Told none was made, so none is left: dropping it removes it, as for one that
             // never came online.
             sdLog.error("place: could not begin a configuration — dropping \(id)")
@@ -728,26 +740,6 @@ extension VideoManager {
             if streamingDisplays.isEmpty { streamingArrangement = nil }
             mergeDevices()
             finishStreamingChange()
-            return
-        }
-        // Set before the commit, or the check after it would hand main back; not before
-        // the configuration begins, or a failure there would leave it set.
-        if main { streamingDisplayIsMainByChoice = true }
-        // WindowServer may have mirrored, moved or changed the resolutions of the others for the
-        // new set, or laid it out as placed already, from a layout it saved for the set.
-        let moved = placed.restore(in: cfg, excluding: [])
-        guard placed.restoreModes(in: cfg, excluding: []) || moved else {
-            // A commit that changes nothing takes 10 s to return.
-            sdLog.debug("place: already in place")
-            CGCancelDisplayConfiguration(cfg)
-            return settle()
-        }
-        // For the session, not the app: when another app's own changes end, WindowServer goes
-        // back to the session's layout, which would undo app-only ones.
-        DispatchQueue.global(qos: .userInitiated).async {
-            let err = CGCompleteDisplayConfiguration(cfg, .forSession)
-            sdLog.debug("place: CompleteDisplayConfiguration err=\(err.rawValue)")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: settle)
         }
     }
 }

@@ -885,22 +885,10 @@ final class VideoManager: ObservableObject {
                                      settle: TimeInterval = 0.5,
                                      timeout: TimeInterval = 10,
                                      completion: @escaping (Result<Void, MirrorError>) -> Void) {
-        var config: CGDisplayConfigRef?
-        let begin = CGBeginDisplayConfiguration(&config)
-        guard begin == .success, let cfg = config else { return completion(.failure(.configuration(begin))) }
-        displayChangesBegun += 1
-        configure(cfg)
         // Touched on the main queue only: whichever of the commit and the timeout comes first
         // reports, and the other one does not.
         var reported = false
-        DispatchQueue.main.asyncAfter(deadline: .now() + timeout) {
-            guard !reported else { return }
-            reported = true
-            mirrorLog.error("CompleteDisplayConfiguration still running after \(timeout) s")
-            completion(.failure(.timedOut))
-        }
-        DispatchQueue.global(qos: .userInitiated).async {
-            let err = CGCompleteDisplayConfiguration(cfg, .permanently)
+        let start = Self.configureDisplays(in: .permanently, { configure($0); return true }) { err in
             if err != .success { mirrorLog.error("CompleteDisplayConfiguration err=\(err.rawValue)") }
             DispatchQueue.main.asyncAfter(deadline: .now() + settle) { [weak self] in
                 self?.mergeDevices()
@@ -909,6 +897,45 @@ final class VideoManager: ObservableObject {
                 completion(err == .success ? .success(()) : .failure(.configuration(err)))
             }
         }
+        if case .failed(let begin) = start { return completion(.failure(.configuration(begin))) }
+        displayChangesBegun += 1
+        DispatchQueue.main.asyncAfter(deadline: .now() + timeout) {
+            guard !reported else { return }
+            reported = true
+            mirrorLog.error("CompleteDisplayConfiguration still running after \(timeout) s")
+            completion(.failure(.timedOut))
+        }
+    }
+
+    /// How a display configuration transaction started (see `configureDisplays`).
+    enum DisplayConfigurationStart {
+        /// Being committed; the result follows.
+        case committing
+        /// Cancelled, as it changed nothing.
+        case unchanged
+        /// It could not begin.
+        case failed(CGError)
+    }
+
+    /// One display configuration transaction: begins it and lets `queue` fill it. When `queue`
+    /// reports a change, it is completed in `scope` off the main queue, as that can block for
+    /// seconds, and `committed` gets the result on the main queue. One that changes nothing
+    /// is cancelled instead: committing it takes 10 s to return.
+    @discardableResult
+    static func configureDisplays(in scope: CGConfigureOption, _ queue: (CGDisplayConfigRef) -> Bool,
+                                  committed: @escaping (CGError) -> Void = { _ in }) -> DisplayConfigurationStart {
+        var config: CGDisplayConfigRef?
+        let begin = CGBeginDisplayConfiguration(&config)
+        guard begin == .success, let cfg = config else { return .failed(begin) }
+        guard queue(cfg) else {
+            CGCancelDisplayConfiguration(cfg)
+            return .unchanged
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let err = CGCompleteDisplayConfiguration(cfg, scope)
+            DispatchQueue.main.async { committed(err) }
+        }
+        return .committing
     }
 
     // MARK: - AirPlay
