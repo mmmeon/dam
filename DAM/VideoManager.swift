@@ -178,9 +178,10 @@ final class VideoManager: ObservableObject {
     /// Mirror changes in flight. While any is, iPads are not given anchors: one releases an
     /// iPad's anchor before its commit lands, and re-anchoring in between breaks the new set.
     var sidecarBackingHolds = 0
-    /// Displays the user set to mirror an iPad, which DAM wires to the iPad's anchor. Kept
-    /// when the anchor is resized, unlike other displays WindowServer adds to its set.
-    var anchorSetSlaves: Set<CGDirectDisplayID> = []
+    /// Displays the user set to mirror an iPad, which DAM wires to the iPad's anchor, by the
+    /// iPad's name. Kept when the anchor is resized, unlike other displays WindowServer adds
+    /// to its set.
+    var anchorSetSlaves: [String: Set<CGDirectDisplayID>] = [:]
     /// Displays to mirror onto an iPad's anchor once it is up, by the iPad's name.
     var anchorPendingSlaves: [String: [CGDirectDisplayID]] = [:]
     /// A stand-in virtual display, created when Sidecar is asked to connect while the Mac has
@@ -635,11 +636,13 @@ final class VideoManager: ObservableObject {
         switch plan {
         case .extendSelf:
             mirrorLog.debug("toggleMirroring: extending slave \(id)")
+            keepUserMirror([id], on: 0)
             commitDisplayChange({ CGConfigureDisplayMirrorOfDisplay($0, id, CGDirectDisplayID(0)) }) {
                 finish($0.map { .extended })
             }
         case .extendSlaves(let mirroringThis):
             mirrorLog.debug("toggleMirroring: extending slaves \(mirroringThis) of \(id)")
+            keepUserMirror(mirroringThis, on: 0)
             commitDisplayChange({ cfg in
                 for slave in mirroringThis { CGConfigureDisplayMirrorOfDisplay(cfg, slave, CGDirectDisplayID(0)) }
             }) { finish($0.map { .extended }) }
@@ -679,10 +682,11 @@ final class VideoManager: ObservableObject {
             self.dissolveMirrorSets(of: [id] + slaveIDs) { result in
                 if case .failure(let error) = result { return finish(.failure(error)) }
                 let masterID = keptAnchor ?? id
-                self.anchorSetSlaves.subtract([id] + slaveIDs)
-                if keptAnchor != nil { self.anchorSetSlaves.formUnion(slaveIDs) }
-                // Or the layout kept after a streaming display came would undo it.
-                self.streamingSettle = self.streamingSettle.map { ($0.arrangement.mirroring(slaveIDs, on: masterID), $0.until) }
+                if keptAnchor == nil { self.keepUserMirror([id], on: 0) }
+                self.keepUserMirror(slaveIDs, on: masterID)
+                if let keptAnchor, let name = self.virtualAnchorCGIDs.first(where: { $0.value == keptAnchor })?.key {
+                    self.anchorSetSlaves[name, default: []].formUnion(slaveIDs)
+                }
                 if self.streamingDisplayIDs.contains(masterID) { self.streamingDisplaysMirroredByChoice.insert(masterID) }
                 self.commitDisplayChange({ cfg in
                     for slave in slaveIDs { CGConfigureDisplayMirrorOfDisplay(cfg, slave, masterID) }
@@ -700,11 +704,22 @@ final class VideoManager: ObservableObject {
                                              slavesOf: slaves(of:), anchorIDs: Set(virtualAnchorCGIDs.values))
         guard !toExtend.isEmpty else { completion?(.success(())); return }
         mirrorLog.debug("extend: freeing \(toExtend)")
-        anchorSetSlaves.subtract(toExtend)
-        streamingSettle = streamingSettle.map { ($0.arrangement.mirroring(Array(toExtend), on: 0), $0.until) }
+        keepUserMirror(Array(toExtend), on: 0)
         commitDisplayChange({ cfg in
             for id in toExtend { CGConfigureDisplayMirrorOfDisplay(cfg, id, CGDirectDisplayID(0)) }
         }) { completion?($0) }
+    }
+
+    /// Keeps a mirror change the user makes, `ids` mirroring `master` (0: each its own
+    /// desktop), in the layouts DAM puts back, or they would undo it: the one kept after a
+    /// streaming display came and the one each anchor restores. None of `ids` is an
+    /// anchor's set slave any more; one that is to be is added after.
+    func keepUserMirror(_ ids: [CGDirectDisplayID], on master: CGDirectDisplayID) {
+        for name in anchorSetSlaves.keys { anchorSetSlaves[name]?.subtract(ids) }
+        streamingSettle = streamingSettle.map { ($0.arrangement.mirroring(ids, on: master), $0.until) }
+        for (name, arrangement) in virtualAnchorArrangements {
+            virtualAnchorArrangements[name] = arrangement.mirroring(ids, on: master)
+        }
     }
 
     // MARK: - Main display
@@ -744,24 +759,34 @@ final class VideoManager: ObservableObject {
                 self.streamingArrangement = self.streamingArrangement?.makingMain(ownID)
             }
         }
-        // Set before the commit: the change it causes is checked before it reports back.
-        streamingDisplayIsMainByChoice = streamingDisplayIDs.contains(ownID)
-        // Or the layout kept after a streaming display came would undo it.
-        streamingSettle = streamingSettle.map { ($0.arrangement.makingMain(ownID), $0.until) }
-        guard CGDisplayIsMain(mainID) == 0 else { rebase(); completion?(.success(())); return }
+        let byChoice = streamingDisplayIDs.contains(ownID)
+        let settleBefore = streamingSettle
+        let choose = { [weak self] in
+            guard let self else { return }
+            self.streamingDisplayIsMainByChoice = byChoice
+            // Or the layout kept after a streaming display came would undo it.
+            self.streamingSettle = self.streamingSettle.map { ($0.arrangement.makingMain(ownID), $0.until) }
+        }
+        guard CGDisplayIsMain(mainID) == 0 else { choose(); rebase(); completion?(.success(())); return }
         let online  = DisplayArrangement.onlineDisplayIDs()
         let bounds  = Dictionary(uniqueKeysWithValues: online.map { ($0, CGDisplayBounds($0)) })
         let slaves  = Set(online.filter { CGDisplayMirrorsDisplay($0) != CGDirectDisplayID(0) })
         let origins = Self.origins(makingMain: mainID, bounds: bounds, slaves: slaves)
         guard !origins.isEmpty else { completion?(.failure(.notConnected)); return }
         mirrorLog.debug("setMainDisplay: \(mainID) for '\(display.name)'")
+        // Set before the commit: the change it causes is checked before it reports back.
+        let wasByChoice = streamingDisplayIsMainByChoice
+        choose()
         commitDisplayChange({ cfg in
             for (id, origin) in origins {
                 CGConfigureDisplayOrigin(cfg, id, Int32(origin.x), Int32(origin.y))
             }
-        }) { result in
+        }) { [weak self] result in
             if case .failure(let error) = result {
                 mirrorLog.error("setMainDisplay '\(display.name)': \(String(describing: error))")
+                // Not made main after all; the layout kept is put back unless replaced meanwhile.
+                self?.streamingDisplayIsMainByChoice = wasByChoice
+                if self?.streamingSettle?.until == settleBefore?.until { self?.streamingSettle = settleBefore }
             } else {
                 rebase()
             }
@@ -1015,6 +1040,8 @@ final class VideoManager: ObservableObject {
         // The old master and every other member of the set come to mirror the new master.
         let others = slaves(of: master).filter { $0 != display.cgDisplayID }
         mirrorLog.debug("setAsOptimizedDisplay: \(display.cgDisplayID) replaces \(master); others \(others)")
+        keepUserMirror([display.cgDisplayID], on: 0)
+        keepUserMirror([master] + others, on: display.cgDisplayID)
         commitDisplayChange({ cfg in
             CGConfigureDisplayMirrorOfDisplay(cfg, master, display.cgDisplayID)
             for other in others { CGConfigureDisplayMirrorOfDisplay(cfg, other, display.cgDisplayID) }
@@ -1060,8 +1087,16 @@ final class VideoManager: ObservableObject {
             return
         }
 
-        // Keep the choice should an anchor's layout be put back afterwards.
+        // Keep the choice should an anchor's layout be put back afterwards, or the screens
+        // wake from sleep.
         for name in virtualAnchorArrangements.keys { virtualAnchorArrangements[name]?.modes[cgDisplayID] = cgMode }
+        modesBeforeSleep.removeValue(forKey: cgDisplayID)
+        // A commit that changes nothing takes 10 s to return.
+        if CGDisplayMirrorsDisplay(cgDisplayID) == 0, let current = CGDisplayCopyDisplayMode(cgDisplayID),
+           DisplayArrangement.sameMode(current, cgMode) {
+            completion?(.success(()))
+            return
+        }
         // WindowServer re-lays out the displays for the new size; the arrangement goes back
         // once it has.
         let before = currentLayout()
@@ -1253,12 +1288,7 @@ final class VideoManager: ObservableObject {
             // Guard 3: or while the display it was made for is online. While the mirror is
             // being wired that display can drop out of NSScreen before it shows as a slave.
             if let target = virtualAnchorTargets[name], onlineIDs.contains(target) { continue }
-            virtualAnchorTargets.removeValue(forKey: name)
-            virtualAnchorStore.removeValue(forKey: name)
-            virtualAnchorCGIDs.removeValue(forKey: name)
-            virtualAnchorArrangements.removeValue(forKey: name)
-            virtualAnchorModes.removeValue(forKey: name)
-            virtualAnchorSettleDeadlines.removeValue(forKey: name)
+            forgetAnchor(name)
         }
 
         // AirPlay displays whose display came online after the app started. One already

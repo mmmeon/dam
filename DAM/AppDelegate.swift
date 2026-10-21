@@ -941,8 +941,7 @@ extension AppDelegate: NSMenuDelegate {
             $0.cgDisplayID == cgDisplayID
         }
         if let ap = matchingDisplay, videoManager.hasVirtualAnchor(for: ap.name) {
-            videoManager.disableVirtualAnchor(for: ap)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+            videoManager.disableVirtualAnchor(for: ap) { [weak self] in
                 self?.videoManager.setMode(mode, for: cgDisplayID) { _ in self?.rebuild() }
             }
         } else {

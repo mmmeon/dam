@@ -124,7 +124,12 @@ extension VideoManager {
         rotLog.debug("stand-in for \(display.name, privacy: .public) on \(screenID) at \(rotation.rawValue)")
         createStandInDisplay(mode: presentation.standInMode,
                              standIn: StandIn(name: display.name, rotation: rotation)) { [weak self] id in
-            guard let self, self.rotatedPresentations[display.name] === presentation else { return }
+            guard let self else { return }
+            // Ended or replaced while the stand-in was made: it would be a desktop nobody shows.
+            guard self.rotatedPresentations[display.name] === presentation else {
+                if let id { self.removeStreamingDisplay(id: id) }
+                return completion(false)
+            }
             guard let id else {
                 self.rotatedPresentations[display.name] = nil
                 return completion(false)

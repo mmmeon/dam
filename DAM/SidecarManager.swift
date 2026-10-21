@@ -145,19 +145,23 @@ extension SidecarManager {
     /// Failures are announced; `completion` gets SidecarCore's result on the main queue.
     func connect(_ device: SidecarDevice, videoManager: VideoManager,
                  completion: ((Error?) -> Void)? = nil) {
+        // The stand-in this attempt connects with: a later attempt may have made another.
+        var standIn: AnyObject?
         videoManager.ensureDisplayForSidecar { [weak self, weak videoManager] in
+            standIn = videoManager?.bootstrapDisplay
             guard let self else { return }
             self.toggle(device) { error in
                 if let error {
                     SpeechSynthesizer.shared.announce(error.localizedDescription)
-                    videoManager?.releaseBootstrapDisplay()
+                    if let standIn { videoManager?.releaseBootstrapDisplay(standIn) }
                 }
                 completion?(error)
             }
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 90) { [weak videoManager] in
-            guard let videoManager, !videoManager.connectedDisplays.contains(where: \.isSidecar) else { return }
-            videoManager.releaseBootstrapDisplay()
+            guard let videoManager, let standIn,
+                  !videoManager.connectedDisplays.contains(where: \.isSidecar) else { return }
+            videoManager.releaseBootstrapDisplay(standIn)
         }
     }
 
