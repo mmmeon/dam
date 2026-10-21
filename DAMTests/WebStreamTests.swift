@@ -55,6 +55,18 @@ final class WebStreamTests: XCTestCase {
         XCTAssertNil(WebStreamRequest.parse(["width": "8000", "height": "6000"], preferred: .interactive).width)
     }
 
+    func testRequestWithHugeSizesIsRefusedRatherThanOverflowing() {
+        let huge = String(Int.max / 2)
+        let request = WebStreamRequest.parse(["width": huge, "height": huge, "mode": "\(huge)x\(huge)x60"],
+                                             preferred: .interactive)
+        XCTAssertNil(request.width)
+        XCTAssertTrue(request.newDisplay == (1920, 1080, 60))
+        XCTAssertNil(WebStreamRequest.parse(["width": "1280", "height": huge], preferred: .interactive).width)
+        let exact = WebStreamRequest.parse(["width": "2560", "height": "1600", "mode": "2560x1600x60"], preferred: .interactive)
+        XCTAssertEqual(exact.width, 2560, "the most pixels still fit")
+        XCTAssertTrue(exact.newDisplay == (2560, 1600, 60))
+    }
+
     func testProfilesSetTheEncoderApart() {
         let interactive = StreamProfile.interactive.encoderSettings(width: 1920, height: 1080, fps: 60, bitrateKbps: 20_000)
         XCTAssertFalse(interactive.reordering)

@@ -137,13 +137,14 @@ struct WebStreamRequest: Equatable {
                                        bitrateKbps: profile.defaultBitrateKbps)
         if let bitrate = query["bitrate"].flatMap(Int.init) { request.bitrateKbps = min(max(bitrate, 1000), 150_000) }
         if let fps = query["fps"].flatMap(Int.init) { request.fps = min(max(fps, 5), 120) }
+        // Sides checked one at a time: any number may come, and a product could overflow.
         if let width = query["width"].flatMap(Int.init), let height = query["height"].flatMap(Int.init),
-           width >= 160, height >= 90, width * height <= maxPixels {
+           width >= 160, height >= 90, width <= maxPixels / height {
             request.width = width & ~1
             request.height = height & ~1
         }
         let mode = (query["mode"] ?? "").split(separator: "x").compactMap { Int($0) }
-        if mode.count == 3, mode[0] >= 640, mode[1] >= 360, mode[0] * mode[1] <= maxPixels, mode[2] >= 30 {
+        if mode.count == 3, mode[0] >= 640, mode[1] >= 360, mode[0] <= maxPixels / mode[1], mode[2] >= 30 {
             request.newDisplay = (mode[0], mode[1], min(mode[2], 120))
         }
         switch query["orientation"]?.lowercased() {
