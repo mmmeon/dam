@@ -32,8 +32,15 @@ final class LocalBlackout {
     deinit { if isOn { CGDisplayRestoreColorSyncSettings() } }
 
     func start(keeping: Set<CGDirectDisplayID>) {
+        // A display kept now that was black until now is lit again. Gamma can only be put
+        // back for every display at once, so the rest are blacked out again below.
+        let relight = isOn && !keeping.isDisjoint(with: blackedOut)
         self.keeping = keeping
         isOn = true
+        if relight {
+            CGDisplayRestoreColorSyncSettings()
+            boLog.debug("lit again for the session: \(keeping)")
+        }
         if !registered {
             CGDisplayRegisterReconfigurationCallback(Self.reconfigured, Unmanaged.passUnretained(self).toOpaque())
             registered = true

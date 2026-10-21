@@ -8,13 +8,14 @@ import Combine
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var iconAnimator: MenuBarIconAnimator!
-    private let audioManager = AudioManager()
-    private let videoManager = VideoManager()
-    private let sidecarManager = SidecarManager()
-    private let moonlightHost = MoonlightHost()
+    // Lazy, so a unit-test host, which skips launching, doesn't reach CoreAudio or SidecarCore.
+    private lazy var audioManager = AudioManager()
+    private lazy var videoManager = VideoManager()
+    private lazy var sidecarManager = SidecarManager()
+    private lazy var moonlightHost = MoonlightHost()
     /// The stream for browsers and players, apart from Moonlight.
-    private let webStream = WebStreamServer()
-    private let openDisplay = OpenDisplaySender()
+    private lazy var webStream = WebStreamServer()
+    private lazy var openDisplay = OpenDisplaySender()
     /// The PIN prompt for Moonlight pairing, while it shows.
     private var moonlightPINAlert: NSAlert?
     private var sidecarAutoConnector: SidecarAutoConnector?
@@ -63,6 +64,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             sidecarManager: sidecarManager
         )
         setupStatusItem()
+        // Name Sidecar displays after their iPad, re-reading SidecarCore on each display merge
+        // so a connection made from Control Center is recognised too; before the first merge.
+        videoManager.connectedSidecarNames = { [sidecarManager] in
+            sidecarManager.refresh()
+            return sidecarManager.devices.filter(\.isConnected).map(\.name)
+        }
         videoManager.startDiscovery()
         refreshAll(nil)
         controlStrip.install()
@@ -165,7 +172,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #endif
         if !debugMode {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-                self?.offerScreenMirroringExtra()
+                // From the run loop, as the PIN prompt is: the alert waits for an answer, and
+                // inside a main queue block it would hold every other one until then.
+                RunLoop.main.perform(inModes: [.default]) { self?.offerScreenMirroringExtra() }
             }
         }
 
@@ -215,13 +224,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         #endif
-
-        // Name Sidecar displays after their iPad, re-reading SidecarCore on each display merge
-        // so a connection made from Control Center is recognised too.
-        videoManager.connectedSidecarNames = { [sidecarManager] in
-            sidecarManager.refresh()
-            return sidecarManager.devices.filter(\.isConnected).map(\.name)
-        }
 
         // Rebuild menu and Control Strip whenever a manager publishes a change
         audioManager.objectWillChange
@@ -328,6 +330,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsWindow?.browserStreamDidChange()
         settingsWindow?.openDisplayDidChange()
         settingsWindow?.sessionsDidChange()
+        settingsWindow?.devicesDidChange()
     }
 
     /// Connections running through the app, shown by the menu bar icon's outflow: AirPlay
@@ -634,45 +637,31 @@ extension AppDelegate: NSMenuDelegate {
         )
         wc.onSave = { [weak self] pref in
             HotkeyPreference.current = pref
-            self?.hotkey = GlobalHotkey(preference: pref) { [weak self] in
-                self?.openSwitcher()
-            }
+            self?.rebind(self?.hotkey, to: pref)
         }
         wc.onSaveAirPlayConnect = { [weak self] pref in
             HotkeyPreference.currentAirPlayConnect = pref
-            self?.airPlayConnectHotkey = GlobalHotkey(preference: pref) {
-                AirPlayQuickConnect.shared.activate()
-            }
+            self?.rebind(self?.airPlayConnectHotkey, to: pref)
         }
         wc.onSaveMirrorToggle = { [weak self] pref in
             HotkeyPreference.currentMirrorToggle = pref
-            self?.mirrorToggleHotkey = GlobalHotkey(preference: pref) {
-                MirrorPicker.shared.advance()
-            }
+            self?.rebind(self?.mirrorToggleHotkey, to: pref)
         }
         wc.onSaveAudioCycle = { [weak self] pref in
             HotkeyPreference.currentAudioCycle = pref
-            self?.audioCycleHotkey = GlobalHotkey(preference: pref) {
-                AudioOutputPicker.shared.advance()
-            }
+            self?.rebind(self?.audioCycleHotkey, to: pref)
         }
         wc.onSaveMainDisplay = { [weak self] pref in
             HotkeyPreference.currentMainDisplay = pref
-            self?.mainDisplayHotkey = GlobalHotkey(preference: pref) {
-                MainDisplayPicker.shared.advance()
-            }
+            self?.rebind(self?.mainDisplayHotkey, to: pref)
         }
         wc.onSaveResolution = { [weak self] pref in
             HotkeyPreference.currentResolution = pref
-            self?.resolutionHotkey = GlobalHotkey(preference: pref) {
-                ResolutionPicker.shared.advance()
-            }
+            self?.rebind(self?.resolutionHotkey, to: pref)
         }
         wc.onSaveRotation = { [weak self] pref in
             HotkeyPreference.currentRotation = pref
-            self?.rotationHotkey = GlobalHotkey(preference: pref) {
-                RotationPicker.shared.advance()
-            }
+            self?.rebind(self?.rotationHotkey, to: pref)
         }
         wc.onRebuild = { [weak self] in self?.rebuild() }
         wc.onToggleMoonlight = { [weak self] in self?.toggleMoonlightHost(nil) }
@@ -683,6 +672,15 @@ extension AppDelegate: NSMenuDelegate {
         wc.onToggleWebStream = { [weak self] in self?.toggleWebStream(nil) }
         settingsWindow = wc
         wc.show()
+    }
+
+    /// Moves one of the app's shortcuts to `pref`, then registers again any that couldn't be,
+    /// as when this one held their keys.
+    private func rebind(_ hotkey: GlobalHotkey?, to pref: HotkeyPreference) {
+        hotkey?.update(preference: pref)
+        let all: [GlobalHotkey?] = [self.hotkey, airPlayConnectHotkey, mirrorToggleHotkey, audioCycleHotkey,
+                                    mainDisplayHotkey, resolutionHotkey, rotationHotkey]
+        for other in all.compactMap({ $0 }) where other !== hotkey { other.registerIfNeeded() }
     }
 
     /// Opens Settings on the Moonlight tab.

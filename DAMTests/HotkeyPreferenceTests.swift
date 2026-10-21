@@ -209,4 +209,25 @@ final class HotkeyPreferenceTests: XCTestCase {
         XCTAssertEqual(HotkeyPreference.currentMainDisplay,    HotkeyPreference.defaultMainDisplay)
         XCTAssertEqual(HotkeyPreference.currentResolution,     HotkeyPreference.defaultResolution)
     }
+
+    // MARK: - Clashes
+
+    func testClashes_sameKeys_nameEachOther() {
+        let a = HotkeyPreference.defaultAirPlayConnect
+        let clashes = HotkeyPreference.clashes(among: [.default, a, .defaultMirrorToggle, a])
+        XCTAssertEqual(clashes, [[], [3], [], [1]])
+    }
+
+    func testClashes_sameKeyOtherModifiers_doNotClash() {
+        let shifted = HotkeyPreference(keyCode: HotkeyPreference.default.keyCode,
+                                       modifiers: HotkeyPreference.default.modifiers | UInt32(shiftKey))
+        XCTAssertEqual(HotkeyPreference.clashes(among: [.default, shifted]), [[], []])
+    }
+
+    func testClashes_defaults_none() {
+        let defaults: [HotkeyPreference] = [.default, .defaultAirPlayConnect, .defaultMirrorToggle,
+                                            .defaultAudioCycle, .defaultMainDisplay, .defaultResolution,
+                                            .defaultRotation]
+        XCTAssertTrue(HotkeyPreference.clashes(among: defaults).allSatisfy(\.isEmpty))
+    }
 }

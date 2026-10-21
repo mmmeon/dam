@@ -52,6 +52,7 @@ final class GlobalHotkey {
 
     private let id: UInt32
     private var hotKeyRef: EventHotKeyRef?
+    private var preference: HotkeyPreference
 
     /// Registers `preference` as a system-wide hotkey. `action` is called on
     /// the main thread each time it fires.
@@ -59,21 +60,40 @@ final class GlobalHotkey {
         ensureSharedHandlerInstalled()
         id = _nextHotkeyID
         _nextHotkeyID += 1
+        self.preference = preference
         _hotkeyActions[id] = { DispatchQueue.main.async { action() } }
-        register(preference)
+        register()
     }
+
+    /// Whether the keys are registered; not while another shortcut, of this app or another,
+    /// has them.
+    var isRegistered: Bool { hotKeyRef != nil }
 
     /// Re-registers with a new key binding (call after the user changes the shortcut).
     func update(preference: HotkeyPreference) {
-        register(preference)
+        self.preference = preference
+        register()
     }
 
-    private func register(_ pref: HotkeyPreference) {
+    /// Tries the keys again when they couldn't be registered, as after the shortcut that had
+    /// them moved to other keys.
+    func registerIfNeeded() {
+        if !isRegistered { register() }
+    }
+
+    private func register() {
         if let ref = hotKeyRef { UnregisterEventHotKey(ref); hotKeyRef = nil }
         let sig  = AppIdentity.fourCharCode
         let hkID = EventHotKeyID(signature: sig, id: id)
-        RegisterEventHotKey(pref.keyCode, pref.modifiers, hkID,
-                            GetApplicationEventTarget(), 0, &hotKeyRef)
+        var ref: EventHotKeyRef?
+        let status = RegisterEventHotKey(preference.keyCode, preference.modifiers, hkID,
+                                         GetApplicationEventTarget(), 0, &ref)
+        guard status == noErr else {
+            let reason = status == OSStatus(eventHotKeyExistsErr) ? "another shortcut has the keys" : "error \(status)"
+            NSLog("\(AppIdentity.name): the shortcut \(preference.displayString) is not available: \(reason)")
+            return
+        }
+        hotKeyRef = ref
     }
 
     deinit {

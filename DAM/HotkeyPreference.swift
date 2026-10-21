@@ -110,6 +110,14 @@ struct HotkeyPreference: Codable, Equatable {
         UserDefaults.dam.set(try? JSONEncoder().encode(pref), forKey: key)
     }
 
+    // MARK: - Clashes
+
+    /// For each of `shortcuts`, the indices of the others set to the same keys. Only one of
+    /// those can be registered.
+    static func clashes(among shortcuts: [HotkeyPreference]) -> [[Int]] {
+        shortcuts.indices.map { i in shortcuts.indices.filter { $0 != i && shortcuts[$0] == shortcuts[i] } }
+    }
+
     // MARK: - Display
 
     /// e.g. "⌃⌥⌘B"

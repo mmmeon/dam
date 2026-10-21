@@ -47,8 +47,12 @@ final class SettingsWindowController: NSWindowController {
 
     // Tab content views — built once, reused on every tab switch.
     private lazy var hotkeyContent:  NSView = buildHotkeysTab()
+    /// Rebuilt when the audio outputs or the Screen Mirroring item change.
     private lazy var generalContent: NSView = buildGeneralTab()
+    private var generalShown = GeneralState()
+    /// Rebuilt when the devices listed change.
     private lazy var devicesContent: NSView = buildDevicesTab()
+    private var devicesShown = DevicesState()
     private lazy var virtualContent: NSView = buildVirtualTab()
     /// Rebuilt when hosting starts or stops or the paired devices change.
     private lazy var moonlightContent: NSView = buildMoonlightTab()
@@ -249,13 +253,15 @@ final class SettingsWindowController: NSWindowController {
     // one or more controls under it; groups are set apart by spacing, not headers.
 
     private func buildHotkeysTab() -> NSView {
-        recorder.onChanged             = { [weak self] pref in self?.onSave?(pref) }
-        recorderAirPlay.onChanged      = { [weak self] pref in self?.onSaveAirPlayConnect?(pref) }
-        recorderMirrorToggle.onChanged = { [weak self] pref in self?.onSaveMirrorToggle?(pref) }
-        recorderAudioCycle.onChanged   = { [weak self] pref in self?.onSaveAudioCycle?(pref) }
-        recorderMainDisplay.onChanged  = { [weak self] pref in self?.onSaveMainDisplay?(pref) }
-        recorderResolution.onChanged   = { [weak self] pref in self?.onSaveResolution?(pref) }
-        recorderRotation.onChanged     = { [weak self] pref in self?.onSaveRotation?(pref) }
+        recorder.onChanged             = { [weak self] pref in self?.onSave?(pref); self?.markClashes() }
+        recorderAirPlay.onChanged      = { [weak self] pref in self?.onSaveAirPlayConnect?(pref); self?.markClashes() }
+        recorderMirrorToggle.onChanged = { [weak self] pref in self?.onSaveMirrorToggle?(pref); self?.markClashes() }
+        recorderAudioCycle.onChanged   = { [weak self] pref in self?.onSaveAudioCycle?(pref); self?.markClashes() }
+        recorderMainDisplay.onChanged  = { [weak self] pref in self?.onSaveMainDisplay?(pref); self?.markClashes() }
+        recorderResolution.onChanged   = { [weak self] pref in self?.onSaveResolution?(pref); self?.markClashes() }
+        recorderRotation.onChanged     = { [weak self] pref in self?.onSaveRotation?(pref); self?.markClashes() }
+
+        markClashes()
 
         return formTab([
             ("Switcher:", [hotkeyRow(
@@ -287,6 +293,7 @@ final class SettingsWindowController: NSWindowController {
     }
 
     private func buildGeneralTab() -> NSView {
+        generalShown = generalState()
         let extraShown = ScreenMirroringPanel.isExtraVisible
         let extraStatus = NSTextField(labelWithString:
             extraShown ? "Menu bar item shown" : "Menu bar item hidden")
@@ -366,6 +373,7 @@ final class SettingsWindowController: NSWindowController {
     /// Unchecked devices are hidden from the menu bar and Touch Bar; they remain
     /// available system-wide.
     private func buildDevicesTab() -> NSView {
+        devicesShown = devicesState()
         let audio = audioManager.allOutputDevices.map { device in
             checkbox(title: device.name,
                      isOn: VisibilityPreferences.isVisible(audioDevice: device.name),
@@ -410,6 +418,34 @@ final class SettingsWindowController: NSWindowController {
             ("Sidecar:",            sidecar.isEmpty  ? [placeholderLabel("No Sidecar devices found")] : sidecar),
             ("Connected Displays:", displays.isEmpty ? [placeholderLabel("No external displays")] : displays),
         ])
+    }
+
+    /// What the General tab shows that changes outside it: the outputs to speak through, by
+    /// label, and whether the Screen Mirroring item is shown.
+    private func generalState() -> GeneralState {
+        GeneralState(outputs: audioManager.allOutputDevices.map { "\($0.id) \($0.label)" },
+                     extraShown: ScreenMirroringPanel.isExtraVisible)
+    }
+
+    /// The devices the Devices tab lists. Their checkboxes and nicknames change only there.
+    private func devicesState() -> DevicesState {
+        DevicesState(audio: audioManager.allOutputDevices.map(\.name),
+                     airPlay: videoManager.allAirPlayDevices.map(\.name),
+                     sidecar: sidecarManager.devices.map(\.name),
+                     displays: videoManager.allConnectedDisplays.filter { !$0.isSidecar }.map(\.name))
+    }
+
+    /// Rebuilds the General and Devices tabs if what they list has changed, as when a device
+    /// comes or goes.
+    func devicesDidChange() {
+        if generalState() != generalShown {
+            generalContent = buildGeneralTab()
+            if selectedTab == TabID.general { selectTab(TabID.general) }
+        }
+        if devicesState() != devicesShown {
+            devicesContent = buildDevicesTab()
+            if selectedTab == TabID.devices { selectTab(TabID.devices) }
+        }
     }
 
     /// A device's visibility checkbox with a field beside it for its nickname, which the
@@ -1371,42 +1407,65 @@ final class SettingsWindowController: NSWindowController {
         let pref = HotkeyPreference.default
         recorder.preference = pref
         onSave?(pref)
+        markClashes()
     }
 
     @objc private func resetAirPlayConnectToDefault() {
         let pref = HotkeyPreference.defaultAirPlayConnect
         recorderAirPlay.preference = pref
         onSaveAirPlayConnect?(pref)
+        markClashes()
     }
 
     @objc private func resetMirrorToggleToDefault() {
         let pref = HotkeyPreference.defaultMirrorToggle
         recorderMirrorToggle.preference = pref
         onSaveMirrorToggle?(pref)
+        markClashes()
     }
 
     @objc private func resetAudioCycleToDefault() {
         let pref = HotkeyPreference.defaultAudioCycle
         recorderAudioCycle.preference = pref
         onSaveAudioCycle?(pref)
+        markClashes()
     }
 
     @objc private func resetMainDisplayToDefault() {
         let pref = HotkeyPreference.defaultMainDisplay
         recorderMainDisplay.preference = pref
         onSaveMainDisplay?(pref)
+        markClashes()
     }
 
     @objc private func resetResolutionToDefault() {
         let pref = HotkeyPreference.defaultResolution
         recorderResolution.preference = pref
         onSaveResolution?(pref)
+        markClashes()
     }
 
     @objc private func resetRotationToDefault() {
         let pref = HotkeyPreference.defaultRotation
         recorderRotation.preference = pref
         onSaveRotation?(pref)
+        markClashes()
+    }
+
+    /// The shortcut recorders, with what each is for.
+    private var namedRecorders: [(recorder: KeyRecorderView, name: String)] {
+        [(recorder, "Switcher"), (recorderAirPlay, "Quick Connect"), (recorderMirrorToggle, "Mirror / Extend"),
+         (recorderAudioCycle, "Cycle Audio"), (recorderMainDisplay, "Main Display"),
+         (recorderResolution, "Resolution"), (recorderRotation, "Rotation")]
+    }
+
+    /// Marks each shortcut set to the same keys as another, as only one of them can work.
+    private func markClashes() {
+        let named = namedRecorders
+        let clashes = HotkeyPreference.clashes(among: named.map { $0.recorder.preference })
+        for (entry, others) in zip(named, clashes) {
+            entry.recorder.clash = others.isEmpty ? nil : others.map { named[$0].name }.joined(separator: ", ")
+        }
     }
 
     // MARK: - Layout helpers
@@ -1529,13 +1588,20 @@ final class SettingsWindowController: NSWindowController {
             var row: [NSView] = [rowLabel(entry.name)]
             let enabled = VisibilityPreferences.virtualRefreshRates(for: entry.context)
             for rate in rates {
-                row.append(checkbox(title: "", isOn: enabled.contains(rate)) { [weak self] isOn in
+                weak var box: NSButton?
+                let view = checkbox(title: "", isOn: enabled.contains(rate)) { [weak self] isOn in
                     var rates = VisibilityPreferences.virtualRefreshRates(for: entry.context)
                     if isOn { rates.insert(rate) } else { rates.remove(rate) }
-                    if rates.isEmpty { rates = [60] }
+                    // The last rate stays: unchecking it leaves it checked.
+                    if rates.isEmpty {
+                        rates = [rate]
+                        box?.state = .on
+                    }
                     VisibilityPreferences.setVirtualRefreshRates(rates, for: entry.context)
                     self?.onRebuild?()
-                })
+                }
+                box = view as? NSButton
+                row.append(view)
             }
             rows.append(row)
         }
@@ -1759,6 +1825,8 @@ final class SettingsWindowController: NSWindowController {
     }
 
     func show() {
+        // The Screen Mirroring item may have been changed in Control Center meanwhile.
+        devicesDidChange()
         showWindow(nil)
         window?.center()
         NSApp.activate(ignoringOtherApps: true)
@@ -2119,6 +2187,20 @@ private struct MoonlightState: Equatable {
         lastError = host.lastError
         clients = host.clients.map(\.certificate)
     }
+}
+
+/// What the General tab shows that changes outside it, to tell when it must be rebuilt.
+private struct GeneralState: Equatable {
+    var outputs: [String] = []
+    var extraShown = false
+}
+
+/// The devices the Devices tab lists, to tell when it must be rebuilt.
+private struct DevicesState: Equatable {
+    var audio: [String] = []
+    var airPlay: [String] = []
+    var sidecar: [String] = []
+    var displays: [String] = []
 }
 
 /// What the Browser Stream tab shows of the server, to tell when it must be rebuilt.

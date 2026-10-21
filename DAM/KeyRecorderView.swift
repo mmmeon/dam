@@ -13,11 +13,18 @@ final class KeyRecorderView: NSView {
 
     var preference: HotkeyPreference { didSet { needsDisplay = true } }
     var onChanged: ((HotkeyPreference) -> Void)?
+    /// What else of the app's has the same shortcut, which then shows in red; nil when nothing does.
+    var clash: String? {
+        didSet { needsDisplay = true; if !isRecording { toolTip = clashTip } }
+    }
+    private var clashTip: String? {
+        clash.map { "\($0) has the same shortcut; only one of them works." }
+    }
 
     private var isRecording = false {
         didSet {
             needsDisplay = true
-            toolTip = isRecording ? "Press the new shortcut. Esc cancels." : nil
+            toolTip = isRecording ? "Press the new shortcut. Esc cancels." : clashTip
             isRecording ? installOutsideClickMonitor() : removeOutsideClickMonitor()
         }
     }
@@ -136,7 +143,7 @@ final class KeyRecorderView: NSView {
         }
 
         let label = isRecording ? "Type shortcut…" : preference.displayString
-        let color: NSColor = isRecording ? .secondaryLabelColor : .labelColor
+        let color: NSColor = isRecording ? .secondaryLabelColor : clash != nil ? .systemRed : .labelColor
         let attrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: NSFont.systemFontSize - 1),
             .foregroundColor: color,

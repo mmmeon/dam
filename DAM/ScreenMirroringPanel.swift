@@ -109,6 +109,9 @@ final class ScreenMirroringPanel {
     private static let closeAttempts               = 2
     /// Lets the press register before the panel is closed.
     private static let settle: TimeInterval        = 0.5
+    /// How long the panel holds at the row for the gate's answer before closing unpressed,
+    /// so a lost answer doesn't leave every later toggle busy.
+    private static let gateTimeout: TimeInterval   = 30
 
     // MARK: - State
 
@@ -226,6 +229,12 @@ final class ScreenMirroringPanel {
                     Self.log("cancelled before the press")
                     self.close(popover, then: .failure(.cancelled))
                 }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.gateTimeout) { [weak self] in
+                guard let self, !answered else { return }
+                answered = true
+                Self.log("no answer to press, closing", error: true)
+                self.close(popover, then: .failure(.cancelled))
             }
         }
     }

@@ -114,8 +114,7 @@ final class AudioManager: ObservableObject {
     /// macOS didn't take it, as for a device that can't be the default.
     @discardableResult
     func setDefaultDevice(uid: String) -> Bool {
-        guard let id = Self.deviceID(forUID: uid) else { return false }
-        setDefaultDeviceID(id)
+        guard let id = Self.deviceID(forUID: uid), setDefaultDeviceID(id) else { return false }
         let current = fetchDefaultOutputDeviceID()
         guard current == id else {
             defaultDeviceID = current
@@ -128,20 +127,30 @@ final class AudioManager: ObservableObject {
     /// The UID of the default output, or nil when there is none.
     var defaultDeviceUID: String? { Self.uid(of: fetchDefaultOutputDeviceID()) }
 
-    private func setDefaultDeviceID(_ id: AudioDeviceID) {
+    /// Makes `id` the default output; false when CoreAudio refused, as for a device that has
+    /// gone, and then the output shown is the one in effect.
+    @discardableResult
+    private func setDefaultDeviceID(_ id: AudioDeviceID) -> Bool {
         var propAddr = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDefaultOutputDevice,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
         var deviceID = id
-        AudioObjectSetPropertyData(
+        let status = AudioObjectSetPropertyData(
             AudioObjectID(kAudioObjectSystemObject),
             &propAddr, 0, nil,
             UInt32(MemoryLayout<AudioDeviceID>.size), &deviceID
         )
+        guard status == noErr else {
+            NSLog("\(AppIdentity.name): setting the sound output to device \(id) failed: \(status)")
+            let current = fetchDefaultOutputDeviceID()
+            if defaultDeviceID != current { defaultDeviceID = current }
+            return false
+        }
         defaultDeviceID = id
         lastDefaultID = id
+        return true
     }
 
     /// The device's persistent UID. Unlike its AudioDeviceID, it survives reconnects and reboots.
