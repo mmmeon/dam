@@ -499,14 +499,8 @@ final class OpenDisplaySession {
 
     /// Makes `channel` the link, in place of any other.
     private func adopt(_ channel: OpenDisplayChannel) {
-        if let old = link {
-            // As when a link is lost: nothing more to the old one, and nothing left held.
-            old.close()
-            lock.lock()
-            sendLink = nil
-            lock.unlock()
-            injector?.releaseAll()
-        }
+        // As when a link is lost.
+        if link != nil { dropLink() }
         link = channel
         linkReady = false
         deframer = OpenDisplayDeframer()
@@ -550,14 +544,7 @@ final class OpenDisplaySession {
     private func lose(_ channel: OpenDisplayChannel, _ reason: String) {
         guard link === channel else { return }
         let wasReady = linkReady
-        link = nil
-        linkReady = false
-        channel.close()
-        closeCursorUDP()
-        lock.lock()
-        sendLink = nil
-        lock.unlock()
-        injector?.releaseAll()
+        dropLink()
         odLog.debug("\(self.name, privacy: .public): \(wasReady ? "lost" : "dial failed", privacy: .public): \(reason, privacy: .public)")
         // A display on its way waits as one already made does.
         if displayID != nil || settingUp, lostAt == nil { lostAt = Date() }
@@ -566,6 +553,19 @@ final class OpenDisplaySession {
             stopTimers()
         }
         sender?.sessionLostLink(self, reason: reason, connected: wasReady)
+    }
+
+    /// Closes the link: nothing more to it, and nothing left held.
+    private func dropLink() {
+        let old = link
+        link = nil
+        linkReady = false
+        old?.close()
+        closeCursorUDP()
+        lock.lock()
+        sendLink = nil
+        lock.unlock()
+        injector?.releaseAll()
     }
 
     fileprivate func displayGone() {
@@ -757,7 +757,6 @@ final class OpenDisplaySession {
                 self?.fail("capture failed: \(error.localizedDescription)")
             }
         })
-        cursor = OpenDisplayCursor()
         startStream()
     }
 

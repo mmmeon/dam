@@ -35,6 +35,37 @@ enum OpenDisplayTransport: String {
     case usb = "USB"
 }
 
+/// What a channel has been handed to send and not yet written out; from any thread.
+final class OpenDisplayBacklog {
+    private let lock = NSLock()
+    private var bytes = 0
+    private var sends = 0
+
+    var pendingBytes: Int {
+        lock.lock(); defer { lock.unlock() }
+        return bytes
+    }
+
+    var pendingSends: Int {
+        lock.lock(); defer { lock.unlock() }
+        return sends
+    }
+
+    func add(_ data: Data) {
+        lock.lock()
+        bytes += data.count
+        sends += 1
+        lock.unlock()
+    }
+
+    func remove(_ data: Data) {
+        lock.lock()
+        bytes -= data.count
+        sends -= 1
+        lock.unlock()
+    }
+}
+
 // MARK: - TCP
 
 /// TCP to a receiver's Bonjour service or address.
@@ -45,9 +76,8 @@ final class OpenDisplayTCPChannel: OpenDisplayChannel {
     let transport = OpenDisplayTransport.wifi
 
     private let connection: NWConnection
+    private let backlog = OpenDisplayBacklog()
     private let lock = NSLock()
-    private var pending = 0
-    private var sends = 0
     private var closed = false
 
     /// " at" the address dialed, for one not a Bonjour name; for the log.
@@ -67,15 +97,8 @@ final class OpenDisplayTCPChannel: OpenDisplayChannel {
         connection = NWConnection(to: endpoint, using: parameters)
     }
 
-    var pendingBytes: Int {
-        lock.lock(); defer { lock.unlock() }
-        return pending
-    }
-
-    var pendingSends: Int {
-        lock.lock(); defer { lock.unlock() }
-        return sends
-    }
+    var pendingBytes: Int { backlog.pendingBytes }
+    var pendingSends: Int { backlog.pendingSends }
 
     func start() {
         connection.stateUpdateHandler = { [weak self] state in
@@ -109,17 +132,11 @@ final class OpenDisplayTCPChannel: OpenDisplayChannel {
 
     func send(_ data: Data) {
         lock.lock()
-        guard !closed else { lock.unlock(); return }
-        pending += data.count
-        sends += 1
+        let closed = self.closed
         lock.unlock()
-        connection.send(content: data, completion: .contentProcessed { [weak self] _ in
-            guard let self else { return }
-            self.lock.lock()
-            self.pending -= data.count
-            self.sends -= 1
-            self.lock.unlock()
-        })
+        guard !closed else { return }
+        backlog.add(data)
+        connection.send(content: data, completion: .contentProcessed { [backlog] _ in backlog.remove(data) })
     }
 
     func close() {
@@ -169,24 +186,16 @@ final class OpenDisplaySocketChannel: OpenDisplayChannel {
     private var fd: Int32 = -1
     private var source: DispatchSourceRead?
     private let writes = DispatchQueue(label: "\(AppIdentity.bundleID).opendisplay.write", qos: .userInteractive)
+    private let backlog = OpenDisplayBacklog()
     private let lock = NSLock()
-    private var pending = 0
-    private var sends = 0
     private var closed = false
 
     init(connect: @escaping (@escaping (Result<Int32, Error>) -> Void) -> Void) {
         self.connect = connect
     }
 
-    var pendingBytes: Int {
-        lock.lock(); defer { lock.unlock() }
-        return pending
-    }
-
-    var pendingSends: Int {
-        lock.lock(); defer { lock.unlock() }
-        return sends
-    }
+    var pendingBytes: Int { backlog.pendingBytes }
+    var pendingSends: Int { backlog.pendingSends }
 
     func start() {
         connect { [weak self] result in
@@ -228,22 +237,17 @@ final class OpenDisplaySocketChannel: OpenDisplayChannel {
 
     func send(_ data: Data) {
         lock.lock()
-        guard !closed else { lock.unlock(); return }
-        pending += data.count
-        sends += 1
+        let closed = self.closed
         lock.unlock()
-        writes.async { [weak self] in
+        guard !closed else { return }
+        backlog.add(data)
+        writes.async { [weak self, backlog] in
+            defer { backlog.remove(data) }
             guard let self else { return }
             self.lock.lock()
             let fd = self.fd
             let closed = self.closed
             self.lock.unlock()
-            defer {
-                self.lock.lock()
-                self.pending -= data.count
-                self.sends -= 1
-                self.lock.unlock()
-            }
             guard !closed, fd >= 0 else { return }
             if !Usbmuxd.writeAll(fd, data) {
                 let reason = String(cString: strerror(errno))
