@@ -375,16 +375,11 @@ final class ControlStripPresenter: NSObject {
                            action: #selector(displayButtonTapped(_:)))
         btn.bezelStyle = .rounded
 
-        // Same rule as the menu: sparkles while a virtual anchor drives the display, the
-        // mirror symbol while it is in a mirror set as slave or master.
-        let isAirPlay    = videoManager?.allAirPlayDevices.contains(where: { $0.id == display.id }) ?? false
-        let hasAnchor    = videoManager?.hasVirtualAnchor(for: display.name) ?? false
-        let mirrorActive = display.isMirroring || (videoManager?.isBeingMirrored(display) ?? false)
+        // The menu's state symbol, else one for the kind of display.
+        let isAirPlay = videoManager?.allAirPlayDevices.contains(where: { $0.id == display.id }) ?? false
         let symbolName: String?
-        if hasAnchor {
-            symbolName = "sparkles"
-        } else if mirrorActive {
-            symbolName = "square.on.square"
+        if let state = videoManager.flatMap({ displayStateSymbol(for: display, video: $0) }) {
+            symbolName = state
         } else if isAirPlay {
             symbolName = "airplayvideo"
         } else if display.isBuiltIn {
@@ -460,7 +455,7 @@ final class ControlStripPresenter: NSObject {
         let resID        = NSTouchBarItem.Identifier(Self.displayResPrefix + display.id)
 
         let targets = videoManager?.mirrorTargets(for: display) ?? []
-        let inSet   = display.isMirroring || (videoManager?.isBeingMirrored(display) ?? false)
+        let inSet   = videoManager?.isInMirrorSet(display) ?? false
         var ids: [NSTouchBarItem.Identifier] = []
         // Same rule as the menu: one other display gets a toggle; several get a "Mirror…"
         // page, with "Extend" alongside while this display has slaves.
@@ -486,7 +481,7 @@ final class ControlStripPresenter: NSObject {
                                       display: DisplayInfo) -> NSTouchBarItem {
         // Same rule as the menu: the display is mirroring whether it is the slave or the
         // master of a set, and a virtual anchor does not count.
-        let isMirroring = display.isMirroring || (videoManager?.isBeingMirrored(display) ?? false)
+        let isMirroring = videoManager?.isInMirrorSet(display) ?? false
         return displayActionItem(id: id, title: isMirroring ? "Extend" : "Mirror", display: display,
                                  action: #selector(mirrorToggleTapped(_:)))
     }
