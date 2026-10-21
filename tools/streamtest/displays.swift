@@ -3,7 +3,7 @@
 //
 //  The displays streamtest needs to know about, for a shell script to read.
 //
-//    swiftc -O -o displays tools/streamtest/displays.swift
+//    built by streamtest with tools/common/onlinedisplays.swift (build_swift in tools/common/common.zsh)
 //    ./displays list              one line per online display:
 //                                 id kind screen-index x y width height pixel-width hz main mirrors
 //    ./displays streaming         the first DAM streaming display's line, or nothing
@@ -20,21 +20,6 @@ import AppKit
 
 setvbuf(stdout, nil, _IONBF, 0)
 
-let streamingVendor: UInt32 = 0x3456
-let streamingProduct: UInt32 = 0x1236
-
-func onlineDisplays() -> [CGDirectDisplayID] {
-    var count: UInt32 = 0
-    CGGetOnlineDisplayList(0, nil, &count)
-    var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
-    CGGetOnlineDisplayList(count, &ids, &count)
-    return Array(ids.prefix(Int(count)))
-}
-
-func isStreaming(_ id: CGDirectDisplayID) -> Bool {
-    CGDisplayVendorNumber(id) == streamingVendor && CGDisplayModelNumber(id) == streamingProduct
-}
-
 func screenIndex(_ id: CGDirectDisplayID) -> Int {
     NSScreen.screens.firstIndex {
         ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == id
@@ -42,14 +27,7 @@ func screenIndex(_ id: CGDirectDisplayID) -> Int {
 }
 
 func line(_ id: CGDirectDisplayID) -> String {
-    let bounds = CGDisplayBounds(id)
-    let mode = CGDisplayCopyDisplayMode(id)
-    let fields: [Any] = [
-        id, isStreaming(id) ? "streaming" : "other", screenIndex(id),
-        Int(bounds.minX), Int(bounds.minY), Int(bounds.width), Int(bounds.height),
-        mode?.pixelWidth ?? 0, Int((mode?.refreshRate ?? 0).rounded()),
-        CGDisplayIsMain(id) != 0 ? 1 : 0, CGDisplayMirrorsDisplay(id),
-    ]
+    let fields: [Any] = [id, isStreaming(id) ? "streaming" : "other", screenIndex(id)] + displayFields(id)
     return fields.map { "\($0)" }.joined(separator: " ")
 }
 

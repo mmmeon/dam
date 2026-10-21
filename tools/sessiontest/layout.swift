@@ -4,7 +4,7 @@
 //  What sessiontest compares before and after a remote session, and the changes it makes in
 //  the middle of one, for a shell script to read.
 //
-//    swiftc -O -import-objc-header DAM/CGVirtualDisplayPrivate.h -o layout tools/sessiontest/layout.swift
+//    built by sessiontest with tools/common/onlinedisplays.swift (build_swift in tools/common/common.zsh)
 //    ./layout snapshot            one line per online display, sorted by ID:
 //                                 display id kind x y width height pixel-width hz main mirrors dark
 //                                 then `output <uid>`, the default sound output
@@ -24,8 +24,6 @@ import CoreAudio
 
 setvbuf(stdout, nil, _IONBF, 0)
 
-let damVendor: UInt32 = 0x3456
-let streamingProduct: UInt32 = 0x1236
 let standinVendor: UInt32 = 0x7E57
 
 func fail(_ message: String) -> Never {
@@ -33,19 +31,11 @@ func fail(_ message: String) -> Never {
     exit(1)
 }
 
-func onlineDisplays() -> [CGDirectDisplayID] {
-    var count: UInt32 = 0
-    CGGetOnlineDisplayList(0, nil, &count)
-    var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
-    CGGetOnlineDisplayList(count, &ids, &count)
-    return Array(ids.prefix(Int(count))).sorted()
-}
-
 func kind(_ id: CGDirectDisplayID) -> String {
-    switch (CGDisplayVendorNumber(id), CGDisplayModelNumber(id)) {
-    case (damVendor, streamingProduct): return "streaming"
-    case (damVendor, _): return "dam"
-    case (standinVendor, _): return "standin"
+    if isStreaming(id) { return "streaming" }
+    switch CGDisplayVendorNumber(id) {
+    case damVendor: return "dam"
+    case standinVendor: return "standin"
     default: return "other"
     }
 }
@@ -60,13 +50,7 @@ func isDark(_ id: CGDirectDisplayID) -> Bool {
 }
 
 func line(_ id: CGDirectDisplayID) -> String {
-    let bounds = CGDisplayBounds(id)
-    let mode = CGDisplayCopyDisplayMode(id)
-    let fields: [Any] = [
-        "display", id, kind(id), Int(bounds.minX), Int(bounds.minY), Int(bounds.width), Int(bounds.height),
-        mode?.pixelWidth ?? 0, Int((mode?.refreshRate ?? 0).rounded()),
-        CGDisplayIsMain(id) != 0 ? 1 : 0, CGDisplayMirrorsDisplay(id), isDark(id) ? 1 : 0,
-    ]
+    let fields: [Any] = ["display", id, kind(id)] + displayFields(id) + [isDark(id) ? 1 : 0]
     return fields.map { "\($0)" }.joined(separator: " ")
 }
 
@@ -142,7 +126,7 @@ func standIn(named name: String) -> Never {
 let args = Array(CommandLine.arguments.dropFirst())
 switch args.first ?? "snapshot" {
 case "snapshot":
-    onlineDisplays().forEach { print(line($0)) }
+    onlineDisplays().sorted().forEach { print(line($0)) }
     print("output \(defaultOutput().map { string($0, kAudioDevicePropertyDeviceUID) } ?? "none")")
 case "outputs":
     let current = defaultOutput()

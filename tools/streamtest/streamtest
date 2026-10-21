@@ -54,22 +54,14 @@ rotation_key=dam.rotation.streaming
 streaming_name="DAM Streaming"
 cache=${TMPDIR:-/tmp}/dam-streamtest
 displays=$cache/displays
-
-die() { print -u2 "streamtest: $*"; exit 1 }
-say() { print "streamtest: $*" }
-pause() { perl -e "select(undef, undef, undef, $1)" }
+tool=streamtest
+source $repo/tools/common/common.zsh
 
 # The displays helper and tools/latency, built into $cache when their source is newer.
 build_tools() {
     mkdir -p $cache
-    local source
-    for source in $here/displays.swift $repo/tools/latency/latency.swift; do
-        local binary=$cache/${source:t:r}
-        if [[ ! -x $binary || $source -nt $binary ]]; then
-            DEVELOPER_DIR=${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer} \
-                swiftc -O -suppress-warnings -o $binary $source || die "could not build ${source:t}"
-        fi
-    done
+    build_swift $displays $here/displays.swift $repo/tools/common/onlinedisplays.swift
+    build_swift $cache/latency $repo/tools/latency/latency.swift
 }
 
 # What a run started, for cleanup to stop, and the streaming display's rotation before it.
