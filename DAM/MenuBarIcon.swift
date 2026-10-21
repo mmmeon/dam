@@ -24,6 +24,13 @@ enum MenuBarIcon {
     /// The outflow's full height; only `cutHeight` of it shows.
     private static let outflowHeight: CGFloat = 100
     private static let cutHeight: CGFloat = 50
+    /// How far, at full strength, ripples push the outflow's sides at its open end.
+    private static let rippleAmplitude: CGFloat = 3
+    /// The length of one ripple down the outflow.
+    private static let rippleWavelength: CGFloat = 45
+    /// How far, at full strength, the reservoir's rim tips as its water sloshes. Up and down,
+    /// since the rim already reaches the image's sides.
+    private static let slosh: CGFloat = 10
     /// Degrees between ridges around the dam.
     static let ridgeSpacing: CGFloat = 25
 
@@ -50,11 +57,17 @@ enum MenuBarIcon {
     }
 
     /// A template image of the symbol with the outflow at `fraction` and the dam turned
-    /// `spin` degrees; ridges move right as `spin` grows.
-    static func image(fraction: CGFloat, spin: CGFloat = 0) -> NSImage {
+    /// `spin` degrees; ridges move right as `spin` grows. The outflow's curve near the dam
+    /// bends toward `upstream` (`fraction` if nil), so a stream whose ends disagree bulges.
+    /// Ripples at `ripple` strength (0 to 1 swelling out, 0 to -1 pinching in) run down the
+    /// outflow, `ripplePhase` waves along,
+    /// and the reservoir tips right by `sway` (0 to 1; negative tips left).
+    static func image(fraction: CGFloat, spin: CGFloat = 0, upstream: CGFloat? = nil,
+                      ripple: CGFloat = 0, ripplePhase: CGFloat = 0, sway: CGFloat = 0) -> NSImage {
         let image = NSImage(size: size, flipped: true) { rect in
             let scale = symbolHeight / (topHeight + barHeight + cutHeight + stroke)
-            let path = symbol(fraction: fraction, spin: spin)
+            let path = symbol(fraction: fraction, upstream: upstream ?? fraction, spin: spin,
+                              ripple: ripple, ripplePhase: ripplePhase, sway: sway)
             // The symbol is centred on the page's centre; put that on the image's.
             var transform = AffineTransform(translationByX: rect.midX, byY: rect.midY)
             transform.scale(scale)
@@ -72,39 +85,72 @@ enum MenuBarIcon {
         return image
     }
 
-    private static func symbol(fraction: CGFloat, spin: CGFloat) -> NSBezierPath {
+    private static func symbol(fraction: CGFloat, upstream: CGFloat, spin: CGFloat,
+                               ripple: CGFloat, ripplePhase: CGFloat, sway: CGFloat) -> NSBezierPath {
         let path = NSBezierPath()
-        appendReservoir(to: path)
+        appendReservoir(to: path, sway: sway)
         path.appendRect(NSRect(x: barLeft, y: barY, width: barWidth, height: barHeight))
-        appendOutflow(to: path, fraction: fraction)
+        appendOutflow(to: path, fraction: fraction, upstream: upstream, ripple: ripple, ripplePhase: ripplePhase)
         appendRidges(to: path, spin: spin)
         return path
     }
 
     /// The reservoir's two sides, curving up and out from the dam's top corners. Open at the
-    /// top; the dam's outline is its floor.
-    private static func appendReservoir(to path: NSBezierPath) {
+    /// top; the dam's outline is its floor. It tips right by `sway` of `slosh`: the right rim
+    /// dips and the left one rises, most at the rim and not at all where they meet the dam.
+    private static func appendReservoir(to path: NSBezierPath, sway: CGFloat) {
         let right = centreX + topWidth / 2, barRight = centreX + barWidth / 2
         let rightControl = { (c: (across: CGFloat, down: CGFloat)) in
             NSPoint(x: barRight + c.across * (right - barRight), y: topY + c.down * topHeight)
         }
         let rightSide = [NSPoint(x: right, y: topY), rightControl(topControls[0]),
                          rightControl(topControls[1]), NSPoint(x: barRight, y: barY)]
-        appendSides(rightSide.map { NSPoint(x: 2 * centreX - $0.x, y: $0.y) }, to: path)
+        let leftSide = rightSide.map { NSPoint(x: 2 * centreX - $0.x, y: $0.y) }
+        let tip = { (p: NSPoint) -> NSPoint in
+            let side: CGFloat = p.x < centreX ? -1 : 1
+            return NSPoint(x: p.x, y: p.y + side * slosh * sway * (barY - p.y) / topHeight)
+        }
+        for side in [leftSide, rightSide].map({ $0.map(tip) }) {
+            path.move(to: side[0])
+            path.curve(to: side[3], controlPoint1: side[1], controlPoint2: side[2])
+        }
     }
 
     /// The outflow's two sides, cut where they have dropped `cutHeight` below the dam. Open
-    /// at the bottom, so the gap between their ends shows the width.
-    private static func appendOutflow(to path: NSBezierPath, fraction: CGFloat) {
+    /// at the bottom, so the gap between their ends shows the width. The control points
+    /// take their place from `upstream` instead.
+    private static func appendOutflow(to path: NSBezierPath, fraction: CGFloat, upstream: CGFloat,
+                                      ripple: CGFloat, ripplePhase: CGFloat) {
         let bottomLeft = centreX - barWidth * fraction / 2
-        let x = { (t: CGFloat) in barLeft + t * (bottomLeft - barLeft) }
+        let upstreamLeft = centreX - barWidth * upstream / 2
+        let x = { (t: CGFloat) in barLeft + t * (upstreamLeft - barLeft) }
         let side = cut([
             NSPoint(x: barLeft, y: barBottom),
             NSPoint(x: x(outflowControls[0].across), y: barBottom + outflowControls[0].down * outflowHeight),
             NSPoint(x: x(outflowControls[1].across), y: barBottom + outflowControls[1].down * outflowHeight),
             NSPoint(x: bottomLeft, y: barBottom + outflowHeight)
         ], atY: barBottom + cutHeight)
-        appendSides(side, to: path)
+        guard ripple != 0 else { return appendSides(side, to: path) }
+        // Ripples swell both sides together, one way only, then back to the plain curve: still
+        // where the stream leaves the dam and strongest at its open end, like surges travelling
+        // down falling water.
+        let points = (0...24).map { i -> NSPoint in
+            let p = point(on: side, at: CGFloat(i) / 24)
+            let down = (p.y - barBottom) / cutHeight
+            let wave = (1 - cos(2 * .pi * ((p.y - barBottom) / rippleWavelength - ripplePhase))) / 2
+            return NSPoint(x: p.x - rippleAmplitude * ripple * down * wave, y: p.y)
+        }
+        for side in [points, points.map { NSPoint(x: 2 * centreX - $0.x, y: $0.y) }] {
+            path.move(to: side[0])
+            side.dropFirst().forEach(path.line(to:))
+        }
+    }
+
+    /// The point `t` of the way along the cubic `p`.
+    private static func point(on p: [NSPoint], at t: CGFloat) -> NSPoint {
+        let lerp = { (a: NSPoint, b: NSPoint) in NSPoint(x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t) }
+        let ab = lerp(p[0], p[1]), bc = lerp(p[1], p[2]), cd = lerp(p[2], p[3])
+        return lerp(lerp(ab, bc), lerp(bc, cd))
     }
 
     /// The cubic `left` and its mirror image across the centre, as two open curves.
@@ -121,10 +167,7 @@ enum MenuBarIcon {
         let lerp = { (a: NSPoint, b: NSPoint, t: CGFloat) in
             NSPoint(x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t)
         }
-        let point = { (t: CGFloat) -> NSPoint in
-            let ab = lerp(p[0], p[1], t), bc = lerp(p[1], p[2], t), cd = lerp(p[2], p[3], t)
-            return lerp(lerp(ab, bc, t), lerp(bc, cd, t), t)
-        }
+        let point = { (t: CGFloat) in Self.point(on: p, at: t) }
         var lo: CGFloat = 0, hi: CGFloat = 1
         for _ in 0..<40 {
             let mid = (lo + hi) / 2
@@ -150,62 +193,140 @@ enum MenuBarIcon {
     }
 }
 
-/// Shows `MenuBarIcon` on a status item button. When the connection count changes, the
-/// outflow eases to its new width while the dam turns, and the dam comes to rest with its
-/// ridges where they started.
+/// Shows `MenuBarIcon` on a status item button. When the connection count changes, the dam
+/// shifts gear: it turns faster and faster, coming to rest with its ridges where they started.
+/// The outflow's width goes with it, barely moving at first and quickest at the end, and flows
+/// like poured liquid: the stream near the dam leads on a quick spring, its open end follows
+/// on a slower, bouncier one that settles after the dam stops. Ripples run down the stream
+/// while it flows and die away once it stills, and the reservoir's water sloshes, tipping
+/// with the dam's turn and swinging back. With Reduce Motion on, the width eases to its new
+/// size at once, without bounce, ripples, sloshing or turning.
 final class MenuBarIconAnimator {
-    static let duration: TimeInterval = 1.5
+    /// How long the dam turns for, and the outflow's width with it.
+    static let duration: TimeInterval = 0.9
     /// Degrees the dam turns per second of the change, rounded to whole ridge spacings.
     static let turnRate: CGFloat = 100
+    /// Ripples travelling down the outflow per second.
+    static let rippleRate: CGFloat = 2.5
+    /// Seconds for ripples to die to about a third once the stream stops moving.
+    static let rippleFade: CGFloat = 0.35
+
+    /// A damped spring toward a target, stepped through time.
+    private struct Spring {
+        var value: CGFloat
+        var velocity: CGFloat = 0
+        /// Seconds per swing were it undamped.
+        let response: CGFloat
+        /// How far past the target it swings, as with SwiftUI springs: 0 settles without
+        /// overshooting, more wobbles more.
+        let bounce: CGFloat
+
+        /// Moves `seconds` on toward `target`, without overshooting unless `bouncing`.
+        mutating func step(toward target: CGFloat, by seconds: CGFloat, bouncing: Bool) {
+            let stiffness = pow(2 * .pi / response, 2)
+            let damping = 4 * .pi * (1 - (bouncing ? bounce : 0)) / response
+            // Short steps keep it stable when a frame comes late.
+            let steps = max(1, Int((seconds * 240).rounded(.up)))
+            let dt = seconds / CGFloat(steps)
+            for _ in 0..<steps {
+                velocity += (-stiffness * (value - target) - damping * velocity) * dt
+                value += velocity * dt
+            }
+        }
+
+        func isSettled(at target: CGFloat) -> Bool {
+            abs(value - target) < 0.0005 && abs(velocity) < 0.005
+        }
+    }
 
     private weak var button: NSStatusBarButton?
     private var count: Int?
-    private var fraction = MenuBarIcon.outflowFraction(for: 0)
+    /// The width the springs pull toward, which moves with the dam to the new one.
+    private var target = MenuBarIcon.outflowFraction(for: 0)
+    private var newTarget = MenuBarIcon.outflowFraction(for: 0)
+    /// The stream by the dam: quick, barely overshooting.
+    private var upstream = Spring(value: MenuBarIcon.outflowFraction(for: 0), response: 0.45, bounce: 0.1)
+    /// The stream's open end: lagging, and swinging a little past the new width.
+    private var outflow = Spring(value: MenuBarIcon.outflowFraction(for: 0), response: 0.7, bounce: 0.3)
+    /// The reservoir's tip, pushed by the stream moving and swinging back once it slows.
+    private var slosh = Spring(value: 0, response: 0.8, bounce: 0.3)
     private var spin: CGFloat = 0
+    /// Ripple strength, 0 to 1, stirred up by the outflow's open end moving.
+    private var ripple: CGFloat = 0
+    private var ripplePhase: CGFloat = 0
+    /// 1 when the outflow is widening, so ripples swell it; -1 when narrowing, so they pinch it.
+    private var rippleDirection: CGFloat = 1
+    private var reduceMotion = false
     private var timer: Timer?
 
     init(button: NSStatusBarButton?) {
         self.button = button
     }
 
-    /// Shows `count` connections: at once the first time or with Reduce Motion on (unless
-    /// `ignoringReduceMotion`, for previews), animated otherwise. A change mid-animation
-    /// carries on from where the icon is.
+    /// Shows `count` connections: at once the first time, animated after, gently with Reduce
+    /// Motion on (unless `ignoringReduceMotion`, for previews). A change mid-animation
+    /// carries on from where the icon is, momentum included.
     func show(count newCount: Int, ignoringReduceMotion: Bool = false) {
         let newCount = min(max(newCount, 0), MenuBarIcon.maxCount)
         guard newCount != count else { return }
         let isFirst = count == nil
         count = newCount
-        let target = MenuBarIcon.outflowFraction(for: newCount)
-        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion && !ignoringReduceMotion
-        guard !isFirst, !reduceMotion else {
+        newTarget = MenuBarIcon.outflowFraction(for: newCount)
+        reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion && !ignoringReduceMotion
+        guard !isFirst else {
             timer?.invalidate()
             timer = nil
-            fraction = target
-            spin = 0
+            settle()
             draw()
             return
         }
-        animate(to: target)
+        animate()
     }
 
-    private func animate(to target: CGFloat) {
+    private func settle() {
+        target = newTarget
+        upstream.value = target
+        upstream.velocity = 0
+        outflow.value = target
+        outflow.velocity = 0
+        slosh.value = 0
+        slosh.velocity = 0
+        spin = 0
+        ripple = 0
+    }
+
+    private func animate() {
         timer?.invalidate()
         let spacing = MenuBarIcon.ridgeSpacing
-        let startFraction = fraction, startSpin = spin
-        let turns = max(1, (CGFloat(Self.duration) * Self.turnRate / spacing).rounded())
+        let startSpin = spin, startTarget = target
+        rippleDirection = newTarget < startTarget ? -1 : 1
+        let turns = reduceMotion ? 0 : max(1, (CGFloat(Self.duration) * Self.turnRate / spacing).rounded())
+        let turnDuration = reduceMotion ? 0 : Self.duration
         let endSpin = ((startSpin / spacing).rounded(.down) + turns) * spacing
         let start = ProcessInfo.processInfo.systemUptime
+        var last = start
         let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] timer in
             guard let self else { return timer.invalidate() }
-            let progress = min(1, (ProcessInfo.processInfo.systemUptime - start) / Self.duration)
-            let eased = CGFloat(1 - cos(.pi * progress)) / 2
-            self.fraction = startFraction + (target - startFraction) * eased
+            let now = ProcessInfo.processInfo.systemUptime
+            let elapsed = CGFloat(min(now - last, 0.1))
+            last = now
+            let progress = turnDuration > 0 ? min(1, (now - start) / turnDuration) : 1
+            // Speeding up all the way, so the gear clunks into place.
+            let eased = CGFloat(pow(progress, 3))
             self.spin = startSpin + (endSpin - startSpin) * eased
-            if progress >= 1 {
+            self.target = startTarget + (self.newTarget - startTarget) * eased
+            self.upstream.step(toward: self.target, by: elapsed, bouncing: !self.reduceMotion)
+            self.outflow.step(toward: self.target, by: elapsed, bouncing: !self.reduceMotion)
+            // The faster the open end moves, the stronger the ripples; they fade once it slows.
+            let stirred = self.reduceMotion ? 0 : min(1, abs(self.outflow.velocity))
+            self.ripple = max(stirred, self.ripple * exp(-elapsed / Self.rippleFade))
+            self.ripplePhase += elapsed * Self.rippleRate
+            self.slosh.step(toward: stirred, by: elapsed, bouncing: true)
+            if progress >= 1, self.ripple < 0.02, self.slosh.isSettled(at: 0),
+               self.upstream.isSettled(at: self.target), self.outflow.isSettled(at: self.target) {
                 timer.invalidate()
                 self.timer = nil
-                self.spin = 0
+                self.settle()
             }
             self.draw()
         }
@@ -215,6 +336,9 @@ final class MenuBarIconAnimator {
     }
 
     private func draw() {
-        button?.image = MenuBarIcon.image(fraction: fraction, spin: spin)
+        // An overshoot past no width at all would cross the stream's sides; pinch it shut instead.
+        button?.image = MenuBarIcon.image(fraction: max(0, outflow.value), spin: spin,
+                                          upstream: max(0, upstream.value),
+                                          ripple: ripple * rippleDirection, ripplePhase: ripplePhase, sway: slosh.value)
     }
 }
