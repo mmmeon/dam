@@ -85,6 +85,24 @@ enum StreamingDisplayModes {
         }
         return [(start.width, start.height, start.refreshRate)] + all.filter { !isStart($0) }
     }
+
+    /// The settings that give a streaming display every mode, `start` first.
+    static func settings(startingIn start: Mode) -> CGVirtualDisplaySettings {
+        let settings = CGVirtualDisplaySettings()
+        settings.hiDPI = 1
+        settings.modes = advertised(startingIn: start).map {
+            CGVirtualDisplayMode(width: UInt($0.width), height: UInt($0.height), refreshRate: Double($0.refreshRate))
+        }
+        return settings
+    }
+}
+
+extension StreamingDisplayModes.Mode {
+    /// The mode a display runs, as a streaming display's mode.
+    init(_ mode: CGDisplayMode) {
+        self.init(width: mode.width, height: mode.height, refreshRate: Int(mode.refreshRate.rounded()),
+                  hiDPI: mode.pixelWidth > mode.width)
+    }
 }
 
 extension VideoManager {
@@ -386,13 +404,7 @@ extension VideoManager {
             streamingDisplayIsMainByChoice = false
         }
         let vd = CGVirtualDisplay(descriptor: descriptor)
-        let settings = CGVirtualDisplaySettings()
-        settings.hiDPI = 1
-        settings.modes = StreamingDisplayModes.advertised(startingIn: mode).map {
-            CGVirtualDisplayMode(width: UInt($0.width), height: UInt($0.height),
-                                 refreshRate: Double($0.refreshRate))
-        }
-        guard vd.apply(settings) else {
+        guard vd.apply(StreamingDisplayModes.settings(startingIn: mode)) else {
             sdLog.error("add: applySettings failed")
             if streamingDisplays.isEmpty { streamingArrangement = nil }
             completion?(nil)
@@ -424,6 +436,7 @@ extension VideoManager {
         }
         // Its ID can come back for another display.
         streamingDisplaysMirroredByChoice.remove(last.id)
+        streamingDisplaysMirroringByChoice.remove(last.id)
         // Dropping the last reference removes the display. While the set settles without
         // it, each change puts the resolutions and positions back if WindowServer's saved
         // layout for the smaller set changed them.
@@ -492,23 +505,21 @@ extension VideoManager {
               mode.pixelWidth <= Int(vd.maxPixelsWide), mode.pixelHeight <= Int(vd.maxPixelsHigh) else {
             return completion(false)
         }
-        // Already in it, mirroring nothing: nothing to do. Asked here, before the new mode list:
-        // once a virtual display is given one, it reports the list's first mode as its own
-        // straight away, while it still runs the old one.
-        if CGDisplayMirrorsDisplay(id) == 0, let wanted = Self.displayMode(mode, of: id),
-           let current = CGDisplayCopyDisplayMode(id), DisplayArrangement.sameMode(wanted, current) {
+        // A mirror the user made through DAM is kept; any other goes, so that the display shows
+        // its own desktop at the new size.
+        let keepsMirror = CGDisplayMirrorsDisplay(id) != 0 && streamingDisplaysMirroringByChoice.contains(id)
+        // What it runs, asked before the new mode list: once a virtual display is given one, it
+        // reports the list's first mode as its own straight away, while it still runs the old one.
+        let running = CGDisplayCopyDisplayMode(id)
+        // Already in it, mirroring nothing or as chosen: nothing to do.
+        if CGDisplayMirrorsDisplay(id) == 0 || keepsMirror, let running, let wanted = Self.displayMode(mode, of: id),
+           DisplayArrangement.sameMode(wanted, running) {
             streamingDisplays[i].start = mode
             return completion(true)
         }
         let index = streamingDisplays[i].index
         sdLog.debug("resize \(index) to \(mode.width)×\(mode.height)@\(mode.refreshRate)\(mode.hiDPI ? " HiDPI" : "")")
-        let settings = CGVirtualDisplaySettings()
-        settings.hiDPI = 1
-        settings.modes = StreamingDisplayModes.advertised(startingIn: mode).map {
-            CGVirtualDisplayMode(width: UInt($0.width), height: UInt($0.height),
-                                 refreshRate: Double($0.refreshRate))
-        }
-        guard vd.apply(settings) else {
+        guard vd.apply(StreamingDisplayModes.settings(startingIn: mode)) else {
             sdLog.error("resize: applySettings failed")
             return completion(false)
         }
@@ -517,10 +528,15 @@ extension VideoManager {
         streamingSettle?.arrangement.modes[id] = nil
         streamingChangeInFlight = true
         let before = activeStreamingSettle ?? DisplayArrangement.current()
-        switchStreamingDisplay(id, to: mode, before: before, attempt: 0) { [weak self] done in
+        switchStreamingDisplay(id, to: mode, keepingMirror: keepsMirror, before: before, attempt: 0) { [weak self, weak vd] done in
             // Only once it runs it: a rotation that failed goes back to the old one.
             if done, let i = self?.streamingDisplays.firstIndex(where: { $0.id == id }) {
                 self?.streamingDisplays[i].start = mode
+            } else if !done, let running {
+                // Its mode list goes back to one led by what it still runs, or it would go on
+                // reporting the new mode as its own, and asking for that again would do nothing.
+                sdLog.debug("resize: failed; listing \(running.width)×\(running.height) first again")
+                _ = vd?.apply(StreamingDisplayModes.settings(startingIn: StreamingDisplayModes.Mode(running)))
             }
             completion(done)
         }
@@ -552,9 +568,10 @@ extension VideoManager {
     }
 
     /// Switches `id` to `mode` once WindowServer lists it, which takes a moment after a new
-    /// mode list; gives up after two seconds. `completion` runs before the next change starts.
+    /// mode list; gives up after two seconds. Unless `keepingMirror`, it stops mirroring.
+    /// `completion` runs before the next change starts.
     private func switchStreamingDisplay(_ id: CGDirectDisplayID, to mode: StreamingDisplayModes.Mode,
-                                        before: DisplayArrangement, attempt: Int,
+                                        keepingMirror: Bool, before: DisplayArrangement, attempt: Int,
                                         completion: @escaping (Bool) -> Void) {
         guard let target = Self.displayMode(mode, of: id) else {
             guard attempt < 20, DisplayArrangement.onlineDisplayIDs().contains(id) else {
@@ -563,7 +580,8 @@ extension VideoManager {
                 return finishStreamingChange()
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-                self?.switchStreamingDisplay(id, to: mode, before: before, attempt: attempt + 1, completion: completion)
+                self?.switchStreamingDisplay(id, to: mode, keepingMirror: keepingMirror, before: before,
+                                             attempt: attempt + 1, completion: completion)
             }
             return
         }
@@ -573,17 +591,20 @@ extension VideoManager {
             return finishStreamingChange()
         }
         // WindowServer may mirror, move or resize the others for the new size.
-        if CGDisplayMirrorsDisplay(id) != 0 { CGConfigureDisplayMirrorOfDisplay(cfg, id, CGDirectDisplayID(0)) }
+        let master = keepingMirror ? CGDisplayMirrorsDisplay(id) : 0
+        if CGDisplayMirrorsDisplay(id) != master { CGConfigureDisplayMirrorOfDisplay(cfg, id, master) }
         _ = before.restore(in: cfg, excluding: [id])
         before.restoreModes(in: cfg, excluding: [id])
         // Always: given a new mode list, the display reports `target` as its mode already
         // (see resizeStreamingDisplay), so asking whether it runs it says nothing.
         CGConfigureDisplayWithDisplayMode(cfg, id, target, nil)
         let origin = before.origins[id] ?? CGDisplayBounds(id).origin
-        let resized = before.excluding(id).adding(id, origin: origin, mode: target)
+        let resized = before.excluding(id).adding(id, origin: origin, mode: target, mirroring: master)
         let settle = { [weak self] (done: Bool) in
             guard let self else { return completion(false) }
-            self.streamingSettle = (resized, Date().addingTimeInterval(5))
+            // Failed, it still runs its old mode, which the layout taken after the new list
+            // doesn't hold.
+            self.streamingSettle = (done ? resized : before.excluding(id), Date().addingTimeInterval(5))
             self.reassertStreamingLayout()
             self.mergeDevices()
             completion(done)
@@ -612,6 +633,7 @@ extension VideoManager {
         guard let i = streamingDisplays.firstIndex(where: { $0.index == index }) else { return }
         sdLog.debug("terminationHandler: streaming display \(index) ended")
         streamingDisplaysMirroredByChoice.remove(streamingDisplays[i].id)
+        streamingDisplaysMirroringByChoice.remove(streamingDisplays[i].id)
         streamingDisplays.remove(at: i)
         if streamingDisplays.isEmpty {
             streamingArrangement = nil

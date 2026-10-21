@@ -78,12 +78,13 @@ struct DisplayArrangement {
     }
 
     /// The same arrangement with display `id` showing its own desktop at `origin` in `mode`,
-    /// for the set it has joined.
-    func adding(_ id: CGDirectDisplayID, origin: CGPoint, mode: CGDisplayMode?) -> DisplayArrangement {
+    /// or mirroring `master`, for the set it has joined.
+    func adding(_ id: CGDirectDisplayID, origin: CGPoint, mode: CGDisplayMode?,
+                mirroring master: CGDirectDisplayID = 0) -> DisplayArrangement {
         var modes = modes
         modes[id] = mode
         return DisplayArrangement(origins: origins.merging([id: origin]) { $1 },
-                                  mirrorMasters: mirrorMasters.merging([id: 0]) { $1 }, modes: modes)
+                                  mirrorMasters: mirrorMasters.merging([id: master]) { $1 }, modes: modes)
     }
 
     /// The same arrangement without display `id`, for the set it has left.

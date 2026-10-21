@@ -214,6 +214,8 @@ final class VideoManager: ObservableObject {
     /// The streaming displays the others were mirrored onto through DAM, not by WindowServer
     /// applying a layout it saved for them.
     var streamingDisplaysMirroredByChoice: Set<CGDirectDisplayID> = []
+    /// The streaming displays set to mirror another display through DAM, which a resize keeps.
+    var streamingDisplaysMirroringByChoice: Set<CGDirectDisplayID> = []
     /// Whether a change of main or of positions leaves `streamingArrangement` as it is, so
     /// the layout from before is put back once the streaming displays go: while a remote
     /// session is on (RemoteSessions.swift). Otherwise the change is kept after them.
@@ -716,8 +718,13 @@ final class VideoManager: ObservableObject {
     /// counts as mirrored by choice while a display mirrors it through DAM.
     func keepUserMirror(_ ids: [CGDirectDisplayID], on master: CGDirectDisplayID) {
         if streamingDisplayIDs.contains(master) { streamingDisplaysMirroredByChoice.insert(master) }
-        // The others only while a display not among `ids` still mirrors them.
         let moving = Set(ids)
+        if master != 0 {
+            streamingDisplaysMirroringByChoice.formUnion(moving.intersection(streamingDisplayIDs))
+        } else {
+            streamingDisplaysMirroringByChoice.subtract(moving)
+        }
+        // The others only while a display not among `ids` still mirrors them.
         let online = DisplayArrangement.onlineDisplayIDs()
         streamingDisplaysMirroredByChoice = streamingDisplaysMirroredByChoice.filter { id in
             id == master || online.contains { !moving.contains($0) && $0 != id && CGDisplayMirrorsDisplay($0) == id }

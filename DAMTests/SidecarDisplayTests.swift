@@ -239,6 +239,12 @@ final class SidecarDisplayTests: XCTestCase {
         // Nothing online mirrors it once 2 is extended again.
         manager.keepUserMirror([2], on: 0)
         XCTAssertTrue(manager.streamingDisplaysMirroredByChoice.isEmpty)
+
+        // Set to mirror another display, which a resize keeps.
+        manager.keepUserMirror([42, 2], on: 1)
+        XCTAssertEqual(manager.streamingDisplaysMirroringByChoice, [42])
+        manager.keepUserMirror([42], on: 0)
+        XCTAssertTrue(manager.streamingDisplaysMirroringByChoice.isEmpty)
     }
 
     func testOnlyTheStandInAnAttemptMadeIsReleased() {
