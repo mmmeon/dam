@@ -439,7 +439,7 @@ extension AirPlayQuickConnect: NSTouchBarDelegate {
            idx < touchBarDisplays.count {
             let item = NSCustomTouchBarItem(identifier: identifier)
             let display = touchBarDisplays[idx]
-            let btn = NSButton(title: "\(idx + 1).  \(truncated(display.label))",
+            let btn = NSButton(title: (hudNumber(at: idx).map { "\($0).  " } ?? "") + display.label.truncated(to: 16),
                                target: self,
                                action: #selector(touchBarDisplayTapped(_:)))
             btn.tag = idx
@@ -458,9 +458,5 @@ extension AirPlayQuickConnect: NSTouchBarDelegate {
         guard case .selecting(let displays) = state, sender.tag < displays.count else { return }
         SpeechSynthesizer.shared.stop()
         startConfirming(display: displays[sender.tag], choice: sender.tag)
-    }
-
-    private func truncated(_ s: String, maxLength: Int = 16) -> String {
-        s.truncated(to: maxLength)
     }
 }
