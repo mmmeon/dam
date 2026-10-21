@@ -229,6 +229,15 @@ final class VideoManager: ObservableObject {
     var streamingSettle: (arrangement: DisplayArrangement, until: Date)?
     /// Whether that layout is being put back; later changes wait for the one it causes.
     var streamingReassertInFlight = false
+    /// The displays online at the last re-read, to tell when one joins.
+    var onlineAtLastMerge: Set<CGDirectDisplayID>?
+    /// Until when WindowServer may still be laying out a set a display joined, from a layout
+    /// it saved for it: streaming displays it puts in mirror sets meanwhile are freed again.
+    var displayJoinedUntil = Date.distantPast
+    /// Whether streaming displays WindowServer mirrored are being freed.
+    var streamingMirrorReleaseInFlight = false
+    /// Whether a look at them waits for a change in flight to land.
+    var streamingMirrorCheckPending = false
 
     /// Whether DAM is in the middle of a display change of its own: putting an anchor's or the
     /// streaming layout back, adding, removing or resizing a streaming display, or handing main
@@ -236,7 +245,7 @@ final class VideoManager: ObservableObject {
     /// landing brings the next look.
     var displayChangeInFlight: Bool {
         virtualAnchorReassertInFlight || streamingChangeInFlight || streamingReassertInFlight
-            || streamingMainHandBackInFlight
+            || streamingMainHandBackInFlight || streamingMirrorReleaseInFlight
     }
     /// How many changes the user asked for (mirror, extend, main, positions, resolution) have
     /// been begun, so a step DAM takes later can tell that one came meanwhile.
@@ -359,6 +368,8 @@ final class VideoManager: ObservableObject {
             self?.reassertAnchorLayout()
             self?.reassertStreamingLayout()
             self?.mergeDevices()
+            self?.noteDisplaysJoined()
+            self?.keepStreamingDisplaysOutOfMirrors()
             self?.keepStreamingDisplayOffMain()
             // WindowServer places a display that arrives beside a virtual anchor on top of
             // it (an AirPlay TV joining an anchored iPad); move it off.

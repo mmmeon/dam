@@ -202,6 +202,37 @@ final class StreamingDisplayTests: XCTestCase {
     func testGoesAtTheOriginWithNoOtherDisplay() {
         XCTAssertEqual(VideoManager.streamingDisplayOrigin(others: []), .zero)
     }
+
+    // MARK: - Mirrors WindowServer makes when a display joins
+
+    /// 1 the Mac, 2 a TV, 10 and 11 streaming displays, 20 an anchor.
+    private func release(masters: [CGDirectDisplayID: CGDirectDisplayID],
+                         mirroringByChoice: Set<CGDirectDisplayID> = [],
+                         mirroredByChoice: Set<CGDirectDisplayID> = [],
+                         anchorManaged: Set<CGDirectDisplayID> = []) -> [CGDirectDisplayID] {
+        VideoManager.mirrorsToRelease(streaming: [10, 11], online: [1, 2, 10, 11, 20],
+                                      masterOf: { masters[$0] ?? 0 },
+                                      mirroringByChoice: mirroringByChoice, mirroredByChoice: mirroredByChoice,
+                                      anchorManaged: anchorManaged)
+    }
+
+    func testAStreamingDisplayMirroringTheTVIsFreed() {
+        XCTAssertEqual(release(masters: [10: 2]), [10])
+    }
+
+    func testTheTVMirroringAStreamingDisplayIsFreed() {
+        XCTAssertEqual(release(masters: [2: 10, 1: 10]), [1, 2])
+    }
+
+    func testMirrorsMadeThroughDAMStay() {
+        XCTAssertEqual(release(masters: [10: 2], mirroringByChoice: [10]), [])
+        XCTAssertEqual(release(masters: [2: 11], mirroredByChoice: [11]), [])
+    }
+
+    func testMirrorsWithoutStreamingDisplaysAndAnchorSetsAreLeftAlone() {
+        XCTAssertEqual(release(masters: [2: 1]), [])
+        XCTAssertEqual(release(masters: [10: 20], anchorManaged: [10, 20]), [])
+    }
 }
 
 final class DisplayModeRateMatchTests: XCTestCase {

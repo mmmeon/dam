@@ -218,6 +218,65 @@ extension VideoManager {
         setMainDisplay(display) { [weak self] _ in self?.streamingMainHandBackInFlight = false }
     }
 
+    /// Notes a display joining that DAM didn't make (a TV connected): WindowServer then lays
+    /// the new set out from a layout it saved for it, mirrors included, over the next seconds,
+    /// and an anchor made for the newcomer keeps a layout for its first 30.
+    func noteDisplaysJoined() {
+        let online = Set(DisplayArrangement.onlineDisplayIDs())
+        defer { onlineAtLastMerge = online }
+        guard let before = onlineAtLastMerge,
+              !online.subtracting(before).subtracting(streamingDisplayIDs).isEmpty else { return }
+        displayJoinedUntil = Date().addingTimeInterval(45)
+    }
+
+    /// The displays to give their own desktop again: each of `streaming` mirroring a display
+    /// though not set to through DAM, and each display mirroring one of `streaming` the user
+    /// didn't mirror onto it through DAM; none an anchor's set holds.
+    static func mirrorsToRelease(streaming: Set<CGDirectDisplayID>, online: [CGDirectDisplayID],
+                                 masterOf: (CGDirectDisplayID) -> CGDirectDisplayID,
+                                 mirroringByChoice: Set<CGDirectDisplayID>,
+                                 mirroredByChoice: Set<CGDirectDisplayID>,
+                                 anchorManaged: Set<CGDirectDisplayID>) -> [CGDirectDisplayID] {
+        online.filter { id in
+            let master = masterOf(id)
+            guard master != 0, !anchorManaged.contains(id) else { return false }
+            if streaming.contains(id) { return !mirroringByChoice.contains(id) }
+            return streaming.contains(master) && !mirroredByChoice.contains(master)
+        }
+    }
+
+    /// Frees streaming displays WindowServer put in a mirror set while laying out a set a
+    /// display joined: one mirroring another can't be captured, so its stream stops, and one
+    /// mirrored takes the newcomer's screen. Only then, so a mirror made in System Settings
+    /// later stays; one the user made through DAM stays too.
+    func keepStreamingDisplaysOutOfMirrors() {
+        guard displayJoinedUntil > Date(), !streamingDisplays.isEmpty else { return }
+        guard !displayChangeInFlight else {
+            // Looked at again once the change has landed.
+            guard !streamingMirrorCheckPending else { return }
+            streamingMirrorCheckPending = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                self?.streamingMirrorCheckPending = false
+                self?.keepStreamingDisplaysOutOfMirrors()
+            }
+            return
+        }
+        let free = Self.mirrorsToRelease(streaming: streamingDisplayIDs.subtracting(standInDisplayIDs),
+                                         online: DisplayArrangement.onlineDisplayIDs(),
+                                         masterOf: { CGDisplayMirrorsDisplay($0) },
+                                         mirroringByChoice: streamingDisplaysMirroringByChoice,
+                                         mirroredByChoice: displaysMirroredByChoice,
+                                         anchorManaged: anchorManagedDisplayIDs)
+        guard !free.isEmpty else { return }
+        sdLog.debug("a display joined and WindowServer mirrored streaming displays; freeing \(free)")
+        // So no layout DAM puts back (an anchor's, the streaming one) mirrors them again.
+        keepUserMirror(free, on: 0)
+        streamingMirrorReleaseInFlight = true
+        commitDisplayChange({ cfg in
+            for id in free { CGConfigureDisplayMirrorOfDisplay(cfg, id, CGDirectDisplayID(0)) }
+        }) { [weak self] _ in self?.streamingMirrorReleaseInFlight = false }
+    }
+
     /// An addition, removal, resize or rotation of a streaming display, waiting its turn. An
     /// addition says when its display is placed, with its ID, or that none could be made,
     /// with nil; a resize or rotation whether it was done. The modes asked for are the
