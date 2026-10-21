@@ -156,8 +156,8 @@ final class OpenDisplayTCPChannel: OpenDisplayChannel {
 
 // MARK: - A socket's descriptor
 
-/// A connected socket's descriptor, as usbmuxd hands it over: read as it comes, written in
-/// order on a queue of its own.
+/// A connected socket's descriptor, as usbmuxd hands it over (SIGPIPE already off, see
+/// `Usbmuxd.openSocket`): read as it comes, written in order on a queue of its own.
 final class OpenDisplaySocketChannel: OpenDisplayChannel {
     var onReady: (() -> Void)?
     var onReceive: ((Data) -> Void)?
@@ -204,8 +204,6 @@ final class OpenDisplaySocketChannel: OpenDisplayChannel {
                     if !closed { self.fd = fd }
                     self.lock.unlock()
                     if closed { Darwin.close(fd); return }
-                    var on: Int32 = 1
-                    setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
                     let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: .main)
                     source.setEventHandler { [weak self] in self?.readAvailable() }
                     self.source = source
@@ -247,15 +245,7 @@ final class OpenDisplaySocketChannel: OpenDisplayChannel {
                 self.lock.unlock()
             }
             guard !closed, fd >= 0 else { return }
-            let failed: Bool = data.withUnsafeBytes { raw in
-                var at = 0
-                while at < raw.count {
-                    let n = write(fd, raw.baseAddress! + at, raw.count - at)
-                    if n > 0 { at += n } else if n < 0 && errno == EINTR { continue } else { return true }
-                }
-                return false
-            }
-            if failed {
+            if !Usbmuxd.writeAll(fd, data) {
                 let reason = String(cString: strerror(errno))
                 // A write cut short by close() is no news.
                 self.lock.lock()
@@ -362,22 +352,13 @@ enum Usbmuxd {
     fileprivate static func openSocket() throws -> Int32 {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw MuxError.unavailable(String(cString: strerror(errno))) }
-        var address = sockaddr_un()
-        address.sun_family = sa_family_t(AF_UNIX)
-        withUnsafeMutableBytes(of: &address.sun_path) { raw in
-            let path = Array(socketPath.utf8)
-            raw.copyBytes(from: path.prefix(raw.count - 1))
-        }
-        let ok = withUnsafePointer(to: &address) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
-            }
-        }
-        guard ok == 0 else {
+        guard ControlSocketPath.connect(fd, to: socketPath) else {
             let why = String(cString: strerror(errno))
             Darwin.close(fd)
             throw MuxError.unavailable(why)
         }
+        // A write to a peer gone fails rather than ending DAM: to usbmuxd, and to the
+        // receiver this descriptor carries after a Connect.
         var on: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
         return fd
