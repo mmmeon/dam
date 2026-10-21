@@ -687,7 +687,6 @@ final class VideoManager: ObservableObject {
                 if let keptAnchor, let name = self.virtualAnchorCGIDs.first(where: { $0.value == keptAnchor })?.key {
                     self.anchorSetSlaves[name, default: []].formUnion(slaveIDs)
                 }
-                if self.streamingDisplayIDs.contains(masterID) { self.streamingDisplaysMirroredByChoice.insert(masterID) }
                 self.commitDisplayChange({ cfg in
                     for slave in slaveIDs { CGConfigureDisplayMirrorOfDisplay(cfg, slave, masterID) }
                 }, completion: finish)
@@ -713,8 +712,16 @@ final class VideoManager: ObservableObject {
     /// Keeps a mirror change the user makes, `ids` mirroring `master` (0: each its own
     /// desktop), in the layouts DAM puts back, or they would undo it: the one kept after a
     /// streaming display came and the one each anchor restores. None of `ids` is an
-    /// anchor's set slave any more; one that is to be is added after.
+    /// anchor's set slave any more; one that is to be is added after. A streaming display
+    /// counts as mirrored by choice while a display mirrors it through DAM.
     func keepUserMirror(_ ids: [CGDirectDisplayID], on master: CGDirectDisplayID) {
+        if streamingDisplayIDs.contains(master) { streamingDisplaysMirroredByChoice.insert(master) }
+        // The others only while a display not among `ids` still mirrors them.
+        let moving = Set(ids)
+        let online = DisplayArrangement.onlineDisplayIDs()
+        streamingDisplaysMirroredByChoice = streamingDisplaysMirroredByChoice.filter { id in
+            id == master || online.contains { !moving.contains($0) && $0 != id && CGDisplayMirrorsDisplay($0) == id }
+        }
         for name in anchorSetSlaves.keys { anchorSetSlaves[name]?.subtract(ids) }
         streamingSettle = streamingSettle.map { ($0.arrangement.mirroring(ids, on: master), $0.until) }
         for (name, arrangement) in virtualAnchorArrangements {
@@ -842,6 +849,7 @@ final class VideoManager: ObservableObject {
                                              slavesOf: slaves(of:), anchorIDs: Set(virtualAnchorCGIDs.values))
         guard !toExtend.isEmpty else { return completion(.success(())) }
         mirrorLog.debug("dissolveMirrorSets: extending \(toExtend) first")
+        keepUserMirror(Array(toExtend), on: 0)
         commitDisplayChange({ cfg in
             for id in toExtend { CGConfigureDisplayMirrorOfDisplay(cfg, id, CGDirectDisplayID(0)) }
         }, settle: 1.0, completion: completion)

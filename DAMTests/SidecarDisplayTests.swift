@@ -210,6 +210,18 @@ final class SidecarDisplayTests: XCTestCase {
         XCTAssertEqual(manager.virtualAnchorArrangements["TV"]?.origins, captured.origins)
     }
 
+    func testAStreamingDisplayIsMirroredByChoiceOnlyWhileMirroredThroughDAM() {
+        let manager = VideoManager()
+        manager.streamingDisplays = [VideoManager.StreamingDisplay(display: NSObject(), index: 0, name: "S",
+                                                                   serial: 4, start: StreamingDisplayModes.start,
+                                                                   id: 42)]
+        manager.keepUserMirror([2], on: 42)
+        XCTAssertEqual(manager.streamingDisplaysMirroredByChoice, [42])
+        // Nothing online mirrors it once 2 is extended again.
+        manager.keepUserMirror([2], on: 0)
+        XCTAssertTrue(manager.streamingDisplaysMirroredByChoice.isEmpty)
+    }
+
     func testOnlyTheStandInAnAttemptMadeIsReleased() {
         let manager = VideoManager()
         let later = NSObject()
