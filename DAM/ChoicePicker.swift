@@ -253,7 +253,7 @@ extension ChoicePicker: NSTouchBarDelegate {
         guard let i = choices.indices.first(where: { choiceID($0) == identifier }) else {
             return nil
         }
-        let btn = NSButton(title: "\(i + 1).  \(truncated(choices[i]))",
+        let btn = NSButton(title: (hudNumber(at: i).map { "\($0).  " } ?? "") + truncated(choices[i]),
                            target: self, action: #selector(touchBarChoiceTapped(_:)))
         btn.tag = i
         btn.bezelColor = i == cursor ? .controlAccentColor : nil
