@@ -168,4 +168,22 @@ final class MoonlightInputTests: XCTestCase {
         XCTAssertEqual(scroll.scroll(30)?.units, .pixel)
         XCTAssertNil(scroll.scroll(0))
     }
+
+    func testTextIsTypedInPiecesOfWholeCharacters() {
+        // 19 letters then an emoji of two UTF-16 units: the emoji goes whole in the next piece.
+        let text = String(repeating: "a", count: 19) + "😀" + "b"
+        let chunks = MoonlightInputInjector.chunks(of: text)
+        XCTAssertEqual(chunks.map(\.count), [19, 3])
+        XCTAssertEqual(chunks.map { String(decoding: $0, as: UTF16.self) }, [String(repeating: "a", count: 19), "😀b"])
+        XCTAssertEqual(chunks.joined().map { $0 }, Array(text.utf16))
+
+        // A family of four is 11 units, one character: never split, so one to a piece.
+        let families = String(repeating: "👨‍👩‍👧‍👦", count: 3)
+        XCTAssertEqual(MoonlightInputInjector.chunks(of: families).map(\.count), [11, 11, 11])
+        XCTAssertTrue(MoonlightInputInjector.chunks(of: "").isEmpty)
+
+        // A character longer than a piece goes a scalar at a time.
+        let long = "e" + String(repeating: "\u{301}", count: 25)
+        XCTAssertEqual(MoonlightInputInjector.chunks(of: long).map(\.count), [20, 6])
+    }
 }

@@ -181,9 +181,7 @@ final class MoonlightInputInjector {
 
     /// Types `text` as it is, whatever the keyboard layout, a few characters an event.
     private func type(_ text: String) {
-        let units = Array(text.utf16)
-        for start in stride(from: 0, to: units.count, by: 20) {
-            let chunk = Array(units[start..<min(start + 20, units.count)])
+        for chunk in Self.chunks(of: text) {
             for down in [true, false] {
                 guard let event = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: down) else { continue }
                 event.flags = []
@@ -191,6 +189,27 @@ final class MoonlightInputInjector {
                 event.post(tap: .cghidEventTap)
             }
         }
+    }
+
+    /// `text` as UTF-16 in pieces of at most `maxUnits`, as an event carries, whole
+    /// characters each: a character cut in two would type as two broken ones. One longer
+    /// than a piece on its own goes a scalar at a time.
+    static func chunks(of text: String, maxUnits: Int = 20) -> [[UInt16]] {
+        var chunks: [[UInt16]] = []
+        var chunk: [UInt16] = []
+        for character in text {
+            let pieces = character.utf16.count <= maxUnits
+                ? [Array(character.utf16)] : character.unicodeScalars.map { Array(String($0).utf16) }
+            for piece in pieces {
+                if chunk.count + piece.count > maxUnits {
+                    chunks.append(chunk)
+                    chunk = []
+                }
+                chunk += piece
+            }
+        }
+        if !chunk.isEmpty { chunks.append(chunk) }
+        return chunks
     }
 
     /// The modifiers the keys held down make.
