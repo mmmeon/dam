@@ -484,7 +484,7 @@ extension VideoManager {
         let arrangement = settle.arrangement
         var config: CGDisplayConfigRef?
         guard CGBeginDisplayConfiguration(&config) == .success, let cfg = config else { return }
-        // Resolutions only for the same displays, mirrored the same way (see reapplyModes).
+        // Resolutions only for the same displays, mirrored the same way (see sameSet).
         let sameSet = DisplayArrangement.sameSet(captured: arrangement.mirrorMasters,
                                                  online: DisplayArrangement.onlineDisplayIDs(),
                                                  mirrorOf: { CGDisplayMirrorsDisplay($0) })
