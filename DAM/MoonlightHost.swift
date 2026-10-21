@@ -819,6 +819,10 @@ final class MoonlightHost {
            SecCertificateCreateWithData(nil, stored as CFData) != nil {
             key = imported
             certificate = stored
+            // Kept even so, as a new one unpairs every device.
+            if !DER.hasMinimalSerial(stored) {
+                mlLog.error("the host certificate's serial is not minimal DER; some Moonlight clients may refuse it")
+            }
         } else {
             mlLog.debug("making the host's key and certificate")
             key = try MoonlightCrypto.generatePrivateKey()

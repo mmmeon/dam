@@ -157,6 +157,25 @@ final class MoonlightPairingTests: XCTestCase {
         XCTAssertEqual(DER.length(300), Data([0x82, 0x01, 0x2C]))
     }
 
+    func testDERIntegersTakeAsFewBytesAsTheyCan() {
+        XCTAssertEqual(DER.integer(Data([2])), Data([0x02, 0x01, 0x02]))
+        XCTAssertEqual(DER.integer(Data([0x00, 0x12, 0x34])), Data([0x02, 0x02, 0x12, 0x34]), "a zero it need not keep")
+        XCTAssertEqual(DER.integer(Data([0x00, 0x00, 0x80])), Data([0x02, 0x02, 0x00, 0x80]), "one zero kept, for the sign")
+        XCTAssertEqual(DER.integer(Data([0x80])), Data([0x02, 0x02, 0x00, 0x80]))
+        XCTAssertEqual(DER.integer(Data([0x00, 0x00])), Data([0x02, 0x01, 0x00]))
+        XCTAssertEqual(DER.integer(Data()), Data([0x02, 0x01, 0x00]))
+    }
+
+    func testASerialWithAZeroItNeedNotKeepIsFoundOut() throws {
+        func certificate(serial: Data) -> Data {
+            DER.sequence(DER.sequence(DER.explicit(0, DER.integer(Data([2]))), serial, DER.null))
+        }
+        XCTAssertFalse(DER.hasMinimalSerial(certificate(serial: DER.tlv(0x02, Data([0x00, 0x12, 0x34])))))
+        XCTAssertTrue(DER.hasMinimalSerial(certificate(serial: DER.tlv(0x02, Data([0x00, 0x92, 0x34])))))
+        XCTAssertTrue(DER.hasMinimalSerial(certificate(serial: DER.integer(Data([0x00, 0x12, 0x34])))))
+        XCTAssertTrue(DER.hasMinimalSerial(try Party.make("p").certificate))
+    }
+
     func testXMLEscapesText() {
         XCTAssertEqual(MoonlightHost.escape("A & <B>"), "A &amp; &lt;B&gt;")
         XCTAssertTrue(MoonlightHost.xml(["paired": "1"]).contains("<root status_code=\"200\"><paired>1</paired></root>"))

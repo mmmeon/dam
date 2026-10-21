@@ -267,9 +267,26 @@ enum DER {
     static func bitString(_ data: Data) -> Data { tlv(0x03, Data([0]) + data) }
     static func explicit(_ number: UInt8, _ content: Data) -> Data { tlv(0xA0 | number, content) }
 
-    /// A non-negative INTEGER from its big-endian bytes.
+    /// A non-negative INTEGER from its big-endian bytes, in as few as DER allows: leading
+    /// zeros dropped, but for one where the top bit would otherwise read as a minus sign, or
+    /// nothing would be left.
+    /// OpenSSL and BoringSSL refuse a certificate whose serial keeps a zero it need not.
     static func integer(_ bytes: Data) -> Data {
-        tlv(0x02, (bytes.first ?? 0) & 0x80 != 0 ? Data([0]) + bytes : bytes)
+        let trimmed = Data(bytes.drop { $0 == 0 })
+        return tlv(0x02, (trimmed.first ?? 0x80) & 0x80 != 0 ? Data([0]) + trimmed : trimmed)
+    }
+
+    /// Whether a certificate's serial is written in as few bytes as DER allows; one made
+    /// before `integer` saw to it may not be (about one in 256).
+    static func hasMinimalSerial(_ certificate: Data) -> Bool {
+        let bytes = [UInt8](certificate)
+        guard let outer = read(bytes, at: 0), let tbs = read(bytes, at: outer.content.lowerBound),
+              let version = read(bytes, at: tbs.content.lowerBound) else { return false }
+        // The version is optional; the serial follows it if it is there.
+        let serial = version.tag == 0xA0 ? read(bytes, at: version.next) : version
+        guard let serial, serial.tag == 0x02, !serial.content.isEmpty else { return false }
+        return serial.content.count == 1 || bytes[serial.content.lowerBound] != 0
+            || bytes[serial.content.lowerBound + 1] & 0x80 != 0
     }
 
     static func utcTime(_ date: Date) -> Data {
