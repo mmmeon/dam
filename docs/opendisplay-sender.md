@@ -79,3 +79,7 @@ With the iPad (2026-10-20): its hello offers `cursorPort` 9001, but it acknowled
 while the Wi-Fi dial landed on its link-local IPv6 address (as a Bonjour name otherwise
 resolves); dialed over IPv4, it acknowledges at once and the pointer goes over UDP. So the
 Wi-Fi dial is IPv4 only.
+
+The datagrams first went as best effort and the pointer felt worse than over TCP, waiting
+behind the video's interactive-video traffic on Wi-Fi; marked interactive voice, UDP feels
+better than TCP. `dam.opendisplay.pointerUDP` set off keeps the pointer on TCP to compare.
