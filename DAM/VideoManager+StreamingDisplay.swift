@@ -200,8 +200,7 @@ extension VideoManager {
         guard streamingIDs.contains(where: { CGDisplayIsMain($0) != 0 }),
               !streamingDisplayIsMainByChoice,
               // Placing one puts main back itself; the others' commits would race this one.
-              !streamingChangeInFlight, !streamingReassertInFlight, !streamingMainHandBackInFlight,
-              !virtualAnchorReassertInFlight else { return }
+              !displayChangeInFlight else { return }
         // Displays showing their own desktop, on their own or through an anchor; a disabled
         // one stays online but has no screen.
         let candidates = (allConnectedDisplays + allAirPlayDevices).filter {

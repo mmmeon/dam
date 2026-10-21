@@ -230,6 +230,15 @@ final class VideoManager: ObservableObject {
     /// Whether that layout is being put back; later changes wait for the one it causes.
     var streamingReassertInFlight = false
 
+    /// Whether DAM is in the middle of a display change of its own: putting an anchor's or the
+    /// streaming layout back, adding, removing or resizing a streaming display, or handing main
+    /// back from one. A change made on top would race it; the reconfiguration it causes on
+    /// landing brings the next look.
+    var displayChangeInFlight: Bool {
+        virtualAnchorReassertInFlight || streamingChangeInFlight || streamingReassertInFlight
+            || streamingMainHandBackInFlight
+    }
+
     /// Start continuous Bonjour discovery. Call once on launch; runs until the app quits.
     func startDiscovery() {
         let browser = NWBrowser(for: .bonjour(type: "_airplay._tcp", domain: nil), using: .tcp)
@@ -351,7 +360,7 @@ final class VideoManager: ObservableObject {
             self?.keepStreamingDisplayOffMain()
             // WindowServer places a display that arrives beside a virtual anchor on top of
             // it (an AirPlay TV joining an anchored iPad); move it off.
-            if let self, !self.virtualAnchorCGIDs.isEmpty, !self.virtualAnchorReassertInFlight {
+            if let self, !self.virtualAnchorCGIDs.isEmpty, !self.displayChangeInFlight {
                 self.separateOverlappingDisplays()
             }
             // A resolution or arrangement change leaves the display list as it was, yet the
