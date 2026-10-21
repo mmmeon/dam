@@ -238,6 +238,9 @@ final class VideoManager: ObservableObject {
         virtualAnchorReassertInFlight || streamingChangeInFlight || streamingReassertInFlight
             || streamingMainHandBackInFlight
     }
+    /// How many changes the user asked for (mirror, extend, main, positions, resolution) have
+    /// been begun, so a step DAM takes later can tell that one came meanwhile.
+    var displayChangesBegun = 0
 
     /// Start continuous Bonjour discovery. Call once on launch; runs until the app quits.
     func startDiscovery() {
@@ -885,6 +888,7 @@ final class VideoManager: ObservableObject {
         var config: CGDisplayConfigRef?
         let begin = CGBeginDisplayConfiguration(&config)
         guard begin == .success, let cfg = config else { return completion(.failure(.configuration(begin))) }
+        displayChangesBegun += 1
         configure(cfg)
         // Touched on the main queue only: whichever of the commit and the timeout comes first
         // reports, and the other one does not.

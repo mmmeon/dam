@@ -742,6 +742,7 @@ extension VideoManager {
         let anchorID    = virtualAnchorCGIDs[display.name] ?? 0
         let arrangement = virtualAnchorArrangements[display.name]
         let setSlaves   = anchorSetSlaves[display.name] ?? []
+        let changesBegun = displayChangesBegun
         // Keep the virtual display alive until the mirror is torn down: destroying the master
         // first leaves its slaves orphaned and lets WindowServer pick a new layout.
         let vd = forgetAnchor(display.name)
@@ -773,10 +774,15 @@ extension VideoManager {
                     completion?()
                 }
                 // Once the set has settled without the anchor, put the positions back if
-                // WindowServer's saved layout for that set moved them.
+                // WindowServer's saved layout for that set moved them; not over a change made
+                // since, as when the release was the first step of a mirror.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                    guard let self, self.displayChangesBegun == changesBegun, !self.displayChangeInFlight else {
+                        vdLog.debug("disableVirtualAnchor: another change came since; positions left to it")
+                        return
+                    }
                     arrangement?.reapplyOriginsPermanently()
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self?.mergeDevices() }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.mergeDevices() }
                 }
             }
         }
