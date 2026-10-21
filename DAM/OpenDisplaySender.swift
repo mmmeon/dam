@@ -954,11 +954,14 @@ final class OpenDisplaySession {
 struct OpenDisplayCursor {
     private var last: CGPoint??
     private var lastImage: Data?
+    /// The display's size the picture was sent for: its size goes as a share of it.
+    private var imageBounds: CGSize?
     private var checkedImage = Date.distantPast
 
     mutating func reset() {
         last = nil
         lastImage = nil
+        imageBounds = nil
         checkedImage = .distantPast
     }
 
@@ -970,8 +973,11 @@ struct OpenDisplayCursor {
         guard bounds.width > 0, bounds.height > 0 else { return (nil, nil) }
         if Date().timeIntervalSince(checkedImage) > 0.25 {
             checkedImage = Date()
-            if let (png, size, hotSpot) = Self.picture(), png != lastImage {
+            // Again when the display changes shape, as when the iPad turns: it may still have
+            // had its old size when the stream started again.
+            if let (png, size, hotSpot) = Self.picture(), png != lastImage || bounds.size != imageBounds {
                 lastImage = png
+                imageBounds = bounds.size
                 image = OpenDisplayReply.cursorImage(
                     png: png, size: CGSize(width: size.width / bounds.width, height: size.height / bounds.height),
                     hotSpot: CGPoint(x: hotSpot.x / max(size.width, 1), y: hotSpot.y / max(size.height, 1)))

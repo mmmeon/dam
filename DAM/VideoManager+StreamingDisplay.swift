@@ -490,9 +490,12 @@ extension VideoManager {
               mode.pixelWidth <= Int(vd.maxPixelsWide), mode.pixelHeight <= Int(vd.maxPixelsHigh) else {
             return completion(false)
         }
-        if streamingDisplays[i].start == mode,
-           let wanted = Self.displayMode(mode, of: id), let current = CGDisplayCopyDisplayMode(id),
-           DisplayArrangement.sameMode(wanted, current) {
+        // Already in it, mirroring nothing: nothing to do. Asked here, before the new mode list:
+        // once a virtual display is given one, it reports the list's first mode as its own
+        // straight away, while it still runs the old one.
+        if CGDisplayMirrorsDisplay(id) == 0, let wanted = Self.displayMode(mode, of: id),
+           let current = CGDisplayCopyDisplayMode(id), DisplayArrangement.sameMode(wanted, current) {
+            streamingDisplays[i].start = mode
             return completion(true)
         }
         let index = streamingDisplays[i].index
@@ -568,12 +571,12 @@ extension VideoManager {
             return finishStreamingChange()
         }
         // WindowServer may mirror, move or resize the others for the new size.
-        let mirrored = CGDisplayMirrorsDisplay(id) != 0
-        if mirrored { CGConfigureDisplayMirrorOfDisplay(cfg, id, CGDirectDisplayID(0)) }
-        let moved = before.restore(in: cfg, excluding: [id])
-        let othersResized = before.restoreModes(in: cfg, excluding: [id])
-        let switching = !(CGDisplayCopyDisplayMode(id).map { DisplayArrangement.sameMode($0, target) } ?? false)
-        if switching { CGConfigureDisplayWithDisplayMode(cfg, id, target, nil) }
+        if CGDisplayMirrorsDisplay(id) != 0 { CGConfigureDisplayMirrorOfDisplay(cfg, id, CGDirectDisplayID(0)) }
+        _ = before.restore(in: cfg, excluding: [id])
+        before.restoreModes(in: cfg, excluding: [id])
+        // Always: given a new mode list, the display reports `target` as its mode already
+        // (see resizeStreamingDisplay), so asking whether it runs it says nothing.
+        CGConfigureDisplayWithDisplayMode(cfg, id, target, nil)
         let origin = before.origins[id] ?? CGDisplayBounds(id).origin
         let resized = before.excluding(id).adding(id, origin: origin, mode: target)
         let settle = { [weak self] (done: Bool) in
@@ -583,12 +586,6 @@ extension VideoManager {
             self.mergeDevices()
             completion(done)
             self.finishStreamingChange()
-        }
-        guard mirrored || moved || othersResized || switching else {
-            // A commit that changes nothing takes 10 s to return.
-            sdLog.debug("resize: already in \(mode.width)×\(mode.height)")
-            CGCancelDisplayConfiguration(cfg)
-            return settle(true)
         }
         // For the session, as placing one is.
         DispatchQueue.global(qos: .userInitiated).async {
