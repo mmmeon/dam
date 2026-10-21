@@ -507,6 +507,42 @@ final class RemoteSessionsTests: XCTestCase {
         XCTAssertNil(ControlHandler.request(from: URL(string: "dam://quit")!))
     }
 
+    func testSizesAndChoicesAreCheckedHoweverTheyCome() {
+        let side = StreamingDisplayModes.maxPixelsSide
+        let start = ["session", "start", "--app", "x"]
+        for bad in [["--width", "-2"], ["--width", "0"], ["--height", "\(side + 1)"], ["--width", "99999999999"],
+                    ["--fps", "0"], ["--fps", "1000"], ["--display", "make"], ["--placement", "left"]] {
+            XCTAssertThrowsError(try ControlCLI.request(from: start + bad, environment: [:]), "\(bad)")
+        }
+        XCTAssertThrowsError(try ControlCLI.request(from: start, environment: ["SUNSHINE_CLIENT_WIDTH": "-1"]))
+        XCTAssertEqual(try ControlCLI.request(from: start + ["--width", "\(side)", "--fps", "240"], environment: [:]).width, side)
+
+        // URLs: refused, not passed on with the bad value or without it.
+        for query in ["width=-2&height=-2", "width=wide", "fps=0", "height=\(side + 1)", "display=make", "placement=left",
+                      "blackout=maybe"] {
+            XCTAssertNil(ControlHandler.request(from: URL(string: "dam://session/start?app=x&\(query)")!), query)
+        }
+        XCTAssertNil(ControlHandler.request(from: URL(string: "dam://session/start?width=1280")!))
+
+        // The socket's requests come as JSON, checked by the handler with the same rules.
+        XCTAssertNotNil(ControlRequest(command: "session.start", app: "x", width: -2, height: -2).problem)
+        XCTAssertNotNil(ControlRequest(command: "session.start", app: "x", fps: 100_000).problem)
+        XCTAssertNotNil(ControlRequest(command: "session.start", app: "x", display: "make").problem)
+        XCTAssertNotNil(ControlRequest(command: "session.start", app: "x", placement: "left").problem)
+        XCTAssertNil(ControlRequest(command: "session.start", app: "x", width: 1920, height: 1080, fps: 60,
+                                    display: "create", placement: "mirror").problem)
+    }
+
+    func testYesAndNoAreReadAlikeEverywhere() throws {
+        for (text, value) in [("yes", true), ("true", true), ("1", true), ("no", false), ("false", false), ("0", false)] {
+            XCTAssertEqual(ControlHandler.request(from: URL(string: "dam://session/start?app=x&blackout=\(text)")!)?.blackout, value)
+            XCTAssertEqual(ControlHandler.request(from: URL(string: "dam://session/end?app=x&all=\(text)")!)?.all, value)
+            XCTAssertEqual(try ControlCLI.request(from: ["session", "start", "--app", "x", "--blackout", text],
+                                                  environment: [:]).blackout, value)
+        }
+        XCTAssertEqual(ControlHandler.request(from: URL(string: "dam://session/start?app=x&clientID=A&client-id=B")!)?.clientID, "A")
+    }
+
     // MARK: - Socket
 
     func testRequestAndAnswerOverTheSocket() throws {
