@@ -218,15 +218,16 @@ extension VideoManager {
         setMainDisplay(display) { [weak self] _ in self?.streamingMainHandBackInFlight = false }
     }
 
-    /// Notes a display joining that DAM didn't make (a TV connected): WindowServer then lays
-    /// the new set out from a layout it saved for it, mirrors included, over the next seconds,
-    /// and an anchor made for the newcomer keeps a layout for its first 30.
-    func noteDisplaysJoined() {
+    /// Notes a display DAM didn't make joining or leaving (a TV connected or disconnected):
+    /// WindowServer then lays the new set out from a layout it saved for it, mirrors included,
+    /// over the next seconds, or hands a mirror set the leaver was in to another of its members;
+    /// an anchor made for a newcomer keeps a layout for its first 30.
+    func noteDisplaySetChanged() {
         let online = Set(DisplayArrangement.onlineDisplayIDs())
         defer { onlineAtLastMerge = online }
         guard let before = onlineAtLastMerge,
-              !online.subtracting(before).subtracting(streamingDisplayIDs).isEmpty else { return }
-        displayJoinedUntil = Date().addingTimeInterval(45)
+              !online.symmetricDifference(before).subtracting(streamingDisplayIDs).isEmpty else { return }
+        displaySetChangedUntil = Date().addingTimeInterval(45)
     }
 
     /// The displays to give their own desktop again: each of `streaming` mirroring a display
@@ -245,35 +246,49 @@ extension VideoManager {
         }
     }
 
-    /// Frees streaming displays WindowServer put in a mirror set while laying out a set a
-    /// display joined: one mirroring another can't be captured, so its stream stops, and one
-    /// mirrored takes the newcomer's screen. Only then, so a mirror made in System Settings
-    /// later stays; one the user made through DAM stays too.
-    func keepStreamingDisplaysOutOfMirrors() {
-        guard displayJoinedUntil > Date(), !streamingDisplays.isEmpty else { return }
+    /// Undoes what WindowServer does to the streaming displays while laying out a set a display
+    /// joined or left, from a layout it saved for it: frees those it put in a mirror set (one
+    /// mirroring another can't be captured, so its stream stops, and one mirrored takes the
+    /// others' screens, main with them) and gives each the mode it was made in or set to (a
+    /// HiDPI one, say, for a stream of its pixel size). Only then, so a change made in System
+    /// Settings later stays; a mirror the user made through DAM stays too.
+    func keepStreamingDisplaysAsMade() {
+        guard displaySetChangedUntil > Date(), !streamingDisplays.isEmpty else { return }
         guard !displayChangeInFlight else {
             // Looked at again once the change has landed.
             guard !streamingMirrorCheckPending else { return }
             streamingMirrorCheckPending = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
                 self?.streamingMirrorCheckPending = false
-                self?.keepStreamingDisplaysOutOfMirrors()
+                self?.keepStreamingDisplaysAsMade()
             }
             return
         }
-        let free = Self.mirrorsToRelease(streaming: streamingDisplayIDs.subtracting(standInDisplayIDs),
+        let streaming = streamingDisplayIDs.subtracting(standInDisplayIDs)
+        let free = Self.mirrorsToRelease(streaming: streaming,
                                          online: DisplayArrangement.onlineDisplayIDs(),
                                          masterOf: { CGDisplayMirrorsDisplay($0) },
                                          mirroringByChoice: streamingDisplaysMirroringByChoice,
                                          mirroredByChoice: displaysMirroredByChoice,
                                          anchorManaged: anchorManagedDisplayIDs)
-        guard !free.isEmpty else { return }
-        sdLog.debug("a display joined and WindowServer mirrored streaming displays; freeing \(free)")
+        // Not one left in a mirror set made through DAM: the set runs one mode on all of them.
+        let modes: [(CGDirectDisplayID, CGDisplayMode)] = streamingDisplays.compactMap { display in
+            let id = display.id
+            guard streaming.contains(id), CGDisplayMirrorsDisplay(id) == 0 || free.contains(id),
+                  !displaysMirroredByChoice.contains(id),
+                  let wanted = Self.displayMode(display.start, of: id),
+                  !(CGDisplayCopyDisplayMode(id).map { DisplayArrangement.sameMode($0, wanted) } ?? false)
+            else { return nil }
+            return (id, wanted)
+        }
+        guard !free.isEmpty || !modes.isEmpty else { return }
+        sdLog.debug("the display set changed; freeing \(free) from mirrors, modes back on \(modes.map(\.0))")
         // So no layout DAM puts back (an anchor's, the streaming one) mirrors them again.
-        keepUserMirror(free, on: 0)
+        if !free.isEmpty { keepUserMirror(free, on: 0) }
         streamingMirrorReleaseInFlight = true
         commitDisplayChange({ cfg in
             for id in free { CGConfigureDisplayMirrorOfDisplay(cfg, id, CGDirectDisplayID(0)) }
+            for (id, mode) in modes { CGConfigureDisplayWithDisplayMode(cfg, id, mode, nil) }
         }) { [weak self] _ in self?.streamingMirrorReleaseInFlight = false }
     }
 

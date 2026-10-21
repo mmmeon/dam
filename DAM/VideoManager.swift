@@ -229,11 +229,11 @@ final class VideoManager: ObservableObject {
     var streamingSettle: (arrangement: DisplayArrangement, until: Date)?
     /// Whether that layout is being put back; later changes wait for the one it causes.
     var streamingReassertInFlight = false
-    /// The displays online at the last re-read, to tell when one joins.
+    /// The displays online at the last re-read, to tell when one joins or leaves.
     var onlineAtLastMerge: Set<CGDirectDisplayID>?
-    /// Until when WindowServer may still be laying out a set a display joined, from a layout
-    /// it saved for it: streaming displays it puts in mirror sets meanwhile are freed again.
-    var displayJoinedUntil = Date.distantPast
+    /// Until when WindowServer may still be laying out a set a display joined or left, from a
+    /// layout it saved for it: what it does to the streaming displays meanwhile is undone.
+    var displaySetChangedUntil = Date.distantPast
     /// Whether streaming displays WindowServer mirrored are being freed.
     var streamingMirrorReleaseInFlight = false
     /// Whether a look at them waits for a change in flight to land.
@@ -368,8 +368,8 @@ final class VideoManager: ObservableObject {
             self?.reassertAnchorLayout()
             self?.reassertStreamingLayout()
             self?.mergeDevices()
-            self?.noteDisplaysJoined()
-            self?.keepStreamingDisplaysOutOfMirrors()
+            self?.noteDisplaySetChanged()
+            self?.keepStreamingDisplaysAsMade()
             self?.keepStreamingDisplayOffMain()
             // WindowServer places a display that arrives beside a virtual anchor on top of
             // it (an AirPlay TV joining an anchored iPad); move it off.
