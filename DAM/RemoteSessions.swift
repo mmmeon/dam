@@ -283,6 +283,8 @@ protocol SessionDisplays: AnyObject {
     func removeDisplay(_ id: CGDirectDisplayID)
     /// The display online whose name contains `name`, ignoring case, other than DAM's own.
     func findDisplay(named name: String) -> CGDirectDisplayID?
+    /// Whether display `id` is online and known, other than DAM's own; it can be placed then.
+    func isListed(_ id: CGDirectDisplayID) -> Bool
     /// Places display `id` as `placement` says; `completion` gets whether it was done.
     func place(_ id: CGDirectDisplayID, _ placement: SessionProfile.Placement, completion: @escaping (Bool) -> Void)
     var outputUID: String? { get }
@@ -487,12 +489,15 @@ final class RemoteSessionCoordinator {
     var adoptInterval: TimeInterval = 0.5
 
     /// Finds the display named `name`, or `known`, waiting for it to come; nil if it doesn't.
+    /// The app can tell of its display before DAM has it listed, and it can't be placed until.
     private func waitForDisplay(named name: String, known: CGDirectDisplayID?, attempts: Int,
                                 completion: @escaping (CGDirectDisplayID?) -> Void) {
-        if let id = known ?? displays.findDisplay(named: name) { return completion(id) }
+        let found: CGDirectDisplayID?
+        if let known { found = displays.isListed(known) ? known : nil } else { found = displays.findDisplay(named: name) }
+        if let id = found { return completion(id) }
         guard attempts > 1 else { return completion(nil) }
         DispatchQueue.main.asyncAfter(deadline: .now() + adoptInterval) { [weak self] in
-            self?.waitForDisplay(named: name, known: nil, attempts: attempts - 1, completion: completion)
+            self?.waitForDisplay(named: name, known: known, attempts: attempts - 1, completion: completion)
         }
     }
 
@@ -671,6 +676,8 @@ final class LiveSessionDisplays: SessionDisplays {
         guard !name.isEmpty else { return nil }
         return displayNames.first { $0.name.localizedCaseInsensitiveContains(name) }?.id
     }
+
+    func isListed(_ id: CGDirectDisplayID) -> Bool { displayNames.contains { $0.id == id } }
 
     /// The online displays' IDs and names, other than DAM's own.
     var displayNames: [(id: CGDirectDisplayID, name: String)] {

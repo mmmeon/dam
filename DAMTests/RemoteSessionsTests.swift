@@ -35,6 +35,8 @@ private final class FakeSessionDisplays: SessionDisplays {
         others.first { $0.key.localizedCaseInsensitiveContains(name) }?.value
     }
 
+    func isListed(_ id: CGDirectDisplayID) -> Bool { others.values.contains(id) }
+
     func place(_ id: CGDirectDisplayID, _ placement: SessionProfile.Placement, completion: @escaping (Bool) -> Void) {
         placed.append((id, placement))
         if placeSucceeds { placements[id] = placement }
@@ -979,6 +981,27 @@ final class RemoteSessionsTests: XCTestCase {
         XCTAssertEqual(try result?.get().displayID, 9)
     }
 
+    func testAdoptWaitsForADisplayToldOfToBeListed() {
+        let fake = FakeSessionDisplays()
+        var profile = SessionProfile()
+        profile.display = .adopt
+        profile.placement = .main
+        let c = coordinator(fake, profiles: ["opendisplay": profile])
+        c.adoptInterval = 0.05
+        // Another display goes by the name, but the app told of its own.
+        fake.others = ["OpenDisplay (other)": 3]
+        var request = SessionRequest(app: "opendisplay")
+        request.adoptedDisplayID = 8
+        var result: Result<SessionStart, SessionError>?
+        c.begin(request) { result = $0 }
+        XCTAssertNil(result)
+        XCTAssertTrue(fake.placed.isEmpty)
+        fake.others["OpenDisplay"] = 8
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        XCTAssertEqual(try result?.get(), SessionStart(displayID: 8))
+        XCTAssertEqual(fake.placed.map(\.0), [8])
+    }
+
     func testAdoptCarriesOnWithoutTheDisplay() {
         let fake = FakeSessionDisplays()
         var profile = SessionProfile()
@@ -1094,6 +1117,7 @@ final class RemoteSessionsTests: XCTestCase {
         profile.display = .adopt
         profile.placement = .main
         let c = coordinator(fake, profiles: ["opendisplay": profile])
+        fake.others = ["OpenDisplay iPad": 7]
         var detector: FakeDetector?
         let watcher = SessionWatcher(coordinator: c) { app in
             guard app == "opendisplay" else { return nil }
