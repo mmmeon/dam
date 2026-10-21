@@ -1712,8 +1712,12 @@ final class SettingsWindowController: NSWindowController {
             AudioManager.uid(of: device.id).map { (uid: $0, device: device) }
         }
         let popup = ClosurePopup(onSelect: { uid in
-            VisibilityPreferences.speechOutputUID  = uid
-            VisibilityPreferences.speechOutputName = devices.first { $0.uid == uid }?.device.name
+            let connected = devices.first { $0.uid == uid }?.device.name
+            // Picking the disconnected choice again keeps the name it was stored with.
+            if connected != nil || uid != VisibilityPreferences.speechOutputUID {
+                VisibilityPreferences.speechOutputName = connected
+            }
+            VisibilityPreferences.speechOutputUID = uid
         })
         popup.controlSize = .small
         popup.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
