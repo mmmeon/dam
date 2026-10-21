@@ -67,6 +67,13 @@ final class WebStreamTests: XCTestCase {
         XCTAssertTrue(exact.newDisplay == (2560, 1600, 60))
     }
 
+    func testAViewerMayHoldAsMuchAsTheEncoderBursts() {
+        XCTAssertEqual(StreamProfile.interactive.maxInFlight(bitrateKbps: 20_000), 2_500_000, "a second of the stream")
+        XCTAssertEqual(StreamProfile.balanced.maxInFlight(bitrateKbps: 30_000), 7_500_000, "twice the rate for a second")
+        XCTAssertEqual(StreamProfile.viewing.maxInFlight(bitrateKbps: 40_000), 30_000_000, "three times for two seconds")
+        XCTAssertEqual(StreamProfile.viewing.maxInFlight(bitrateKbps: 150_000), 64 << 20)
+    }
+
     func testProfilesSetTheEncoderApart() {
         let interactive = StreamProfile.interactive.encoderSettings(width: 1920, height: 1080, fps: 60, bitrateKbps: 20_000)
         XCTAssertFalse(interactive.reordering)

@@ -88,6 +88,15 @@ enum StreamProfile: String, CaseIterable {
         return settings
     }
 
+    /// Bytes a viewer may have unsent before it counts as behind: a second of the stream, or
+    /// all the encoder may put out over its rate limit's window when that is more, so a
+    /// scene change bursting to its limit leaves no one behind. At most 64 MB.
+    func maxInFlight(bitrateKbps: Int) -> Int {
+        let settings = encoderSettings(width: 0, height: 0, fps: 0, bitrateKbps: bitrateKbps)
+        let seconds = max(1, settings.rateLimitMultiple * settings.rateLimitWindow)
+        return min(Int(Double(bitrateKbps * 125) * seconds), 64 << 20)
+    }
+
     private static let preferredKey = "\(AppIdentity.shortID).stream.profile"
 
     /// The profile streams get unless they ask for one; chosen in the menu.
@@ -633,7 +642,9 @@ final class WebStreamServer {
         let key = WebStreamSession.Key(displayID: displayID, profile: request.profile, bitrateKbps: request.bitrateKbps,
                                        fps: size.fps, width: size.width, height: size.height,
                                        lowLatency: request.lowLatency)
-        let viewer = WebStreamViewer(connection: connection, maxInFlight: request.bitrateKbps * 125, audio: request.audio)
+        let viewer = WebStreamViewer(connection: connection,
+                                     maxInFlight: request.profile.maxInFlight(bitrateKbps: request.bitrateKbps),
+                                     audio: request.audio)
         // A session that has just ended, and is still to be let go here, takes no one.
         if let running = sessions[key], running.add(viewer) { return }
         let session: WebStreamSession
