@@ -672,8 +672,11 @@ extension VideoManager {
         descriptor.maxPixelsHigh = UInt32(max(2160, resolutions.map(\.height).max() ?? 0))
         descriptor.vendorID  = Self.anchorVendorID
         descriptor.productID = Self.anchorProductID
-        descriptor.serialNum = 0x0002
-        vdLog.debug("enableVirtualAnchor: descriptor configured — vendor=0x3456 product=0x1234 serial=0x0002 queue=main")
+        // Its own serial number, which it is found by should its ID come late.
+        let serials = Set(virtualAnchorStore.values.compactMap { ($0 as? CGVirtualDisplay)?.serialNum })
+        let serial = (0..<64).lazy.map(Self.anchorSerial).first { !serials.contains($0) } ?? Self.anchorSerial(0)
+        descriptor.serialNum = serial
+        vdLog.debug("enableVirtualAnchor: descriptor configured — vendor=0x3456 product=0x1234 serial=\(serial) queue=main")
 
         let airPlayCGID = display.cgDisplayID
         let deviceName  = display.name
@@ -727,8 +730,14 @@ extension VideoManager {
         // Retain vd so it isn't released before mirroring is wired up.
         virtualAnchorStore[deviceName] = vd
         vdLog.debug("enableVirtualAnchor: stored anchor, beginning poll (attempt 0)")
-        waitForVirtualDisplay(vd, name: deviceName, airPlayID: airPlayCGID, context: context,
+        waitForVirtualDisplay(vd, name: deviceName, serial: serial, airPlayID: airPlayCGID, context: context,
                               initialMode: initialMode, attempt: 0)
+    }
+
+    /// The serial number of anchor `n`: each anchor alive at once has its own, so that two set
+    /// up together are never taken for one another. The first keeps the one anchors always had.
+    static func anchorSerial(_ n: Int) -> UInt32 {
+        0x0002 + UInt32(n) << 8
     }
 
     /// Tears down the mirror, restores the pre-anchor arrangement, and releases the
@@ -1052,6 +1061,7 @@ extension VideoManager {
     /// wires up the mirror configuration in two steps.
     private func waitForVirtualDisplay(_ vd: CGVirtualDisplay,
                                        name: String,
+                                       serial: UInt32,
                                        airPlayID: CGDirectDisplayID,
                                        context: VisibilityPreferences.DisplayContext,
                                        initialMode: DisplayMode?,
@@ -1077,7 +1087,7 @@ extension VideoManager {
         vdLog.debug("waitForVirtualDisplay: attempt \(attempt)/10 — vd.displayID=\(directID) online=\(onlineIDs) active=\(activeIDs) claimed=\(Array(claimedAnchorIDs))")
 
         // Primary: trust vd.displayID once the system has assigned it.
-        // Fallback: vendor/product scan — handles macOS versions where displayID
+        // Fallback: vendor/product/serial scan — handles macOS versions where displayID
         // isn't assigned synchronously with CGVirtualDisplay init.
         let virtualID: CGDirectDisplayID? = {
             if directID != 0, allIDs.contains(directID) {
@@ -1087,6 +1097,7 @@ extension VideoManager {
             if let heuristic = allIDs.first(where: {
                 CGDisplayVendorNumber($0) == Self.anchorVendorID &&
                 CGDisplayModelNumber($0) == Self.anchorProductID &&
+                CGDisplaySerialNumber($0) == serial &&
                 !claimedAnchorIDs.contains($0) && $0 != bootstrapDisplayID
             }) {
                 vdLog.debug("waitForVirtualDisplay: found via vendor/product heuristic id=\(heuristic)")
@@ -1102,7 +1113,7 @@ extension VideoManager {
             if attempt < 10 {
                 vdLog.debug("waitForVirtualDisplay: virtual display not found yet, retrying in 1 s")
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-                    self?.waitForVirtualDisplay(vd, name: name, airPlayID: airPlayID,
+                    self?.waitForVirtualDisplay(vd, name: name, serial: serial, airPlayID: airPlayID,
                                                context: context, initialMode: initialMode,
                                                attempt: attempt + 1)
                 }

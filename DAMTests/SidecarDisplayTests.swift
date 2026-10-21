@@ -229,6 +229,14 @@ final class SidecarDisplayTests: XCTestCase {
         XCTAssertEqual(manager.virtualAnchorArrangements["TV"]?.mirrorMasters, released.mirrorMasters)
     }
 
+    func testEachAnchorHasItsOwnSerialTheFirstTheOneAnchorsHad() {
+        let serials = (0..<8).map(VideoManager.anchorSerial)
+        XCTAssertEqual(serials.first, 0x0002)
+        XCTAssertEqual(Set(serials).count, serials.count)
+        let streaming = (0..<VideoManager.maxStreamingDisplays).map(VideoManager.streamingSerial)
+        XCTAssertTrue(Set(serials).isDisjoint(with: streaming + [0x0003]))
+    }
+
     func testAStreamingDisplayIsMirroredByChoiceOnlyWhileMirroredThroughDAM() {
         let manager = VideoManager()
         manager.streamingDisplays = [VideoManager.StreamingDisplay(display: NSObject(), index: 0, name: "S",
