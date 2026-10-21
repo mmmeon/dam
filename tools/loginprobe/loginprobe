@@ -1,0 +1,118 @@
+#!/bin/zsh
+#
+#  loginprobe
+#
+#  Finds out what DAM could do at the login window, before anyone has signed in: whether a
+#  process there can capture the screen (CGDisplayCreateImage, CGDisplayStream,
+#  ScreenCaptureKit), make a CGVirtualDisplay, and move the pointer. loginprobe.swift does the
+#  trying; this builds it and runs it here, or installs it as a LaunchAgent limited to the
+#  LoginWindow session, which launchd starts as root when the login window comes up.
+#
+#    tools/loginprobe/loginprobe run          in this session, for comparison (no root)
+#    tools/loginprobe/loginprobe install      the LaunchAgent (asks for the admin password)
+#    tools/loginprobe/loginprobe results      every report so far, newest last
+#    tools/loginprobe/loginprobe uninstall    the LaunchAgent and its binary; keeps results
+#
+#  After install, log out (Apple menu → Log Out) and wait about 30 s at the login window: the
+#  probe waits 15 s for the window server to settle, then takes ~20 s. A display flickers as
+#  the virtual one comes and goes, and the pointer jumps 40 px and back. Log in, then
+#  `results`. Each run leaves report.txt and PNGs in /Library/Logs/DAMLoginProbe/<time>
+#  (or /tmp/dam-loginprobe/<time> for `run`).
+#
+
+set -u
+setopt pipefail
+
+here=${0:A:h}
+repo=${here:h:h}
+label=mmmeon.dam.loginprobe
+cache=${TMPDIR:-/tmp}/dam-loginprobe
+binary=$cache/loginprobe
+installed="/Library/Application Support/DAM/loginprobe"
+plist=/Library/LaunchAgents/$label.plist
+logs=/Library/Logs/DAMLoginProbe
+
+die() { print -u2 "loginprobe: $*"; exit 1 }
+say() { print "loginprobe: $*" }
+
+build() {
+    mkdir -p $cache
+    local source=$here/loginprobe.swift
+    if [[ ! -x $binary || $source -nt $binary ]]; then
+        DEVELOPER_DIR=${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer} \
+            swiftc -O -suppress-warnings -import-objc-header $repo/DAM/CGVirtualDisplayPrivate.h \
+            -o $binary $source || die "could not build loginprobe.swift"
+    fi
+}
+
+cmd_run() {
+    build
+    $binary /tmp/dam-loginprobe/$(date +%Y%m%d-%H%M%S)-${USER}
+}
+
+cmd_install() {
+    build
+    local staged=$cache/$label.plist
+    # A wrapper names each run's folder by the time it starts.
+    cat > $cache/start <<EOF
+#!/bin/sh
+exec "$installed/loginprobe" "$logs/\$(date +%Y%m%d-%H%M%S)-loginwindow" --delay 15
+EOF
+    cat > $staged <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>$label</string>
+    <key>LimitLoadToSessionType</key>
+    <string>LoginWindow</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>$installed/start</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>$logs/launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>$logs/launchd.log</string>
+</dict>
+</plist>
+EOF
+    plutil -lint -s $staged || die "the plist does not parse"
+    say "installing $plist and \"$installed\" (sudo)"
+    sudo /bin/sh -c "
+        set -e
+        mkdir -p '$installed' '$logs'
+        install -o root -g wheel -m 755 '$binary' '$installed/loginprobe'
+        install -o root -g wheel -m 755 '$cache/start' '$installed/start'
+        install -o root -g wheel -m 644 '$staged' '$plist'
+        chmod 755 '$logs'
+    " || die "install failed"
+    say "installed. Log out, wait ~30 s at the login window, log in, then: $0 results"
+}
+
+cmd_results() {
+    local report
+    for report in /tmp/dam-loginprobe/*/report.txt(N) $logs/*/report.txt(N); do
+        print "== ${report:h}"
+        cat $report
+        print
+    done
+    [[ -f $logs/launchd.log ]] && { print "== $logs/launchd.log"; tail -20 $logs/launchd.log }
+    true
+}
+
+cmd_uninstall() {
+    say "removing $plist and \"$installed\" (sudo); results stay in $logs"
+    sudo /bin/sh -c "rm -f '$plist'; rm -rf '$installed'; rmdir '${installed:h}' 2>/dev/null; true"
+}
+
+case ${1:-} in
+    run) cmd_run ;;
+    install) cmd_install ;;
+    results) cmd_results ;;
+    uninstall) cmd_uninstall ;;
+    *) sed -n '3,21p' $0 | sed -E 's/^# ?//'; exit 2 ;;
+esac
