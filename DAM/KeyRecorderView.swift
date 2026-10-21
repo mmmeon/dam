@@ -26,6 +26,9 @@ final class KeyRecorderView: NSView {
             needsDisplay = true
             toolTip = isRecording ? "Press the new shortcut. Esc cancels." : clashTip
             isRecording ? installOutsideClickMonitor() : removeOutsideClickMonitor()
+            // The app's shortcuts are off while recording, so their keys can be recorded
+            // rather than acted on.
+            if isRecording != oldValue { isRecording ? GlobalHotkey.pauseAll() : GlobalHotkey.resumeAll() }
         }
     }
     /// Cancels recording on a click anywhere but this field.
@@ -78,6 +81,7 @@ final class KeyRecorderView: NSView {
     deinit {
         if let o = windowObserver { NotificationCenter.default.removeObserver(o) }
         removeOutsideClickMonitor()
+        if isRecording { GlobalHotkey.resumeAll() }
     }
 
     /// Leaves recording mode, keeping the current shortcut.

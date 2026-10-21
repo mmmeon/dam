@@ -226,4 +226,44 @@ final class HotkeyPreferenceTests: XCTestCase {
         let defaults = HotkeyAction.allCases.map(\.defaultShortcut)
         XCTAssertTrue(HotkeyPreference.clashes(among: defaults).allSatisfy(\.isEmpty))
     }
+
+    // MARK: - Pausing
+
+    /// Keys no one is likely to have: ⌃⌥⇧⌘F19.
+    private let unlikely = HotkeyPreference(keyCode: UInt32(kVK_F19),
+                                            modifiers: UInt32(controlKey | optionKey | shiftKey | cmdKey))
+
+    func testPausing_unregistersUntilResumed() {
+        let hotkey = GlobalHotkey(preference: unlikely) {}
+        XCTAssertTrue(hotkey.isRegistered)
+        GlobalHotkey.pauseAll()
+        XCTAssertFalse(hotkey.isRegistered)
+        // A shortcut changed meanwhile waits for the resume too.
+        hotkey.update(preference: unlikely)
+        XCTAssertFalse(hotkey.isRegistered)
+        GlobalHotkey.resumeAll()
+        XCTAssertTrue(hotkey.isRegistered)
+    }
+
+    func testPausing_twiceNeedsTwoResumes() {
+        let hotkey = GlobalHotkey(preference: unlikely) {}
+        GlobalHotkey.pauseAll()
+        GlobalHotkey.pauseAll()
+        GlobalHotkey.resumeAll()
+        XCTAssertFalse(hotkey.isRegistered)
+        GlobalHotkey.resumeAll()
+        XCTAssertTrue(hotkey.isRegistered)
+        // An extra resume changes nothing.
+        GlobalHotkey.resumeAll()
+        XCTAssertTrue(hotkey.isRegistered)
+    }
+
+    func testPausing_theFirstMadeKeepsSharedKeys() {
+        let first = GlobalHotkey(preference: unlikely) {}
+        let second = GlobalHotkey(preference: unlikely) {}
+        GlobalHotkey.pauseAll()
+        GlobalHotkey.resumeAll()
+        XCTAssertTrue(first.isRegistered)
+        XCTAssertFalse(second.isRegistered)
+    }
 }
