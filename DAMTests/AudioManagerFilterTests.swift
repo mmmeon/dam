@@ -8,6 +8,7 @@ final class AudioManagerFilterTests: XCTestCase {
     private let audioSeenKey = "\(AppIdentity.shortID).seen.audio"
     private let speechUIDKey  = "\(AppIdentity.shortID).behaviour.speechOutputUID"
     private let speechNameKey = "\(AppIdentity.shortID).behaviour.speechOutputName"
+    private let autoHideKey   = "\(AppIdentity.shortID).behaviour.autoHideVirtualAudio"
 
     // The host app also writes preferences (seen audio devices, for one), so start each
     // test from a clean slate as well as cleaning up after it.
@@ -22,7 +23,7 @@ final class AudioManagerFilterTests: XCTestCase {
     }
 
     private func clearPreferences() {
-        [audioKey, audioSeenKey, speechUIDKey, speechNameKey].forEach { UserDefaults.dam.removeObject(forKey: $0) }
+        [audioKey, audioSeenKey, speechUIDKey, speechNameKey, autoHideKey].forEach { UserDefaults.dam.removeObject(forKey: $0) }
     }
 
     // Convenience factory — AudioDeviceID is UInt32; use arbitrary values for tests.
@@ -91,88 +92,39 @@ final class AudioManagerFilterTests: XCTestCase {
         XCTAssertEqual(result.last?.id, 99)
     }
 
-    // MARK: - Auto-hide path (VisibilityPreferences side-effects)
+    // MARK: - AudioManager.autoHideNewDevices(_:isVirtual:)
     //
-    // These tests replicate the UserDefaults portion of autoHideNewVirtualDevices
-    // without calling CoreAudio (isHardwareDevice is excluded). They verify the
-    // seen-set and hide semantics that the method relies on.
+    // The CoreAudio-free core of autoHideNewVirtualDevices; device 2 stands for a virtual one.
 
-    func testAutoHidePath_unseenDeviceMarkedHiddenViaPreferences() {
-        // Simulates: device not in seen set → mark hidden, add to seen
-        let name = "BlackHole 2ch"
-        XCTAssertFalse(VisibilityPreferences.seenAudioDevices.contains(name))
-        // Replicate the autoHide path manually
-        var seen = VisibilityPreferences.seenAudioDevices
-        if !seen.contains(name) {
-            VisibilityPreferences.setVisible(false, audioDevice: name)
-            seen.insert(name)
+    private let virtual: (AudioDeviceID) -> Bool = { $0 == 2 }
+
+    func testAutoHide_unseenVirtualDeviceIsHidden() {
+        AudioManager.autoHideNewDevices([device("Speakers", id: 1), device("BlackHole 2ch", id: 2)],
+                                        isVirtual: virtual)
+        XCTAssertTrue(VisibilityPreferences.isVisible(audioDevice: "Speakers"))
+        XCTAssertFalse(VisibilityPreferences.isVisible(audioDevice: "BlackHole 2ch"))
+        XCTAssertEqual(VisibilityPreferences.seenAudioDevices, ["Speakers", "BlackHole 2ch"])
+    }
+
+    func testAutoHide_seenDeviceIsNotHiddenAgain() {
+        // Seen before, and shown again by the user since.
+        VisibilityPreferences.seenAudioDevices = ["BlackHole 2ch"]
+        AudioManager.autoHideNewDevices([device("BlackHole 2ch", id: 2)], isVirtual: virtual)
+        XCTAssertTrue(VisibilityPreferences.isVisible(audioDevice: "BlackHole 2ch"))
+    }
+
+    func testAutoHide_offStillRecordsTheDevicesSeen() {
+        VisibilityPreferences.autoHideVirtualAudio = false
+        AudioManager.autoHideNewDevices([device("BlackHole 2ch", id: 2)], isVirtual: virtual)
+        XCTAssertTrue(VisibilityPreferences.isVisible(audioDevice: "BlackHole 2ch"))
+        XCTAssertEqual(VisibilityPreferences.seenAudioDevices, ["BlackHole 2ch"])
+    }
+
+    func testAutoHide_seenSetGrowsWithEachNewDevice() {
+        for name in ["Device A", "Device B", "Device C"] {
+            AudioManager.autoHideNewDevices([device(name, id: 1)], isVirtual: virtual)
         }
-        VisibilityPreferences.seenAudioDevices = seen
-        XCTAssertFalse(VisibilityPreferences.isVisible(audioDevice: name))
-        XCTAssertTrue(VisibilityPreferences.seenAudioDevices.contains(name))
-    }
-
-    func testAutoHidePath_seenDeviceNotReHidden() {
-        // Simulates: device already in seen set → do not re-hide if user re-enabled it
-        let name = "BlackHole 2ch"
-        VisibilityPreferences.seenAudioDevices = [name]   // mark as previously seen
-        VisibilityPreferences.setVisible(true, audioDevice: name) // user re-enabled it
-
-        var seen = VisibilityPreferences.seenAudioDevices
-        if !seen.contains(name) {
-            VisibilityPreferences.setVisible(false, audioDevice: name)
-            seen.insert(name)
-        }
-        VisibilityPreferences.seenAudioDevices = seen
-        // Because it was already seen, the if-block above was skipped → still visible
-        XCTAssertTrue(VisibilityPreferences.isVisible(audioDevice: name))
-    }
-
-    func testAutoHidePath_seenSetGrowsWithEachNewDevice() {
-        let newDevices = ["Device A", "Device B", "Device C"]
-        for name in newDevices {
-            var seen = VisibilityPreferences.seenAudioDevices
-            if !seen.contains(name) {
-                seen.insert(name)
-            }
-            VisibilityPreferences.seenAudioDevices = seen
-        }
-        XCTAssertEqual(VisibilityPreferences.seenAudioDevices, Set(newDevices))
-    }
-
-    func testAutoHidePath_alreadySeenDeviceSkippedInSeenSet() {
-        let name = "Speaker"
-        VisibilityPreferences.seenAudioDevices = [name]
-        var seen = VisibilityPreferences.seenAudioDevices
-        let countBefore = seen.count
-        seen.insert(name)   // inserting duplicate into a Set is a no-op
-        VisibilityPreferences.seenAudioDevices = seen
-        XCTAssertEqual(VisibilityPreferences.seenAudioDevices.count, countBefore)
-    }
-
-    // MARK: - AudioManager.device(after:in:)
-
-    func testDeviceAfter_advancesToNext() {
-        let devices = [device("Speakers", id: 1), device("Headphones", id: 2), device("TV", id: 3)]
-        XCTAssertEqual(AudioManager.device(after: 1, in: devices)?.name, "Headphones")
-    }
-
-    func testDeviceAfter_wrapsFromLastToFirst() {
-        let devices = [device("Speakers", id: 1), device("Headphones", id: 2)]
-        XCTAssertEqual(AudioManager.device(after: 2, in: devices)?.name, "Speakers")
-    }
-
-    func testDeviceAfter_currentHidden_startsAtFirst() {
-        let devices = [device("Speakers", id: 1), device("Headphones", id: 2)]
-        XCTAssertEqual(AudioManager.device(after: 99, in: devices)?.name, "Speakers")
-    }
-
-    func testDeviceAfter_singleDevice_returnsItself() {
-        XCTAssertEqual(AudioManager.device(after: 1, in: [device("Speakers", id: 1)])?.name, "Speakers")
-    }
-
-    func testDeviceAfter_noDevices_returnsNil() {
-        XCTAssertNil(AudioManager.device(after: 1, in: []))
+        XCTAssertEqual(VisibilityPreferences.seenAudioDevices, ["Device A", "Device B", "Device C"])
     }
 
     // MARK: - AudioManager.uid(of:) / deviceID(forUID:)

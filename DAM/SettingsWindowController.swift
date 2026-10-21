@@ -8,13 +8,8 @@ import UniformTypeIdentifiers
 
 final class SettingsWindowController: NSWindowController {
 
-    private let recorder: KeyRecorderView
-    private let recorderAirPlay: KeyRecorderView
-    private let recorderMirrorToggle: KeyRecorderView
-    private let recorderAudioCycle: KeyRecorderView
-    private let recorderMainDisplay: KeyRecorderView
-    private let recorderResolution: KeyRecorderView
-    private let recorderRotation: KeyRecorderView
+    /// A shortcut recorder per action.
+    private let recorders: [HotkeyAction: KeyRecorderView]
     private let audioManager: AudioManager
     private let videoManager: VideoManager
     private let sidecarManager: SidecarManager
@@ -23,13 +18,10 @@ final class SettingsWindowController: NSWindowController {
     private let webStream: WebStreamServer
     private let openDisplay: OpenDisplaySender?
 
-    var onSave: ((HotkeyPreference) -> Void)?
-    var onSaveAirPlayConnect: ((HotkeyPreference) -> Void)?
-    var onSaveMirrorToggle: ((HotkeyPreference) -> Void)?
-    var onSaveAudioCycle: ((HotkeyPreference) -> Void)?
-    var onSaveMainDisplay: ((HotkeyPreference) -> Void)?
-    var onSaveResolution: ((HotkeyPreference) -> Void)?
-    var onSaveRotation: ((HotkeyPreference) -> Void)?
+    /// Called when a shortcut is recorded or reset, to store and register it.
+    var onSave: ((HotkeyAction, HotkeyPreference) -> Void)?
+    /// Whether an action's shortcut is registered, which it isn't while another app has its keys.
+    var isRegistered: ((HotkeyAction) -> Bool)?
     /// Called whenever a visibility checkbox is toggled so the menu/Touch Bar rebuild.
     var onRebuild: (() -> Void)?
     /// Turns Moonlight hosting on or off, as the menu does.
@@ -101,27 +93,16 @@ final class SettingsWindowController: NSWindowController {
 
     // MARK: - Init
 
-    init(current: HotkeyPreference,
-         currentAirPlayConnect: HotkeyPreference,
-         currentMirrorToggle: HotkeyPreference,
-         currentAudioCycle: HotkeyPreference,
-         currentMainDisplay: HotkeyPreference,
-         currentResolution: HotkeyPreference,
-         currentRotation: HotkeyPreference,
-         audioManager: AudioManager,
+    init(audioManager: AudioManager,
          videoManager: VideoManager,
          sidecarManager: SidecarManager,
          moonlightHost: MoonlightHost,
          webStream: WebStreamServer,
          openDisplay: OpenDisplaySender? = nil,
          sessionCoordinator: RemoteSessionCoordinator? = nil) {
-        recorder              = KeyRecorderView(preference: current)
-        recorderAirPlay       = KeyRecorderView(preference: currentAirPlayConnect)
-        recorderMirrorToggle  = KeyRecorderView(preference: currentMirrorToggle)
-        recorderAudioCycle    = KeyRecorderView(preference: currentAudioCycle)
-        recorderMainDisplay   = KeyRecorderView(preference: currentMainDisplay)
-        recorderResolution    = KeyRecorderView(preference: currentResolution)
-        recorderRotation      = KeyRecorderView(preference: currentRotation)
+        recorders = Dictionary(uniqueKeysWithValues: HotkeyAction.allCases.map {
+            ($0, KeyRecorderView(preference: $0.shortcut))
+        })
         self.audioManager     = audioManager
         self.videoManager     = videoManager
         self.sidecarManager   = sidecarManager
@@ -253,43 +234,13 @@ final class SettingsWindowController: NSWindowController {
     // one or more controls under it; groups are set apart by spacing, not headers.
 
     private func buildHotkeysTab() -> NSView {
-        recorder.onChanged             = { [weak self] pref in self?.onSave?(pref); self?.markClashes() }
-        recorderAirPlay.onChanged      = { [weak self] pref in self?.onSaveAirPlayConnect?(pref); self?.markClashes() }
-        recorderMirrorToggle.onChanged = { [weak self] pref in self?.onSaveMirrorToggle?(pref); self?.markClashes() }
-        recorderAudioCycle.onChanged   = { [weak self] pref in self?.onSaveAudioCycle?(pref); self?.markClashes() }
-        recorderMainDisplay.onChanged  = { [weak self] pref in self?.onSaveMainDisplay?(pref); self?.markClashes() }
-        recorderResolution.onChanged   = { [weak self] pref in self?.onSaveResolution?(pref); self?.markClashes() }
-        recorderRotation.onChanged     = { [weak self] pref in self?.onSaveRotation?(pref); self?.markClashes() }
+        for (action, recorder) in recorders {
+            recorder.onChanged = { [weak self] pref in self?.save(pref, for: action) }
+        }
 
         markClashes()
 
-        return formTab([
-            ("Switcher:", [hotkeyRow(
-                recorder, reset: #selector(resetToDefault),
-                help: "Opens the Touch Bar switcher for the audio output and AirPlay display. " +
-                      "Without a Touch Bar (or with the lid closed) it opens the menu bar menu.")]),
-            ("Quick Connect:", [hotkeyRow(
-                recorderAirPlay, reset: #selector(resetAirPlayConnectToDefault),
-                help: "Connects to an AirPlay display or an iPad (Sidecar) from any " +
-                      "application, even with no display attached.")]),
-            ("Mirror / Extend:", [hotkeyRow(
-                recorderMirrorToggle, reset: #selector(resetMirrorToggleToDefault),
-                help: "Picks where the connected AirPlay display is mirrored: nowhere, " +
-                      "on one of the other displays, or on all of them.")]),
-            ("Cycle Audio:", [hotkeyRow(
-                recorderAudioCycle, reset: #selector(resetAudioCycleToDefault),
-                help: "Picks an audio output among those checked on the Devices tab.")]),
-            ("Main Display:", [hotkeyRow(
-                recorderMainDisplay, reset: #selector(resetMainDisplayToDefault),
-                help: "Picks the display that has the menu bar.")]),
-            ("Resolution:", [hotkeyRow(
-                recorderResolution, reset: #selector(resetResolutionToDefault),
-                help: "Picks a resolution for the display under the pointer.")]),
-            ("Rotation:", [hotkeyRow(
-                recorderRotation, reset: #selector(resetRotationToDefault),
-                help: "Turns the display under the pointer, where macOS allows it, or a " +
-                      "streaming display, whose streams keep their shape.")]),
-        ], centered: true)
+        return formTab(HotkeyAction.allCases.map { ("\($0.title):", [hotkeyRow($0)]) }, centered: true)
     }
 
     private func buildGeneralTab() -> NSView {
@@ -298,11 +249,8 @@ final class SettingsWindowController: NSWindowController {
         let extraStatus = NSTextField(labelWithString:
             extraShown ? "Menu bar item shown" : "Menu bar item hidden")
         extraStatus.font = .systemFont(ofSize: NSFont.systemFontSize)
-        let openCC = NSButton(title: "Control Center…", target: self,
-                              action: #selector(openControlCenterSettings))
-        openCC.bezelStyle  = .rounded
-        openCC.controlSize = .small
-        openCC.font        = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        let openCC = small(NSButton(title: "Control Center…", target: self,
+                                    action: #selector(openControlCenterSettings)))
         let extraRow = NSStackView(views: [extraStatus, openCC])
         extraRow.orientation = .horizontal
         extraRow.spacing = 8
@@ -338,8 +286,8 @@ final class SettingsWindowController: NSWindowController {
             ("Pickers:", [
                 checkbox(title: "Open on the current choice",
                          isOn: VisibilityPreferences.pickerStartsOnCurrent,
-                         help: "The audio, mirror and main display pickers open on what is " +
-                               "current. Unchecked, they open on the next choice, so a single " +
+                         help: "The audio, mirror, main display, resolution and rotation pickers " +
+                               "open on what is current. Unchecked, they open on the next choice, so a single " +
                                "press followed by the pause moves on.",
                          action: { VisibilityPreferences.pickerStartsOnCurrent = $0 }),
                 pickDelayRow(),
@@ -495,16 +443,10 @@ final class SettingsWindowController: NSWindowController {
     private func buildMoonlightTab() -> NSView {
         let host = moonlightHost
         moonlightShown = MoonlightState(host: host)
-        let hostChoice = ClosurePopup(onSelect: { [weak self] raw in
+        let hostChoice = popup([("\(AppIdentity.name)", "dam"), ("Sunshine", "sunshine")],
+                               selected: MoonlightHost.usesExternalSunshine ? "sunshine" : "dam") { [weak self] raw in
             self?.onUseExternalSunshine?(raw == "sunshine")
-        })
-        hostChoice.font = .systemFont(ofSize: NSFont.systemFontSize)
-        for (title, key) in [("\(AppIdentity.name)", "dam"), ("Sunshine", "sunshine")] {
-            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-            item.representedObject = key
-            hostChoice.menu?.addItem(item)
         }
-        hostChoice.selectItem(at: MoonlightHost.usesExternalSunshine ? 1 : 0)
         hostChoice.toolTip = "Who Moonlight connects to: \(AppIdentity.name)'s own host, or Sunshine " +
                              "running on this Mac, for which \(AppIdentity.name) makes and places the displays."
         guard !MoonlightHost.usesExternalSunshine else {
@@ -551,17 +493,8 @@ final class SettingsWindowController: NSWindowController {
                      action: { MoonlightStream.showsPointer = $0 }),
         ]
 
-        let encryption = ClosurePopup(onSelect: { raw in
-            guard let choice = raw.flatMap(MoonlightVideoEncryption.init(rawValue:)) else { return }
-            MoonlightStream.videoEncryption = choice
-        })
-        encryption.font = .systemFont(ofSize: NSFont.systemFontSize)
-        for option in MoonlightVideoEncryption.allCases {
-            let item = NSMenuItem(title: option.title, action: nil, keyEquivalent: "")
-            item.representedObject = option.rawValue
-            item.toolTip = option.summary
-            encryption.menu?.addItem(item)
-            if option == MoonlightStream.videoEncryption { encryption.select(item) }
+        let encryption = popup(choosing: MoonlightStream.videoEncryption, title: \.title, tip: \.summary) {
+            MoonlightStream.videoEncryption = $0
         }
         encryption.toolTip = "When Moonlight's video is encrypted; the controls and sound always are. " +
                              "Moonlight on a Mac, PC, iPhone or iPad takes it whenever it is offered. " +
@@ -580,20 +513,13 @@ final class SettingsWindowController: NSWindowController {
                                      host?.setAllowsInput(allows, for: client)
                                      if allows { _ = VideoManager.hasAccessibilityAccess(prompting: true) }
                                  })
-            let forget = ClosureButton(title: "Forget") { [weak self] _ in self?.onForgetMoonlightClient?(client) }
-            forget.bezelStyle  = .rounded
-            forget.controlSize = .small
-            forget.font        = .systemFont(ofSize: NSFont.smallSystemFontSize)
+            let forget = small(ClosureButton(title: "Forget") { [weak self] _ in self?.onForgetMoonlightClient?(client) })
             forget.toolTip     = "Unpairs \(client.name): it has to pair again to connect."
             let name = rowLabel(client.name)
             name.toolTip = "Paired \(client.paired.formatted(date: .abbreviated, time: .shortened))"
             return [name, lowLatency, input, forget]
         }
-        // A grid, so each device's controls line up whatever the length of its name.
-        let deviceGrid = BaselineRowGridView(views: devices)
-        deviceGrid.rowSpacing    = 6
-        deviceGrid.columnSpacing = 8
-        deviceGrid.rowAlignment  = .firstBaseline
+        let deviceGrid = rowGrid(devices)
 
         return formTab([
             ("Host:", [hostChoice]),
@@ -623,17 +549,8 @@ final class SettingsWindowController: NSWindowController {
         serving.append(allow)
         if let error = server.lastError { serving.append(placeholderLabel(error)) }
 
-        let reach = ClosurePopup(onSelect: { raw in
-            guard let choice = raw.flatMap(WebStreamReach.init(rawValue:)) else { return }
-            WebStreamReach.current = choice
-        })
-        reach.font = .systemFont(ofSize: NSFont.systemFontSize)
-        for option in WebStreamReach.allCases {
-            let item = NSMenuItem(title: option.title, action: nil, keyEquivalent: "")
-            item.representedObject = option.rawValue
-            item.toolTip = option.summary
-            reach.menu?.addItem(item)
-            if option == WebStreamReach.current { reach.select(item) }
+        let reach = popup(choosing: WebStreamReach.current, title: \.title, tip: \.summary) {
+            WebStreamReach.current = $0
         }
         reach.toolTip = "Where browsers and players may watch from, paired or not."
 
@@ -669,10 +586,7 @@ final class SettingsWindowController: NSWindowController {
             row.append(small(forget))
             return row
         }
-        let deviceGrid = BaselineRowGridView(views: devices)
-        deviceGrid.rowSpacing    = 6
-        deviceGrid.columnSpacing = 8
-        deviceGrid.rowAlignment  = .firstBaseline
+        let deviceGrid = rowGrid(devices)
         let newLink = ClosureButton(title: "New Player Link…") { [weak self] _ in self?.makePlayerLink() }
         newLink.bezelStyle = .rounded
         newLink.toolTip = "Makes a link for a player such as mpv, IINA or VLC, which can't pair, and copies it."
@@ -681,18 +595,9 @@ final class SettingsWindowController: NSWindowController {
                                help: "Draws the Mac's pointer into browser streams. Takes effect from the next stream.",
                                action: { WebStreamServer.showsPointer = $0 })
 
-        let profile = ClosurePopup(onSelect: { [weak self] raw in
-            guard let profile = raw.flatMap(StreamProfile.init(rawValue:)) else { return }
-            StreamProfile.preferred = profile
+        let profile = popup(choosing: StreamProfile.preferred, title: \.title, tip: \.summary) { [weak self] in
+            StreamProfile.preferred = $0
             self?.onRebuild?()
-        })
-        profile.font = .systemFont(ofSize: NSFont.systemFontSize)
-        for option in StreamProfile.allCases {
-            let item = NSMenuItem(title: option.title, action: nil, keyEquivalent: "")
-            item.representedObject = option.rawValue
-            item.toolTip = option.summary
-            profile.menu?.addItem(item)
-            if option == StreamProfile.preferred { profile.select(item) }
         }
         profile.toolTip = "The profile a browser or player gets unless its address asks for " +
                           "another. Hover over each for what it trades."
@@ -756,10 +661,7 @@ final class SettingsWindowController: NSWindowController {
             }
             return row
         }
-        let grid = BaselineRowGridView(views: rows)
-        grid.rowSpacing    = 6
-        grid.columnSpacing = 8
-        grid.rowAlignment  = .firstBaseline
+        let grid = rowGrid(rows)
         let receivers: NSView = rows.isEmpty
             ? placeholderLabel(sender.isRunning ? "None found. Open OpenDisplay on the device." : "Turn sending on to look for them.")
             : grid
@@ -802,11 +704,21 @@ final class SettingsWindowController: NSWindowController {
         if selectedTab == TabID.opendisplay { selectTab(TabID.opendisplay) }
     }
 
-    private func small(_ button: NSButton) -> NSButton {
+    private func small<Button: NSButton>(_ button: Button) -> Button {
         button.bezelStyle  = .rounded
         button.controlSize = .small
         button.font        = .systemFont(ofSize: NSFont.smallSystemFontSize)
         return button
+    }
+
+    /// A grid of rows of controls, lined up on their text, so each row's controls line up
+    /// whatever the length of its name.
+    private func rowGrid(_ rows: [[NSView]]) -> NSGridView {
+        let grid = BaselineRowGridView(views: rows)
+        grid.rowSpacing    = 6
+        grid.columnSpacing = 8
+        grid.rowAlignment  = .firstBaseline
+        return grid
     }
 
     /// Asks for a name, makes a link for a player, and copies its stream address.
@@ -882,13 +794,10 @@ final class SettingsWindowController: NSWindowController {
         let command = Bundle.main.executablePath ?? "/Applications/\(AppIdentity.name).app/Contents/MacOS/\(AppIdentity.name)"
         let start = "\(command) session start --app sunshine"
         let end = "\(command) session end --app sunshine"
-        let copy = ClosureButton(title: "Copy") { _ in
+        let copy = small(ClosureButton(title: "Copy") { _ in
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString("do: \(start)\nundo: \(end)", forType: .string)
-        }
-        copy.bezelStyle  = .rounded
-        copy.controlSize = .small
-        copy.font        = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        })
         return [
             ("Sunshine:", [status, smallNote("\(AppIdentity.name)'s own host is off, so Sunshine can use the ports.")]),
             ("Prep Command:", [selectableLabel("Do: \(start)"), selectableLabel("Undo: \(end)"), copy,
@@ -1371,6 +1280,20 @@ final class SettingsWindowController: NSWindowController {
         return popup
     }
 
+    /// A pop-up of every case of an enum stored by its raw value, each item with its title and
+    /// tooltip, `current` chosen.
+    private func popup<Option>(choosing current: Option, title: KeyPath<Option, String>,
+                               tip: KeyPath<Option, String>,
+                               onSelect: @escaping (Option) -> Void) -> NSPopUpButton
+        where Option: CaseIterable & RawRepresentable, Option.RawValue == String {
+        let options = Array(Option.allCases)
+        let popup = popup(options.map { ($0[keyPath: title], $0.rawValue) }, selected: current.rawValue) { raw in
+            if let option = raw.flatMap(Option.init(rawValue:)) { onSelect(option) }
+        }
+        for (item, option) in zip(popup.itemArray, options) { item.toolTip = option[keyPath: tip] }
+        return popup
+    }
+
     private func selectableLabel(_ text: String) -> NSView {
         let tf = NSTextField(labelWithString: text)
         tf.font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
@@ -1388,13 +1311,7 @@ final class SettingsWindowController: NSWindowController {
         return tf
     }
 
-    /// Rebuilds the Moonlight tab, as when the host changes.
-    func rebuildMoonlightTab() {
-        moonlightContent = buildMoonlightTab()
-        if selectedTab == TabID.moonlight { selectTab(TabID.moonlight) }
-    }
-
-    /// Rebuilds the Moonlight tab if what it shows of the host has changed.
+    /// Rebuilds the Moonlight tab if what it shows of the host, or which host, has changed.
     func moonlightDidChange() {
         guard MoonlightState(host: moonlightHost) != moonlightShown else { return }
         moonlightContent = buildMoonlightTab()
@@ -1403,68 +1320,27 @@ final class SettingsWindowController: NSWindowController {
 
     // MARK: - Actions
 
-    @objc private func resetToDefault() {
-        let pref = HotkeyPreference.default
-        recorder.preference = pref
-        onSave?(pref)
+    /// Stores and registers `action`'s new shortcut.
+    private func save(_ pref: HotkeyPreference, for action: HotkeyAction) {
+        onSave?(action, pref)
         markClashes()
     }
 
-    @objc private func resetAirPlayConnectToDefault() {
-        let pref = HotkeyPreference.defaultAirPlayConnect
-        recorderAirPlay.preference = pref
-        onSaveAirPlayConnect?(pref)
-        markClashes()
+    /// Puts `action`'s shortcut back to its default.
+    private func reset(_ action: HotkeyAction) {
+        let pref = action.defaultShortcut
+        recorders[action]?.preference = pref
+        save(pref, for: action)
     }
 
-    @objc private func resetMirrorToggleToDefault() {
-        let pref = HotkeyPreference.defaultMirrorToggle
-        recorderMirrorToggle.preference = pref
-        onSaveMirrorToggle?(pref)
-        markClashes()
-    }
-
-    @objc private func resetAudioCycleToDefault() {
-        let pref = HotkeyPreference.defaultAudioCycle
-        recorderAudioCycle.preference = pref
-        onSaveAudioCycle?(pref)
-        markClashes()
-    }
-
-    @objc private func resetMainDisplayToDefault() {
-        let pref = HotkeyPreference.defaultMainDisplay
-        recorderMainDisplay.preference = pref
-        onSaveMainDisplay?(pref)
-        markClashes()
-    }
-
-    @objc private func resetResolutionToDefault() {
-        let pref = HotkeyPreference.defaultResolution
-        recorderResolution.preference = pref
-        onSaveResolution?(pref)
-        markClashes()
-    }
-
-    @objc private func resetRotationToDefault() {
-        let pref = HotkeyPreference.defaultRotation
-        recorderRotation.preference = pref
-        onSaveRotation?(pref)
-        markClashes()
-    }
-
-    /// The shortcut recorders, with what each is for.
-    private var namedRecorders: [(recorder: KeyRecorderView, name: String)] {
-        [(recorder, "Switcher"), (recorderAirPlay, "Quick Connect"), (recorderMirrorToggle, "Mirror / Extend"),
-         (recorderAudioCycle, "Cycle Audio"), (recorderMainDisplay, "Main Display"),
-         (recorderResolution, "Resolution"), (recorderRotation, "Rotation")]
-    }
-
-    /// Marks each shortcut set to the same keys as another, as only one of them can work.
+    /// Marks each shortcut set to the same keys as another, as only one of them can work, and
+    /// each that another app has, which then doesn't work.
     private func markClashes() {
-        let named = namedRecorders
-        let clashes = HotkeyPreference.clashes(among: named.map { $0.recorder.preference })
-        for (entry, others) in zip(named, clashes) {
-            entry.recorder.clash = others.isEmpty ? nil : others.map { named[$0].name }.joined(separator: ", ")
+        let actions = HotkeyAction.allCases
+        let clashes = HotkeyPreference.clashes(among: actions.compactMap { recorders[$0]?.preference })
+        for (action, others) in zip(actions, clashes) {
+            recorders[action]?.clash = others.isEmpty ? nil : others.map { actions[$0].title }.joined(separator: ", ")
+            recorders[action]?.isTakenElsewhere = others.isEmpty && isRegistered?(action) == false
         }
     }
 
@@ -1558,15 +1434,14 @@ final class SettingsWindowController: NSWindowController {
         return tf
     }
 
-    private func hotkeyRow(_ recorder: KeyRecorderView, reset: Selector, help: String) -> NSView {
-        let resetBtn = NSButton(title: "Reset", target: self, action: reset)
-        resetBtn.bezelStyle  = .rounded
-        resetBtn.controlSize = .small
-        resetBtn.font        = .systemFont(ofSize: NSFont.smallSystemFontSize)
+    /// `action`'s recorder with a button that puts its default back.
+    private func hotkeyRow(_ action: HotkeyAction) -> NSView {
+        let recorder = recorders[action]!   // there is one for every action
+        let resetBtn = small(ClosureButton(title: "Reset") { [weak self] _ in self?.reset(action) })
         let row = NSStackView(views: [recorder, resetBtn])
         row.orientation = .horizontal
         row.spacing     = 8
-        row.toolTip     = help
+        row.toolTip     = action.help
         NSLayoutConstraint.activate([
             recorder.widthAnchor.constraint(equalToConstant: 140),
             recorder.heightAnchor.constraint(equalToConstant: 22),
@@ -1635,12 +1510,6 @@ final class SettingsWindowController: NSWindowController {
 
     /// Popup for choosing the default virtual resolution for a given context.
     private func buildClosurePopup(for context: VisibilityPreferences.DisplayContext) -> NSView {
-        let popup = ClosurePopup(onSelect: { [weak self] key in
-            VisibilityPreferences.setDefaultVirtualResolution(key, for: context)
-            self?.onRebuild?()
-        })
-        popup.font = .systemFont(ofSize: NSFont.systemFontSize)
-
         // Options: (title, stored key or nil)
         let options: [(String, String?)] = [
             ("Display's own", nil),
@@ -1649,17 +1518,10 @@ final class SettingsWindowController: NSWindowController {
             ("1440p", "2560x1440"),
             ("4K",    "3840x2160"),
         ]
-        for (title, key) in options {
-            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-            item.representedObject = key
-            popup.menu?.addItem(item)
+        return popup(options, selected: VisibilityPreferences.defaultVirtualResolution(for: context)) { [weak self] key in
+            VisibilityPreferences.setDefaultVirtualResolution(key, for: context)
+            self?.onRebuild?()
         }
-
-        // Select the item that matches the stored preference.
-        let stored = VisibilityPreferences.defaultVirtualResolution(for: context)
-        let matchIndex = options.firstIndex { $0.1 == stored } ?? 0
-        popup.selectItem(at: matchIndex)
-        return popup
     }
 
     // MARK: - View factories
@@ -1712,8 +1574,12 @@ final class SettingsWindowController: NSWindowController {
             AudioManager.uid(of: device.id).map { (uid: $0, device: device) }
         }
         let popup = ClosurePopup(onSelect: { uid in
-            VisibilityPreferences.speechOutputUID  = uid
-            VisibilityPreferences.speechOutputName = devices.first { $0.uid == uid }?.device.name
+            let connected = devices.first { $0.uid == uid }?.device.name
+            // Picking the disconnected choice again keeps the name it was stored with.
+            if connected != nil || uid != VisibilityPreferences.speechOutputUID {
+                VisibilityPreferences.speechOutputName = connected
+            }
+            VisibilityPreferences.speechOutputUID = uid
         })
         popup.controlSize = .small
         popup.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
@@ -1827,6 +1693,8 @@ final class SettingsWindowController: NSWindowController {
     func show() {
         // The Screen Mirroring item may have been changed in Control Center meanwhile.
         devicesDidChange()
+        // So may which shortcuts another app has.
+        markClashes()
         showWindow(nil)
         window?.center()
         NSApp.activate(ignoringOtherApps: true)
@@ -2177,12 +2045,14 @@ private final class NaturalWidthView: NSView {
 
 /// What the Moonlight tab shows of the host and does not change itself.
 private struct MoonlightState: Equatable {
+    var usesExternalSunshine = false
     var isRunning = false
     var lastError: String?
     var clients: [Data] = []
 
     init(host: MoonlightHost?) {
         guard let host else { return }
+        usesExternalSunshine = MoonlightHost.usesExternalSunshine
         isRunning = host.isRunning
         lastError = host.lastError
         clients = host.clients.map(\.certificate)

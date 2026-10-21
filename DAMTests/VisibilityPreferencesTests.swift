@@ -218,4 +218,39 @@ final class VisibilityPreferencesTests: XCTestCase {
         VisibilityPreferences.screenFeedback = false
         XCTAssertFalse(VisibilityPreferences.screenFeedback)
     }
+
+    // MARK: - Switches on until set
+
+    func testEverySwitchOnByDefault_isOnUntilSetAndKeepsWhatIsSet() {
+        let behaviour = "\(AppIdentity.shortID).behaviour."
+        let switches: [(key: String, get: () -> Bool, set: (Bool) -> Void)] = [
+            (behaviour + "autoConnectSingle", { VisibilityPreferences.autoConnectSingleDisplay },
+             { VisibilityPreferences.autoConnectSingleDisplay = $0 }),
+            (behaviour + "speechEnabled", { VisibilityPreferences.speechEnabled },
+             { VisibilityPreferences.speechEnabled = $0 }),
+            (behaviour + "touchBarFeedback", { VisibilityPreferences.touchBarFeedback },
+             { VisibilityPreferences.touchBarFeedback = $0 }),
+            (behaviour + "screenFeedback", { VisibilityPreferences.screenFeedback },
+             { VisibilityPreferences.screenFeedback = $0 }),
+            (behaviour + "pickerStartsOnCurrent", { VisibilityPreferences.pickerStartsOnCurrent },
+             { VisibilityPreferences.pickerStartsOnCurrent = $0 }),
+            (behaviour + "autoHideVirtualAudio", { VisibilityPreferences.autoHideVirtualAudio },
+             { VisibilityPreferences.autoHideVirtualAudio = $0 }),
+            (behaviour + "followNewDisplayAudio", { VisibilityPreferences.followNewDisplayAudio },
+             { VisibilityPreferences.followNewDisplayAudio = $0 }),
+            ("\(AppIdentity.shortID).sidecar.virtualDisplayBacking",
+             { VisibilityPreferences.backsSidecarWithVirtualDisplay },
+             { VisibilityPreferences.backsSidecarWithVirtualDisplay = $0 }),
+        ]
+        for entry in switches {
+            UserDefaults.dam.removeObject(forKey: entry.key)
+            defer { UserDefaults.dam.removeObject(forKey: entry.key) }
+            XCTAssertTrue(entry.get(), entry.key)
+            entry.set(false)
+            XCTAssertFalse(entry.get(), entry.key)
+            XCTAssertEqual(UserDefaults.dam.object(forKey: entry.key) as? Bool, false, entry.key)
+            entry.set(true)
+            XCTAssertTrue(entry.get(), entry.key)
+        }
+    }
 }

@@ -34,6 +34,26 @@ final class ScreenMirroringPanelTests: XCTestCase {
             role: "AXCheckBox", deviceName: tv))
     }
 
+    func testDoesNotMatchADeviceWhoseNameOnlyEndsWithTheName() {
+        XCTAssertFalse(ScreenMirroringPanel.matchesDevice(
+            identifier: "screen-mirroring-device-Bedroom Apple TV", title: nil,
+            role: "AXCheckBox", deviceName: "Apple TV"))
+        XCTAssertFalse(ScreenMirroringPanel.matchesDevice(
+            identifier: nil, title: "Bedroom Apple TV", role: "AXCheckBox", deviceName: "Apple TV"))
+    }
+
+    func testPicksTheExactRowOverOneThatAlsoEndsWithTheName() {
+        let rows: [(identifier: String?, title: String?, role: String?)] = [
+            ("screen-mirroring-device-Bedroom Apple TV", nil, "AXCheckBox"),
+            ("screen-mirroring-device-Bedroom-Apple TV", nil, "AXCheckBox"),
+            ("screen-mirroring-device-Apple TV", nil, "AXDisclosureTriangle"),
+            ("screen-mirroring-device-Apple TV", nil, "AXCheckBox"),
+        ]
+        XCTAssertEqual(ScreenMirroringPanel.bestMatch(among: rows, deviceName: "Apple TV"), 3)
+        XCTAssertEqual(ScreenMirroringPanel.bestMatch(among: rows, deviceName: "Bedroom Apple TV"), 0)
+        XCTAssertNil(ScreenMirroringPanel.bestMatch(among: rows, deviceName: "Kitchen TV"))
+    }
+
     // MARK: - Failure announcements
 
     func testACancelIsNotAnnounced() {

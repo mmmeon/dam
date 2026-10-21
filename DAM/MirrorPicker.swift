@@ -11,8 +11,6 @@
 import AppKit
 
 private extension HUDHint {
-    static let mirrorPicking = HUDHint(leading: "Hotkey for next, or press a number",
-                                       trailing: "Esc to cancel")
     static let mirrorChanging = HUDHint(leading: "Changing displays", trailing: "")
 }
 
@@ -40,7 +38,6 @@ final class MirrorPicker {
 
     private weak var videoManager: VideoManager?
     private let picker = ChoicePicker(idPrefix: "\(AppIdentity.shortID).mirror",
-                                      pickingHint: .mirrorPicking,
                                       pickedHint: { _ in .mirrorChanging })
 
     private init() {}
@@ -73,12 +70,7 @@ final class MirrorPicker {
     /// Opens the picker on the current state (or the next choice, as set), or moves to the
     /// next choice when already open. Picking the current state again changes nothing.
     func advance() {
-        if picker.isCycling {
-            picker.advance()
-            return
-        }
-        picker.close()
-        guard let vm = videoManager else { return }
+        guard !picker.advanceIfOpen(), let vm = videoManager else { return }
         vm.refresh()
         guard let display = vm.airPlayDevices.first(where: { $0.isConnected && $0.cgDisplayID != 0 }) else {
             SpeechSynthesizer.shared.announce(Spoken.noAirPlayDisplayConnected)
@@ -114,15 +106,10 @@ final class MirrorPicker {
     }
 
 #if DEBUG
-    /// Opens the picker on sample choices, steps the cursor once, then lets it pick after
-    /// the pause, silently, without changing the displays.
+    /// Plays the picker on sample choices, without changing the displays.
     func playDebugPreview() {
-        picker.open(choices: ["Separate Display", "Mirror on Built-in Display",
-                              "Mirror on Living Room TV", "Mirror on All Displays"],
-                    cursor: 1, preview: true) { _ in }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [picker] in
-            picker.previewMove(to: 2)
-        }
+        picker.playPreview(["Separate Display", "Mirror on Built-in Display",
+                            "Mirror on Living Room TV", "Mirror on All Displays"])
     }
 #endif
 }

@@ -161,7 +161,7 @@ final class ArrangeTouchBar: NSObject {
     }
 
     private func truncated(_ s: String, max: Int = 12) -> String {
-        s.count > max ? String(s.prefix(max - 1)) + "…" : s
+        s.truncated(to: max)
     }
 
     /// What the page asks for, or, on the preview, what confirming does.

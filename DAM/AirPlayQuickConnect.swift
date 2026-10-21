@@ -461,6 +461,6 @@ extension AirPlayQuickConnect: NSTouchBarDelegate {
     }
 
     private func truncated(_ s: String, maxLength: Int = 16) -> String {
-        s.count > maxLength ? String(s.prefix(maxLength - 1)) + "…" : s
+        s.truncated(to: maxLength)
     }
 }

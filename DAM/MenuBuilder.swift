@@ -429,9 +429,8 @@ private func buildResolutionSubmenu(display: DisplayInfo, video: VideoManager) -
             }
         }
 
-        // The streaming display is virtual already; it gets no anchor, so no virtual rates.
-        let rates = (video.refreshRateOptions(for: display)?.modes ?? []).filter { !display.isStreaming || !$0.isVirtual }
-        addRateSections(to: submenu, rates: rates, display: display, current: current)
+        addRateSections(to: submenu, rates: video.refreshRateOptions(for: display)?.modes ?? [],
+                        display: display, current: current)
     }
     if let item = rotationItem(for: display, video: video) {
         submenu.addItem(.separator())
@@ -505,13 +504,17 @@ private func modeItem(title: String, mode: DisplayMode, display: DisplayInfo, is
     return item
 }
 
-/// True when at least two displays are online — required for mirror/extend to make sense.
-/// Sparkles when a virtual anchor is driving the display; a mirror icon whether the display
-/// is the slave or the master in a set; nil otherwise.
-private func displayIcon(for display: DisplayInfo, video: VideoManager) -> NSImage? {
-    if video.hasVirtualAnchor(for: display.name) { return menuIcon("sparkles") }
-    if display.isMirroring || video.isBeingMirrored(display) { return menuIcon("square.on.square") }
+/// The symbol of a display's state, for its menu item and its Touch Bar button: sparkles
+/// while a virtual anchor drives the display, the mirror symbol while it is in a mirror set
+/// as slave or master; nil otherwise.
+func displayStateSymbol(for display: DisplayInfo, video: VideoManager) -> String? {
+    if video.hasVirtualAnchor(for: display.name) { return "sparkles" }
+    if video.isInMirrorSet(display) { return "square.on.square" }
     return nil
+}
+
+private func displayIcon(for display: DisplayInfo, video: VideoManager) -> NSImage? {
+    displayStateSymbol(for: display, video: video).flatMap { menuIcon($0) }
 }
 
 /// The mirror, optimize, main-display and position items for a connected display.
@@ -562,7 +565,7 @@ private func optimizeItem(for display: DisplayInfo, video: VideoManager) -> NSMe
 /// doing so checked, plus "All Displays", and "Use as Separate Display" when it has slaves.
 private func addMirrorItems(to submenu: NSMenu, for display: DisplayInfo, video: VideoManager) {
     let targets = video.mirrorTargets(for: display)
-    let inSet   = display.isMirroring || video.isBeingMirrored(display)
+    let inSet   = video.isInMirrorSet(display)
     if targets.count < 2 || display.isMirroring {
         submenu.addItem(mirrorToggleItem(for: display, isMirroring: inSet))
         return

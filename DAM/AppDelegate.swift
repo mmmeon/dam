@@ -20,13 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var moonlightPINAlert: NSAlert?
     private var sidecarAutoConnector: SidecarAutoConnector?
     private var controlStrip: ControlStripPresenter!
-    private var hotkey: GlobalHotkey!
-    private var airPlayConnectHotkey: GlobalHotkey!
-    private var mirrorToggleHotkey: GlobalHotkey!
-    private var audioCycleHotkey: GlobalHotkey!
-    private var mainDisplayHotkey: GlobalHotkey!
-    private var resolutionHotkey: GlobalHotkey!
-    private var rotationHotkey: GlobalHotkey!
+    private var hotkeys: [HotkeyAction: GlobalHotkey] = [:]
     private var settingsWindow: SettingsWindowController?
     private var aboutWindow: NSWindow?
     private var arrangeWindow: ArrangeDisplaysWindowController?
@@ -139,26 +133,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         RotationPicker.shared.configure(videoManager: videoManager) { [weak self] rotation, display in
             self?.applyRotation(rotation, for: display)
         }
-        hotkey = GlobalHotkey(preference: HotkeyPreference.current) { [weak self] in
-            self?.openSwitcher()
-        }
-        airPlayConnectHotkey = GlobalHotkey(preference: HotkeyPreference.currentAirPlayConnect) {
-            AirPlayQuickConnect.shared.activate()
-        }
-        mirrorToggleHotkey = GlobalHotkey(preference: HotkeyPreference.currentMirrorToggle) {
-            MirrorPicker.shared.advance()
-        }
-        audioCycleHotkey = GlobalHotkey(preference: HotkeyPreference.currentAudioCycle) {
-            AudioOutputPicker.shared.advance()
-        }
-        mainDisplayHotkey = GlobalHotkey(preference: HotkeyPreference.currentMainDisplay) {
-            MainDisplayPicker.shared.advance()
-        }
-        resolutionHotkey = GlobalHotkey(preference: HotkeyPreference.currentResolution) {
-            ResolutionPicker.shared.advance()
-        }
-        rotationHotkey = GlobalHotkey(preference: HotkeyPreference.currentRotation) {
-            RotationPicker.shared.advance()
+        for action in HotkeyAction.allCases {
+            hotkeys[action] = GlobalHotkey(preference: action.shortcut) { [weak self] in self?.perform(action) }
         }
 
         redirectSwiftUISettingsWindow()
@@ -290,7 +266,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else if MoonlightHost.isEnabled {
             moonlightHost.start()
         }
-        settingsWindow?.rebuildMoonlightTab()
         rebuild()
     }
 
@@ -618,13 +593,6 @@ extension AppDelegate: NSMenuDelegate {
         }
 
         let wc = SettingsWindowController(
-            current: HotkeyPreference.current,
-            currentAirPlayConnect: HotkeyPreference.currentAirPlayConnect,
-            currentMirrorToggle: HotkeyPreference.currentMirrorToggle,
-            currentAudioCycle: HotkeyPreference.currentAudioCycle,
-            currentMainDisplay: HotkeyPreference.currentMainDisplay,
-            currentResolution: HotkeyPreference.currentResolution,
-            currentRotation: HotkeyPreference.currentRotation,
             audioManager: audioManager,
             videoManager: videoManager,
             sidecarManager: sidecarManager,
@@ -633,34 +601,11 @@ extension AppDelegate: NSMenuDelegate {
             openDisplay: openDisplay,
             sessionCoordinator: sessionCoordinator
         )
-        wc.onSave = { [weak self] pref in
-            HotkeyPreference.current = pref
-            self?.rebind(self?.hotkey, to: pref)
+        wc.onSave = { [weak self] action, pref in
+            action.shortcut = pref
+            self?.rebind(action, to: pref)
         }
-        wc.onSaveAirPlayConnect = { [weak self] pref in
-            HotkeyPreference.currentAirPlayConnect = pref
-            self?.rebind(self?.airPlayConnectHotkey, to: pref)
-        }
-        wc.onSaveMirrorToggle = { [weak self] pref in
-            HotkeyPreference.currentMirrorToggle = pref
-            self?.rebind(self?.mirrorToggleHotkey, to: pref)
-        }
-        wc.onSaveAudioCycle = { [weak self] pref in
-            HotkeyPreference.currentAudioCycle = pref
-            self?.rebind(self?.audioCycleHotkey, to: pref)
-        }
-        wc.onSaveMainDisplay = { [weak self] pref in
-            HotkeyPreference.currentMainDisplay = pref
-            self?.rebind(self?.mainDisplayHotkey, to: pref)
-        }
-        wc.onSaveResolution = { [weak self] pref in
-            HotkeyPreference.currentResolution = pref
-            self?.rebind(self?.resolutionHotkey, to: pref)
-        }
-        wc.onSaveRotation = { [weak self] pref in
-            HotkeyPreference.currentRotation = pref
-            self?.rebind(self?.rotationHotkey, to: pref)
-        }
+        wc.isRegistered = { [weak self] in self?.hotkeys[$0]?.isRegistered ?? true }
         wc.onRebuild = { [weak self] in self?.rebuild() }
         wc.onToggleMoonlight = { [weak self] in self?.toggleMoonlightHost(nil) }
         wc.onForgetMoonlightClient = { [weak self] in self?.forget($0) }
@@ -674,11 +619,22 @@ extension AppDelegate: NSMenuDelegate {
 
     /// Moves one of the app's shortcuts to `pref`, then registers again any that couldn't be,
     /// as when this one held their keys.
-    private func rebind(_ hotkey: GlobalHotkey?, to pref: HotkeyPreference) {
-        hotkey?.update(preference: pref)
-        let all: [GlobalHotkey?] = [self.hotkey, airPlayConnectHotkey, mirrorToggleHotkey, audioCycleHotkey,
-                                    mainDisplayHotkey, resolutionHotkey, rotationHotkey]
-        for other in all.compactMap({ $0 }) where other !== hotkey { other.registerIfNeeded() }
+    private func rebind(_ action: HotkeyAction, to pref: HotkeyPreference) {
+        hotkeys[action]?.update(preference: pref)
+        for other in HotkeyAction.allCases where other != action { hotkeys[other]?.registerIfNeeded() }
+    }
+
+    /// What each shortcut does.
+    private func perform(_ action: HotkeyAction) {
+        switch action {
+        case .switcher:       openSwitcher()
+        case .airPlayConnect: AirPlayQuickConnect.shared.activate()
+        case .mirrorToggle:   MirrorPicker.shared.advance()
+        case .audioCycle:     AudioOutputPicker.shared.advance()
+        case .mainDisplay:    MainDisplayPicker.shared.advance()
+        case .resolution:     ResolutionPicker.shared.advance()
+        case .rotation:       RotationPicker.shared.advance()
+        }
     }
 
     /// Opens Settings on the Moonlight tab.
@@ -724,10 +680,7 @@ extension AppDelegate: NSMenuDelegate {
         } else {
             MoonlightHost.isEnabled = true
             // Turned on here, DAM hosts again in Sunshine's place.
-            if MoonlightHost.usesExternalSunshine {
-                MoonlightHost.usesExternalSunshine = false
-                settingsWindow?.rebuildMoonlightTab()
-            }
+            if MoonlightHost.usesExternalSunshine { MoonlightHost.usesExternalSunshine = false }
             moonlightHost.start()
             // Streaming needs it; asked now rather than when a stream starts.
             MoonlightScreenCapture.requestPermission()

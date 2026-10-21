@@ -10,8 +10,6 @@ import AppKit
 import CoreAudio
 
 private extension HUDHint {
-    static let audioPicking  = HUDHint(leading: "Hotkey for next, or press a number",
-                                       trailing: "Esc to cancel")
     static let audioSwitched = HUDHint(leading: "Audio output switched", trailing: "")
 }
 
@@ -21,7 +19,6 @@ final class AudioOutputPicker {
 
     private weak var audioManager: AudioManager?
     private let picker = ChoicePicker(idPrefix: "\(AppIdentity.shortID).audio",
-                                      pickingHint: .audioPicking,
                                       pickedHint: { _ in .audioSwitched })
 
     private init() {}
@@ -33,12 +30,7 @@ final class AudioOutputPicker {
     /// Opens the picker on the current output (or the next one, as set), or moves to the
     /// next output when already open. Picking the current output again changes nothing.
     func advance() {
-        if picker.isCycling {
-            picker.advance()
-            return
-        }
-        picker.close()
-        guard let audioManager else { return }
+        guard !picker.advanceIfOpen(), let audioManager else { return }
         audioManager.refresh()
         let enabled = audioManager.devices
         guard !enabled.isEmpty else {
@@ -54,14 +46,9 @@ final class AudioOutputPicker {
     }
 
 #if DEBUG
-    /// Opens the picker on sample outputs, steps the cursor once, then lets it pick after
-    /// the pause, silently, without switching the real output.
+    /// Plays the picker on sample outputs, without switching the real output.
     func playDebugPreview() {
-        picker.open(choices: ["MacBook Pro Speakers", "AirPods Pro", "Living Room TV"],
-                    cursor: 1, preview: true) { _ in }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [picker] in
-            picker.previewMove(to: 2)
-        }
+        picker.playPreview(["MacBook Pro Speakers", "AirPods Pro", "Living Room TV"])
     }
 #endif
 }

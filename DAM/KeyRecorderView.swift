@@ -15,17 +15,28 @@ final class KeyRecorderView: NSView {
     var onChanged: ((HotkeyPreference) -> Void)?
     /// What else of the app's has the same shortcut, which then shows in red; nil when nothing does.
     var clash: String? {
-        didSet { needsDisplay = true; if !isRecording { toolTip = clashTip } }
+        didSet { needsDisplay = true; if !isRecording { toolTip = warningTip } }
     }
-    private var clashTip: String? {
-        clash.map { "\($0) has the same shortcut; only one of them works." }
+    /// Whether another app has the shortcut, so it couldn't be registered; shows in red too.
+    var isTakenElsewhere = false {
+        didSet { needsDisplay = true; if !isRecording { toolTip = warningTip } }
+    }
+    private var warningTip: String? {
+        if let clash { return "\(clash) has the same shortcut; only one of them works." }
+        return isTakenElsewhere
+            ? String(localized: "Another app uses this shortcut.",
+                     comment: "Tooltip of a shortcut field whose keys another app has registered")
+            : nil
     }
 
     private var isRecording = false {
         didSet {
             needsDisplay = true
-            toolTip = isRecording ? "Press the new shortcut. Esc cancels." : clashTip
+            toolTip = isRecording ? "Press the new shortcut. Esc cancels." : warningTip
             isRecording ? installOutsideClickMonitor() : removeOutsideClickMonitor()
+            // The app's shortcuts are off while recording, so their keys can be recorded
+            // rather than acted on.
+            if isRecording != oldValue { isRecording ? GlobalHotkey.pauseAll() : GlobalHotkey.resumeAll() }
         }
     }
     /// Cancels recording on a click anywhere but this field.
@@ -78,6 +89,7 @@ final class KeyRecorderView: NSView {
     deinit {
         if let o = windowObserver { NotificationCenter.default.removeObserver(o) }
         removeOutsideClickMonitor()
+        if isRecording { GlobalHotkey.resumeAll() }
     }
 
     /// Leaves recording mode, keeping the current shortcut.
@@ -143,7 +155,8 @@ final class KeyRecorderView: NSView {
         }
 
         let label = isRecording ? "Type shortcut…" : preference.displayString
-        let color: NSColor = isRecording ? .secondaryLabelColor : clash != nil ? .systemRed : .labelColor
+        let color: NSColor = isRecording ? .secondaryLabelColor
+                           : clash != nil || isTakenElsewhere ? .systemRed : .labelColor
         let attrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: NSFont.systemFontSize - 1),
             .foregroundColor: color,

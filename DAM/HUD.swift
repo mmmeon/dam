@@ -246,7 +246,8 @@ final class HUDContentView: NSVisualEffectView {
                     rowLines.append(line)
                     addSection(line)
                 }
-                let row = ChoiceRow(number: numbered ? i + 1 : nil, name: name)
+                // A row past the ninth keeps the number column, blank, so the names line up.
+                let row = ChoiceRow(number: numbered ? hudNumber(at: i) ?? "" : nil, name: name)
                 rows.append(row)
                 addSection(row)
             }
@@ -462,8 +463,8 @@ final class HUDContentView: NSVisualEffectView {
             let fill = FillView(color: ChoiceRow.tint)
             let label: NSTextField
 
-            init(number: Int) {
-                label = HUDContentView.label("\(number)", size: HUDContentView.bodySize,
+            init(number: String) {
+                label = HUDContentView.label(number, size: HUDContentView.bodySize,
                                              weight: .medium, color: .secondaryLabelColor,
                                              alignment: .center, width: HUDContentView.numberColumn)
                 super.init(frame: .zero)
@@ -491,7 +492,7 @@ final class HUDContentView: NSVisualEffectView {
         private var numberWidth: NSLayoutConstraint?
 
         /// `number` nil leaves out the number column and its line.
-        init(number n: Int?, name text: String) {
+        init(number n: String?, name text: String) {
             let columns = n == nil ? 0 : HUDContentView.numberColumn + GridLine.maxThickness
             name = HUDContentView.label(text, size: HUDContentView.bodySize, weight: .medium,
                                         color: .labelColor, alignment: .natural,
@@ -685,18 +686,24 @@ func restoreFocus(to app: NSRunningApplication?) {
 
 // MARK: - Keys
 
-/// The number 1–9 for a digit key press, else nil.
+/// The number 1–9 for a digit key press, on the main keys or the keypad, else nil.
 func hudDigit(_ event: NSEvent) -> Int? {
     switch Int(event.keyCode) {
-    case kVK_ANSI_1: return 1
-    case kVK_ANSI_2: return 2
-    case kVK_ANSI_3: return 3
-    case kVK_ANSI_4: return 4
-    case kVK_ANSI_5: return 5
-    case kVK_ANSI_6: return 6
-    case kVK_ANSI_7: return 7
-    case kVK_ANSI_8: return 8
-    case kVK_ANSI_9: return 9
-    default:         return nil
+    case kVK_ANSI_1, kVK_ANSI_Keypad1: return 1
+    case kVK_ANSI_2, kVK_ANSI_Keypad2: return 2
+    case kVK_ANSI_3, kVK_ANSI_Keypad3: return 3
+    case kVK_ANSI_4, kVK_ANSI_Keypad4: return 4
+    case kVK_ANSI_5, kVK_ANSI_Keypad5: return 5
+    case kVK_ANSI_6, kVK_ANSI_Keypad6: return 6
+    case kVK_ANSI_7, kVK_ANSI_Keypad7: return 7
+    case kVK_ANSI_8, kVK_ANSI_Keypad8: return 8
+    case kVK_ANSI_9, kVK_ANSI_Keypad9: return 9
+    default:                           return nil
     }
+}
+
+/// The number shown for the choice at `index`: 1–9, which a key picks; the rows after the
+/// ninth have none, as no key picks them.
+func hudNumber(at index: Int) -> String? {
+    index < 9 ? "\(index + 1)" : nil
 }

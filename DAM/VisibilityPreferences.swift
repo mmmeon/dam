@@ -39,22 +39,45 @@ extension UserDefaults {
 
 enum VisibilityPreferences {
 
+    // MARK: - Storage
+
+    /// A set of names stored as an array under `key`.
+    private static func names(_ key: String) -> Set<String> {
+        Set(UserDefaults.dam.stringArray(forKey: key) ?? [])
+    }
+
+    private static func setNames(_ names: Set<String>, _ key: String) {
+        UserDefaults.dam.set(Array(names), forKey: key)
+    }
+
+    /// Adds `name` to, or takes it from, the hidden names under `key`.
+    private static func setVisible(_ visible: Bool, _ name: String, hiddenKey key: String) {
+        var hidden = names(key)
+        if visible { hidden.remove(name) } else { hidden.insert(name) }
+        setNames(hidden, key)
+    }
+
+    /// A switch stored under `key`, on until set.
+    private static func isOn(_ key: String) -> Bool {
+        UserDefaults.dam.object(forKey: key) == nil ? true : UserDefaults.dam.bool(forKey: key)
+    }
+
     // MARK: - Audio
 
     private static let audioKey     = "\(AppIdentity.shortID).hidden.audio"
     private static let audioSeenKey = "\(AppIdentity.shortID).seen.audio"
 
     static var hiddenAudioDevices: Set<String> {
-        get { Set(UserDefaults.dam.stringArray(forKey: audioKey) ?? []) }
-        set { UserDefaults.dam.set(Array(newValue), forKey: audioKey) }
+        get { names(audioKey) }
+        set { setNames(newValue, audioKey) }
     }
 
     /// Every audio device name ever observed. Used to auto-hide virtual devices
     /// only on their first discovery, without re-hiding them if the user later
     /// enables them manually.
     static var seenAudioDevices: Set<String> {
-        get { Set(UserDefaults.dam.stringArray(forKey: audioSeenKey) ?? []) }
-        set { UserDefaults.dam.set(Array(newValue), forKey: audioSeenKey) }
+        get { names(audioSeenKey) }
+        set { setNames(newValue, audioSeenKey) }
     }
 
     static func isVisible(audioDevice name: String) -> Bool {
@@ -62,9 +85,7 @@ enum VisibilityPreferences {
     }
 
     static func setVisible(_ visible: Bool, audioDevice name: String) {
-        var s = hiddenAudioDevices
-        if visible { s.remove(name) } else { s.insert(name) }
-        hiddenAudioDevices = s
+        setVisible(visible, name, hiddenKey: audioKey)
     }
 
     // MARK: - AirPlay displays
@@ -72,8 +93,8 @@ enum VisibilityPreferences {
     private static let airPlayKey = "\(AppIdentity.shortID).hidden.airplay"
 
     static var hiddenAirPlayDevices: Set<String> {
-        get { Set(UserDefaults.dam.stringArray(forKey: airPlayKey) ?? []) }
-        set { UserDefaults.dam.set(Array(newValue), forKey: airPlayKey) }
+        get { names(airPlayKey) }
+        set { setNames(newValue, airPlayKey) }
     }
 
     static func isVisible(airPlayDevice name: String) -> Bool {
@@ -81,9 +102,7 @@ enum VisibilityPreferences {
     }
 
     static func setVisible(_ visible: Bool, airPlayDevice name: String) {
-        var s = hiddenAirPlayDevices
-        if visible { s.remove(name) } else { s.insert(name) }
-        hiddenAirPlayDevices = s
+        setVisible(visible, name, hiddenKey: airPlayKey)
     }
 
     // MARK: - Behaviour
@@ -94,10 +113,7 @@ enum VisibilityPreferences {
     /// visible AirPlay display skips the selection list and goes straight to the
     /// confirmation / TTS step. When false the selection list is always shown.
     static var autoConnectSingleDisplay: Bool {
-        get {
-            let val = UserDefaults.dam.object(forKey: autoConnectKey)
-            return val == nil ? true : UserDefaults.dam.bool(forKey: autoConnectKey)
-        }
+        get { isOn(autoConnectKey) }
         set { UserDefaults.dam.set(newValue, forKey: autoConnectKey) }
     }
 
@@ -106,10 +122,7 @@ enum VisibilityPreferences {
     /// When true (default), actions such as connecting AirPlay and toggling
     /// mirror/extend are announced via TTS. Set to false to silence all speech.
     static var speechEnabled: Bool {
-        get {
-            let val = UserDefaults.dam.object(forKey: speechEnabledKey)
-            return val == nil ? true : UserDefaults.dam.bool(forKey: speechEnabledKey)
-        }
+        get { isOn(speechEnabledKey) }
         set { UserDefaults.dam.set(newValue, forKey: speechEnabledKey) }
     }
 
@@ -133,10 +146,7 @@ enum VisibilityPreferences {
 
     /// When true (default), hotkeys show their feedback on the Touch Bar when one is available.
     static var touchBarFeedback: Bool {
-        get {
-            let val = UserDefaults.dam.object(forKey: touchBarFeedbackKey)
-            return val == nil ? true : UserDefaults.dam.bool(forKey: touchBarFeedbackKey)
-        }
+        get { isOn(touchBarFeedbackKey) }
         set { UserDefaults.dam.set(newValue, forKey: touchBarFeedbackKey) }
     }
 
@@ -144,10 +154,7 @@ enum VisibilityPreferences {
 
     /// When true (default), hotkeys show their feedback on screen.
     static var screenFeedback: Bool {
-        get {
-            let val = UserDefaults.dam.object(forKey: screenFeedbackKey)
-            return val == nil ? true : UserDefaults.dam.bool(forKey: screenFeedbackKey)
-        }
+        get { isOn(screenFeedbackKey) }
         set { UserDefaults.dam.set(newValue, forKey: screenFeedbackKey) }
     }
 
@@ -156,10 +163,7 @@ enum VisibilityPreferences {
     /// When true (default), a hotkey picker opens on the current choice. When false it opens
     /// on the one after it, so a single press followed by the pause moves on.
     static var pickerStartsOnCurrent: Bool {
-        get {
-            let val = UserDefaults.dam.object(forKey: pickerStartsOnCurrentKey)
-            return val == nil ? true : UserDefaults.dam.bool(forKey: pickerStartsOnCurrentKey)
-        }
+        get { isOn(pickerStartsOnCurrentKey) }
         set { UserDefaults.dam.set(newValue, forKey: pickerStartsOnCurrentKey) }
     }
 
@@ -197,10 +201,7 @@ enum VisibilityPreferences {
     /// are automatically hidden on first discovery. The user can re-enable them
     /// in Settings at any time.
     static var autoHideVirtualAudio: Bool {
-        get {
-            let val = UserDefaults.dam.object(forKey: autoHideVirtualAudioKey)
-            return val == nil ? true : UserDefaults.dam.bool(forKey: autoHideVirtualAudioKey)
-        }
+        get { isOn(autoHideVirtualAudioKey) }
         set { UserDefaults.dam.set(newValue, forKey: autoHideVirtualAudioKey) }
     }
 
@@ -212,10 +213,7 @@ enum VisibilityPreferences {
     /// display (HDMI / DisplayPort) is left alone. When false, the app switches the
     /// output back to the device that was playing before.
     static var followNewDisplayAudio: Bool {
-        get {
-            let val = UserDefaults.dam.object(forKey: followNewDisplayAudioKey)
-            return val == nil ? true : UserDefaults.dam.bool(forKey: followNewDisplayAudioKey)
-        }
+        get { isOn(followNewDisplayAudioKey) }
         set { UserDefaults.dam.set(newValue, forKey: followNewDisplayAudioKey) }
     }
 
@@ -278,7 +276,7 @@ enum VisibilityPreferences {
     /// Whether a connected iPad gets a virtual display behind it, mirrored, so that it can be
     /// the Mac's only display. On by default.
     static var backsSidecarWithVirtualDisplay: Bool {
-        get { UserDefaults.dam.object(forKey: sidecarAloneKey) as? Bool ?? true }
+        get { isOn(sidecarAloneKey) }
         set { UserDefaults.dam.set(newValue, forKey: sidecarAloneKey) }
     }
 
@@ -340,8 +338,8 @@ enum VisibilityPreferences {
     private static let displayKey = "\(AppIdentity.shortID).hidden.displays"
 
     static var hiddenDisplays: Set<String> {
-        get { Set(UserDefaults.dam.stringArray(forKey: displayKey) ?? []) }
-        set { UserDefaults.dam.set(Array(newValue), forKey: displayKey) }
+        get { names(displayKey) }
+        set { setNames(newValue, displayKey) }
     }
 
     static func isVisible(display name: String) -> Bool {
@@ -349,8 +347,6 @@ enum VisibilityPreferences {
     }
 
     static func setVisible(_ visible: Bool, display name: String) {
-        var s = hiddenDisplays
-        if visible { s.remove(name) } else { s.insert(name) }
-        hiddenDisplays = s
+        setVisible(visible, name, hiddenKey: displayKey)
     }
 }

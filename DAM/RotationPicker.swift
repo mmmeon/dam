@@ -10,8 +10,6 @@
 import AppKit
 
 private extension HUDHint {
-    static let rotationPicking  = HUDHint(leading: "Hotkey for next, or press a number",
-                                          trailing: "Esc to cancel")
     static let rotationChanging = HUDHint(leading: "Rotating the display", trailing: "")
 }
 
@@ -23,7 +21,6 @@ final class RotationPicker {
     /// Turns a display to a picked rotation, as the menu's rotation items do.
     private var select: ((DisplayRotation, DisplayInfo) -> Void)?
     private let picker = ChoicePicker(idPrefix: "\(AppIdentity.shortID).rotation",
-                                      pickingHint: .rotationPicking,
                                       pickedHint: { _ in .rotationChanging })
 
     private init() {}
@@ -37,18 +34,9 @@ final class RotationPicker {
     /// next one, as set), or moves to the next rotation when already open. Picking the
     /// current rotation again changes nothing.
     func advance() {
-        if picker.isCycling {
-            picker.advance()
-            return
-        }
-        picker.close()
-        guard let vm = videoManager else { return }
+        guard !picker.advanceIfOpen(), let vm = videoManager else { return }
         vm.refresh()
-        guard let display = vm.displayUnderPointer() else { return }
-        if let master = vm.anchoredMaster(of: display) {
-            SpeechSynthesizer.shared.announce(Spoken.follows(display.label, master.label))
-            return
-        }
+        guard let display = ChoicePicker.displayUnderPointer(in: vm) else { return }
         guard let current = vm.rotation(of: display) else {
             SpeechSynthesizer.shared.announce(Spoken.cannotRotate(display.label))
             return

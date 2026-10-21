@@ -445,9 +445,10 @@ extension VideoManager {
             if nativeByRate[mode.roundedRefreshRate] == nil { nativeByRate[mode.roundedRefreshRate] = mode }
         }
 
-        let rates = Set(nativeByRate.keys)
-            .union(VisibilityPreferences.effectiveVirtualRefreshRates(for: displayContext(for: display)))
-            .sorted(by: >)
+        // A streaming display is virtual already; it gets no anchor, so no virtual rates.
+        let virtualRates = display.isStreaming
+            ? [] : VisibilityPreferences.effectiveVirtualRefreshRates(for: displayContext(for: display))
+        let rates = Set(nativeByRate.keys).union(virtualRates).sorted(by: >)
         let modes = rates.map {
             nativeByRate[$0] ?? Self.virtualMode(width: current.width, height: current.height, refreshRate: $0,
                                                  pixelWidth: current.pixelWidth, pixelHeight: current.pixelHeight)
