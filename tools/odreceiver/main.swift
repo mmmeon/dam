@@ -5,7 +5,7 @@
 // Build (the binary is ignored by git):
 //   swiftc -O -o tools/odreceiver/odreceiver tools/odreceiver/main.swift
 //
-//   tools/odreceiver/odreceiver [--seconds N] [--size WxH] [--id ID] [--touch] [--hover] [--no-udp] [--no-ack] [--no-close]
+//   tools/odreceiver/odreceiver [--seconds N] [--size WxH] [--id ID] [--touch] [--hover] [--turn] [--no-udp] [--no-ack] [--no-close]
 //
 // --no-close drops the connection at the end without saying closing, as a cut cable does.
 // --hover moves the Mac's pointer across the display (stylus hover: no clicks), to see
@@ -13,11 +13,15 @@
 // acknowledges it, so the sender should fall back to TCP.
 //
 // --touch sends a tap in the middle of the display: it moves the Mac's pointer.
+//
+// --turn turns the iPad a quarter of the way in: a new hello with its sides swapped, as the
+// OpenDisplay app sends on a rotation. Each pointer picture is printed with the share of the
+// display it is to be drawn at (nw × nh), which should follow the turn.
 
 import Foundation
 import Network
 
-var seconds = 12.0, width = 2048, height = 1536, id = "dam-odreceiver-test", touch = false, noClose = false, hover = false, udp = true, ack = true
+var seconds = 12.0, width = 2048, height = 1536, id = "dam-odreceiver-test", touch = false, noClose = false, hover = false, udp = true, ack = true, turn = false
 var args = CommandLine.arguments.dropFirst()
 while let arg = args.popFirst() {
     switch arg {
@@ -29,6 +33,7 @@ while let arg = args.popFirst() {
     case "--touch": touch = true
     case "--no-close": noClose = true
     case "--hover": hover = true
+    case "--turn": turn = true
     case "--no-udp": udp = false
     case "--no-ack": ack = false
     default: print("unknown option \(arg)"); exit(2)
@@ -77,6 +82,11 @@ func handle(_ payload: Data) {
         if order.count < 6 && !order.contains(type) { order.append(type) }
         if type == "streamConfig" { streamConfig = json; say("streamConfig \(json)") }
         if type == "welcome" { say("welcome \(json)") }
+        if type == "cursorImg" {
+            let nw = json["nw"] as? Double ?? 0, nh = json["nh"] as? Double ?? 0
+            say(String(format: "cursorImg nw %.4f nh %.4f (%.0f × %.0f px of a %d × %d panel)",
+                       nw, nh, nw * Double(width), nh * Double(height), width, height))
+        }
         if type == "pong", let t = json["t"] as? Double { latencies.append(nowMs() - t) }
         if type == "cursor" {
             tcpCursors += 1
@@ -178,6 +188,12 @@ let tcpParameters = NWParameters(tls: nil, tcp: tcp)
 // IPv4 only: on the sender's own Mac, a dial would otherwise land on a link-local IPv6
 // address of one of its interfaces, which carries TCP to itself but not UDP.
 (tcpParameters.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options)?.version = .v4
+/// The hello for the panel as it stands now: `width` × `height`.
+func hello() -> Data {
+    framed(["type": "hello", "pixelsWide": width, "pixelsHigh": height, "scale": 2, "device": "iPad", "id": id, "pv": 3,
+            "panel": ["pixelsWide": width, "pixelsHigh": height, "scale": 2], "displayMaxFrameRate": 60]
+        .merging(cursorPort.map { ["cursorPort": $0] } ?? [:]) { $1 })
+}
 let listener = try! NWListener(using: tcpParameters, on: 9000)
 listener.service = NWListener.Service(name: "DAM test receiver", type: "_opensidecar._tcp",
                                       txtRecord: NWTXTRecord(["id": id, "pv": "3"]))
@@ -185,10 +201,7 @@ listener.newConnectionHandler = { c in
     newcomers[ObjectIdentifier(c)] = c
     say("sender dialed from \(c.endpoint)")
     c.start(queue: .main)
-    let hello = framed(["type": "hello", "pixelsWide": width, "pixelsHigh": height, "scale": 2, "device": "iPad", "id": id, "pv": 3,
-          "panel": ["pixelsWide": width, "pixelsHigh": height, "scale": 2], "displayMaxFrameRate": 60]
-        .merging(cursorPort.map { ["cursorPort": $0] } ?? [:]) { $1 })
-    c.send(content: hello, completion: .idempotent)
+    c.send(content: hello(), completion: .idempotent)
     receive(c)
 }
 listener.stateUpdateHandler = { state in
@@ -204,10 +217,16 @@ Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
     guard connection != nil else { return }
     send(["type": "ping", "t": nowMs()])
 }
-var phase = 0
+var phase = 0, turned = false
 Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { timer in
     guard let at = connectedAt else { return }
     let t = Date().timeIntervalSince(at)
+    if turn && !turned && t > seconds * 0.25 {
+        turned = true
+        (width, height) = (height, width)
+        connection?.send(content: hello(), completion: .idempotent)
+        say("turned: a hello for \(width)x\(height)")
+    }
     if phase == 0 && t > seconds * 0.5 {
         phase = 1; kfAskedAt = Date(); send(["type": "kf"]); say("asked for a keyframe")
         if hover {
