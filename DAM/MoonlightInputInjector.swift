@@ -24,6 +24,8 @@ final class MoonlightInputInjector {
     /// Where events are posted, one at a time; everything below is only touched on it.
     private let queue = DispatchQueue(label: "\(AppIdentity.bundleID).moonlight.input", qos: .userInteractive)
     private var closed = false
+    /// Whether events are acted on; see `allowInput`.
+    private var allowed = true
     private var trusted = false
     /// When access was last found missing, so it is asked of macOS no more than once a second.
     private var checkedAccess: TimeInterval?
@@ -48,7 +50,7 @@ final class MoonlightInputInjector {
     func handle(_ events: [MoonlightInput]) {
         guard !events.isEmpty else { return }
         queue.async { [self] in
-            guard !closed, hasAccess() else { return }
+            guard !closed, allowed, hasAccess() else { return }
             for event in events { post(event) }
         }
     }
@@ -58,8 +60,18 @@ final class MoonlightInputInjector {
     func scrollPixels(dx: Int32, dy: Int32) {
         guard dx != 0 || dy != 0 else { return }
         queue.async { [self] in
-            guard !closed, hasAccess() else { return }
+            guard !closed, allowed, hasAccess() else { return }
             scroll(units: .pixel, vertical: dy, horizontal: dx)
+        }
+    }
+
+    /// Acts on input from now on, or not; turned off, whatever is held is let go. Set on the
+    /// queue events are posted on, so events handed over before it is turned off are acted
+    /// on first (and let go of), and none handed over after.
+    func allowInput(_ allow: Bool) {
+        queue.async { [self] in
+            allowed = allow
+            if !allow { releaseHeld() }
         }
     }
 

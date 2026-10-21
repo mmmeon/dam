@@ -784,9 +784,11 @@ final class MoonlightStream {
         }
         statsTimer = stats
         stats.resume()
+        // Whether input is allowed is checked where it is posted, so none that came before
+        // it was turned off goes after the release.
+        input.allowInput(allowsInput)
         control.onInput = { [weak self] payload in
-            guard let self, self.allowsInput else { return }
-            self.input.handle(MoonlightInput.parse(payload))
+            self?.input.handle(MoonlightInput.parse(payload))
         }
         control.onDisconnect = { [weak self] in self?.end("Moonlight disconnected") }
         video.onFirstPing = { [weak self] in self?.startPicture() }
@@ -811,7 +813,7 @@ final class MoonlightStream {
             lock.lock()
             inputAllowed = newValue
             lock.unlock()
-            if !newValue { input.releaseAll() }
+            input.allowInput(newValue)
         }
     }
 
