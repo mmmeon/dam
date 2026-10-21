@@ -39,17 +39,13 @@ other_name="Sessiontest Other"
 all_cases=(extend main mirror user-main blackout audio learn-audio locked-audio overlap same-app quit kill
            rustdesk parsec chromeremotedesktop screensharing teamviewer adopt)
 
-die() { print -u2 "sessiontest: $*"; exit 1 }
-say() { print "sessiontest: $*" }
-pause() { perl -e "select(undef, undef, undef, $1)" }
+tool=sessiontest
+source $repo/tools/common/common.zsh
 
 build_tools() {
     mkdir -p $cache
-    if [[ ! -x $layout || $here/layout.swift -nt $layout ]]; then
-        DEVELOPER_DIR=${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer} \
-            swiftc -O -suppress-warnings -import-objc-header $repo/DAM/CGVirtualDisplayPrivate.h \
-            -o $layout $here/layout.swift || die "could not build layout.swift"
-    fi
+    local swift_flags=(-import-objc-header $repo/DAM/CGVirtualDisplayPrivate.h)
+    build_swift $layout $here/layout.swift $repo/tools/common/onlinedisplays.swift
     # Stand-ins for the processes the detectors look for, which sleep for as long as they're
     # told. Built, as macOS kills a copy of /bin/sleep at once.
     local name

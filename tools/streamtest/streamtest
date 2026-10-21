@@ -54,22 +54,14 @@ rotation_key=dam.rotation.streaming
 streaming_name="DAM Streaming"
 cache=${TMPDIR:-/tmp}/dam-streamtest
 displays=$cache/displays
-
-die() { print -u2 "streamtest: $*"; exit 1 }
-say() { print "streamtest: $*" }
-pause() { perl -e "select(undef, undef, undef, $1)" }
+tool=streamtest
+source $repo/tools/common/common.zsh
 
 # The displays helper and tools/latency, built into $cache when their source is newer.
 build_tools() {
     mkdir -p $cache
-    local source
-    for source in $here/displays.swift $repo/tools/latency/latency.swift; do
-        local binary=$cache/${source:t:r}
-        if [[ ! -x $binary || $source -nt $binary ]]; then
-            DEVELOPER_DIR=${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer} \
-                swiftc -O -suppress-warnings -o $binary $source || die "could not build ${source:t}"
-        fi
-    done
+    build_swift $displays $here/displays.swift $repo/tools/common/onlinedisplays.swift
+    build_swift $cache/latency $repo/tools/latency/latency.swift
 }
 
 # What a run started, for cleanup to stop, and the streaming display's rotation before it.
@@ -202,19 +194,22 @@ cmd_run() {
     local part=0
     run_started=1
     $displays watch > $out/displays.log 2>&1 & watch_pid=$!
-    /usr/bin/log stream --level debug --predicate 'subsystem == "mmmeon.dam"' --style compact > $out/dam.log 2>&1 & log_pid=$!
+    /usr/bin/log stream --level debug --predicate "subsystem == \"$bundle\"" --style compact > $out/dam.log 2>&1 & log_pid=$!
 
     # The streaming display's width in pixels for a stream of WxH: its height when it is turned
     # on its side.
     turned_width() { (( rotation == 90 || rotation == 270 )) && print ${1#*x} || print ${1%x*} }
 
-    # Whether any display mirrors another now.
-    mirrored_now() { $displays list | awk '$11 != 0' | grep -q . }
-
     # Streaming displays up before the run belong to other devices' streams; the run's is
     # the first one that is not among them.
     local others=" $($displays list | awk '$2 == "streaming" { print $1 }' | tr '\n' ' ')"
     our_display() { $displays list | awk -v others="$others" '$2 == "streaming" && index(others, " " $1 " ") == 0' | head -1 }
+
+    # Whether a display mirrors the run's streaming display now; others' mirroring is theirs.
+    mirrored_now() {
+        local ours=$(our_display | cut -d' ' -f1)
+        [[ -n $ours ]] && $displays list | awk -v id=$ours '$11 == id' | grep -q .
+    }
 
     # The streaming display, once placed at the size asked for (in pixels; a HiDPI one shows
     # half) and nothing mirrors.

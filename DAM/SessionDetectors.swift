@@ -252,15 +252,18 @@ final class LogFollower {
                 self.readNew()
             }
         }
+        // A source's descriptor is closed only once it has been cancelled, or a new file
+        // given the same descriptor could leave the next source dead.
+        source.setCancelHandler { try? handle.close() }
         source.resume()
         self.source = source
         if !fromEnd { readNew() }
     }
 
     private func close() {
+        // The file is closed by its source's cancel handler.
         source?.cancel()
         source = nil
-        try? handle?.close()
         handle = nil
         partial.removeAll()
     }
@@ -271,7 +274,8 @@ final class LogFollower {
         var opened = stat()
         var atPath = stat()
         guard fstat(handle.fileDescriptor, &opened) == 0 else { return }
-        if lstat(url.path, &atPath) != 0 || atPath.st_ino != opened.st_ino {
+        // Through a link to the log, the file it leads to.
+        if stat(url.path, &atPath) != 0 || atPath.st_ino != opened.st_ino || atPath.st_dev != opened.st_dev {
             readNew()
             self.open(fromEnd: false)
         } else {
@@ -547,6 +551,9 @@ enum SessionDetectors {
     /// The apps DAM can watch for sessions of.
     static let watchable: Set<String> = ["rustdesk", "parsec", "screensharing", "chromeremotedesktop", "teamviewer", "opendisplay", "display"]
 
+    /// OpenDisplay's process and log folder; its Debug build's are called "OpenDisplay Dev".
+    static let openDisplayNames = ["OpenDisplay", "OpenDisplay Dev"]
+
     /// For "display": the displays online, and the name to watch for; set by the app.
     static var displayNames: () -> [(id: CGDirectDisplayID, name: String)] = { [] }
     static var adoptName: () -> String? = { nil }
@@ -585,9 +592,9 @@ enum SessionDetectors {
         case "opendisplay":
             // The Debug build logs to a folder of its own.
             let logs = home.appendingPathComponent("Library/Logs")
-            let standard = newest(["OpenDisplay", "OpenDisplay Dev"].map { logs.appendingPathComponent("\($0)/opendisplay.log") })
+            let standard = newest(openDisplayNames.map { logs.appendingPathComponent("\($0)/opendisplay.log") })
             return LogSessionDetector(app: app, url: logURL(for: app, standard: standard), parse: SessionLogLines.openDisplay,
-                                      isRunning: { !RunningProcesses.names().isDisjoint(with: ["OpenDisplay", "OpenDisplay Dev"]) })
+                                      isRunning: { !RunningProcesses.names().isDisjoint(with: openDisplayNames) })
         case "display":
             return DisplaySessionDetector(app: app, name: adoptName, displays: displayNames)
         default:
@@ -630,8 +637,8 @@ enum SessionDetectors {
         case "opendisplay":
             // Often built from source, so its log tells too.
             let logs = home.appendingPathComponent("Library/Logs").path
-            return fm.fileExists(atPath: "/Applications/OpenDisplay.app") || fm.fileExists(atPath: "\(logs)/OpenDisplay")
-                || fm.fileExists(atPath: "\(logs)/OpenDisplay Dev")
+            return fm.fileExists(atPath: "/Applications/OpenDisplay.app")
+                || openDisplayNames.contains { fm.fileExists(atPath: "\(logs)/\($0)") }
         case "sunshine":
             return ["/Applications/Sunshine.app", "/usr/local/bin/sunshine", "/opt/homebrew/bin/sunshine"]
                 .contains { fm.fileExists(atPath: $0) }
@@ -650,6 +657,9 @@ final class SessionWatcher {
     private var madeFrom: [String: SessionProfile] = [:]
     /// Called with what to announce when a watched session starts or ends.
     var announce: ((String) -> Void)?
+    /// The session each open connection joined, by app and the detector's key: a session
+    /// ended by hand leaves its connections open, and their closes mustn't end a later one.
+    private var joined: [String: [String: UUID]] = [:]
 
     init(coordinator: RemoteSessionCoordinator, make: ((String) -> SessionDetector?)? = nil) {
         self.coordinator = coordinator
@@ -702,7 +712,7 @@ final class SessionWatcher {
     func handle(_ event: SessionEvent, of app: String) {
         let name = RemoteSessionApp.name(of: app)
         switch event {
-        case .opened(_, let client, let display):
+        case .opened(let key, let client, let display):
             let first = coordinator.sessions[app] == nil
             var request = SessionRequest(app: app, client: client)
             switch display {
@@ -714,13 +724,19 @@ final class SessionWatcher {
                 switch result {
                 case .success(let start):
                     for warning in start.warnings { detLog.error("\(app): \(warning)") }
-                    if first { self?.announce?(Spoken.remoteSessionStarted(name)) }
+                    // Not when every connection closed while it was being set up: it ends now.
+                    let on = (self?.coordinator.sessions[app]?.count ?? 0) > 0
+                    if first, on { self?.announce?(Spoken.remoteSessionStarted(name)) }
                 case .failure(let error):
                     detLog.error("\(app): \(error.description)")
                 }
             }
-        case .closed:
-            let last = coordinator.sessions[app]?.count == 1
+            joined[app, default: [:]][key] = coordinator.sessions[app]?.id
+        case .closed(let key):
+            guard let id = joined[app]?.removeValue(forKey: key), let session = coordinator.sessions[app],
+                  session.id == id else { return }
+            // One still being set up was never announced.
+            let last = session.count == 1 && !session.starting
             if case .success = coordinator.end(app: app), last { announce?(Spoken.remoteSessionEnded(name)) }
         }
     }
