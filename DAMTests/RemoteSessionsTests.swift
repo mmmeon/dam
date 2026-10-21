@@ -378,6 +378,25 @@ final class RemoteSessionsTests: XCTestCase {
         XCTAssertEqual(fake.outputUID, "speakers")
     }
 
+    func testATurnedDisplaysModeComparesAsItWasMade() {
+        let made = StreamingDisplayModes.forStream(width: 3840, height: 2160, fps: 60)
+        // Kept on its side: shown 1080 × 1920 points, 2160 pixels wide.
+        let turned = LiveSessionDisplays.mode(width: 1080, height: 1920, pixelWidth: 2160, refreshRate: 60, turned: .quarter)
+        XCTAssertEqual(turned, made)
+        XCTAssertEqual(LiveSessionDisplays.mode(width: 1920, height: 1080, pixelWidth: 1920, refreshRate: 59.94, turned: .half),
+                       StreamingDisplayModes.Mode(width: 1920, height: 1080, refreshRate: 60))
+        XCTAssertEqual(LiveSessionDisplays.mode(width: 1280, height: 800, pixelWidth: 1280, refreshRate: 60, turned: nil),
+                       StreamingDisplayModes.Mode(width: 1280, height: 800, refreshRate: 60))
+
+        // So a session on a turned display keeps its profile as it was.
+        let fake = FakeSessionDisplays()
+        let c = coordinator(fake, profiles: ["sunshine": SessionProfile()])
+        _ = start(c, SessionRequest(app: "sunshine", width: 3840, height: 2160, fps: 60))
+        fake.modes[100] = turned
+        c.end(app: "sunshine")
+        XCTAssertNil(c.profile(for: "sunshine").width)
+    }
+
     func testNothingChangedKeepsTheProfile() {
         let fake = FakeSessionDisplays()
         var profile = SessionProfile()

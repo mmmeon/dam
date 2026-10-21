@@ -292,7 +292,7 @@ protocol SessionDisplays: AnyObject {
     func blackOut(keeping: Set<CGDirectDisplayID>?)
     /// How display `id` is placed now, as chosen through DAM; nil when it is gone.
     func placement(of id: CGDirectDisplayID) -> SessionProfile.Placement?
-    /// Display `id`'s mode now, or nil when it is gone.
+    /// Display `id`'s mode now, before any turn DAM gives it, or nil when it is gone.
     func mode(of id: CGDirectDisplayID) -> StreamingDisplayModes.Mode?
     /// While true, changes made to the displays leave the layout put back after the
     /// sessions as it was before them.
@@ -720,9 +720,17 @@ final class LiveSessionDisplays: SessionDisplays {
 
     func mode(of id: CGDirectDisplayID) -> StreamingDisplayModes.Mode? {
         guard let mode = CGDisplayCopyDisplayMode(id) else { return nil }
-        return StreamingDisplayModes.Mode(width: mode.width, height: mode.height,
-                                          refreshRate: Int(mode.refreshRate.rounded()),
-                                          hiDPI: mode.pixelWidth > mode.width)
+        return Self.mode(width: mode.width, height: mode.height, pixelWidth: mode.pixelWidth,
+                         refreshRate: mode.refreshRate, turned: video.streamingRotation(of: id))
+    }
+
+    /// The mode of a display shown at `width` × `height` and turned by `turned`, as it was
+    /// asked for: a streaming display kept turned is made at the turned size, which would
+    /// otherwise look like a change of size each session.
+    static func mode(width: Int, height: Int, pixelWidth: Int, refreshRate: Double,
+                     turned: DisplayRotation?) -> StreamingDisplayModes.Mode {
+        StreamingDisplayModes.Mode(width: width, height: height, refreshRate: Int(refreshRate.rounded()),
+                                   hiDPI: pixelWidth > width).rotated((turned ?? .standard).inverse)
     }
 
     func holdLayout(_ hold: Bool) { video.holdsStreamingArrangement = hold }
