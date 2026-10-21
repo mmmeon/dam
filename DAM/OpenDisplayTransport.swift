@@ -58,6 +58,9 @@ final class OpenDisplayTCPChannel: OpenDisplayChannel {
         tcp.connectionTimeout = 5
         let parameters = NWParameters(tls: nil, tcp: tcp)
         parameters.serviceClass = .interactiveVideo
+        // IPv4, where the receiver also takes the pointer over UDP: the iPad's doesn't at the
+        // link-local IPv6 address a Bonjour name otherwise resolves to.
+        (parameters.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options)?.version = .v4
         connection = NWConnection(to: endpoint, using: parameters)
     }
 

@@ -74,3 +74,8 @@ ack, positions move to UDP and TCP stops carrying them; `--no-ack` falls back to
 dropped by its kernel (counted as "dropped due to full socket buffers" in
 `netstat -s -p udp`, whatever the sender) while 127.0.0.1 loses none, so runs there
 fall back to TCP about half the time; a receiver on another device doesn't see this.
+
+With the iPad (2026-10-20): its hello offers `cursorPort` 9001, but it acknowledged nothing
+while the Wi-Fi dial landed on its link-local IPv6 address (as a Bonjour name otherwise
+resolves); dialed over IPv4, it acknowledges at once and the pointer goes over UDP. So the
+Wi-Fi dial is IPv4 only.
