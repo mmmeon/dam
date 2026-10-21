@@ -493,10 +493,15 @@ cleanup() {
             $dam session end --app $app --all >/dev/null 2>&1
         done
     fi
+    say "putting DAM's own settings back"
+    # With DAM quit, which saves its profiles as it goes, and `defaults import` replaces
+    # every setting it has.
+    quit_dam
     if (( had_profiles )); then cp $out/remote-sessions.json.orig $profiles; else rm -f $profiles; fi
     if (( had_logs )); then defaults import $bundle $out/defaults.orig.plist; else defaults delete $bundle SessionDetectorLogs 2>/dev/null; fi
-    say "putting DAM's own settings back"
-    restart_dam
+    start_dam
+    # Its detectors take their first look.
+    pause 3
     [[ -n $log_pid ]] && kill $log_pid 2>/dev/null
     local final=$(current=final settled)
     if [[ $final != $baseline ]]; then

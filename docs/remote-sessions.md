@@ -140,7 +140,11 @@ root's processes (`screensharingd`), and names are cut to 16 characters.
   `Connection opened` line. Desktops are told apart by the lines that follow within ~10 ms:
   `new wakelock, require display on: true` (first connection only), `Option update:
   OptionMessage` and video capture starting; a terminal logs `require display on: false` and
-  `terminal_service.rs` lines and makes no session.
+  `terminal_service.rs` lines and makes no session. Only those within 0.5 s of the open
+  count at once (a desktop's came 7–22 ms after), as later ones can be another connection's.
+  RustDesk may log the open before the login, so one with none by then stays held while a
+  password is typed or the host waits for a click: video capture starting makes it a desktop,
+  a terminal's line or the next open drops it (no screen: a file transfer). Not yet tried live.
   Tried 2026-10-20 toward streaming an extended display, neither works: RustDesk follows main
   (handing main back to the Lenovo mid-session moved it back to the Lenovo within a second),
   and a display picked in the client's toolbar (`current=1`) went back to display 0 at the

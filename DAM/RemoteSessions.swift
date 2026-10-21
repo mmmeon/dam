@@ -534,6 +534,11 @@ final class RemoteSessionCoordinator {
         let completions = waiting.removeValue(forKey: app) ?? []
         if case .failure = result {
             sessions[app] = nil
+            // The first failed: nothing to put back but what begin set up.
+            if sessions.isEmpty {
+                outputBeforeSessions = nil
+                displays.holdLayout(false)
+            }
         } else {
             sessions[app]?.starting = false
         }

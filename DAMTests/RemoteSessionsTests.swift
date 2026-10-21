@@ -287,6 +287,11 @@ final class RemoteSessionsTests: XCTestCase {
         guard case .failure(.noDisplay) = start(c, SessionRequest(app: "sunshine")) else { return XCTFail("started") }
         XCTAssertEqual(fake.outputUID, "speakers")
         XCTAssertTrue(c.sessions.isEmpty)
+        XCTAssertFalse(fake.holdsLayout)
+        // Nothing left for the next launch to switch the output to.
+        fake.outputUID = "blackhole"
+        _ = coordinator(fake)
+        XCTAssertEqual(fake.outputUID, "blackhole")
     }
 
     func testNoDisplayAskedOnlySwitchesTheOutput() {
@@ -570,18 +575,26 @@ final class RemoteSessionsTests: XCTestCase {
         XCTAssertNil(lines.parse("#4 Connection opened from 10.0.0.4:1."))
         XCTAssertEqual(lines.parse("#5 Connection opened from 10.0.0.5:1."), .opened(key: "4", client: "10.0.0.4"))
         XCTAssertEqual(lines.parse("video_service.rs:485] #displays=2, current=0, origin: (0, 0)"), .opened(key: "5", client: "10.0.0.5"))
+
+        // A terminal whose lines come 5 s after its open, past the window, as after a login.
+        XCTAssertNil(lines.parse("[2026-10-20 16:01:00.000000 -04:00] DEBUG [src/server/connection.rs:1498] #21 Connection opened from 10.0.0.21:1."))
+        XCTAssertNil(lines.parse("[2026-10-20 16:01:05.000000 -04:00] INFO [src/server/terminal_service.rs:180] Creating new terminal service: ts_3"))
+        XCTAssertNil(lines.parse("[2026-10-20 16:01:05.020000 -04:00] DEBUG [src/server/video_service.rs:485] #displays=2, current=0"))
+        XCTAssertNil(lines.parse("[2026-10-20 16:02:00.000000 -04:00] DEBUG [src/server/connection.rs:1498] #22 Connection opened from 10.0.0.22:1."))
+        XCTAssertNil(lines.parse("[2026-10-20 16:02:05.000000 -04:00] INFO [src/platform/mod.rs:112] new wakelock, require display on: false"))
+        XCTAssertNil(lines.parse("[2026-10-20 16:02:05.010000 -04:00] DEBUG [src/server/video_service.rs:485] #displays=2, current=0"))
     }
 
     func testRustDeskCountsOnlyLinesSoonAfterAnOpen() throws {
         let lines = SessionLogLines.RustDeskConnections()
         XCTAssertEqual(try XCTUnwrap(SessionLogLines.RustDeskConnections.time(of: "[2026-10-20 15:26:04.995863 -04:00] INFO x")), 55564.995863, accuracy: 1e-6)
         XCTAssertNil(SessionLogLines.RustDeskConnections.time(of: "#3 Connection opened from 10.0.0.3:1."))
-        // No desktop's line soon after: no screen, as a file transfer, so no session, even
-        // when another desktop's line comes later.
+        // No desktop's line soon after: a wakelock or options later can be another
+        // connection's, so they don't count.
         XCTAssertNil(lines.parse("[2026-10-20 15:30:00.000000 -04:00] DEBUG [src/server/connection.rs:1498] #7 Connection opened from 10.0.0.7:1."))
-        XCTAssertNil(lines.parse("[2026-10-20 15:30:02.000000 -04:00] INFO [src/server/connection.rs:4857] Option update: OptionMessage { custom_fps: 30 }"))
-        XCTAssertNil(lines.parse("[2026-10-20 15:30:03.000000 -04:00] DEBUG [src/server/video_service.rs:485] #displays=2, current=0"))
-        // Nor is it taken for a desktop when the next opens.
+        XCTAssertNil(lines.parse("[2026-10-20 15:30:02.000000 -04:00] INFO [src/platform/mod.rs:112] new wakelock, require display on: true"))
+        XCTAssertNil(lines.parse("[2026-10-20 15:30:03.000000 -04:00] INFO [src/server/connection.rs:4857] Option update: OptionMessage { custom_fps: 30 }"))
+        // Still held with none when the next opens: no screen, as a file transfer, so no session.
         XCTAssertNil(lines.parse("[2026-10-20 15:30:10.000000 -04:00] DEBUG [src/server/connection.rs:1498] #10 Connection opened from 10.0.0.10:1."))
         XCTAssertEqual(lines.parse("[2026-10-20 15:30:10.009000 -04:00] INFO [src/platform/mod.rs:112] new wakelock, require display on: true"),
                        .opened(key: "10", client: "10.0.0.10"))
@@ -593,6 +606,15 @@ final class RemoteSessionsTests: XCTestCase {
         // Past midnight reads as past the window.
         XCTAssertNil(lines.parse("[2026-10-20 23:59:59.900000 -04:00] DEBUG [src/server/connection.rs:1498] #9 Connection opened from 10.0.0.9:1."))
         XCTAssertNil(lines.parse("[2026-10-21 00:00:00.100000 -04:00] INFO [src/server/connection.rs:4857] Option update: OptionMessage { }"))
+        // RustDesk logs the open before the login: a client types its password for 5 s, then
+        // the desktop's lines come, and its video capture starting makes the session.
+        XCTAssertNil(lines.parse("[2026-10-21 16:00:00.000000 -04:00] DEBUG [src/server/connection.rs:1498] #20 Connection opened from 10.0.0.20:1."))
+        XCTAssertNil(lines.parse("[2026-10-21 16:00:05.000000 -04:00] INFO [src/common.rs:2213] Connection secured"))
+        XCTAssertNil(lines.parse("[2026-10-21 16:00:05.004000 -04:00] INFO [src/platform/mod.rs:112] new wakelock, require display on: true"))
+        XCTAssertNil(lines.parse("[2026-10-21 16:00:05.008000 -04:00] INFO [src/server/connection.rs:4857] Option update: OptionMessage { image_quality: NotSet }"))
+        XCTAssertEqual(lines.parse("[2026-10-21 16:00:05.020000 -04:00] DEBUG [src/server/video_service.rs:485] #displays=2, current=0, origin: (0, 0)"),
+                       .opened(key: "20", client: "10.0.0.20"))
+        XCTAssertNil(lines.parse("[2026-10-21 16:00:05.030000 -04:00] DEBUG [src/server/video_service.rs:485] #displays=2, current=0, origin: (0, 0)"))
     }
 
     func testParsecLines() {

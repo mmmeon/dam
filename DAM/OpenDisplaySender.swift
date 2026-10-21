@@ -539,6 +539,8 @@ final class OpenDisplaySession {
         linkReady = true
         lastHeard = Date()
         lostAt = nil
+        // A cable taking over a link lost meanwhile finds them stopped.
+        if timers.isEmpty { startTimers() }
         odLog.debug("\(self.name, privacy: .public): connected over \(channel.transport.rawValue, privacy: .public)")
         sender?.sessionConnected(self, over: channel)
     }

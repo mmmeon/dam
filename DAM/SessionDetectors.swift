@@ -57,10 +57,12 @@ enum SessionLogLines {
     /// connection), `Option update: OptionMessage { … }` and video capture starting
     /// (`video_service.rs:485] #displays=2, current=0, …`). A terminal's: `require display on:
     /// false` and `terminal_service.rs` lines. Holds an opened connection until one comes; one
-    /// still held when the next opens counts as a desktop. With the log's timestamps, only
-    /// lines within `window` of the open count, as another connection's may come later; one
-    /// with no desktop's line by then has no screen (a terminal, a file transfer) and makes
-    /// no session. A desktop's come within about 20 ms, over the internet too.
+    /// still held when the next opens counts as a desktop. With the log's timestamps, any of
+    /// these within `window` of the open count; a desktop's come within about 20 ms, over the
+    /// internet too. Past it the connection may still be logging in (a password being typed,
+    /// a click to accept), so it stays held: only video capture starting makes it a desktop,
+    /// as the wakelock and options can be another connection's, and a terminal's line or the
+    /// next open drops it, as one with no screen (a file transfer) makes no session.
     final class RustDeskConnections {
         private var pending: SessionEvent?
         /// When the held connection opened, by the log.
@@ -87,16 +89,13 @@ enum SessionLogLines {
                 }
             }
             guard let held = pending else { return nil }
-            if expired(at) {
-                pending = nil
-                return nil
-            }
             if line.contains("require display on: false") || line.contains("terminal_service.rs") {
                 pending = nil
                 return nil
             }
-            if line.contains("require display on: true") || line.contains("Option update: OptionMessage")
-                || (line.contains("video_service.rs") && line.contains("#displays=")) {
+            let capturing = line.contains("video_service.rs") && line.contains("#displays=")
+            if capturing || (!expired(at) && (line.contains("require display on: true")
+                                              || line.contains("Option update: OptionMessage"))) {
                 pending = nil
                 return held
             }
