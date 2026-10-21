@@ -97,9 +97,22 @@ final class ArrangeTouchBar: NSObject {
         if let previous = step.previous { show(previous) } else { end() }
     }
 
+    /// `moving` put on `side` of `other` in `now`, the arrangement as it is when confirmed, so
+    /// the rest stays wherever it has moved since the flow began; nil when either has gone.
+    static func arrangement(placing moving: CGDirectDisplayID, _ side: PlacementSide,
+                            of other: CGDirectDisplayID, in now: DisplayLayout) -> DisplayLayout? {
+        guard now[moving] != nil, now[other] != nil else { return nil }
+        return now.placing(moving, side, of: other)
+    }
+
     private func confirm(moving: CGDirectDisplayID, side: PlacementSide, other: CGDirectDisplayID) {
-        let result = layout.placing(moving, side, of: other)
-        videoManager?.arrange(result) { [weak self] outcome in
+        guard let vm = videoManager else { return end() }
+        vm.refresh()
+        guard let result = Self.arrangement(placing: moving, side, of: other, in: vm.currentLayout()) else {
+            SpeechSynthesizer.shared.announce(Spoken.displayNotConnected)
+            return end()
+        }
+        vm.arrange(result) { [weak self] outcome in
             if case .failure(let error) = outcome {
                 SpeechSynthesizer.shared.announce(error.localizedDescription)
             }

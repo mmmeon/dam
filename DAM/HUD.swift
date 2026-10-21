@@ -401,6 +401,8 @@ final class HUDContentView: NSVisualEffectView {
 
         required init?(coder: NSCoder) { fatalError() }
 
+        deinit { dotsTimer?.invalidate() }
+
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             update()
@@ -412,8 +414,9 @@ final class HUDContentView: NSVisualEffectView {
             dotsTimer?.invalidate()
             dotsTimer = nil
             if hint.animatesDots && window != nil {
-                dotsTimer = .scheduledTimer(withTimeInterval: 0.4, repeats: true) { [weak self] _ in
-                    guard let self else { return }
+                dotsTimer = .scheduledTimer(withTimeInterval: 0.4, repeats: true) { [weak self] timer in
+                    // The HUD can be dropped without its hint changing.
+                    guard let self else { return timer.invalidate() }
                     self.dots = self.dots % 3 + 1
                     self.showDots()
                 }

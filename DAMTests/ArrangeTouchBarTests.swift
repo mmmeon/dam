@@ -36,4 +36,37 @@ final class ArrangeTouchBarTests: XCTestCase {
         XCTAssertLessThanOrEqual(image!.size.width, 96)
         XCTAssertNil(ArrangeTouchBar.previewImage(of: DisplayLayout(placements: []), moving: 1))
     }
+
+    // MARK: - Applying to the arrangement as it is now
+
+    private func placement(_ id: CGDirectDisplayID, x: CGFloat, y: CGFloat = 0) -> DisplayPlacement {
+        DisplayPlacement(id: id, frame: CGRect(x: x, y: y, width: 1920, height: 1080), names: ["\(id)"], isMain: id == 1)
+    }
+
+    func testArrangement_appliesToTheLayoutAsItIsNow() {
+        // When the flow began 3 was right of 2; it has since moved below 1.
+        let now = DisplayLayout(placements: [placement(1, x: 0), placement(2, x: 1920), placement(3, x: 0, y: 1080)])
+        let result = ArrangeTouchBar.arrangement(placing: 2, .left, of: 1, in: now)
+        XCTAssertEqual(result?[3]?.frame.origin, CGPoint(x: 0, y: 1080), "Displays not moved stay where they are now")
+        XCTAssertEqual(result?[2]?.frame.maxX, 0)
+    }
+
+    func testArrangement_displayGone_isNil() {
+        let now = DisplayLayout(placements: [placement(1, x: 0), placement(2, x: 1920)])
+        XCTAssertNil(ArrangeTouchBar.arrangement(placing: 3, .left, of: 1, in: now))
+        XCTAssertNil(ArrangeTouchBar.arrangement(placing: 2, .left, of: 3, in: now))
+    }
+
+    func testMapDrop_appliesToTheLayoutGiven() {
+        let now = DisplayLayout(placements: [placement(1, x: 0), placement(2, x: 1920), placement(3, x: 0, y: 1080)])
+        let dropped = DisplayMapView.drop(2, at: CGPoint(x: -1920, y: 0), into: now)
+        XCTAssertEqual(dropped?[2]?.frame.origin, CGPoint(x: -1920, y: 0))
+        XCTAssertEqual(dropped?[3]?.frame.origin, CGPoint(x: 0, y: 1080))
+    }
+
+    func testMapDrop_displayGoneOrUnmoved_isNil() {
+        let now = DisplayLayout(placements: [placement(1, x: 0), placement(2, x: 1920)])
+        XCTAssertNil(DisplayMapView.drop(3, at: .zero, into: now))
+        XCTAssertNil(DisplayMapView.drop(2, at: CGPoint(x: 1920, y: 0), into: now))
+    }
 }

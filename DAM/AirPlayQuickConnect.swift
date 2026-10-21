@@ -45,6 +45,15 @@ enum ConnectTarget: Hashable {
         }
     }
 
+    /// Whether this is the same display or iPad as `other`, whatever the state of either.
+    func isSame(as other: ConnectTarget) -> Bool {
+        switch (self, other) {
+        case (.airPlay(let a), .airPlay(let b)): return a.id == b.id
+        case (.sidecar(let a), .sidecar(let b)): return a.id == b.id
+        default:                                 return false
+        }
+    }
+
     /// AirPlay displays first, then iPads, connected or not.
     static func all(video: VideoManager, sidecar: SidecarManager?) -> [ConnectTarget] {
         video.airPlayDevices.map(ConnectTarget.airPlay) + (sidecar?.devices ?? []).map(ConnectTarget.sidecar)
@@ -91,6 +100,8 @@ final class AirPlayQuickConnect: NSObject {
     /// The panel driver's continuation, once it holds at the display's row.
     private var pendingPress: ((Bool) -> Void)?
     private var cancelWindowPassed = false
+    /// Counts the connects started, so what an earlier one left waiting can tell it is over.
+    private var attempt = 0
 
     // HUD
     private var panel: HUDPanel?
@@ -118,6 +129,8 @@ final class AirPlayQuickConnect: NSObject {
 
     func activate() {
         guard let vm = videoManager else { return }
+        // Pressed again while open: starts over, ending the panel's wait for the last press.
+        if case .idle = state {} else { cancel() }
 
         sidecarManager?.refresh()
         let all = ConnectTarget.all(video: vm, sidecar: sidecarManager)
@@ -167,15 +180,23 @@ final class AirPlayQuickConnect: NSObject {
     /// `choice` is the row picked in the selection HUD; that HUD then animates into the
     /// connecting state. Without it, the HUD opens on the display and highlights it.
     private func startConfirming(display: ConnectTarget, choice: Int? = nil) {
-        state = .confirming(display)
+        // A press still waiting is let go, so the panel holding for it closes.
+        let waiting = pendingPress
         pendingPress = nil
+        waiting?(false)
+        state = .confirming(display)
         cancelWindowPassed = false
+        attempt += 1
+        let current = attempt
+        let isCurrent = { [weak self] in
+            guard let self, self.attempt == current, case .confirming = self.state else { return false }
+            return true
+        }
 
         // Press once the cancel window after the HUD settles passes uncancelled.
         let settled = { [weak self] in
             DispatchQueue.main.asyncAfter(deadline: .now() + Self.cancelWindow) { [weak self] in
-                guard let self, case .confirming(let d) = self.state, d == display
-                else { return }
+                guard let self, isCurrent() else { return }
                 self.cancelWindowPassed = true
                 self.pressIfReady()
             }
@@ -206,15 +227,13 @@ final class AirPlayQuickConnect: NSObject {
                 deviceName: airPlay.name,
                 announcing: display.connectingAnnouncement,
                 gate: { [weak self] proceed in
-                    guard let self, case .confirming(let d) = self.state, d == display
-                    else { return proceed(false) }
+                    guard let self, isCurrent() else { return proceed(false) }
                     self.pendingPress = proceed
                     self.pressIfReady()
                 },
                 completion: { [weak self] _ in
                     // Ended before the press (a failure, or nothing to press): drop the HUD.
-                    guard let self, case .confirming(let d) = self.state, d == display
-                    else { return }
+                    guard let self, isCurrent() else { return }
                     self.dismiss()
                 })
         case .sidecar(let device):
@@ -239,13 +258,13 @@ final class AirPlayQuickConnect: NSObject {
 
     func cancel() {
         SpeechSynthesizer.shared.stop()
-        let proceed = pendingPress
         dismiss()
-        proceed?(false)
     }
 
+    /// Ends the HUD; a press still waiting is let go, which closes the panel without pressing.
     private func dismiss() {
         state = .idle
+        let waiting = pendingPress
         pendingPress = nil
         removeMonitors()
         dismissTouchBar()
@@ -253,6 +272,7 @@ final class AirPlayQuickConnect: NSObject {
         panel = nil
         restoreFocus(to: previousApp)
         previousApp = nil
+        waiting?(false)
     }
 
     // MARK: - Key Monitors

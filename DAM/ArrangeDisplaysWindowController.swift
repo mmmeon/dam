@@ -30,6 +30,8 @@ final class ArrangeDisplaysWindowController {
     private var globalMonitor: Any?
     /// The app to hand focus back to on close.
     private var previousApp: NSRunningApplication?
+    /// Whether a change came during a drag, to be read once it ends.
+    private var reloadPending = false
 
     init(videoManager: VideoManager) {
         self.videoManager = videoManager
@@ -37,6 +39,11 @@ final class ArrangeDisplaysWindowController {
         map.onMirror  = { [weak self] id, targets in self?.mirror(id, onto: targets) }
         map.onExtend  = { [weak self] id, origin in self?.extend(id, to: origin) }
         map.onCancel  = { [weak self] in self?.close(reason: "Esc in map") }
+        map.currentLayout = { [weak videoManager] in videoManager?.currentLayout() }
+        map.onDragEnded = { [weak self] in
+            guard let self, self.reloadPending else { return }
+            self.reload()
+        }
         cancellable = videoManager.objectWillChange
             .debounce(for: .milliseconds(300), scheduler: RunLoop.main)
             .sink { [weak self] in self?.reload() }
@@ -61,13 +68,18 @@ final class ArrangeDisplaysWindowController {
         return content
     }
 
-    /// Re-reads the arrangement, unless a drag is under way.
+    /// Re-reads the arrangement, or, while a drag is under way, once it ends.
     private func reload() {
-        guard panel != nil, !map.isDragging else { return }
+        guard panel != nil else { return }
+        guard !map.isDragging else { reloadPending = true; return }
+        reloadPending = false
         map.layout = videoManager.currentLayout()
     }
 
+    /// Applies a drop. Like mirror and extend, it reloads once done, in place of a reload
+    /// held back during the drag.
     private func apply(_ layout: DisplayLayout, main: CGDirectDisplayID?) {
+        reloadPending = false
         videoManager.arrange(layout, main: main) { [weak self] result in
             if case .failure(let error) = result {
                 SpeechSynthesizer.shared.announce(error.localizedDescription)
@@ -77,6 +89,7 @@ final class ArrangeDisplaysWindowController {
     }
 
     private func mirror(_ id: CGDirectDisplayID, onto targets: [CGDirectDisplayID]) {
+        reloadPending = false
         videoManager.mirror(placement: id, onto: targets, in: map.layout) { [weak self] result in
             if case .failure(let error) = result {
                 SpeechSynthesizer.shared.announce(error.localizedDescription)
@@ -86,6 +99,7 @@ final class ArrangeDisplaysWindowController {
     }
 
     private func extend(_ id: CGDirectDisplayID, to origin: CGPoint) {
+        reloadPending = false
         videoManager.extend(member: id, to: origin) { [weak self] result in
             if case .failure(let error) = result {
                 SpeechSynthesizer.shared.announce(error.localizedDescription)
@@ -179,6 +193,11 @@ final class DisplayMapView: NSView {
     var onExtend: ((CGDirectDisplayID, CGPoint) -> Void)?
     /// Called when Esc is pressed while the map has focus.
     var onCancel: (() -> Void)?
+    /// Called once a drag ends, after any of the above.
+    var onDragEnded: (() -> Void)?
+    /// Reads the arrangement as it is now, for a drop to apply to; `layout` may be out of
+    /// date when it changed during the drag.
+    var currentLayout: (() -> DisplayLayout?)?
 
     var layout = DisplayLayout(placements: []) {
         didSet { needsDisplay = true }
@@ -567,6 +586,7 @@ final class DisplayMapView: NSView {
             drag = nil; endHold(); overOwnSet = false; needsDisplay = true
             setHoveredStack(stack(at: point))
             (stackMember(at: point) != nil ? NSCursor.openHand : NSCursor.arrow).set()
+            onDragEnded?()
         }
         guard dragMoved else { return }
         switch drag {
@@ -577,17 +597,27 @@ final class DisplayMapView: NSView {
             guard !backOnSet else { return }
             onExtend?(id, CGPoint(x: frame.minX.rounded(), y: frame.minY.rounded()))
         case .display(let id, _, let frame):
-            let dropped = layout.moving(id, to: CGPoint(x: frame.minX.rounded(), y: frame.minY.rounded()))
-            guard dropped != layout else { return }
+            let now = currentLayout?() ?? layout
+            guard let dropped = Self.drop(id, at: CGPoint(x: frame.minX.rounded(), y: frame.minY.rounded()),
+                                          into: now) else { return }
             layout = dropped
             onArrange?(dropped, nil)
         case .menuBar:
             drag = nil
-            guard let target = placement(at: point), !target.isMain else { return }
-            onArrange?(layout, target.id)
+            let now = currentLayout?() ?? layout
+            guard let target = placement(at: point), let current = now[target.id], !current.isMain else { return }
+            onArrange?(now, target.id)
         case nil:
             return
         }
+    }
+
+    /// `layout` with display `id` dropped at `origin`; nil when the display has gone from it,
+    /// or the drop changes nothing.
+    static func drop(_ id: CGDirectDisplayID, at origin: CGPoint, into layout: DisplayLayout) -> DisplayLayout? {
+        guard layout[id] != nil else { return nil }
+        let dropped = layout.moving(id, to: origin)
+        return dropped == layout ? nil : dropped
     }
 
     // MARK: Holding

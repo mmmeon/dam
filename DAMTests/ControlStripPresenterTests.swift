@@ -241,4 +241,20 @@ final class ControlStripPresenterTests: XCTestCase {
     func testWindow_currentInMiddle_isCentred() {
         XCTAssertEqual(Array(ControlStripPresenter.window(Array(0..<9), around: 4, limit: 5)), [2, 3, 4, 5, 6])
     }
+
+    // MARK: - ConnectTarget.isSame
+
+    func testConnectTarget_isSame_byDeviceWhateverItsState() {
+        let tv = DisplayInfo(id: "tv", name: "tv", isConnected: false, cgDisplayID: 0,
+                             isMirroring: false, isBuiltIn: false, isMain: false)
+        let tvNow = DisplayInfo(id: "tv", name: "tv", isConnected: true, cgDisplayID: 5,
+                                isMirroring: false, isBuiltIn: false, isMain: false)
+        let other = DisplayInfo(id: "office", name: "office", isConnected: false, cgDisplayID: 0,
+                                isMirroring: false, isBuiltIn: false, isMain: false)
+        let pad = SidecarDevice(id: "tv", name: "tv", isConnected: false)
+        XCTAssertTrue(ConnectTarget.airPlay(tv).isSame(as: .airPlay(tvNow)))
+        XCTAssertFalse(ConnectTarget.airPlay(tv).isSame(as: .airPlay(other)))
+        XCTAssertFalse(ConnectTarget.airPlay(tv).isSame(as: .sidecar(pad)), "An iPad is never an AirPlay display")
+        XCTAssertTrue(ConnectTarget.sidecar(pad).isSame(as: .sidecar(SidecarDevice(id: "tv", name: "tv", isConnected: true))))
+    }
 }
