@@ -538,7 +538,7 @@ final class RemoteSessionsTests: XCTestCase {
     }
 
     func testSizesAndChoicesAreCheckedHoweverTheyCome() {
-        let side = StreamingDisplayModes.maxPixelsSide
+        let side = ControlRequest.maxSide
         let start = ["session", "start", "--app", "x"]
         for bad in [["--width", "-2"], ["--width", "0"], ["--height", "\(side + 1)"], ["--width", "99999999999"],
                     ["--fps", "0"], ["--fps", "1000"], ["--display", "make"], ["--placement", "left"]] {
@@ -561,6 +561,8 @@ final class RemoteSessionsTests: XCTestCase {
         XCTAssertNotNil(ControlRequest(command: "session.start", app: "x", placement: "left").problem)
         XCTAssertNil(ControlRequest(command: "session.start", app: "x", width: 1920, height: 1080, fps: 60,
                                     display: "create", placement: "mirror").problem)
+        // A 5K or ultrawide client gets a HiDPI display of half its size.
+        XCTAssertNil(ControlRequest(command: "session.start", app: "x", width: 5120, height: 1440).problem)
     }
 
     func testYesAndNoAreReadAlikeEverywhere() throws {
