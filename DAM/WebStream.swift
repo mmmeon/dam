@@ -845,6 +845,15 @@ final class WebStreamSession {
             guard let error else { return }
             self?.end("capture: \(error.localizedDescription)")
         }
+        // Capture can start and still send nothing; end then rather than leave the page
+        // connecting, and the Mac kept awake, for ever. Allows for capture restarting replayd.
+        queue.asyncAfter(deadline: .now() + 5 + MoonlightScreenCapture.answerTimeout + 1) { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            let captured = self.lastFrame != nil
+            self.lock.unlock()
+            if !captured { self.end("capture did not start") }
+        }
         wsLog.debug("session \(self.key.width)×\(self.key.height)@\(self.key.fps) \(self.key.profile.rawValue, privacy: .public) \(self.key.bitrateKbps) kbps from display \(self.key.displayID)")
     }
 
