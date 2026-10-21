@@ -155,13 +155,33 @@ struct DisplayArrangement {
         }
     }
 
-    /// Whether `a` and `b` show the same: the same size, pixels and rate. Not by their IDs: a
-    /// display can list a mode twice under different IDs, and WindowServer may pick either, and
-    /// a virtual display given a new mode list (or mirrored and back) numbers its modes afresh,
-    /// so an ID can stand for another mode than it did.
-    static func sameMode(_ a: CGDisplayMode, _ b: CGDisplayMode) -> Bool {
+    /// How closely two modes' refresh rates must agree for the modes to be the same.
+    enum RateMatch {
+        /// To a hundredth of a hertz: 59.94 and 60 Hz are different modes. For whether a display
+        /// already runs the mode asked for.
+        case exact
+        /// To the nearest hertz: 59.94 and 60 Hz are one, as the pickers list them. For finding a
+        /// mode again in a list a display may have renumbered.
+        case wholeHertz
+        /// Within 1 Hz: a virtual display may report a rate a little off the one it was given.
+        case withinOneHertz
+
+        func matches(_ a: Double, _ b: Double) -> Bool {
+            switch self {
+            case .exact:          return Int((a * 100).rounded()) == Int((b * 100).rounded())
+            case .wholeHertz:     return Int(a.rounded()) == Int(b.rounded())
+            case .withinOneHertz: return abs(a - b) < 1
+            }
+        }
+    }
+
+    /// Whether `a` and `b` show the same: the same size, pixels and rate, as `rate` matches
+    /// rates. Not by their IDs: a display can list a mode twice under different IDs, and
+    /// WindowServer may pick either, and a virtual display given a new mode list (or mirrored
+    /// and back) numbers its modes afresh, so an ID can stand for another mode than it did.
+    static func sameMode(_ a: CGDisplayMode, _ b: CGDisplayMode, rate: RateMatch = .wholeHertz) -> Bool {
         a.width == b.width && a.height == b.height && a.pixelWidth == b.pixelWidth
-            && a.pixelHeight == b.pixelHeight && Int(a.refreshRate.rounded()) == Int(b.refreshRate.rounded())
+            && a.pixelHeight == b.pixelHeight && rate.matches(a.refreshRate, b.refreshRate)
     }
 
     /// The mode `id` lists now that shows the same as `mode`. A captured mode can be stale:

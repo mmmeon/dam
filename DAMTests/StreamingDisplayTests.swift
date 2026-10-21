@@ -204,6 +204,23 @@ final class StreamingDisplayTests: XCTestCase {
     }
 }
 
+final class DisplayModeRateMatchTests: XCTestCase {
+    func testExactKeeps5994And60Apart() {
+        XCTAssertFalse(DisplayArrangement.RateMatch.exact.matches(59.94, 60))
+        XCTAssertTrue(DisplayArrangement.RateMatch.exact.matches(60, 60.001))
+    }
+
+    func testWholeHertzTakes5994For60() {
+        XCTAssertTrue(DisplayArrangement.RateMatch.wholeHertz.matches(59.94, 60))
+        XCTAssertFalse(DisplayArrangement.RateMatch.wholeHertz.matches(59.4, 60))
+    }
+
+    func testWithinOneHertzTakesAVirtualDisplaysRate() {
+        XCTAssertTrue(DisplayArrangement.RateMatch.withinOneHertz.matches(119.88, 120))
+        XCTAssertFalse(DisplayArrangement.RateMatch.withinOneHertz.matches(119, 120))
+    }
+}
+
 final class DisplayArrangementSameSetTests: XCTestCase {
     func testSameDisplaysMirroredTheSameWayMatch() {
         XCTAssertTrue(DisplayArrangement.sameSet(captured: [1: 0, 2: 1], online: [2, 1],

@@ -1148,9 +1148,10 @@ final class VideoManager: ObservableObject {
         // wake from sleep.
         for name in virtualAnchorArrangements.keys { virtualAnchorArrangements[name]?.modes[cgDisplayID] = cgMode }
         modesBeforeSleep.removeValue(forKey: cgDisplayID)
-        // A commit that changes nothing takes 10 s to return.
+        // A commit that changes nothing takes 10 s to return. To the hundredth of a hertz:
+        // 59.94 Hz is another mode than the 60 Hz one it rounds to.
         if CGDisplayMirrorsDisplay(cgDisplayID) == 0, let current = CGDisplayCopyDisplayMode(cgDisplayID),
-           DisplayArrangement.sameMode(current, cgMode) {
+           DisplayArrangement.sameMode(current, cgMode, rate: .exact) {
             completion?(.success(()))
             return
         }
