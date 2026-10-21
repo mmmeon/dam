@@ -120,7 +120,8 @@ func makeMain(_ id: CGDirectDisplayID) {
 /// Keeps a display called `name` online until the process is killed.
 func standIn(named name: String) -> Never {
     let descriptor = CGVirtualDisplayDescriptor()
-    descriptor.queue = .main
+    // Not `queue`, which sets what the system ignores (see DAM's enableVirtualAnchor).
+    descriptor.setDispatchQueue(.main)
     descriptor.name = name
     descriptor.maxPixelsWide = 1280
     descriptor.maxPixelsHigh = 800

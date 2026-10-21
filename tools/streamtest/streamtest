@@ -72,6 +72,37 @@ build_tools() {
     done
 }
 
+# What a run started, for cleanup to stop, and the streaming display's rotation before it.
+run_started=0 watch_pid= log_pid= codes_pid= iina_title= rotation=0 previous_rotation=
+
+# The rotation DAM keeps for the streaming display; 0 when it keeps none.
+rotation_now() {
+    defaults export $bundle - 2>/dev/null | python3 -I -c 'import plistlib,sys
+try: d = plistlib.load(sys.stdin.buffer).get(sys.argv[1])
+except Exception: d = None
+print(d.get(sys.argv[2], 0) if isinstance(d, dict) else 0)' $rotation_key "$streaming_name" 2>/dev/null || print 0
+}
+
+# Stops what a run started and puts the rotation back: once, at its end or on the way out.
+cleanup() {
+    (( run_started )) || return
+    run_started=0
+    [[ -n $codes_pid ]] && kill $codes_pid 2>/dev/null
+    [[ -n $iina_title ]] && osascript -e 'tell application "IINA" to quit' >/dev/null 2>&1
+    # Moonlight's quit can hang after DAM has answered it; the pkill below ends it.
+    $moonlight quit $host >/dev/null 2>&1 &
+    local quit_pid=$!
+    for i in {1..30}; do kill -0 $quit_pid 2>/dev/null || break; pause 0.5; done
+    pause 6
+    pkill -x Moonlight 2>/dev/null
+    pause 2
+    [[ -n $watch_pid ]] && kill $watch_pid 2>/dev/null
+    [[ -n $log_pid ]] && kill $log_pid 2>/dev/null
+    [[ -n $previous_rotation ]] && defaults write $bundle $rotation_key -dict-add "$streaming_name" -int $previous_rotation
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+
 check_ready() {
     [[ -x $moonlight ]] || die "Moonlight is not in /Applications"
     curl -s -m 3 -o /dev/null http://$host:47989/serverinfo || die "DAM is not answering on port 47989 (is Moonlight hosting on?)"
@@ -137,7 +168,7 @@ cmd_install() {
 }
 
 cmd_run() {
-    local resolution=1920x1080 fps=60 bitrate=20000 decoder=hardware seconds=30 resume= rotation=0
+    local resolution=1920x1080 fps=60 bitrate=20000 decoder=hardware seconds=30 resume=
     local media= sound=0 measure=1 out=/tmp/dam-streamtest/$(date +%Y%m%d-%H%M%S)
     while (( $# )); do
         case $1 in
@@ -168,24 +199,10 @@ cmd_run() {
     mkdir -p $out
     say "logs in $out"
 
-    local watch_pid log_pid codes_pid= iina_title= part=0
+    local part=0
+    run_started=1
     $displays watch > $out/displays.log 2>&1 & watch_pid=$!
     /usr/bin/log stream --level debug --predicate 'subsystem == "mmmeon.dam"' --style compact > $out/dam.log 2>&1 & log_pid=$!
-
-    cleanup() {
-        [[ -n $codes_pid ]] && kill $codes_pid 2>/dev/null
-        [[ -n $iina_title ]] && osascript -e 'tell application "IINA" to quit' >/dev/null 2>&1
-        # Moonlight's quit can hang after DAM has answered it; the pkill below ends it.
-        $moonlight quit $host >/dev/null 2>&1 &
-        local quit_pid=$!
-        for i in {1..30}; do kill -0 $quit_pid 2>/dev/null || break; pause 0.5; done
-        pause 6
-        pkill -x Moonlight 2>/dev/null
-        pause 2
-        kill $watch_pid $log_pid 2>/dev/null
-        (( rotation )) && defaults write $bundle $rotation_key -dict-add "$streaming_name" -int 0
-    }
-    trap 'cleanup; exit 130' INT TERM
 
     # The streaming display's width in pixels for a stream of WxH: its height when it is turned
     # on its side.
@@ -220,11 +237,12 @@ cmd_run() {
 
     local started=$(date +%s)
     # DAM reads the display's rotation when it makes it.
-    (( rotation )) && defaults write $bundle $rotation_key -dict-add "$streaming_name" -int $rotation
-    stream $resolution
-    if ! wait_for_display $resolution; then
-        cleanup; die "no streaming display at $resolution within a minute; see $out"
+    if (( rotation )); then
+        previous_rotation=$(rotation_now)
+        defaults write $bundle $rotation_key -dict-add "$streaming_name" -int $rotation
     fi
+    stream $resolution
+    wait_for_display $resolution || die "no streaming display at $resolution within a minute; see $out"
     say "streaming $resolution@$fps at $bitrate kbps, $decoder decoding"
 
     # Codes on the streaming display and the main one. Again after a resume: the streaming
@@ -313,7 +331,6 @@ cmd_run() {
     fi
 
     cleanup
-    trap - INT TERM
     wait
     # Each stream's log, the last one's stats in the summary.
     grep -o '/tmp/Moonlight-[0-9]*\.log' $out/moonlight.out | while read -r log; do cat $log; done > $out/moonlight.log
