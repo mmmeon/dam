@@ -84,34 +84,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if self?.moonlightPINAlert != nil { NSApp.abortModal() }
         }
         moonlightHost.onChange = { [weak self] in self?.rebuild() }
-        moonlightHost.makeDisplay = { [weak self] width, height, fps, done in
+        // A stream's display, made and resized at the stream's size: Moonlight's and a browser's alike.
+        let makeStreamDisplay: (Int, Int, Int, @escaping (CGDirectDisplayID?) -> Void) -> Void
+        makeStreamDisplay = { [weak self] width, height, fps, done in
             guard let self else { return done(nil) }
             self.videoManager.createStreamingDisplay(
                 mode: StreamingDisplayModes.forStream(width: width, height: height, fps: fps), completion: done)
         }
-        moonlightHost.removeDisplay = { [weak self] id in self?.videoManager.removeStreamingDisplay(id: id) }
-        moonlightHost.resizeDisplay = { [weak self] id, width, height, fps, done in
+        let removeStreamDisplay: (CGDirectDisplayID) -> Void = { [weak self] id in self?.videoManager.removeStreamingDisplay(id: id) }
+        let resizeStreamDisplay: (CGDirectDisplayID, Int, Int, Int, @escaping (Bool) -> Void) -> Void
+        resizeStreamDisplay = { [weak self] id, width, height, fps, done in
             guard let self else { return done(false) }
             self.videoManager.resizeStreamingDisplay(
                 id: id, to: StreamingDisplayModes.forStream(width: width, height: height, fps: fps), completion: done)
         }
+        moonlightHost.makeDisplay = makeStreamDisplay
+        moonlightHost.removeDisplay = removeStreamDisplay
+        moonlightHost.resizeDisplay = resizeStreamDisplay
         if MoonlightHost.isEnabled && !MoonlightHost.usesExternalSunshine { moonlightHost.start() }
         startRemoteSessions()
         webStream.onChange = { [weak self] in self?.rebuild() }
         webStream.requestCode = { [weak self] address, name, answer in
             self?.promptForBrowserCode(name: name, answer: answer)
         }
-        webStream.makeDisplay = { [weak self] width, height, fps, done in
-            guard let self else { return done(nil) }
-            self.videoManager.createStreamingDisplay(
-                mode: StreamingDisplayModes.forStream(width: width, height: height, fps: fps), completion: done)
-        }
-        webStream.removeDisplay = { [weak self] id in self?.videoManager.removeStreamingDisplay(id: id) }
-        webStream.resizeDisplay = { [weak self] id, width, height, fps, done in
-            guard let self else { return done(false) }
-            self.videoManager.resizeStreamingDisplay(
-                id: id, to: StreamingDisplayModes.forStream(width: width, height: height, fps: fps), completion: done)
-        }
+        webStream.makeDisplay = makeStreamDisplay
+        webStream.removeDisplay = removeStreamDisplay
+        webStream.resizeDisplay = resizeStreamDisplay
         if WebStreamServer.isEnabled { webStream.start() }
         openDisplay.onChange = { [weak self] in self?.settingsWindow?.openDisplayDidChange() }
         openDisplay.makeDisplay = { [weak self] mode, identity, done in
