@@ -249,11 +249,8 @@ final class SettingsWindowController: NSWindowController {
         let extraStatus = NSTextField(labelWithString:
             extraShown ? "Menu bar item shown" : "Menu bar item hidden")
         extraStatus.font = .systemFont(ofSize: NSFont.systemFontSize)
-        let openCC = NSButton(title: "Control Center…", target: self,
-                              action: #selector(openControlCenterSettings))
-        openCC.bezelStyle  = .rounded
-        openCC.controlSize = .small
-        openCC.font        = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        let openCC = small(NSButton(title: "Control Center…", target: self,
+                                    action: #selector(openControlCenterSettings)))
         let extraRow = NSStackView(views: [extraStatus, openCC])
         extraRow.orientation = .horizontal
         extraRow.spacing = 8
@@ -446,16 +443,10 @@ final class SettingsWindowController: NSWindowController {
     private func buildMoonlightTab() -> NSView {
         let host = moonlightHost
         moonlightShown = MoonlightState(host: host)
-        let hostChoice = ClosurePopup(onSelect: { [weak self] raw in
+        let hostChoice = popup([("\(AppIdentity.name)", "dam"), ("Sunshine", "sunshine")],
+                               selected: MoonlightHost.usesExternalSunshine ? "sunshine" : "dam") { [weak self] raw in
             self?.onUseExternalSunshine?(raw == "sunshine")
-        })
-        hostChoice.font = .systemFont(ofSize: NSFont.systemFontSize)
-        for (title, key) in [("\(AppIdentity.name)", "dam"), ("Sunshine", "sunshine")] {
-            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-            item.representedObject = key
-            hostChoice.menu?.addItem(item)
         }
-        hostChoice.selectItem(at: MoonlightHost.usesExternalSunshine ? 1 : 0)
         hostChoice.toolTip = "Who Moonlight connects to: \(AppIdentity.name)'s own host, or Sunshine " +
                              "running on this Mac, for which \(AppIdentity.name) makes and places the displays."
         guard !MoonlightHost.usesExternalSunshine else {
@@ -502,17 +493,8 @@ final class SettingsWindowController: NSWindowController {
                      action: { MoonlightStream.showsPointer = $0 }),
         ]
 
-        let encryption = ClosurePopup(onSelect: { raw in
-            guard let choice = raw.flatMap(MoonlightVideoEncryption.init(rawValue:)) else { return }
-            MoonlightStream.videoEncryption = choice
-        })
-        encryption.font = .systemFont(ofSize: NSFont.systemFontSize)
-        for option in MoonlightVideoEncryption.allCases {
-            let item = NSMenuItem(title: option.title, action: nil, keyEquivalent: "")
-            item.representedObject = option.rawValue
-            item.toolTip = option.summary
-            encryption.menu?.addItem(item)
-            if option == MoonlightStream.videoEncryption { encryption.select(item) }
+        let encryption = popup(choosing: MoonlightStream.videoEncryption, title: \.title, tip: \.summary) {
+            MoonlightStream.videoEncryption = $0
         }
         encryption.toolTip = "When Moonlight's video is encrypted; the controls and sound always are. " +
                              "Moonlight on a Mac, PC, iPhone or iPad takes it whenever it is offered. " +
@@ -531,20 +513,13 @@ final class SettingsWindowController: NSWindowController {
                                      host?.setAllowsInput(allows, for: client)
                                      if allows { _ = VideoManager.hasAccessibilityAccess(prompting: true) }
                                  })
-            let forget = ClosureButton(title: "Forget") { [weak self] _ in self?.onForgetMoonlightClient?(client) }
-            forget.bezelStyle  = .rounded
-            forget.controlSize = .small
-            forget.font        = .systemFont(ofSize: NSFont.smallSystemFontSize)
+            let forget = small(ClosureButton(title: "Forget") { [weak self] _ in self?.onForgetMoonlightClient?(client) })
             forget.toolTip     = "Unpairs \(client.name): it has to pair again to connect."
             let name = rowLabel(client.name)
             name.toolTip = "Paired \(client.paired.formatted(date: .abbreviated, time: .shortened))"
             return [name, lowLatency, input, forget]
         }
-        // A grid, so each device's controls line up whatever the length of its name.
-        let deviceGrid = BaselineRowGridView(views: devices)
-        deviceGrid.rowSpacing    = 6
-        deviceGrid.columnSpacing = 8
-        deviceGrid.rowAlignment  = .firstBaseline
+        let deviceGrid = rowGrid(devices)
 
         return formTab([
             ("Host:", [hostChoice]),
@@ -574,17 +549,8 @@ final class SettingsWindowController: NSWindowController {
         serving.append(allow)
         if let error = server.lastError { serving.append(placeholderLabel(error)) }
 
-        let reach = ClosurePopup(onSelect: { raw in
-            guard let choice = raw.flatMap(WebStreamReach.init(rawValue:)) else { return }
-            WebStreamReach.current = choice
-        })
-        reach.font = .systemFont(ofSize: NSFont.systemFontSize)
-        for option in WebStreamReach.allCases {
-            let item = NSMenuItem(title: option.title, action: nil, keyEquivalent: "")
-            item.representedObject = option.rawValue
-            item.toolTip = option.summary
-            reach.menu?.addItem(item)
-            if option == WebStreamReach.current { reach.select(item) }
+        let reach = popup(choosing: WebStreamReach.current, title: \.title, tip: \.summary) {
+            WebStreamReach.current = $0
         }
         reach.toolTip = "Where browsers and players may watch from, paired or not."
 
@@ -620,10 +586,7 @@ final class SettingsWindowController: NSWindowController {
             row.append(small(forget))
             return row
         }
-        let deviceGrid = BaselineRowGridView(views: devices)
-        deviceGrid.rowSpacing    = 6
-        deviceGrid.columnSpacing = 8
-        deviceGrid.rowAlignment  = .firstBaseline
+        let deviceGrid = rowGrid(devices)
         let newLink = ClosureButton(title: "New Player Link…") { [weak self] _ in self?.makePlayerLink() }
         newLink.bezelStyle = .rounded
         newLink.toolTip = "Makes a link for a player such as mpv, IINA or VLC, which can't pair, and copies it."
@@ -632,18 +595,9 @@ final class SettingsWindowController: NSWindowController {
                                help: "Draws the Mac's pointer into browser streams. Takes effect from the next stream.",
                                action: { WebStreamServer.showsPointer = $0 })
 
-        let profile = ClosurePopup(onSelect: { [weak self] raw in
-            guard let profile = raw.flatMap(StreamProfile.init(rawValue:)) else { return }
-            StreamProfile.preferred = profile
+        let profile = popup(choosing: StreamProfile.preferred, title: \.title, tip: \.summary) { [weak self] in
+            StreamProfile.preferred = $0
             self?.onRebuild?()
-        })
-        profile.font = .systemFont(ofSize: NSFont.systemFontSize)
-        for option in StreamProfile.allCases {
-            let item = NSMenuItem(title: option.title, action: nil, keyEquivalent: "")
-            item.representedObject = option.rawValue
-            item.toolTip = option.summary
-            profile.menu?.addItem(item)
-            if option == StreamProfile.preferred { profile.select(item) }
         }
         profile.toolTip = "The profile a browser or player gets unless its address asks for " +
                           "another. Hover over each for what it trades."
@@ -707,10 +661,7 @@ final class SettingsWindowController: NSWindowController {
             }
             return row
         }
-        let grid = BaselineRowGridView(views: rows)
-        grid.rowSpacing    = 6
-        grid.columnSpacing = 8
-        grid.rowAlignment  = .firstBaseline
+        let grid = rowGrid(rows)
         let receivers: NSView = rows.isEmpty
             ? placeholderLabel(sender.isRunning ? "None found. Open OpenDisplay on the device." : "Turn sending on to look for them.")
             : grid
@@ -753,11 +704,21 @@ final class SettingsWindowController: NSWindowController {
         if selectedTab == TabID.opendisplay { selectTab(TabID.opendisplay) }
     }
 
-    private func small(_ button: NSButton) -> NSButton {
+    private func small<Button: NSButton>(_ button: Button) -> Button {
         button.bezelStyle  = .rounded
         button.controlSize = .small
         button.font        = .systemFont(ofSize: NSFont.smallSystemFontSize)
         return button
+    }
+
+    /// A grid of rows of controls, lined up on their text, so each row's controls line up
+    /// whatever the length of its name.
+    private func rowGrid(_ rows: [[NSView]]) -> NSGridView {
+        let grid = BaselineRowGridView(views: rows)
+        grid.rowSpacing    = 6
+        grid.columnSpacing = 8
+        grid.rowAlignment  = .firstBaseline
+        return grid
     }
 
     /// Asks for a name, makes a link for a player, and copies its stream address.
@@ -833,13 +794,10 @@ final class SettingsWindowController: NSWindowController {
         let command = Bundle.main.executablePath ?? "/Applications/\(AppIdentity.name).app/Contents/MacOS/\(AppIdentity.name)"
         let start = "\(command) session start --app sunshine"
         let end = "\(command) session end --app sunshine"
-        let copy = ClosureButton(title: "Copy") { _ in
+        let copy = small(ClosureButton(title: "Copy") { _ in
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString("do: \(start)\nundo: \(end)", forType: .string)
-        }
-        copy.bezelStyle  = .rounded
-        copy.controlSize = .small
-        copy.font        = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        })
         return [
             ("Sunshine:", [status, smallNote("\(AppIdentity.name)'s own host is off, so Sunshine can use the ports.")]),
             ("Prep Command:", [selectableLabel("Do: \(start)"), selectableLabel("Undo: \(end)"), copy,
@@ -1322,6 +1280,20 @@ final class SettingsWindowController: NSWindowController {
         return popup
     }
 
+    /// A pop-up of every case of an enum stored by its raw value, each item with its title and
+    /// tooltip, `current` chosen.
+    private func popup<Option>(choosing current: Option, title: KeyPath<Option, String>,
+                               tip: KeyPath<Option, String>,
+                               onSelect: @escaping (Option) -> Void) -> NSPopUpButton
+        where Option: CaseIterable & RawRepresentable, Option.RawValue == String {
+        let options = Array(Option.allCases)
+        let popup = popup(options.map { ($0[keyPath: title], $0.rawValue) }, selected: current.rawValue) { raw in
+            if let option = raw.flatMap(Option.init(rawValue:)) { onSelect(option) }
+        }
+        for (item, option) in zip(popup.itemArray, options) { item.toolTip = option[keyPath: tip] }
+        return popup
+    }
+
     private func selectableLabel(_ text: String) -> NSView {
         let tf = NSTextField(labelWithString: text)
         tf.font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
@@ -1339,13 +1311,7 @@ final class SettingsWindowController: NSWindowController {
         return tf
     }
 
-    /// Rebuilds the Moonlight tab, as when the host changes.
-    func rebuildMoonlightTab() {
-        moonlightContent = buildMoonlightTab()
-        if selectedTab == TabID.moonlight { selectTab(TabID.moonlight) }
-    }
-
-    /// Rebuilds the Moonlight tab if what it shows of the host has changed.
+    /// Rebuilds the Moonlight tab if what it shows of the host, or which host, has changed.
     func moonlightDidChange() {
         guard MoonlightState(host: moonlightHost) != moonlightShown else { return }
         moonlightContent = buildMoonlightTab()
@@ -1544,12 +1510,6 @@ final class SettingsWindowController: NSWindowController {
 
     /// Popup for choosing the default virtual resolution for a given context.
     private func buildClosurePopup(for context: VisibilityPreferences.DisplayContext) -> NSView {
-        let popup = ClosurePopup(onSelect: { [weak self] key in
-            VisibilityPreferences.setDefaultVirtualResolution(key, for: context)
-            self?.onRebuild?()
-        })
-        popup.font = .systemFont(ofSize: NSFont.systemFontSize)
-
         // Options: (title, stored key or nil)
         let options: [(String, String?)] = [
             ("Display's own", nil),
@@ -1558,17 +1518,10 @@ final class SettingsWindowController: NSWindowController {
             ("1440p", "2560x1440"),
             ("4K",    "3840x2160"),
         ]
-        for (title, key) in options {
-            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-            item.representedObject = key
-            popup.menu?.addItem(item)
+        return popup(options, selected: VisibilityPreferences.defaultVirtualResolution(for: context)) { [weak self] key in
+            VisibilityPreferences.setDefaultVirtualResolution(key, for: context)
+            self?.onRebuild?()
         }
-
-        // Select the item that matches the stored preference.
-        let stored = VisibilityPreferences.defaultVirtualResolution(for: context)
-        let matchIndex = options.firstIndex { $0.1 == stored } ?? 0
-        popup.selectItem(at: matchIndex)
-        return popup
     }
 
     // MARK: - View factories
@@ -2092,12 +2045,14 @@ private final class NaturalWidthView: NSView {
 
 /// What the Moonlight tab shows of the host and does not change itself.
 private struct MoonlightState: Equatable {
+    var usesExternalSunshine = false
     var isRunning = false
     var lastError: String?
     var clients: [Data] = []
 
     init(host: MoonlightHost?) {
         guard let host else { return }
+        usesExternalSunshine = MoonlightHost.usesExternalSunshine
         isRunning = host.isRunning
         lastError = host.lastError
         clients = host.clients.map(\.certificate)

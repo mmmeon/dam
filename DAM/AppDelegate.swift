@@ -268,7 +268,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else if MoonlightHost.isEnabled {
             moonlightHost.start()
         }
-        settingsWindow?.rebuildMoonlightTab()
         rebuild()
     }
 
@@ -683,10 +682,7 @@ extension AppDelegate: NSMenuDelegate {
         } else {
             MoonlightHost.isEnabled = true
             // Turned on here, DAM hosts again in Sunshine's place.
-            if MoonlightHost.usesExternalSunshine {
-                MoonlightHost.usesExternalSunshine = false
-                settingsWindow?.rebuildMoonlightTab()
-            }
+            if MoonlightHost.usesExternalSunshine { MoonlightHost.usesExternalSunshine = false }
             moonlightHost.start()
             // Streaming needs it; asked now rather than when a stream starts.
             MoonlightScreenCapture.requestPermission()
