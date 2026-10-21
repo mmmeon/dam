@@ -462,8 +462,10 @@ extension VideoManager {
         let sameSet = DisplayArrangement.sameSet(captured: arrangement.mirrorMasters,
                                                  online: DisplayArrangement.onlineDisplayIDs(),
                                                  mirrorOf: { CGDisplayMirrorsDisplay($0) })
-        let resized = sameSet && arrangement.restoreModes(in: cfg, excluding: [])
-        guard arrangement.restore(in: cfg, excluding: []) || resized else {
+        // Not what the anchors keep: the layout can be from before an anchor came or went.
+        let excluded = anchorManagedDisplayIDs
+        let resized = sameSet && arrangement.restoreModes(in: cfg, excluding: excluded)
+        guard arrangement.restore(in: cfg, excluding: excluded) || resized else {
             CGCancelDisplayConfiguration(cfg)
             return
         }

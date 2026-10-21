@@ -75,6 +75,19 @@ struct DisplayArrangement {
                            modes: modes.filter { $0.key != id })
     }
 
+    /// The same arrangement without the anchor `anchorID`, as releasing it leaves the displays
+    /// that mirrored it: `target` showing its own desktop, `setSlaves` mirroring `target`,
+    /// any other extended. Kept, the anchor's ID could come back for another display.
+    func releasing(_ anchorID: CGDirectDisplayID, target: CGDirectDisplayID?,
+                   setSlaves: Set<CGDirectDisplayID>) -> DisplayArrangement {
+        let released = excluding(anchorID)
+        var masters = released.mirrorMasters
+        for (id, master) in released.mirrorMasters where master == anchorID {
+            masters[id] = setSlaves.contains(id) && id != target ? target ?? 0 : 0
+        }
+        return DisplayArrangement(origins: released.origins, mirrorMasters: masters, modes: released.modes)
+    }
+
     static func onlineDisplayIDs() -> [CGDirectDisplayID] {
         var count: CGDisplayCount = 0
         CGGetOnlineDisplayList(0, nil, &count)
@@ -845,8 +858,18 @@ extension VideoManager {
     @discardableResult
     func forgetAnchor(_ name: String) -> AnyObject? {
         // Display IDs come back for other displays.
-        if let target = virtualAnchorTargets.removeValue(forKey: name) { sidecarNativeModes.removeValue(forKey: target) }
-        virtualAnchorCGIDs.removeValue(forKey: name)
+        let target = virtualAnchorTargets.removeValue(forKey: name)
+        if let target { sidecarNativeModes.removeValue(forKey: target) }
+        if let anchorID = virtualAnchorCGIDs.removeValue(forKey: name) {
+            // The other layouts DAM keeps would mirror its displays onto its ID.
+            let setSlaves = anchorSetSlaves[name] ?? []
+            let release = { (kept: DisplayArrangement) in kept.releasing(anchorID, target: target, setSlaves: setSlaves) }
+            streamingArrangement = streamingArrangement.map(release)
+            streamingSettle = streamingSettle.map { (release($0.arrangement), $0.until) }
+            for (other, arrangement) in virtualAnchorArrangements where other != name {
+                virtualAnchorArrangements[other] = release(arrangement)
+            }
+        }
         virtualAnchorArrangements.removeValue(forKey: name)
         virtualAnchorModes.removeValue(forKey: name)
         virtualAnchorSettleDeadlines.removeValue(forKey: name)
@@ -1296,6 +1319,12 @@ extension VideoManager {
             && abs(current.refreshRate - wanted.refreshRate) < 1.0
     }
 
+    /// The anchors, the displays they drive and the displays set to mirror those: their sizes
+    /// and mirroring are the anchors' to keep, not any layout captured without them.
+    var anchorManagedDisplayIDs: Set<CGDirectDisplayID> {
+        Set(virtualAnchorCGIDs.values).union(virtualAnchorTargets.values).union(anchorSetSlaves.values.joined())
+    }
+
     /// How long after an anchor is mirrored DAM keeps the layout around it. WindowServer has
     /// been seen to re-lay the displays out some ten seconds after the commit, resizing the
     /// anchors and the other displays.
@@ -1319,8 +1348,7 @@ extension VideoManager {
             return
         }
         let arrangements = virtualAnchorSettleDeadlines.keys.compactMap { virtualAnchorArrangements[$0] }
-        let excluded = Set(virtualAnchorCGIDs.values).union(virtualAnchorTargets.values)
-            .union(anchorSetSlaves.values.joined())
+        let excluded = anchorManagedDisplayIDs
         let online = Set(DisplayArrangement.onlineDisplayIDs())
 
         var config: CGDisplayConfigRef?
