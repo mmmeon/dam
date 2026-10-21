@@ -107,11 +107,18 @@ struct DisplayArrangement {
         return DisplayArrangement(origins: released.origins, mirrorMasters: masters, modes: released.modes)
     }
 
-    static func onlineDisplayIDs() -> [CGDirectDisplayID] {
+    /// Every display connected, a mirror slave or asleep as well.
+    static func onlineDisplayIDs() -> [CGDirectDisplayID] { displayIDs(CGGetOnlineDisplayList) }
+
+    /// The displays that can be drawn on.
+    static func activeDisplayIDs() -> [CGDirectDisplayID] { displayIDs(CGGetActiveDisplayList) }
+
+    private static func displayIDs(_ list: (UInt32, UnsafeMutablePointer<CGDirectDisplayID>?,
+                                            UnsafeMutablePointer<UInt32>?) -> CGError) -> [CGDirectDisplayID] {
         var count: CGDisplayCount = 0
-        CGGetOnlineDisplayList(0, nil, &count)
+        _ = list(0, nil, &count)
         var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
-        CGGetOnlineDisplayList(count, &ids, &count)
+        _ = list(count, &ids, &count)
         return Array(ids.prefix(Int(count)))
     }
 
@@ -723,8 +730,7 @@ extension VideoManager {
         // Retain vd so it isn't released before mirroring is wired up.
         virtualAnchorStore[deviceName] = vd
         vdLog.debug("enableVirtualAnchor: stored anchor, beginning poll (attempt 0)")
-        waitForVirtualDisplay(vd, name: deviceName, serial: serial, airPlayID: airPlayCGID, context: context,
-                              initialMode: initialMode, attempt: 0)
+        waitForVirtualDisplay(vd, name: deviceName, serial: serial, airPlayID: airPlayCGID, initialMode: initialMode)
     }
 
     /// The serial number of anchor `n`: each anchor alive at once has its own, so that two set
@@ -1001,7 +1007,7 @@ extension VideoManager {
         descriptor.maxPixelsHigh = 1080
         descriptor.vendorID  = Self.anchorVendorID
         descriptor.productID = Self.bootstrapProductID
-        descriptor.serialNum = 0x0003
+        descriptor.serialNum = Self.bootstrapSerial
         descriptor.terminationHandler = { [weak self] _, _ in
             DispatchQueue.main.async {
                 self?.bootstrapDisplay = nil
@@ -1018,35 +1024,29 @@ extension VideoManager {
             return completion()
         }
         bootstrapDisplay = vd
-        waitForBootstrapDisplay(vd, attempt: 0, completion: completion)
+        whenOnline(vd, product: Self.bootstrapProductID, serial: Self.bootstrapSerial,
+                   wanted: { [weak self] in self?.bootstrapDisplay === vd }) { [weak self] search in
+            switch search {
+            case .found(let id):
+                vdLog.debug("ensureDisplayForSidecar: stand-in online as \(id)")
+                self?.bootstrapDisplayID = id
+                self?.mergeDevices()
+                // Let WindowServer settle on the new display before Sidecar adds another.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: completion)
+            case .released:
+                // Let go of meanwhile (an iPad came up); the connection is still attempted.
+                vdLog.debug("ensureDisplayForSidecar: stand-in let go of before it came online")
+                completion()
+            case .neverCame:
+                vdLog.error("ensureDisplayForSidecar: stand-in never came online — dropping it")
+                self?.bootstrapDisplay = nil
+                completion()
+            }
+        }
     }
 
-    private func waitForBootstrapDisplay(_ vd: CGVirtualDisplay, attempt: Int,
-                                         completion: @escaping () -> Void) {
-        let online = DisplayArrangement.onlineDisplayIDs()
-        let id = vd.displayID != 0 && online.contains(vd.displayID)
-            ? vd.displayID
-            : online.first {
-                CGDisplayVendorNumber($0) == Self.anchorVendorID
-                    && CGDisplayModelNumber($0) == Self.bootstrapProductID
-            } ?? 0
-        if id != 0 {
-            vdLog.debug("ensureDisplayForSidecar: stand-in online as \(id)")
-            bootstrapDisplayID = id
-            mergeDevices()
-            // Let WindowServer settle on the new display before Sidecar adds another.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: completion)
-            return
-        }
-        guard attempt < 10 else {
-            vdLog.error("ensureDisplayForSidecar: stand-in never came online — dropping it")
-            bootstrapDisplay = nil
-            return completion()
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-            self?.waitForBootstrapDisplay(vd, attempt: attempt + 1, completion: completion)
-        }
-    }
+    /// The stand-in's serial number.
+    static let bootstrapSerial: UInt32 = 0x0003
 
     /// Drops the stand-in once the iPad is up and, when it is to be backed, has its anchor;
     /// or when the iPad will not be backed at all.
@@ -1072,73 +1072,60 @@ extension VideoManager {
 
     // MARK: - Private
 
-    /// Polls until the virtual display appears in the system display list, then
-    /// wires up the mirror configuration in two steps.
-    private func waitForVirtualDisplay(_ vd: CGVirtualDisplay,
-                                       name: String,
-                                       serial: UInt32,
-                                       airPlayID: CGDirectDisplayID,
-                                       context: VisibilityPreferences.DisplayContext,
-                                       initialMode: DisplayMode?,
-                                       attempt: Int) {
-        // Released meanwhile.
-        guard virtualAnchorStore[name] === vd else { return }
-        // Collect both online and active lists — different macOS versions promote
-        // CGVirtualDisplay to one or the other first.
-        var onlineCount: CGDisplayCount = 0
-        CGGetOnlineDisplayList(0, nil, &onlineCount)
-        var onlineIDs = [CGDirectDisplayID](repeating: 0, count: Int(onlineCount))
-        CGGetOnlineDisplayList(onlineCount, &onlineIDs, &onlineCount)
+    /// What looking for a new virtual display came to.
+    enum VirtualDisplaySearch {
+        case found(CGDirectDisplayID)
+        /// It was let go of while it was looked for.
+        case released
+        case neverCame
+    }
 
-        var activeCount: CGDisplayCount = 0
-        CGGetActiveDisplayList(0, nil, &activeCount)
-        var activeIDs = [CGDirectDisplayID](repeating: 0, count: Int(activeCount))
-        CGGetActiveDisplayList(activeCount, &activeIDs, &activeCount)
-
-        let allIDs = Set(onlineIDs + activeIDs)
-        let claimedAnchorIDs = Set(virtualAnchorCGIDs.values)
-        let directID = vd.displayID
-
-        vdLog.debug("waitForVirtualDisplay: attempt \(attempt)/10 — vd.displayID=\(directID) online=\(onlineIDs) active=\(activeIDs) claimed=\(Array(claimedAnchorIDs))")
-
-        // Primary: trust vd.displayID once the system has assigned it.
-        // Fallback: vendor/product/serial scan — handles macOS versions where displayID
-        // isn't assigned synchronously with CGVirtualDisplay init.
-        let virtualID: CGDirectDisplayID? = {
-            if directID != 0, allIDs.contains(directID) {
-                vdLog.debug("waitForVirtualDisplay: found via directID \(directID)")
-                return directID
-            }
-            if let heuristic = allIDs.first(where: {
-                CGDisplayVendorNumber($0) == Self.anchorVendorID &&
-                CGDisplayModelNumber($0) == Self.anchorProductID &&
-                CGDisplaySerialNumber($0) == serial &&
-                !claimedAnchorIDs.contains($0) && $0 != bootstrapDisplayID
-            }) {
-                vdLog.debug("waitForVirtualDisplay: found via vendor/product heuristic id=\(heuristic)")
-                return heuristic
-            }
-            for id in allIDs {
-                vdLog.debug("waitForVirtualDisplay:   display \(id) vendor=\(CGDisplayVendorNumber(id)) model=\(CGDisplayModelNumber(id))")
-            }
-            return nil
-        }()
-
-        guard let virtualID else {
-            if attempt < 10 {
-                vdLog.debug("waitForVirtualDisplay: virtual display not found yet, retrying in 1 s")
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-                    self?.waitForVirtualDisplay(vd, name: name, serial: serial, airPlayID: airPlayID,
-                                               context: context, initialMode: initialMode,
-                                               attempt: attempt + 1)
-                }
-            } else {
-                vdLog.error("waitForVirtualDisplay: gave up after \(attempt) attempts — removing anchor for '\(name)'")
-                forgetAnchor(name)
-            }
-            return
+    /// Looks for virtual display `vd` once a second, up to ten more times, while `wanted()`: by
+    /// its ID once it has one, else — on macOS versions that assign the ID late — by DAM's
+    /// vendor, `product` and `serial` among the displays no other of DAM's has. It looks among
+    /// the displays online and active, as macOS versions differ in which list takes it first.
+    /// `then` gets what the search came to.
+    func whenOnline(_ vd: CGVirtualDisplay, product: UInt32, serial: UInt32, attempt: Int = 0,
+                    wanted: @escaping () -> Bool, then: @escaping (VirtualDisplaySearch) -> Void) {
+        guard wanted() else { return then(.released) }
+        let ids = Set(DisplayArrangement.onlineDisplayIDs() + DisplayArrangement.activeDisplayIDs())
+        if vd.displayID != 0, ids.contains(vd.displayID) { return then(.found(vd.displayID)) }
+        let known = Set(virtualAnchorCGIDs.values).union(streamingDisplayIDs).union([bootstrapDisplayID])
+        if let id = ids.first(where: {
+            CGDisplayVendorNumber($0) == Self.anchorVendorID && CGDisplayModelNumber($0) == product
+                && CGDisplaySerialNumber($0) == serial && !known.contains($0)
+        }) {
+            vdLog.debug("whenOnline: found \(id) by product \(product) serial \(serial)")
+            return then(.found(id))
         }
+        guard attempt < 10 else { return then(.neverCame) }
+        vdLog.debug("whenOnline: product \(product) serial \(serial) not online yet (attempt \(attempt)/10, displayID \(vd.displayID), displays \(Array(ids)))")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            self?.whenOnline(vd, product: product, serial: serial, attempt: attempt + 1, wanted: wanted, then: then)
+        }
+    }
 
+    /// Waits until the anchor appears in the system display list, then wires up the mirror
+    /// configuration in two steps.
+    private func waitForVirtualDisplay(_ vd: CGVirtualDisplay, name: String, serial: UInt32,
+                                       airPlayID: CGDirectDisplayID, initialMode: DisplayMode?) {
+        whenOnline(vd, product: Self.anchorProductID, serial: serial,
+                   wanted: { [weak self] in self?.virtualAnchorStore[name] === vd }) { [weak self] search in
+            switch search {
+            case .found(let virtualID):
+                self?.mirrorAnchor(vd, name: name, virtualID: virtualID, airPlayID: airPlayID, initialMode: initialMode)
+            case .released:
+                break
+            case .neverCame:
+                vdLog.error("waitForVirtualDisplay: gave up — removing anchor for '\(name)'")
+                self?.forgetAnchor(name)
+            }
+        }
+    }
+
+    /// Files the anchor online as `virtualID` and mirrors its display onto it.
+    private func mirrorAnchor(_ vd: CGVirtualDisplay, name: String, virtualID: CGDirectDisplayID,
+                              airPlayID: CGDirectDisplayID, initialMode: DisplayMode?) {
         virtualAnchorCGIDs[name] = virtualID
         vdLog.debug("waitForVirtualDisplay: virtual display id=\(virtualID) registered for '\(name)'")
 

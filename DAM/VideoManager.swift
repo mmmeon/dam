@@ -1195,10 +1195,7 @@ final class VideoManager: ObservableObject {
 
         // Use CGGetOnlineDisplayList to capture ALL connected displays, including
         // those hidden in a mirror set (which NSScreen.screens omits).
-        var onlineCount: UInt32 = 0
-        CGGetOnlineDisplayList(0, nil, &onlineCount)
-        var onlineIDs = [CGDirectDisplayID](repeating: 0, count: Int(onlineCount))
-        CGGetOnlineDisplayList(onlineCount, &onlineIDs, &onlineCount)
+        let onlineIDs = DisplayArrangement.onlineDisplayIDs()
 
         // Build a full id → name map, falling back to IOKit for external displays not in NSScreen:
         // their IODisplayConnect service on Intel, their framebuffer on Apple silicon.

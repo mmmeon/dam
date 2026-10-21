@@ -430,7 +430,7 @@ extension VideoManager {
                                                   start: mode, rotation: rotation, standsInFor: standIn?.name))
         streamingAddCompletion = completion
         streamingChangeInFlight = true
-        waitForStreamingDisplay(vd, index: index, serial: serial, before: before, main: main, attempt: 0)
+        waitForStreamingDisplay(vd, index: index, serial: serial, before: before, main: main)
     }
 
     /// Removes streaming display `index`, if it is still there, and puts the others back
@@ -654,36 +654,29 @@ extension VideoManager {
     }
 
     private func waitForStreamingDisplay(_ vd: CGVirtualDisplay, index: Int, serial: UInt32,
-                                         before: DisplayArrangement, main: Bool, attempt: Int) {
-        // Ended meanwhile; nothing else finishes this change.
-        guard isStreamingDisplay(vd) else { return finishStreamingChange() }
-        let online = DisplayArrangement.onlineDisplayIDs()
-        let id = vd.displayID != 0 && online.contains(vd.displayID)
-            ? vd.displayID
-            : online.first {
-                CGDisplayVendorNumber($0) == Self.anchorVendorID
-                    && CGDisplayModelNumber($0) == Self.streamingProductID
-                    && CGDisplaySerialNumber($0) == serial
-            } ?? 0
-        if id != 0, let i = streamingDisplays.firstIndex(where: { $0.display === vd }) {
-            sdLog.debug("\(index) online as \(id)")
-            streamingDisplays[i].id = id
-            // Let WindowServer lay out the new set first; it would undo a placement made before.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-                guard let self else { return }
-                guard self.isStreamingDisplay(vd) else { return self.finishStreamingChange() }
-                self.placeStreamingDisplay(id, before: before, main: main)
+                                         before: DisplayArrangement, main: Bool) {
+        whenOnline(vd, product: Self.streamingProductID, serial: serial,
+                   wanted: { [weak self] in self?.isStreamingDisplay(vd) ?? false }) { [weak self] search in
+            guard let self else { return }
+            switch search {
+            case .found(let id):
+                sdLog.debug("\(index) online as \(id)")
+                if let i = self.streamingDisplays.firstIndex(where: { $0.display === vd }) { self.streamingDisplays[i].id = id }
+                // Let WindowServer lay out the new set first; it would undo a placement made before.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                    guard let self else { return }
+                    guard self.isStreamingDisplay(vd) else { return self.finishStreamingChange() }
+                    self.placeStreamingDisplay(id, before: before, main: main)
+                }
+            case .released:
+                // Ended meanwhile; nothing else finishes this change.
+                self.finishStreamingChange()
+            case .neverCame:
+                sdLog.error("\(index) never came online — dropping it")
+                self.streamingDisplays.removeAll { $0.display === vd }
+                if self.streamingDisplays.isEmpty { self.streamingArrangement = nil }
+                self.finishStreamingChange()
             }
-            return
-        }
-        guard attempt < 10 else {
-            sdLog.error("\(index) never came online — dropping it")
-            streamingDisplays.removeAll { $0.display === vd }
-            if streamingDisplays.isEmpty { streamingArrangement = nil }
-            return finishStreamingChange()
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-            self?.waitForStreamingDisplay(vd, index: index, serial: serial, before: before, main: main, attempt: attempt + 1)
         }
     }
 
