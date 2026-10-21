@@ -44,7 +44,7 @@ final class MoonlightHostTests: XCTestCase {
 
         static func make() throws -> Client {
             let key = try MoonlightCrypto.generatePrivateKey()
-            let certificate = try MoonlightCrypto.selfSignedCertificate(key: key, commonName: "NVIDIA GameStream Client")
+            let certificate = try MoonlightCrypto.certificate(key: key, subject: "NVIDIA GameStream Client", days: 20 * 365)
             let identity = try XCTUnwrap(MoonlightHost.makeIdentity(
                 try XCTUnwrap(SecCertificateCreateWithData(nil, certificate as CFData)), key))
             return Client(key: key, certificate: certificate, identity: identity)

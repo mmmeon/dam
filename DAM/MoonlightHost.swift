@@ -826,7 +826,9 @@ final class MoonlightHost {
         } else {
             mlLog.debug("making the host's key and certificate")
             key = try MoonlightCrypto.generatePrivateKey()
-            certificate = try MoonlightCrypto.selfSignedCertificate(key: key, commonName: "\(AppIdentity.name) GameStream Host")
+            // Self-signed, for 20 years.
+            certificate = try MoonlightCrypto.certificate(key: key, subject: "\(AppIdentity.name) GameStream Host",
+                                                          days: 20 * 365)
             try writePrivately(try MoonlightCrypto.exportPrivateKey(key), to: keyURL)
             try writePrivately(certificate, to: certificateURL)
             try? FileManager.default.removeItem(at: clientsURL)

@@ -12,7 +12,7 @@ final class MoonlightPairingTests: XCTestCase {
 
         static func make(_ name: String) throws -> Party {
             let key = try MoonlightCrypto.generatePrivateKey()
-            return Party(key: key, certificate: try MoonlightCrypto.selfSignedCertificate(key: key, commonName: name))
+            return Party(key: key, certificate: try MoonlightCrypto.certificate(key: key, subject: name, days: 20 * 365))
         }
     }
 

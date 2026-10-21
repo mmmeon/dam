@@ -114,29 +114,6 @@ enum MoonlightCrypto {
         return data as Data
     }
 
-    /// A self-signed X.509 v3 certificate for `key`, valid for 20 years from now.
-    static func selfSignedCertificate(key: SecKey, commonName: String, now: Date = Date()) throws -> Data {
-        guard let publicKey = SecKeyCopyPublicKey(key),
-              let publicKeyData = SecKeyCopyExternalRepresentation(publicKey, nil) as Data? else {
-            throw MoonlightCryptoError.badKey
-        }
-        let algorithm = DER.sequence(DER.oid(DER.sha256WithRSA), DER.null)
-        let name = DER.sequence(DER.set(DER.sequence(DER.oid(DER.commonName), DER.utf8String(commonName))))
-        let notAfter = now.addingTimeInterval(20 * 365 * 24 * 3600)
-        var serial = Data((0..<16).map { _ in UInt8.random(in: 0...255) })
-        serial[0] &= 0x7F
-        let tbs = DER.sequence(
-            DER.explicit(0, DER.integer(Data([2]))),
-            DER.integer(serial),
-            algorithm,
-            name,
-            DER.sequence(DER.time(now.addingTimeInterval(-24 * 3600)), DER.time(notAfter)),
-            name,
-            DER.sequence(DER.sequence(DER.oid(DER.rsaEncryption), DER.null), DER.bitString(publicKeyData))
-        )
-        return DER.sequence(tbs, algorithm, DER.bitString(try sign(tbs, with: key)))
-    }
-
     /// An X.509 v3 certificate for `key`'s public half, signed by `issuerKey` (`key` itself
     /// when nil), from a day ago for `days`, with `extensions` as made by `DER.extension`.
     static func certificate(key: SecKey, subject: String, issuer: String? = nil, issuerKey: SecKey? = nil,
