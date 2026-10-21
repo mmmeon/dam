@@ -626,11 +626,10 @@ extension VideoManager {
 
     /// The mode of `id` that is `mode`: its size, rate and scale.
     static func displayMode(_ mode: StreamingDisplayModes.Mode, of id: CGDirectDisplayID) -> CGDisplayMode? {
-        let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
-        let modes = CGDisplayCopyAllDisplayModes(id, options) as? [CGDisplayMode] ?? []
-        return modes.first {
+        DisplayArrangement.listedModes(of: id).first {
             $0.width == mode.width && $0.height == mode.height && $0.pixelWidth == mode.pixelWidth
-                && Int($0.refreshRate.rounded()) == mode.refreshRate
+                && $0.pixelHeight == mode.pixelHeight
+                && DisplayArrangement.RateMatch.wholeHertz.matches($0.refreshRate, Double(mode.refreshRate))
         }
     }
 

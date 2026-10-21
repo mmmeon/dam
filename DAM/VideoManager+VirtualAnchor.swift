@@ -184,12 +184,17 @@ struct DisplayArrangement {
             && a.pixelHeight == b.pixelHeight && rate.matches(a.refreshRate, b.refreshRate)
     }
 
+    /// Every mode display `id` offers, those macOS lists only as duplicates of a lower
+    /// resolution included.
+    static func listedModes(of id: CGDirectDisplayID) -> [CGDisplayMode] {
+        let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
+        return CGDisplayCopyAllDisplayModes(id, options) as? [CGDisplayMode] ?? []
+    }
+
     /// The mode `id` lists now that shows the same as `mode`. A captured mode can be stale:
     /// once a display renumbers its modes, setting the captured one does nothing.
     static func listedMode(like mode: CGDisplayMode, of id: CGDirectDisplayID) -> CGDisplayMode? {
-        let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
-        let modes = CGDisplayCopyAllDisplayModes(id, options) as? [CGDisplayMode] ?? []
-        return modes.first { sameMode($0, mode) }
+        listedModes(of: id).first { sameMode($0, mode) }
     }
 
     /// Queues changes on `cfg` returning every still-online display that showed its own
@@ -1329,19 +1334,20 @@ extension VideoManager {
     /// display may report a slightly different rate), else — for a HiDPI mode the anchor
     /// didn't derive — the logical size at 1x.
     private func anchorDisplayMode(_ mode: DisplayMode, anchorID: CGDirectDisplayID) -> CGDisplayMode? {
-        let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
-        guard let modeList = CGDisplayCopyAllDisplayModes(anchorID, options) as? [CGDisplayMode] else {
-            vdLog.error("anchorDisplayMode: CGDisplayCopyAllDisplayModes returned nil for \(anchorID)")
+        let modeList = DisplayArrangement.listedModes(of: anchorID)
+        guard !modeList.isEmpty else {
+            vdLog.error("anchorDisplayMode: no modes listed for \(anchorID)")
             return nil
         }
         vdLog.debug("anchorDisplayMode: \(modeList.count) modes on master \(anchorID), seeking \(mode.width)×\(mode.height) (pixels \(mode.pixelWidth)×\(mode.pixelHeight)) @\(mode.refreshRate)Hz")
         for m in modeList { vdLog.debug("  candidate: \(m.width)×\(m.height) (pixels \(m.pixelWidth)×\(m.pixelHeight)) @\(m.refreshRate)Hz") }
 
-        let cgMode = modeList.first { Self.matches($0, mode) && abs($0.refreshRate - mode.refreshRate) < 1.0 }
+        let rate = DisplayArrangement.RateMatch.withinOneHertz
+        let cgMode = modeList.first { Self.matches($0, mode) && rate.matches($0.refreshRate, mode.refreshRate) }
             ?? modeList.first { Self.matches($0, mode) }
             ?? modeList.first {
                 $0.pixelWidth == mode.width && $0.pixelHeight == mode.height
-                    && abs($0.refreshRate - mode.refreshRate) < 1.0
+                    && rate.matches($0.refreshRate, mode.refreshRate)
             }
         if let cgMode, mode.isHiDPI, cgMode.pixelWidth == cgMode.width {
             vdLog.error("anchorDisplayMode: anchor offers no HiDPI \(mode.width)×\(mode.height) — falling back to 1x")
@@ -1357,9 +1363,7 @@ extension VideoManager {
     private func anchorRuns(_ mode: DisplayMode, anchorID: CGDirectDisplayID) -> Bool {
         guard let current = CGDisplayCopyDisplayMode(anchorID),
               let wanted = anchorDisplayMode(mode, anchorID: anchorID) else { return false }
-        return current.width == wanted.width && current.height == wanted.height
-            && current.pixelWidth == wanted.pixelWidth && current.pixelHeight == wanted.pixelHeight
-            && abs(current.refreshRate - wanted.refreshRate) < 1.0
+        return DisplayArrangement.sameMode(current, wanted, rate: .withinOneHertz)
     }
 
     /// The anchors, the displays they drive and the displays set to mirror those: their sizes
@@ -1445,6 +1449,7 @@ extension VideoManager {
         }
     }
 
+    /// Whether `cgMode` is `mode`'s size in points and pixels, whatever its rate.
     private static func matches(_ cgMode: CGDisplayMode, _ mode: DisplayMode) -> Bool {
         cgMode.width == mode.width && cgMode.height == mode.height
             && cgMode.pixelWidth == mode.pixelWidth && cgMode.pixelHeight == mode.pixelHeight

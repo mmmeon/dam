@@ -302,11 +302,9 @@ final class VideoManager: ObservableObject {
         var current: [CGDirectDisplayID: ModeShape] = [:]
         var available: [CGDirectDisplayID: [ModeShape: CGDisplayMode]] = [:]
         var skip = Set(virtualAnchorCGIDs.values)
-        let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
         for id in DisplayArrangement.onlineDisplayIDs() {
             current[id] = CGDisplayCopyDisplayMode(id).map(ModeShape.init)
-            let modes = CGDisplayCopyAllDisplayModes(id, options) as? [CGDisplayMode] ?? []
-            available[id] = Dictionary(modes.map { (ModeShape($0), $0) }) { first, _ in first }
+            available[id] = Dictionary(DisplayArrangement.listedModes(of: id).map { (ModeShape($0), $0) }) { first, _ in first }
             if CGDisplayMirrorsDisplay(id) != 0 { skip.insert(id) }
         }
         let restore = Self.modesToRestore(saved: modesBeforeSleep, current: current,
@@ -338,6 +336,7 @@ final class VideoManager: ObservableObject {
     }
 
     /// What a mode is, as opposed to its ID, which a display can renumber when it comes back.
+    /// Equal when `DisplayArrangement.sameMode(_:_:rate: .exact)` is, as a key.
     struct ModeShape: Hashable {
         let width: Int, height: Int, pixelWidth: Int, pixelHeight: Int
         /// In hundredths of a hertz, so 59.94 and 60 stay apart but rounding noise does not.
@@ -986,8 +985,7 @@ final class VideoManager: ObservableObject {
 
     func availableModes(for cgDisplayID: CGDirectDisplayID) -> [DisplayMode] {
         guard cgDisplayID != 0 else { return [] }
-        let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
-        guard let modeList = CGDisplayCopyAllDisplayModes(cgDisplayID, options) as? [CGDisplayMode] else { return [] }
+        let modeList = DisplayArrangement.listedModes(of: cgDisplayID)
 
         var seen = Set<String>()
         let panelRate = Self.panelRefreshRate(of: cgDisplayID)
@@ -1010,11 +1008,10 @@ final class VideoManager: ObservableObject {
     }
 
     /// One mode per logical resolution, preferring HiDPI over non-HiDPI, then highest refresh rate.
-    /// Single pass over CGDisplayCopyAllDisplayModes — does not call availableModes().
+    /// Single pass over the listed modes — does not call availableModes().
     func availableModesDeduped(for cgDisplayID: CGDirectDisplayID) -> [DisplayMode] {
         guard cgDisplayID != 0 else { return [] }
-        let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
-        guard let modeList = CGDisplayCopyAllDisplayModes(cgDisplayID, options) as? [CGDisplayMode] else { return [] }
+        let modeList = DisplayArrangement.listedModes(of: cgDisplayID)
         var best: [String: DisplayMode] = [:]
         let panelRate = Self.panelRefreshRate(of: cgDisplayID)
         for cgMode in modeList {
@@ -1137,9 +1134,8 @@ final class VideoManager: ObservableObject {
     func setMode(_ mode: DisplayMode, for cgDisplayID: CGDirectDisplayID,
                  completion: ((Result<Void, MirrorError>) -> Void)? = nil) {
         guard cgDisplayID != 0 else { completion?(.failure(.notConnected)); return }
-        let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
-        guard let modeList = CGDisplayCopyAllDisplayModes(cgDisplayID, options) as? [CGDisplayMode],
-              let cgMode = modeList.first(where: { $0.ioDisplayModeID == mode.ioModeID }) else {
+        // By ID: the mode was picked from this display's list just now.
+        guard let cgMode = DisplayArrangement.listedModes(of: cgDisplayID).first(where: { $0.ioDisplayModeID == mode.ioModeID }) else {
             completion?(.failure(.configuration(.illegalArgument)))
             return
         }
