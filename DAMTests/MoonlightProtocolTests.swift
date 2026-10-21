@@ -249,6 +249,37 @@ final class MoonlightProtocolTests: XCTestCase {
         XCTAssertEqual(requests.request(at: 1000 * ms, roundTrip: 40 * ms), .now)
     }
 
+    func testARequestHeldForLaterIsDroppedOnceAKeyFrameWentOut() {
+        var requests = MoonlightKeyFrameRequests()
+        XCTAssertEqual(requests.request(at: 0, roundTrip: nil), .now)
+        requests.keyFrameSent(at: 10 * ms)
+        XCTAssertEqual(requests.request(at: 50 * ms, roundTrip: nil), .later(200 * ms))
+        XCTAssertEqual(requests.request(at: 80 * ms, roundTrip: nil), .alreadyDue)
+        requests.keyFrameSent(at: 100 * ms)
+        XCTAssertEqual(requests.retry(at: 250 * ms, roundTrip: nil), .covered, "the keyframe at 100 ms answered both")
+        // Nothing is due any more: the next request within the interval is held again.
+        XCTAssertEqual(requests.request(at: 260 * ms, roundTrip: nil), .now)
+    }
+
+    func testARequestHeldForLaterAfterTheLastKeyFrameIsMade() {
+        var requests = MoonlightKeyFrameRequests()
+        XCTAssertEqual(requests.request(at: 0, roundTrip: nil), .now)
+        requests.keyFrameSent(at: 10 * ms)
+        XCTAssertEqual(requests.request(at: 50 * ms, roundTrip: nil), .later(200 * ms))
+        XCTAssertEqual(requests.request(at: 120 * ms, roundTrip: nil), .alreadyDue)
+        requests.keyFrameSent(at: 100 * ms)
+        XCTAssertEqual(requests.retry(at: 250 * ms, roundTrip: nil), .now, "one came after the keyframe")
+    }
+
+    func testAJoinAndTheFramesAlreadyOnTheirWayCostOneKeyFrame() {
+        // A browser viewer asks with every frame until its keyframe comes.
+        var requests = MoonlightKeyFrameRequests()
+        XCTAssertEqual(requests.request(at: 0, roundTrip: nil), .now)
+        XCTAssertEqual(requests.request(at: 16 * ms, roundTrip: nil), .covered)
+        XCTAssertEqual(requests.request(at: 33 * ms, roundTrip: nil), .covered)
+        requests.keyFrameSent(at: 50 * ms)
+    }
+
     func testALongRoundTripCoversNoMoreThanItsLimit() {
         var requests = MoonlightKeyFrameRequests()
         XCTAssertEqual(requests.request(at: 0, roundTrip: 500 * ms), .now)

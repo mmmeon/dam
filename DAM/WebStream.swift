@@ -744,7 +744,8 @@ final class WebStreamSession {
     /// Fills the grid's empty slots. It, `silenceTimer`, `statsTimer` and `activity` are
     /// under `lock`.
     private var repeater: DispatchSourceTimer?
-    private var keyFrames = MoonlightKeyFrameThrottle()
+    /// On `queue`.
+    private lazy var keyFrames = MoonlightKeyFrameRequester(retryingOn: queue)
     private var activity: NSObjectProtocol?
     private var statsTimer: DispatchSourceTimer?
     private let stats = MoonlightStreamStats()
@@ -974,37 +975,29 @@ final class WebStreamSession {
             case .waitingForKeyFrame, .catchingUp: waiting = true
             }
         }
+        // Those who asked for it have it: a request held for later now asks for no other.
+        if frame.isKeyFrame { keyFrames.keyFrameSent() }
         if waiting { requestKeyFrame() }
         stats.video(packets: 1, bytes: fragment.count, refused: 0, keyFrame: frame.isKeyFrame)
     }
 
-    /// The next frame as a keyframe, from the last picture at once if the screen is still.
+    /// The next frame as a keyframe, from the last picture at once if the screen is still;
+    /// on `queue` (see MoonlightKeyFrameRequester).
     private func requestKeyFrame() {
-        lock.lock()
-        let decision = keyFrames.request(at: DispatchTime.now().uptimeNanoseconds)
-        switch decision {
-        case .now:
-            break
-        case .later(let wait):
-            lock.unlock()
-            queue.asyncAfter(deadline: .now() + .nanoseconds(Int(wait))) { [weak self] in
-                self?.requestKeyFrame()
+        keyFrames.request { [weak self] in
+            guard let self else { return (nil, nil) }
+            self.lock.lock()
+            let encoder = self.encoder
+            let last = self.lastFrame
+            self.lock.unlock()
+            self.stats.keyFrameRequested()
+            // A still screen gets its keyframe from the last picture at once; a moving one
+            // from its next frame.
+            guard let last, DispatchTime.now().uptimeNanoseconds - last.at > self.interval * 3 / 2 else {
+                return (encoder, nil)
             }
-            return
-        case .alreadyDue:
-            lock.unlock()
-            return
-        }
-        let encoder = self.encoder
-        let last = lastFrame
-        lock.unlock()
-        stats.keyFrameRequested()
-        encoder?.requestKeyFrame()
-        // A still screen gets its keyframe from the last picture at once; a moving one
-        // from its next frame.
-        if let last, DispatchTime.now().uptimeNanoseconds - last.at > interval * 3 / 2 {
             let now = CMClockGetTime(CMClockGetHostTimeClock())
-            encoder?.encode(last.buffer, at: grid.nextSlot(before: now) ?? grid.snap(now))
+            return (encoder, (last.buffer, self.grid.nextSlot(before: now) ?? self.grid.snap(now)))
         }
     }
 
