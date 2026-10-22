@@ -1362,6 +1362,9 @@ enum WebStreamPage {
       let buffer = params.get('buffer'), lowlatency = params.get('lowlatency');
       const token = params.get('token') || '';
       let abort = null, source = null, sb = null, queue = [], bytes = 0, held = true, stalls = 0, cutOff = false;
+      // Whether a stream has played on this page; when the stream started; the reconnects
+      // of the last five minutes; what the watchdog saw last; the screen's wake lock.
+      let played = false, startedAt = 0, retries = [], retryTimer = null, watch = null, wake = null;
 
       const MS = window.ManagedMediaSource || window.MediaSource;
       if (!MS) { $('msg').hidden = false; $('msg').textContent = 'This browser cannot play streams (no Media Source Extensions).'; return; }
@@ -1382,21 +1385,22 @@ enum WebStreamPage {
       portrait.addEventListener('change', () => { if (source) start(); });
       // A tab in the background stops reading, and DAM lets a viewer go that falls far
       // behind; back in front, it starts again.
-      document.addEventListener('visibilitychange', () => { if (!document.hidden && cutOff) start(); });
+      document.addEventListener('visibilitychange', () => { if (document.hidden) return; if (cutOff) start(); else keepAwake(); });
 
-      function start() {
+      function start(text) {
         stop();
-        queue = []; bytes = 0; held = true; stalls = 0; cutOff = false;
+        queue = []; bytes = 0; held = true; stalls = 0; cutOff = false; watch = null; startedAt = performance.now();
         const ms = source = new MS();
         video.disableRemotePlayback = true;
         video.src = URL.createObjectURL(ms);
         ms.addEventListener('sourceopen', () => open(ms), { once: true });
         history.replaceState(null, '', '?' + new URLSearchParams({ ...(token ? { token } : {}), ...(app ? { app } : {}), profile, bitrate: Math.round(bitrate * 1000), buffer: Math.round(buffer * 1000), ...(lowlatency ? { lowlatency } : {}) }));
         // Making a display for the stream can take a while.
-        $('msg').hidden = false; $('msg').textContent = 'Connecting…';
+        $('msg').hidden = false; $('msg').textContent = text || 'Connecting…';
       }
 
       function stop() {
+        clearTimeout(retryTimer);
         if (abort) abort.abort();
         abort = null; sb = null;
         if (source && source.readyState === 'open') try { source.endOfStream(); } catch (e) {}
@@ -1414,7 +1418,7 @@ enum WebStreamPage {
         let response;
         try {
           response = await fetch(url(), { signal: ctl.signal, cache: 'no-store' });
-        } catch (e) { if (!gone()) fail('Could not reach the stream.'); return; }
+        } catch (e) { if (!gone()) (played ? retry : fail)('Could not reach the stream.'); return; }
         if (gone()) return;
         if (!response.ok) { const text = await response.text().catch(() => ''); if (!gone()) fail(text); return; }
         const codecs = response.headers.get('X-Codecs') || 'avc1.640028,mp4a.40.2';
@@ -1430,14 +1434,59 @@ enum WebStreamPage {
             const { value, done } = await reader.read();
             if (gone()) return;
             if (done) break;
-            $('msg').hidden = true;
+            $('msg').hidden = true; played = true;
             queue.push(value); bytes += value.length;
             pump();
           }
-          cutOff = true;
-          fail('The stream ended.');
-        } catch (e) { if (!gone()) { cutOff = true; fail('The stream broke off.'); } }
+          retry('The stream ended.');
+        } catch (e) { if (!gone()) retry('The stream broke off.'); }
       }
+
+      // A stream that played and broke off starts again after 1, 2, 4… seconds; the first
+      // try comes back before DAM lets the display go. Not from a tab in the background (it
+      // starts again once in front), and at most five times in five minutes.
+      function retry(text) {
+        const now = performance.now();
+        retries = retries.filter(t => now - t < 300000);
+        if (document.hidden || retries.length >= 5) { cutOff = true; return fail(document.hidden ? text : text + ' Reload to try again.'); }
+        retries.push(now);
+        stop();
+        $('msg').hidden = false; $('msg').textContent = 'Reconnecting…';
+        retryTimer = setTimeout(() => start('Reconnecting…'), 1000 * 2 ** (retries.length - 1));
+      }
+
+      // DAM sends every frame of a still screen too, so seconds without a byte mean the link
+      // is gone, and bytes coming while the picture stands still mean a stuck decoder: both
+      // start the stream again. One that never answers gives up after 30 seconds (making a
+      // display takes up to about 15).
+      function watchdog() {
+        const now = performance.now();
+        if (!source || document.hidden || video.seeking) { watch = null; return; }
+        if (!bytes) { if (now - startedAt > 30000) (played ? retry : fail)('The Mac did not answer.'); return; }
+        const q = video.getVideoPlaybackQuality ? video.getVideoPlaybackQuality() : null;
+        const time = video.currentTime, frames = q ? q.totalVideoFrames : 0;
+        if (!watch) { watch = { bytes, time, frames, fed: now, moved: now, counts: false }; return; }
+        if (bytes !== watch.bytes) { watch.bytes = bytes; watch.fed = now; }
+        // A browser that counts frames is trusted to: time running on without them is a
+        // frozen picture too.
+        if (frames !== watch.frames) watch.counts = true;
+        if (held || (time !== watch.time && (frames !== watch.frames || !watch.counts))) watch.moved = now;
+        watch.time = time; watch.frames = frames;
+        if (now - watch.fed > 5000) retry('The stream stopped coming.');
+        else if (now - watch.moved > 3000) retry('The picture froze.');
+      }
+
+      // The screen stays on while the stream plays, as a display's should. The browser lets
+      // go of the lock when the tab is hidden, so it is asked for again on the way back.
+      // Only over HTTPS.
+      function keepAwake() {
+        if (wake || !navigator.wakeLock || document.hidden || !source) return;
+        const asked = wake = navigator.wakeLock.request('screen').then(lock => {
+          lock.addEventListener('release', () => { if (wake === asked) wake = null; });
+          return lock;
+        }, () => { if (wake === asked) wake = null; });
+      }
+      function letSleep() { const asked = wake; wake = null; if (asked) asked.then(lock => lock && lock.release().catch(() => {})); }
 
       function pump() {
         if (!sb || sb.updating || !queue.length) return;
@@ -1453,7 +1502,7 @@ enum WebStreamPage {
         try { sb.appendBuffer(chunk); } catch (e) { fail('Playback failed: ' + e.message); }
       }
 
-      function fail(text) { stop(); $('msg').hidden = false; $('msg').textContent = text; }
+      function fail(text) { stop(); letSleep(); $('msg').hidden = false; $('msg').textContent = text; }
 
       // Keeps playback `buffer` seconds behind the latest frame: a jump when far off, a
       // slightly faster or slower rate when a little, over any gap the still screen left,
@@ -1479,11 +1528,11 @@ enum WebStreamPage {
           + (stalls ? ' · ' + stalls + ' stall' + (stalls > 1 ? 's' : '') : '')
           + (q ? ' · ' + q.droppedVideoFrames + ' dropped' : '');
       }
-      setInterval(follow, 100);
+      setInterval(() => { follow(); watchdog(); }, 100);
       // Out of picture: hold until `buffer` seconds are in hand again, rather than play each
       // frame the moment it lands and stutter.
       video.addEventListener('waiting', () => { if (!held && !video.seeking) { held = true; stalls++; video.pause(); } follow(); });
-      video.addEventListener('playing', follow);
+      video.addEventListener('playing', () => { follow(); keepAwake(); });
 
       // Controls.
       function setBuffer(seconds) { buffer = seconds; $('buffer').value = Math.round(seconds * 1000); $('bufferText').textContent = Math.round(seconds * 1000) + ' ms'; }
@@ -1493,7 +1542,7 @@ enum WebStreamPage {
       $('buffer').oninput = () => setBuffer(+$('buffer').value / 1000);
       $('mute').onclick = () => { video.muted = !video.muted; $('mute').textContent = video.muted ? 'Unmute' : 'Mute'; start(); };
       $('full').onclick = () => { (video.requestFullscreen || video.webkitEnterFullscreen || (() => {})).call(video); };
-      let idle; function awake() { document.body.classList.remove('idle'); clearTimeout(idle); idle = setTimeout(() => document.body.classList.add('idle'), 3000); }
+      let idle; function awake() { document.body.classList.remove('idle'); clearTimeout(idle); keepAwake(); idle = setTimeout(() => document.body.classList.add('idle'), 3000); }
       ['mousemove', 'touchstart', 'keydown'].forEach(e => addEventListener(e, awake)); awake();
 
       // A browser without a link pairs: it shows a code, which the user types on the Mac,

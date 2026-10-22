@@ -18,6 +18,10 @@ Stream menu and Settings › Browser Stream, independent of Moonlight hosting an
 settings.
 
 - `/watch` plays the stream in a browser through Media Source Extensions.
+  It keeps the screen awake while it plays (over HTTPS only). It starts the stream again
+  when the stream breaks off, ends, or goes 5 s without data, and when the picture stands
+  still for 3 s while data keeps coming. Retries come after 1, 2, 4… s, at most five in
+  five minutes. A first connection that gets no data within 30 s fails.
 - `/stream.mp4` is an endless fragmented MP4 that mpv, ffplay and VLC play as is.
 - `/apps.json` lists the displays.
 
