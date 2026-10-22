@@ -230,6 +230,14 @@ final class MoonlightScreenCaptureTests: XCTestCase {
         subscription.cancel()
     }
 
+    /// PQ's curve, which the reference white is found by: 100 and 203 nits, and the ends.
+    func testPQSignalsStandForTheirLight() {
+        XCTAssertEqual(HDR10Converter.pqNits(0.5081), 100, accuracy: 0.5)
+        XCTAssertEqual(HDR10Converter.pqNits(0.5806), 203, accuracy: 0.5)
+        XCTAssertEqual(HDR10Converter.pqNits(0), 0, accuracy: 0.001)
+        XCTAssertEqual(HDR10Converter.pqNits(1), 10_000, accuracy: 1)
+    }
+
     /// SDR white, as a display is captured before macOS 15, goes to BT.2408's 203 nits in
     /// HDR10's PQ, where HDR10 players show it, not macOS's 100.
     func testHDR10PutsSDRWhiteAtTheReferenceLevel() throws {
