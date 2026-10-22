@@ -484,6 +484,10 @@ final class WebStreamServer {
             send(status: "200 OK", contentType: "application/x-x509-ca-cert",
                  headers: ["Content-Disposition: attachment; filename=\"\(AppIdentity.name) Browser Stream.cer\""],
                  body: authority, to: connection)
+        case "/time":
+            // The Mac's clock, for the page to set its own against.
+            send(status: "200 OK", contentType: "text/plain",
+                 body: Data(String(format: "%.1f", Date().timeIntervalSince1970 * 1000).utf8), to: connection)
         case "/pair/begin":
             beginPairing(request, on: connection)
         case "/pair/wait":
@@ -764,6 +768,9 @@ final class WebStreamSession {
 
     // The stream's clock, on `queue`: the first frame's time is its zero.
     private var anchor: CMTime?
+    /// When the stream's zero was, in milliseconds since 1970 on the Mac's clock, for the
+    /// page to tell how long a frame took from the screen to it; on `queue`.
+    private var epoch: Double?
     /// The init segment and codecs for viewers with sound and without.
     private var initSegment: (sound: Data, silent: Data)?
     private var codecs = (sound: "", silent: "")
@@ -977,7 +984,12 @@ final class WebStreamSession {
         // The encoder's decode times matter only when it reorders frames; otherwise they
         // are the presentation times, give or take its rounding.
         let decodeTime = reorders && decode.isValid ? decode : frame.time
-        if anchor == nil { anchor = CMTimeMinimum(decodeTime, frame.time) }
+        if anchor == nil {
+            let zero = CMTimeMinimum(decodeTime, frame.time)
+            anchor = zero
+            let since = CMTimeGetSeconds(CMTimeSubtract(CMClockGetTime(CMClockGetHostTimeClock()), zero))
+            epoch = (Date().timeIntervalSince1970 - since) * 1000
+        }
         guard let anchor else { return }
         let sample = frame.avcc
         if frame.isKeyFrame, let (sets, _) = MoonlightVideoEncoder.parameterSets(frame.sample) {
@@ -1006,7 +1018,7 @@ final class WebStreamSession {
         for viewer in viewers {
             switch viewer.take(video: fragment, keyFrame: frame.isKeyFrame,
                                codecs: viewer.audio ? codecs.sound : codecs.silent,
-                               initSegment: viewer.audio ? initSegment.sound : initSegment.silent) {
+                               initSegment: viewer.audio ? initSegment.sound : initSegment.silent, epoch: epoch) {
             case .taken, .behind: break
             case .waitingForKeyFrame, .catchingUp: waiting = true
             }
@@ -1277,7 +1289,7 @@ final class WebStreamViewer {
         }
     }
 
-    func take(video fragment: Data, keyFrame: Bool, codecs: String, initSegment: Data) -> Outcome {
+    func take(video fragment: Data, keyFrame: Bool, codecs: String, initSegment: Data, epoch: Double? = nil) -> Outcome {
         lock.lock()
         guard !closed else { lock.unlock(); return .taken }
         if let behindSince {
@@ -1298,7 +1310,7 @@ final class WebStreamViewer {
             waitingForKeyFrame = false
             started = true
             lock.unlock()
-            send(Data(Self.head(codecs: codecs).utf8))
+            send(Data(Self.head(codecs: codecs, epoch: epoch).utf8))
             send(initSegment)
         } else if inFlight > maxInFlight {
             waitingForKeyFrame = true
@@ -1321,10 +1333,12 @@ final class WebStreamViewer {
         if streaming { send(fragment) }
     }
 
-    /// The response's head: a body of unknown length that ends with the connection.
-    static func head(codecs: String) -> String {
+    /// The response's head: a body of unknown length that ends with the connection. With
+    /// it, when the stream's zero was on the Mac's clock (see WebStreamSession.epoch).
+    static func head(codecs: String, epoch: Double? = nil) -> String {
         "HTTP/1.1 200 OK\r\nContent-Type: video/mp4\r\nCache-Control: no-store\r\nConnection: close\r\n" +
-        "Access-Control-Allow-Origin: *\r\nAccess-Control-Expose-Headers: X-Codecs\r\nX-Codecs: \(codecs)\r\n\r\n"
+        "Access-Control-Allow-Origin: *\r\nAccess-Control-Expose-Headers: X-Codecs, X-Stream-Epoch\r\n" +
+        "X-Codecs: \(codecs)\r\n" + (epoch.map { "X-Stream-Epoch: \(String(format: "%.1f", $0))\r\n" } ?? "") + "\r\n"
     }
 
     private func send(_ data: Data) {
@@ -1382,11 +1396,16 @@ enum WebStreamPage {
       #msg .code { font: 600 56px ui-monospace, Menlo, monospace; letter-spacing: 0.15em; margin: 12px 0; }
       #msg .small { opacity: 0.7; font-size: 13px; }
       code { user-select: all; }
+      #hint { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); max-width: min(560px, calc(100vw - 32px));
+              box-sizing: border-box; padding: 10px 36px 10px 14px; border-radius: 8px; background: rgba(20,20,20,.9); line-height: 1.4; }
+      #hint[hidden] { display: none; }
+      #hint button { position: absolute; top: 6px; right: 6px; padding: 2px 8px; background: none; }
     </style>
     </head>
     <body>
     <video id="v" muted playsinline></video>
     <div id="msg" hidden></div>
+    <div id="hint" hidden><span></span><button aria-label="Close">×</button></div>
     <div id="bar">
       <label>Display <select id="app"></select></label>
       <label>Profile <select id="profile">
@@ -1418,6 +1437,13 @@ enum WebStreamPage {
       // Stalls in a stream's first 2 seconds are the decoder starting, and teach nothing.
       let extra = 0, extraChanged = 0, playingSince = 0;
       try { extra = Math.min(Math.max(+localStorage.getItem('extraBuffer') || 0, 0), 0.5); } catch (e) {}
+      // When the stream's zero was on the Mac's clock (from its response), the Mac's clock
+      // less this one's, and how long the frames shown in the last second took from the Mac's
+      // screen to this one.
+      let epoch = null, offset = null, clock = [], delays = [];
+      // When the last bytes came, and when the gaps between them began that were long
+      // enough to show.
+      let lastBytes = 0, gaps = [], hinted = false;
       function setExtra(seconds) {
         extra = seconds; extraChanged = performance.now();
         try { localStorage.setItem('extraBuffer', String(extra)); } catch (e) {}
@@ -1447,6 +1473,7 @@ enum WebStreamPage {
       function start(text) {
         stop();
         queue = []; bytes = 0; held = true; stalls = 0; cutOff = false; watch = null; startedAt = performance.now(); playingSince = 0;
+        epoch = null; delays = []; lastBytes = 0; gaps = [];
         const ms = source = new MS();
         video.disableRemotePlayback = true;
         video.src = URL.createObjectURL(ms);
@@ -1479,6 +1506,8 @@ enum WebStreamPage {
         if (gone()) return;
         if (!response.ok) { const text = await response.text().catch(() => ''); if (!gone()) fail(text); return; }
         const codecs = response.headers.get('X-Codecs') || 'avc1.640028,mp4a.40.2';
+        epoch = +response.headers.get('X-Stream-Epoch') || null;
+        if (epoch) for (let i = 0; i < 4; i++) setTimeout(setClock, i * 300);
         const mime = 'video/mp4; codecs="' + codecs + '"';
         if (!MS.isTypeSupported(mime)) return fail('This browser cannot decode ' + codecs + '.');
         sb = ms.addSourceBuffer(mime);
@@ -1492,6 +1521,7 @@ enum WebStreamPage {
             if (gone()) return;
             if (done) break;
             $('msg').hidden = true; played = true;
+            arrived(performance.now());
             queue.push(value); bytes += value.length;
             pump();
           }
@@ -1545,6 +1575,67 @@ enum WebStreamPage {
       }
       function letSleep() { const asked = wake; wake = null; if (asked) asked.then(lock => lock && lock.release().catch(() => {})); }
 
+      // The Mac's clock against this one: the middle of the quickest of the last few asks
+      // for its time, a few as a stream starts and then every 10 seconds.
+      function setClock() {
+        if (document.hidden || !source) return;
+        const sent = performance.now();
+        fetch('/time', { cache: 'no-store' }).then(r => r.text()).then(text => {
+          const back = performance.now(), mac = +text;
+          if (!mac) return;
+          clock.push({ rtt: back - sent, offset: mac - (performance.timeOrigin + (sent + back) / 2) });
+          if (clock.length > 8) clock.shift();
+          offset = clock.reduce((a, b) => b.rtt < a.rtt ? b : a).offset;
+        }).catch(() => {});
+      }
+      setInterval(() => { if (epoch) setClock(); }, 10000);
+
+      // Each frame as it is shown: when, on the Mac's clock, less when it was captured. The
+      // capture is its slot on the stream's grid, up to a frame before. WebKit on macOS 13
+      // gives a media time of 0 and an expected display time hours off for every frame
+      // from Media Source; there the time playback stands at, and the callback's own time,
+      // stand in for them.
+      function shown(now, frame) {
+        if (epoch && offset !== null) {
+          const when = Math.abs(frame.expectedDisplayTime - now) < 1000 ? frame.expectedDisplayTime : now;
+          const media = frame.mediaTime || video.currentTime;
+          delays.push({ now, ms: performance.timeOrigin + when + offset - (epoch + media * 1000) });
+          while (now - delays[0].now > 1000) delays.shift();
+        }
+        video.requestVideoFrameCallback(shown);
+      }
+      if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(shown);
+      function delay() {
+        if (!delays.length || performance.now() - delays[delays.length - 1].now > 1000) return null;
+        const sorted = delays.map(d => d.ms).sort((a, b) => a - b);
+        return Math.round(sorted[sorted.length >> 1]);
+      }
+
+      // Wi-Fi shared with AirDrop, Handoff or AirPlay (AWDL) leaves for the devices around
+      // at a steady beat, a few times a second, and nothing comes meanwhile; a busy network
+      // stops at random. Gaps too long for the buffer to cover, six or more in 15 seconds,
+      // most of them the same time apart, between a quarter of a second and 1.2, bring a hint.
+      // Not in a stream's first 2 seconds, when the decoder starts.
+      function arrived(now) {
+        const gap = now - lastBytes, began = lastBytes;
+        lastBytes = now;
+        if (hinted || !began || !playingSince || now - playingSince < 2000) return;
+        if (gap < Math.max(50, (buffer + extra) * 1000)) return;
+        gaps = gaps.filter(t => now - t < 15000);
+        gaps.push(began);
+        if (gaps.length < 6) return;
+        const apart = gaps.slice(1).map((t, i) => t - gaps[i]);
+        const median = apart.slice().sort((a, b) => a - b)[apart.length >> 1];
+        if (median < 250 || median > 1200) return;
+        if (apart.filter(d => Math.abs(d - median) <= median * 0.15).length < apart.length * 0.7) return;
+        hinted = true;
+        $('hint').querySelector('span').textContent = 'The picture stops every ' + (median / 1000).toFixed(1)
+          + ' s, as Wi-Fi does while AirDrop, Handoff or AirPlay look for devices nearby. Turning off AirDrop, '
+          + 'on this device or the Mac, should stop it.';
+        $('hint').hidden = false;
+      }
+      $('hint').querySelector('button').onclick = () => { $('hint').hidden = true; };
+
       function pump() {
         if (!sb || sb.updating || !queue.length) return;
         // Trim what has been played, so memory stays put. Removing video takes with it every
@@ -1587,8 +1678,10 @@ enum WebStreamPage {
         if (held && lag >= target + (playingSince ? 0 : 0.1)) held = false;
         if (!held && video.paused) video.play().catch(() => {});
         const q = video.getVideoPlaybackQuality ? video.getVideoPlaybackQuality() : null;
+        const ms = delay();
         $('stats').textContent = (video.videoWidth ? video.videoWidth + '×' + video.videoHeight + ' · ' : '')
-          + Math.round(Math.max(lag, 0) * 1000) + ' ms behind'
+          + (ms !== null ? ms + ' ms from the Mac · ' : '')
+          + Math.round(Math.max(lag, 0) * 1000) + ' ms buffered'
           + (extra ? ' (+' + Math.round(extra * 1000) + ' ms for this browser)' : '')
           + (stalls ? ' · ' + stalls + ' stall' + (stalls > 1 ? 's' : '') : '')
           + (q ? ' · ' + q.droppedVideoFrames + ' dropped' : '');

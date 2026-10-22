@@ -136,11 +136,21 @@ DAM's page. In order of value for the effort:
    host sends the wall-clock time of media time 0 and the page estimates the clock offset
    with a ping.
 
+   **Done 2026-10-22,** as described: `X-Stream-Epoch` on the stream and `/time` for the
+   clock. On macOS 13's WebKit, `requestVideoFrameCallback` gives every Media Source frame
+   a `mediaTime` of 0 and a fixed `expectedDisplayTime` hours off, so the page falls back
+   to `currentTime` and the callback's own time. Not yet seen in Chrome.
+
 5. **Warn about AWDL.** moonlight-web spots stalls that come at a fixed period, which is
    AWDL's mark, and tells the viewer to turn off AirDrop
    (`frontend/js/stream/PeriodicStallDetector.js`). DAM's page could count its own stalls
    by time and show the same hint. This fits with stop-stutter, the MIT helper that turns
    AWDL off.
+
+   **Done 2026-10-22,** on gaps between arriving data rather than frame times, and only
+   gaps longer than the page's buffer, since shorter ones don't show. Checked against
+   synthetic arrivals (steady beats hint; random gaps, covered gaps and a 150 ms beat
+   don't), not yet on a Wi-Fi network with AirDrop on.
 
 6. **Decode with WebCodecs for Interactive.** MSE keeps a media pipeline and a buffer
    between the bytes and the screen. moonlight-web decodes each frame with a WebCodecs

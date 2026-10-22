@@ -34,6 +34,19 @@ settings.
   trims played video 25 s back once 40 s is buffered: a browser removes every frame up to the
   next keyframe along with the ones asked for, so the cut needs a keyframe well before what
   plays now.
+- The page shows how long frames take from the Mac's screen to the browser's: the stream's
+  response says when its zero was on the Mac's clock (`X-Stream-Epoch`, milliseconds since
+  1970), the page sets its clock against the Mac's from the quickest of its last eight asks
+  of `/time` (four as a stream starts, then one every 10 s), and `requestVideoFrameCallback`
+  gives each frame's media time as it is shown. A frame's capture is taken as its slot on
+  the grid, up to a frame earlier. WebKit on macOS 13 gives every Media Source frame a media
+  time of 0 and an expected display time hours off, so there the page uses `currentTime`
+  and the callback's own time instead. Measured in WebKit on the Intel test Mac over
+  loopback: about 150 ms with 120–140 ms buffered.
+- Gaps between arriving data that are too long for the buffer to cover, six or more in
+  15 s, most of them the same time apart, between 0.25 and 1.2 s, bring a hint to turn
+  off AirDrop: that steady beat is Wi-Fi leaving for AWDL (AirDrop, Handoff, AirPlay), where
+  a busy network stops at random. Once a page.
 - `/stream.mp4` is an endless fragmented MP4 that mpv, ffplay and VLC play as is.
 - `/apps.json` lists the displays.
 

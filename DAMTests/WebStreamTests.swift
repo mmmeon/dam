@@ -292,6 +292,11 @@ final class WebStreamTests: XCTestCase {
         XCTAssertTrue(head.contains("Content-Type: video/mp4\r\n"))
         XCTAssertTrue(head.contains("X-Codecs: \(codecs)\r\n"))
         XCTAssertFalse(head.contains("Content-Length"), "the body ends with the connection")
+        XCTAssertFalse(head.contains("X-Stream-Epoch:"), "no zero known, none said")
+        let stamped = WebStreamViewer.head(codecs: codecs, epoch: 1_792_000_000_123.4)
+        XCTAssertTrue(stamped.contains("X-Stream-Epoch: 1792000000123.4\r\n"))
+        XCTAssertTrue(stamped.contains("Access-Control-Expose-Headers: X-Codecs, X-Stream-Epoch\r\n"))
+        XCTAssertTrue(stamped.hasSuffix("\r\n\r\n"))
 
         let closed = expectation(description: "closed")
         viewer.onClose = { closed.fulfill() }
@@ -475,6 +480,11 @@ final class WebStreamTests: XCTestCase {
             XCTAssertEqual(try get(path).status, 401, path)
         }
         XCTAssertEqual(try get("/serverinfo").status, 404, "Moonlight's requests are not this server's")
+        // The Mac's clock, for the page to set its own against, to anyone in reach.
+        let time = try get("/time")
+        XCTAssertEqual(time.status, 200)
+        let mac = try XCTUnwrap(Double(String(decoding: time.body, as: UTF8.self)))
+        XCTAssertEqual(mac, Date().timeIntervalSince1970 * 1000, accuracy: 2000)
         XCTAssertEqual(server.watchURL.path, "/watch")
         XCTAssertEqual(server.watchURL.port, Int(port.rawValue))
 
