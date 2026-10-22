@@ -254,8 +254,11 @@ them as HID events, one injector per stream:
   would for that device: its encoder holds back no more frames before handing one back
   (none with low-latency rate control, so a device with Low-Latency Encoding on gets HEVC
   only where HEVC has it too, or holds none), and encodes at least half as many a second.
-  Both are measured once at 1080p, in the background when hosting starts (about a second
-  here), as no property tells: H.264's session here takes MaxFrameDelayCount and still
+  Both are measured at 1080p, in the background when hosting starts (about a second
+  here), once for the Mac as it is: the result is kept with the Mac's model, macOS build
+  (the encoders come with it) and the encoders VideoToolbox lists (another GPU would add
+  one), and measured again only when one of those changes, or when it couldn't be kept
+  because an encoder failed to measure. Measured, as no property tells: H.264's session here takes MaxFrameDelayCount and still
   holds one frame. The encoder's ID (`kVTCompressionPropertyKey_EncoderID`) would name it
   (`hevc.gva` here: Intel's), but names differ by Mac and macOS. Settings' tooltip shows
   what was measured. Measured here, three runs: H.264 124–144 frames a second, 1 held;

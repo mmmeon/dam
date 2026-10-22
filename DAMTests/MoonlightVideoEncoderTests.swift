@@ -247,6 +247,35 @@ final class MoonlightVideoEncoderTests: XCTestCase {
         }
     }
 
+    /// Measured once for the Mac as it is, and again only once that changes.
+    func testEncodersAreMeasuredOncePerMac() throws {
+        let suite = "\(AppIdentity.shortID).tests.performance.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let measured = [VideoCodec.h264: VideoCodec.Performance(framesPerSecond: 140, heldFrames: 1),
+                        .hevc: VideoCodec.Performance(framesPerSecond: 37, heldFrames: 2)]
+        var runs = 0
+        func kept(_ fingerprint: String) -> [VideoCodec: VideoCodec.Performance] {
+            VideoCodec.kept(for: fingerprint, in: defaults) { runs += 1; return measured }
+        }
+        XCTAssertEqual(kept("MacBookPro14,2 22H730"), measured)
+        XCTAssertEqual(kept("MacBookPro14,2 22H730"), measured)
+        XCTAssertEqual(runs, 1, "kept")
+        XCTAssertEqual(kept("MacBookPro14,2 22H800"), measured)
+        XCTAssertEqual(runs, 2, "measured again on another macOS")
+
+        XCTAssertEqual(VideoCodec.kept(for: "Mac15,3 24A335", in: defaults) { nil }, [:])
+        XCTAssertEqual(kept("Mac15,3 24A335"), measured)
+        XCTAssertEqual(runs, 3, "a failure isn't kept")
+    }
+
+    func testTheFingerprintNamesTheMacAndItsEncoders() {
+        let fingerprint = VideoCodec.fingerprint
+        XCTAssertEqual(fingerprint, VideoCodec.fingerprint, "the same each time")
+        XCTAssertTrue(fingerprint.contains("Mac"), "the model: \(fingerprint)")
+        XCTAssertTrue(fingerprint.contains("com.apple.videotoolbox.videoencoder."), fingerprint)
+    }
+
     func testCodecsNameNALUnitTypesTheirOwnWay() {
         XCTAssertEqual(VideoCodec.h264.nalType(0x67), 7)
         XCTAssertEqual(VideoCodec.h264.nalType(0x65), 5)
