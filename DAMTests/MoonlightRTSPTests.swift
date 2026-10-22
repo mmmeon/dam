@@ -114,6 +114,32 @@ final class MoonlightRTSPTests: XCTestCase {
             .hasPrefix("RTSP/1.0 400"), "encrypted video is not offered")
     }
 
+    func testHEVCIsDescribedAndTakenOnlyWhenTheLaunchOffersIt() {
+        let hevcSDP = sdp + "a=x-nv-vqos[0].bitStreamFormat:1 \r\n"
+        XCTAssertTrue(respond(request("ANNOUNCE", "streamid=control/13/0", body: hevcSDP)) { _, _ in
+            XCTFail("HEVC started"); return nil
+        }.hasPrefix("RTSP/1.0 400"), "not offered")
+        XCTAssertTrue(respond(request("ANNOUNCE", "streamid=control/13/0", body: sdp + "a=x-nv-vqos[0].bitStreamFormat:2 \r\n")) { _, _ in
+            XCTFail("AV1 started"); return nil
+        }.hasPrefix("RTSP/1.0 400"), "AV1 is never offered")
+
+        var hevc = launch
+        hevc.codecs = [.h264, .hevc]
+        let describe = MoonlightRTSP.response(to: request("DESCRIBE", "rtsp://10.0.0.2:48010"), from: "10.0.0.2",
+                                              launch: hevc, announce: { _, _ in nil })
+        XCTAssertTrue(describe.contains("\r\nsprop-parameter-sets=AAAAAU\r\n"), describe)
+        XCTAssertFalse(describe.contains("AV1/90000"))
+        var started: MoonlightStreamConfig?
+        let reply = MoonlightRTSP.response(to: request("ANNOUNCE", "streamid=control/13/0", body: hevcSDP), from: "10.0.0.2",
+                                           launch: hevc) { _, config in started = config; return nil }
+        XCTAssertTrue(reply.hasPrefix("RTSP/1.0 200 OK"), reply)
+        XCTAssertEqual(started?.codec, .hevc)
+        let plain = MoonlightRTSP.response(to: request("ANNOUNCE", "streamid=control/13/0", body: sdp), from: "10.0.0.2",
+                                           launch: hevc) { _, config in started = config; return nil }
+        XCTAssertTrue(plain.hasPrefix("RTSP/1.0 200 OK"), plain)
+        XCTAssertEqual(started?.codec, .h264, "H.264 still, when the client chooses it")
+    }
+
     func testRefusesAHandshakeWithoutALaunch() {
         XCTAssertTrue(MoonlightRTSP.response(to: request("OPTIONS", "/"), from: "10.0.0.2", launch: nil, announce: { _, _ in nil })
             .hasPrefix("RTSP/1.0 503"))

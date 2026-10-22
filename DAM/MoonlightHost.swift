@@ -68,8 +68,22 @@ final class MoonlightHost {
     /// (7 and up: SHA-256) and checks the GameStream version against ones it knows to fail.
     static let appVersion = "7.1.431.-1"
     static let gfeVersion = "3.23.0.74"
-    /// The codecs streams can use, as Moonlight's SCM_* bits: H.264 for now.
-    static let codecModeSupport = 0x0001
+    /// The codecs offered: H.264, and HEVC when the user turned it on and this Mac encodes it
+    /// in hardware. It is off unless turned on, as Moonlight takes HEVC whenever it is offered
+    /// and the device decodes it in hardware, and HEVC may be the slower codec to encode: on
+    /// the Intel test Mac it encodes about 40 frames a second at 1080p (H.264: 165), holds
+    /// each frame two frames' time, and has no low-latency rate control.
+    static func codecs(offersHEVC: Bool = MoonlightHost.offersHEVC,
+                       support: [VideoCodec: VideoCodec.Support] = VideoCodec.support) -> [VideoCodec] {
+        [.h264] + (offersHEVC && support[.hevc]?.hardware == true ? [.hevc] : [])
+    }
+
+    /// Whether HEVC is offered where this Mac encodes it in hardware; see `codecs`.
+    static var offersHEVC: Bool {
+        get { UserDefaults.dam.bool(forKey: offersHEVCKey) }
+        set { UserDefaults.dam.set(newValue, forKey: offersHEVCKey) }
+    }
+    private static let offersHEVCKey = "\(AppIdentity.shortID).moonlight.offersHEVC"
 
     private static let enabledKey = "\(AppIdentity.shortID).moonlight.enabled"
     private static let uniqueIDKey = "\(AppIdentity.shortID).moonlight.uniqueID"
@@ -236,6 +250,8 @@ final class MoonlightHost {
             let identity = try loadIdentity()
             self.identity = identity
             clients = loadClients()
+            // Found before the first device asks, off the main queue.
+            DispatchQueue.global(qos: .utility).async { _ = VideoCodec.support }
             let http = NWParameters.tcp
             http.allowLocalEndpointReuse = true
             // Each frame goes out the moment it is ready, not held for an acknowledgement.
@@ -409,6 +425,7 @@ final class MoonlightHost {
         switch request.path {
         case "/serverinfo":
             reply(serverInfo(paired: secure, launch: secure ? session(for: certificate)?.launch : nil,
+                             codecs: Self.codecs(),
                              localAddress: Self.address(connection.currentPath?.localEndpoint)),
                   to: connection)
         case "/pair" where secure:
@@ -501,6 +518,7 @@ final class MoonlightHost {
             }
             var launch = launch
             launch.lowLatency = lowLatency
+            launch.codecs = Self.codecs()
             launch.offersEncryptedVideo = encryption.offers(to: peer)
             launch.requiresEncryptedVideo = encryption == .always
             launch.clientAddress = Self.address(peer)
@@ -705,7 +723,8 @@ final class MoonlightHost {
 
     /// The host as `launch`'s device sees it: busy with its own launch, if it has one, and
     /// free otherwise, whatever other devices stream.
-    private func serverInfo(paired: Bool, launch: MoonlightLaunch?, localAddress: String) -> String {
+    /// Moonlight takes HEVC from `codecs` only with a MaxLumaPixelsHEVC, which is Sunshine's.
+    private func serverInfo(paired: Bool, launch: MoonlightLaunch?, codecs: [VideoCodec], localAddress: String) -> String {
         Self.xml([
             "hostname": Self.hostName,
             "appversion": Self.appVersion,
@@ -713,10 +732,10 @@ final class MoonlightHost {
             "uniqueid": Self.uniqueID,
             "HttpsPort": "\(httpsPort.rawValue)",
             "ExternalPort": "\(httpPort.rawValue)",
-            "MaxLumaPixelsHEVC": "0",
+            "MaxLumaPixelsHEVC": codecs.contains(.hevc) ? "1869449984" : "0",
             "mac": "00:00:00:00:00:00",
             "LocalIP": localAddress,
-            "ServerCodecModeSupport": "\(Self.codecModeSupport)",
+            "ServerCodecModeSupport": "\(codecs.reduce(0) { $0 | $1.moonlightCodecMode })",
             "PairStatus": paired ? "1" : "0",
             "currentgame": "\(launch?.appID ?? 0)",
             "state": launch == nil ? "SUNSHINE_SERVER_FREE" : "SUNSHINE_SERVER_BUSY",

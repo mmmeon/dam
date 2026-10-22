@@ -498,6 +498,7 @@ final class SettingsWindowController: NSWindowController {
                      help: "Draws the Mac's pointer into Moonlight streams. Takes effect from the " +
                            "next stream.",
                      action: { MoonlightStream.showsPointer = $0 }),
+            hevcCheckbox(),
         ]
 
         let encryption = popup(choosing: MoonlightStream.videoEncryption, title: \.title, tip: \.summary) {
@@ -1708,6 +1709,22 @@ final class SettingsWindowController: NSWindowController {
         let label = NSTextField(labelWithString: text)
         label.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         return label
+    }
+
+    /// Offer HEVC, with what this Mac's encoder makes of it; off where it has none in hardware.
+    private func hevcCheckbox() -> NSView {
+        let support = VideoCodec.support[.hevc]
+        var help = "Moonlight then streams HEVC to devices that decode it in hardware: a sharper picture " +
+                   "at the same bitrate. Takes effect from the next launch."
+        if support?.hardware != true {
+            help += " This Mac has no hardware HEVC encoder."
+        } else if support?.lowLatency != true {
+            help += " This Mac's HEVC encoder has no low-latency mode and may be slower than its H.264 one."
+        }
+        let box = checkbox(title: "Offer HEVC", isOn: MoonlightHost.offersHEVC && support?.hardware == true,
+                           help: help, action: { MoonlightHost.offersHEVC = $0 })
+        (box as? NSButton)?.isEnabled = support?.hardware == true
+        return box
     }
 
     private func checkbox(title: String,

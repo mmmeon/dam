@@ -974,7 +974,8 @@ final class MoonlightStream {
         do {
             let encoder = try MoonlightVideoEncoder(
                 settings: .init(width: config.width, height: config.height, fps: config.fps,
-                                bitrateKbps: config.bitrateKbps, lowLatency: config.lowLatency)) { [weak self] frame in
+                                bitrateKbps: config.bitrateKbps, codec: config.codec ?? .h264,
+                                lowLatency: config.lowLatency)) { [weak self] frame in
                 self?.video.send(frame)
             }
             video.onFrameTooLarge = { [weak self] in self?.sendKeyFrame(roundTrip: nil) }

@@ -18,7 +18,7 @@ struct MoonlightStreamConfig: Equatable {
     /// Bytes of each video packet after its 16-byte RTP header.
     var packetSize: Int
     var bitrateKbps: Int
-    /// 0 is H.264, the only codec offered.
+    /// The codec, as Moonlight numbers it (see VideoCodec.moonlightFormat): 0 is H.264.
     var videoFormat: Int
     /// The x-ss-general.encryptionEnabled bits; 0x02 is encrypted video.
     var encryptionEnabled: Int
@@ -33,6 +33,9 @@ struct MoonlightStreamConfig: Equatable {
     /// Whether the encoder uses low-latency rate control; set from the device's setting,
     /// not from ANNOUNCE.
     var lowLatency = false
+
+    /// The codec asked for; nil for one DAM doesn't know.
+    var codec: VideoCodec? { VideoCodec(moonlightFormat: videoFormat) }
 
     /// Whether the client turned on encrypted video, which it does only when it is offered.
     var videoEncrypted: Bool { encryptionEnabled & MoonlightVideoCrypto.encryptionBit != 0 }
