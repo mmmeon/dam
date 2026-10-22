@@ -286,6 +286,12 @@ them as HID events, one injector per stream:
   parse AV1 at all; it takes a frame's length from the frame header's last-payload length,
   which `MoonlightPacketizer` already sets, so the FEC padding is stripped. Build it on a
   Mac that has the encoder, so the framing can be checked against real output.
+- **No 10-bit H.264 (checked 2026-10-22):** VideoToolbox's H.264 profiles are all 8-bit
+  (Baseline, Constrained Baseline, Main, Extended, High, Constrained High); given 10-bit
+  4:2:0 the test Mac's encoder writes 8-bit High (`profile_idc` 100, not High 10's 110)
+  and refuses High 10 profile names (-12915). Moonlight has no 10-bit H.264 format either
+  (its 10-bit ones are HEVC Main10 and AV1 Main10), and browsers decode High 10 in
+  hardware almost nowhere. 10-bit goes as HEVC Main10 (HDR10, above).
 - **No 4:4:4 (decided 2026-10-22):** VideoToolbox has no 4:4:4 profile for H.264 or HEVC
   (the macOS 13 SDK's only other is HEVC Main42210), and FFmpeg's VideoToolbox encoder
   offers only Main and Main10. On the test Mac, 4:4:4 input comes out 4:2:0
