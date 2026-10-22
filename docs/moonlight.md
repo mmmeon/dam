@@ -268,9 +268,17 @@ them as HID events, one injector per stream:
   (-12902), and MaxFrameDelayCount, AllowOpenGOP and MaxKeyFrameIntervalDuration refused
   (-12900). Streamed to the local Moonlight: 1080p60, 30 fps, 205 ms host processing, a
   280 ms picture delay (H.264 at the same time: 46 fps, 10 ms, 30 ms); 720p60 HEVC, 48 fps
-  and 48 ms. Its keyframes are CRA, which Moonlight takes. Not yet: 4:4:4 (asked-for
-  4:4:4 and 4:2:2 come out 4:2:0 here), and AV1, which no Mac encodes in hardware (Apple
-  Silicon from M3 only decodes it). The browser stream and OpenDisplay stay H.264.
+  and 48 ms. Its keyframes are CRA, which Moonlight takes. Not offered: AV1, which no Mac encodes in hardware (Apple Silicon from M3 only decodes
+  it), and 4:4:4 (below). The browser stream and OpenDisplay stay H.264.
+- **No 4:4:4 (decided 2026-10-22):** VideoToolbox has no 4:4:4 profile for H.264 or HEVC
+  (the macOS 13 SDK's only other is HEVC Main42210), and FFmpeg's VideoToolbox encoder
+  offers only Main and Main10. On the test Mac, 4:4:4 input comes out 4:2:0
+  (`chroma_format_idc` 1 in the SPS) from H.264 and HEVC alike, as does Main42210; H.264
+  refuses guessed 4:4:4 profile names (-12915), HEVC takes any name and ignores it. Apple's
+  only 4:4:4 codec is ProRes 4444, which Moonlight doesn't take. The encoders Moonlight's
+  4:4:4 needs in software are x264 and x265, GPL-2, which DAM (MIT) leaves out, and on a
+  dual-core Mac they would cost the latency hardware encoding has. Apple's HEVC decoder
+  turns 4:4:4 into 4:2:0 on M1 too (VLC #28610), so Apple clients may gain little.
 - **HDR10 (since 2026-10-22):** HEVC Main10 in BT.2020 with PQ, for a client whose own
   HDR setting is on (moonlight-qt sends `hdrMode=1` with /launch then). Offered where the
   Mac makes Main10 in hardware, unless Settings › Moonlight › HEVC is Off; such a launch
