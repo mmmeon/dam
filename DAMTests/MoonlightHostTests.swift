@@ -626,8 +626,9 @@ final class MoonlightHostTests: XCTestCase {
         }
     }
 
-    /// A start after a stop waits for the stop's listeners to close; a port found taken soon
-    /// after is tried again, unless another stop comes first, and reported once that is long past.
+    /// A start after a stop waits for the stop's listeners to close, or a while if one never
+    /// says it has; a port found taken soon after is tried again, unless another stop comes
+    /// first, and reported once that is long past or the stop was for a failure.
     func testListenersAreOpenedAgainOnlyWhileAStopMayHoldTheirPorts() throws {
         let restarts = MoonlightListenerRestarts()
         let taken = NWError.posix(.EADDRINUSE)
@@ -657,6 +658,16 @@ final class MoonlightHostTests: XCTestCase {
         restarts.stop([])
         RunLoop.main.run(until: Date().addingTimeInterval(3 * MoonlightListenerRestarts.retryDelay))
         XCTAssertEqual(opened, 2, "a stop drops the try")
+
+        // Never started, so it never says it has closed.
+        restarts.stop([try NWListener(using: .tcp)])
+        restarts.open(open)
+        XCTAssertEqual(opened, 2)
+        RunLoop.main.run(until: Date().addingTimeInterval(MoonlightListenerRestarts.closeTimeout + 0.5))
+        XCTAssertEqual(opened, 3, "not waited for forever")
+
+        restarts.stop([try NWListener(using: .tcp)], failed: true)
+        XCTAssertFalse(restarts.retries(taken, closing: [], open: open), "after a failure: someone else's")
 
         let holdTime = MoonlightListenerRestarts.portHoldTime
         MoonlightListenerRestarts.portHoldTime = 0
