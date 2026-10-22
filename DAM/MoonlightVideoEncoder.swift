@@ -37,7 +37,7 @@ enum MoonlightVideoError: Error {
 }
 
 /// A codec the Mac's video encoder makes, as Annex B NAL units.
-enum VideoCodec: CaseIterable {
+enum VideoCodec: String, CaseIterable {
     /// H.264 High.
     case h264
     /// HEVC Main: 8-bit 4:2:0.
@@ -134,7 +134,7 @@ enum VideoCodec: CaseIterable {
     /// How a codec's hardware encoder does at 1080p as a stream has it (real time, without
     /// reordering), which no property tells: a session may take MaxFrameDelayCount and still
     /// hold a frame, as H.264's does on the Intel test Mac.
-    struct Performance: Equatable {
+    struct Performance: Codable, Equatable {
         /// Frames a second it encodes, given one after another as fast as it takes them.
         var framesPerSecond: Double
         /// Pictures the plain encoder takes before it hands the first back: 0 where each
@@ -142,13 +142,64 @@ enum VideoCodec: CaseIterable {
         var heldFrames: Int
     }
 
-    /// Each hardware encoder's performance, measured the first time it is asked, which takes
-    /// about a second on the Intel test Mac; none for a codec without one.
-    static let performance: [VideoCodec: Performance] = Dictionary(uniqueKeysWithValues: allCases.compactMap { codec in
-        guard support[codec]?.hardware == true, let measured = codec.measure() else { return nil }
-        veLog.debug("\(codec.name, privacy: .public) at 1080p: \(measured.framesPerSecond, format: .fixed(precision: 0)) frames a second, \(measured.heldFrames) held")
-        return (codec, measured)
-    })
+    /// Each hardware encoder's performance, found the first time it is asked: measured once
+    /// for the Mac as it is (see `fingerprint`), which takes about a second on the Intel test
+    /// Mac, and kept, to be measured again only when that changes. None for a codec without one.
+    static let performance = kept(for: fingerprint, in: .dam) { measureAll() }
+
+    /// The performance kept in `defaults` for `fingerprint`, or else what `measuring` finds,
+    /// kept for it in place of any other; nothing is kept when it finds nothing.
+    static func kept(for fingerprint: String, in defaults: UserDefaults,
+                     measuring: () -> [VideoCodec: Performance]?) -> [VideoCodec: Performance] {
+        if let data = defaults.data(forKey: performanceKey),
+           let saved = try? JSONDecoder().decode(KeptPerformance.self, from: data), saved.fingerprint == fingerprint {
+            return Dictionary(uniqueKeysWithValues: saved.codecs.compactMap { name, performance in
+                VideoCodec(rawValue: name).map { ($0, performance) }
+            })
+        }
+        guard let measured = measuring() else { return [:] }
+        let kept = KeptPerformance(fingerprint: fingerprint,
+                                   codecs: Dictionary(uniqueKeysWithValues: measured.map { ($0.key.rawValue, $0.value) }))
+        if let data = try? JSONEncoder().encode(kept) { defaults.set(data, forKey: performanceKey) }
+        return measured
+    }
+
+    private struct KeptPerformance: Codable {
+        let fingerprint: String
+        let codecs: [String: Performance]
+    }
+    private static let performanceKey = "\(AppIdentity.shortID).encoderPerformance"
+
+    /// What a measurement holds for: the Mac's model, the macOS build its encoders come with,
+    /// and the encoders VideoToolbox lists, which another GPU would change.
+    static var fingerprint: String {
+        func sysctl(_ name: String) -> String {
+            var size = 0
+            guard sysctlbyname(name, nil, &size, nil, 0) == 0, size > 0 else { return "" }
+            var value = [CChar](repeating: 0, count: size)
+            guard sysctlbyname(name, &value, &size, nil, 0) == 0 else { return "" }
+            return String(cString: value)
+        }
+        var list: CFArray?
+        VTCopyVideoEncoderList(nil, &list)
+        let encoders = ((list as? [[String: Any]]) ?? []).compactMap { $0[kVTVideoEncoderList_EncoderID as String] as? String }
+        return ([sysctl("hw.model"), sysctl("kern.osversion")] + encoders.sorted()).joined(separator: " ")
+    }
+
+    /// Every hardware encoder measured, or nil when one of them couldn't be, so that a
+    /// failure isn't kept.
+    private static func measureAll() -> [VideoCodec: Performance]? {
+        var measured: [VideoCodec: Performance] = [:]
+        for codec in allCases where support[codec]?.hardware == true {
+            guard let performance = codec.measure() else {
+                veLog.error("\(codec.name, privacy: .public) encoder could not be measured")
+                return nil
+            }
+            veLog.debug("\(codec.name, privacy: .public) at 1080p: \(performance.framesPerSecond, format: .fixed(precision: 0)) frames a second, \(performance.heldFrames) held")
+            measured[codec] = performance
+        }
+        return measured
+    }
 
     private func measure() -> Performance? {
         let width = 1920, height = 1080

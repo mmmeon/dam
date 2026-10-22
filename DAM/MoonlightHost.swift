@@ -134,7 +134,7 @@ final class MoonlightHost {
     private static let hevcOfferKey = "\(AppIdentity.shortID).moonlight.hevc"
 
     /// Finds what the encoders do before a device asks, off the main queue; measured only
-    /// where Automatic needs it.
+    /// where Automatic needs it, and then only once for the Mac (see VideoCodec.performance).
     static func measureEncoders() {
         DispatchQueue.global(qos: .utility).async {
             if VideoCodec.support[.hevc]?.hardware == true, hevcOffer == .automatic { _ = VideoCodec.performance }
