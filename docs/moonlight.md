@@ -218,6 +218,11 @@ them as HID events, one injector per stream:
 - **Sending:** a separate thread paces packets at 6× the bitrate, between 60 and
   400 Mbit/s. Encoded frames are never dropped. When the sender falls behind, capture
   skips a frame before encoding it.
+- **Marking:** video packets carry DSCP AF41 and the interactive-video service type,
+  sound EF and interactive voice, as Sunshine marks them. The service type picks the
+  Wi-Fi queue the Mac sends from; the DSCP lets an access point queue them the same way on
+  the way to the client. macOS writes a service type's DSCP only on networks it knows
+  follow DiffServ, so DAM sets the DSCP itself (`IP_TOS`; the sockets are IPv4 only).
 - **FEC:** each frame is split into up to four blocks, each with 20% Reed-Solomon parity
   (nanors-compatible), or more if the client asks for it.
 - **Encryption:** when the client turned it on, each packet, data and parity alike, is
