@@ -412,7 +412,10 @@ final class MoonlightVideoSender {
     private func sendNow(_ frame: MoonlightVideoEncoder.Frame, to peer: sockaddr_in) {
         let now = DispatchTime.now().uptimeNanoseconds
         let timestamp = UInt32(truncatingIfNeeded: (frame.submitted - start) * 9 / 100_000)
-        let latency = UInt16(min((now - frame.submitted) / 100_000, UInt64(UInt16.max)))
+        // A repeat that nudged the frame before it out then waits in the encoder for the next
+        // picture, up to the whole of a still screen; it shows nothing new, so its wait says
+        // nothing of the stream's delay. 0 is "not known", which Moonlight leaves out.
+        let latency = frame.isRepeat ? 0 : UInt16(min((now - frame.submitted) / 100_000, UInt64(UInt16.max)))
         guard let blocks = packetizer.blocks(for: frame.data, isKeyFrame: frame.isKeyFrame,
                                              timestamp: timestamp, latency: latency) else {
             msLog.error("frame of \(frame.data.count) bytes too large to send")
