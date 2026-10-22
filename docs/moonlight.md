@@ -270,6 +270,22 @@ them as HID events, one injector per stream:
   280 ms picture delay (H.264 at the same time: 46 fps, 10 ms, 30 ms); 720p60 HEVC, 48 fps
   and 48 ms. Its keyframes are CRA, which Moonlight takes. Not offered: AV1, which no Mac encodes in hardware (Apple Silicon from M3 only decodes
   it), and 4:4:4 (below). The browser stream and OpenDisplay stay H.264.
+- **AV1, once a Mac encodes it (decided 2026-10-22 to wait):** no Mac is known to encode
+  AV1 in hardware. M3 and M4 only decode it (Wikipedia lists M5's as decode too; one
+  converter vendor's page claims M5 Pro/Max encode it, uncorroborated). FFmpeg's
+  VideoToolbox encoder has no AV1 (master, 2026-10-22), and Sunshine's `av1_videotoolbox`
+  entry is a name that fails to open. The test Mac lists no `av01` encoder. To check a
+  Mac: `VTCopyVideoEncoderList` for an entry with codec type `av01` and
+  `IsHardwareAccelerated`, or `VideoCodec.support` once AV1 is a case. What it would take:
+  a `VideoCodec.av1` case (`kCMVideoCodecType_AV1`, which the macOS 13 SDK has); framing
+  of its own, as AV1 is OBUs, not Annex B NAL units: the sample's OBUs as they are, with
+  the sequence header OBU from the format description's av1C put before each keyframe's
+  (and likely a temporal delimiter before each frame, as FFmpeg's encoders give Moonlight);
+  ServerCodecModeSupport bits SCM_AV1_MAIN8 0x10000 and SCM_AV1_MAIN10 0x20000 (HDR); the
+  DESCRIBE marker `a=rtpmap:98 AV1/90000`; ANNOUNCE `bitStreamFormat` 2. Moonlight doesn't
+  parse AV1 at all; it takes a frame's length from the frame header's last-payload length,
+  which `MoonlightPacketizer` already sets, so the FEC padding is stripped. Build it on a
+  Mac that has the encoder, so the framing can be checked against real output.
 - **No 4:4:4 (decided 2026-10-22):** VideoToolbox has no 4:4:4 profile for H.264 or HEVC
   (the macOS 13 SDK's only other is HEVC Main42210), and FFmpeg's VideoToolbox encoder
   offers only Main and Main10. On the test Mac, 4:4:4 input comes out 4:2:0
