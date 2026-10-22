@@ -453,8 +453,7 @@ final class WebStreamTests: XCTestCase {
     func testAServerStartedAgainAtOnceIsRunningAndListens() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let port = NWEndpoint.Port(rawValue: UInt16.random(in: 30000...39000) & ~1)!
-        let server = WebStreamServer(port: port, directory: directory)
+        var server: WebStreamServer!
         defer { server.stop() }
         func listens() {
             let deadline = Date().addingTimeInterval(8)
@@ -463,7 +462,18 @@ final class WebStreamTests: XCTestCase {
             }
             XCTAssertTrue(server.isListening, server.lastError ?? "not listening")
         }
-        server.start()
+        // On ports of its own, others where they are taken.
+        for _ in 1...5 {
+            server?.stop()
+            server = WebStreamServer(port: NWEndpoint.Port(rawValue: UInt16.random(in: 30000...39000) & ~1)!,
+                                     directory: directory)
+            server.start()
+            let deadline = Date().addingTimeInterval(5)
+            while !server.isListening, server.lastError == nil, Date() < deadline {
+                RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+            }
+            if server.isListening { break }
+        }
         listens()
         server.stop()
         server.start()

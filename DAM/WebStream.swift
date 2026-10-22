@@ -285,17 +285,21 @@ final class WebStreamServer {
     /// just before are free. Runs on the main queue.
     func start() {
         guard !isRunning else { return }
+        do {
+            certificates = try WebStreamCertificates(directory: directory)
+        } catch {
+            return stop(error: error.localizedDescription)
+        }
         isRunning = true
         lastError = nil
-        restarts.open { [weak self] in self?.open() }
+        restarts.open { [weak self] in self?.listen() }
         onChange?()
     }
 
-    private func open() {
-        guard isRunning else { return }
+    /// Opens the listeners.
+    private func listen() {
+        guard isRunning, let certificates else { return }
         do {
-            let certificates = try WebStreamCertificates(directory: directory)
-            self.certificates = certificates
             let parameters = NWParameters.tcp
             parameters.allowLocalEndpointReuse = true
             // Each fragment goes out the moment it is ready, not held for an acknowledgement.
@@ -321,9 +325,11 @@ final class WebStreamServer {
                     case .failed(let error):
                         wsLog.error("listener failed: \(String(describing: error), privacy: .public)")
                         let port = listener.port?.rawValue ?? self.port.rawValue
-                        if self.restarts.retries(error, closing: self.listeners, open: { [weak self] in self?.open() }) {
+                        if self.restarts.retries(error, closing: self.listeners, open: { [weak self] in self?.listen() }) {
                             self.listeners = []
                             self.readyListeners = []
+                            // Those a sibling took meanwhile go with it; browsers try again.
+                            self.http.closeAll()
                         } else if case .posix(.EADDRINUSE) = error {
                             self.stop(error: "Another app is using port \(port)")
                         } else {
@@ -344,7 +350,7 @@ final class WebStreamServer {
     func stop() { stop(error: nil) }
 
     private func stop(error: String?) {
-        restarts.stop(listeners)
+        restarts.stop(listeners, failed: error != nil)
         listeners = []
         readyListeners = []
         http.closeAll()

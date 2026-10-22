@@ -330,19 +330,25 @@ final class MoonlightHost {
     /// free. Runs on the main queue.
     func start() {
         guard !isRunning else { return }
+        do {
+            identity = try loadIdentity()
+        } catch {
+            mlLog.error("start: \(String(describing: error), privacy: .public)")
+            return stop(error: Spoken.moonlightCouldNotStart(error.localizedDescription))
+        }
+        clients = loadClients()
+        Self.measureEncoders()
         isRunning = true
         lastError = nil
-        restarts.open { [weak self] in self?.open() }
+        restarts.open { [weak self] in self?.listen() }
+        mlLog.debug("hosting as \(Self.hostName, privacy: .public)")
         onChange?()
     }
 
-    private func open() {
-        guard isRunning else { return }
+    /// Opens the listeners.
+    private func listen() {
+        guard isRunning, let identity else { return }
         do {
-            let identity = try loadIdentity()
-            self.identity = identity
-            clients = loadClients()
-            Self.measureEncoders()
             let http = NWParameters.tcp
             http.allowLocalEndpointReuse = true
             // Each frame goes out the moment it is ready, not held for an acknowledgement.
@@ -370,10 +376,13 @@ final class MoonlightHost {
                         self.readyListeners.insert(ObjectIdentifier(listener))
                     case .failed(let error):
                         mlLog.error("listener failed: \(String(describing: error), privacy: .public)")
-                        if self.restarts.retries(error, closing: self.listeners, open: { [weak self] in self?.open() }) {
+                        if self.restarts.retries(error, closing: self.listeners, open: { [weak self] in self?.listen() }) {
                             self.listeners = []
                             self.httpListener = nil
                             self.readyListeners = []
+                            // Those a sibling took meanwhile go with it; devices try again.
+                            self.http.closeAll()
+                            self.rtsps.forEach { $0.closeAll() }
                         } else {
                             self.stop(error: Self.describe(error))
                         }
@@ -388,9 +397,8 @@ final class MoonlightHost {
                 }
                 listener.start(queue: .main)
             }
-            mlLog.debug("hosting as \(Self.hostName, privacy: .public)")
         } catch {
-            mlLog.error("start: \(String(describing: error), privacy: .public)")
+            mlLog.error("listen: \(String(describing: error), privacy: .public)")
             stop(error: Spoken.moonlightCouldNotStart(error.localizedDescription))
         }
     }
@@ -398,7 +406,7 @@ final class MoonlightHost {
     func stop() { stop(error: nil) }
 
     private func stop(error: String?) {
-        restarts.stop(listeners)
+        restarts.stop(listeners, failed: error != nil)
         listeners = []
         httpListener = nil
         readyListeners = []
@@ -1108,6 +1116,8 @@ final class MoonlightListenerRestarts {
     static var portHoldTime: TimeInterval = 5
     /// How long to wait before each try.
     static var retryDelay: TimeInterval = 0.25
+    /// How long a closing listener is waited for, should it never say it has closed.
+    static var closeTimeout: TimeInterval = 2
 
     /// Listeners still closing.
     private var closing = 0
@@ -1124,10 +1134,16 @@ final class MoonlightListenerRestarts {
     }
 
     /// Closes `listeners` for a stop, and drops any open still waiting or to be tried again.
-    func stop(_ listeners: [NWListener]) {
+    /// A port taken soon after is tried again unless the stop `failed`: one it failed for, as
+    /// another app's, is still that app's.
+    func stop(_ listeners: [NWListener], failed: Bool = false) {
         pendingOpen = nil
         stops += 1
-        if !listeners.isEmpty { retryUntil = Date().addingTimeInterval(Self.portHoldTime) }
+        if failed {
+            retryUntil = .distantPast
+        } else if !listeners.isEmpty {
+            retryUntil = Date().addingTimeInterval(Self.portHoldTime)
+        }
         close(listeners)
     }
 
@@ -1148,15 +1164,19 @@ final class MoonlightListenerRestarts {
     private func close(_ listeners: [NWListener]) {
         for listener in listeners {
             closing += 1
-            listener.stateUpdateHandler = { [weak self] state in
-                guard case .cancelled = state, let self else { return }
+            var isClosed = false
+            let closed = { [weak self] in
+                guard !isClosed, let self else { return }
+                isClosed = true
                 self.closing -= 1
                 if self.closing == 0, let open = self.pendingOpen {
                     self.pendingOpen = nil
                     open()
                 }
             }
+            listener.stateUpdateHandler = { if case .cancelled = $0 { closed() } }
             listener.cancel()
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.closeTimeout, execute: closed)
         }
     }
 }
