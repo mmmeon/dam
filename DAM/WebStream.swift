@@ -73,6 +73,9 @@ enum StreamProfile: String, CaseIterable {
         settings.lowLatency = lowLatency
         // The stream fills its grid itself, with repeats where the screen is still.
         settings.steady = true
+        // A keyframe at least every 10 seconds: a browser can only let go of played video up
+        // to a keyframe, and without one it has to keep it all (see the page's `pump`).
+        settings.keyFrameInterval = 10
         switch self {
         case .interactive:
             settings.prioritizeSpeed = true
@@ -917,12 +920,23 @@ final class WebStreamSession {
     /// is given comes through `queue`, so frames reach it in the order of their slots. A
     /// frame whose slot is still to come, from a display faster than the stream, is only
     /// kept as the last picture, for the grid's next empty slot.
+    ///
+    /// Slots the frame jumps over get the picture before it first. The repeater gives up on
+    /// a slot only a frame's time after it, so a screen changing at 30 Hz brings each frame
+    /// before the slot between is filled, and the track had a hole every other frame. WebKit
+    /// drops every frame after such a hole until the next keyframe, which may never come.
     private func encode(_ buffer: CVPixelBuffer, captured time: CMTime, at: UInt64) {
+        lock.lock()
+        let previous = lastFrame
+        let encoder = self.encoder
+        lock.unlock()
+        let skipped = previous == nil ? [] : grid.slotsBefore(time, limit: 4)
+        for slot in skipped { encoder?.encode(previous!.buffer, at: slot) }
         let slot = grid.snap(time, now: CMClockGetTime(CMClockGetHostTimeClock()))
         lock.lock()
         lastFrame = (buffer, at)
         if slot != nil { given.real += 1 }
-        let encoder = self.encoder
+        given.repeats += skipped.count
         lock.unlock()
         if let slot { encoder?.encode(buffer, at: slot) }
     }
@@ -1166,6 +1180,15 @@ struct FrameGrid {
         lastSlot += 1
         return next
     }
+
+    /// Takes the empty slots before the one `time` falls in, at most `limit` of them: the
+    /// slots a frame at `time` would jump over, leaving a hole in the track.
+    mutating func slotsBefore(_ time: CMTime, limit: Int) -> [CMTime] {
+        let previous = CMTimeSubtract(time, CMTime(value: 1, timescale: CMTimeScale(fps)))
+        var slots: [CMTime] = []
+        while slots.count < limit, let slot = nextSlot(before: previous) { slots.append(slot) }
+        return slots
+    }
 }
 
 // MARK: - Viewer
@@ -1365,6 +1388,16 @@ enum WebStreamPage {
       // Whether a stream has played on this page; when the stream started; the reconnects
       // of the last five minutes; what the watchdog saw last; the screen's wake lock.
       let played = false, startedAt = 0, retries = [], retryTimer = null, watch = null, wake = null;
+      // What this browser needs in hand on top of `buffer`, learned from its stalls and kept
+      // for its next stream, and when that last changed: WebKit runs dry with less than about
+      // 100 ms ahead, and a target under that only stalls, every frame, without coming closer.
+      // Stalls in a stream's first 2 seconds are the decoder starting, and teach nothing.
+      let extra = 0, extraChanged = 0, playingSince = 0;
+      try { extra = Math.min(Math.max(+localStorage.getItem('extraBuffer') || 0, 0), 0.5); } catch (e) {}
+      function setExtra(seconds) {
+        extra = seconds; extraChanged = performance.now();
+        try { localStorage.setItem('extraBuffer', String(extra)); } catch (e) {}
+      }
 
       const MS = window.ManagedMediaSource || window.MediaSource;
       if (!MS) { $('msg').hidden = false; $('msg').textContent = 'This browser cannot play streams (no Media Source Extensions).'; return; }
@@ -1389,7 +1422,7 @@ enum WebStreamPage {
 
       function start(text) {
         stop();
-        queue = []; bytes = 0; held = true; stalls = 0; cutOff = false; watch = null; startedAt = performance.now();
+        queue = []; bytes = 0; held = true; stalls = 0; cutOff = false; watch = null; startedAt = performance.now(); playingSince = 0;
         const ms = source = new MS();
         video.disableRemotePlayback = true;
         video.src = URL.createObjectURL(ms);
@@ -1490,9 +1523,11 @@ enum WebStreamPage {
 
       function pump() {
         if (!sb || sb.updating || !queue.length) return;
-        // Trim what has been played, so memory stays put.
+        // Trim what has been played, so memory stays put. Removing video takes with it every
+        // frame up to the next keyframe, as they depend on it: DAM sends one at least every
+        // 10 s, so a cut 25 s back never reaches what plays now.
         const t = video.currentTime;
-        if (sb.buffered.length && sb.buffered.start(0) < t - 20) { sb.remove(0, t - 10); return; }
+        if (sb.buffered.length && sb.buffered.start(0) < t - 40) { sb.remove(0, t - 25); return; }
         let chunk;
         if (queue.length === 1) { chunk = queue[0]; } else {
           chunk = new Uint8Array(queue.reduce((n, c) => n + c.length, 0));
@@ -1504,11 +1539,15 @@ enum WebStreamPage {
 
       function fail(text) { stop(); letSleep(); $('msg').hidden = false; $('msg').textContent = text; }
 
-      // Keeps playback `buffer` seconds behind the latest frame: a jump when far off, a
-      // slightly faster or slower rate when a little, over any gap the still screen left,
-      // and, when the picture runs dry, a hold until the buffer is back.
+      // Keeps playback `buffer` seconds (and what the browser needs on top) behind the latest
+      // frame: a jump when far off, a slightly faster or slower rate when a little, over any
+      // gap the still screen left, and, when the picture runs dry, a hold until the buffer is
+      // back. Half a minute without a stall gives back 5 ms of the extra.
       function follow() {
         if (!sb || !sb.buffered.length) return;
+        const now = performance.now();
+        if (extra > 0 && !held && now - extraChanged > 30000) setExtra(Math.max(extra - 0.005, 0));
+        const target = buffer + extra;
         const b = sb.buffered, end = b.end(b.length - 1), t = video.currentTime;
         let inside = false, next = null;
         for (let i = 0; i < b.length; i++) {
@@ -1516,23 +1555,32 @@ enum WebStreamPage {
           else if (b.start(i) > t && next === null) next = b.start(i);
         }
         let lag = end - t;
-        if (!inside && next !== null) { video.currentTime = Math.max(next, end - buffer); lag = end - video.currentTime; }
-        else if (lag > buffer + 0.3) { video.currentTime = Math.max(end - buffer, 0); lag = end - video.currentTime; }
+        if (!inside && next !== null) { video.currentTime = Math.max(next, end - target); lag = end - video.currentTime; }
+        else if (lag > target + 0.3) { video.currentTime = Math.max(end - target, 0); lag = end - video.currentTime; }
         // Held near the target: a touch faster past it, faster still well past it, slower short of it.
-        video.playbackRate = lag > buffer + 0.12 ? 1.15 : lag > buffer + 0.025 ? 1.05 : lag < buffer - 0.08 ? 0.95 : 1;
-        if (held && lag >= buffer) held = false;
+        video.playbackRate = lag > target + 0.12 ? 1.15 : lag > target + 0.025 ? 1.05 : lag < target - 0.08 ? 0.95 : 1;
+        // A stream's first play waits for 100 ms more, which the decoder starting eats.
+        if (held && lag >= target + (playingSince ? 0 : 0.1)) held = false;
         if (!held && video.paused) video.play().catch(() => {});
         const q = video.getVideoPlaybackQuality ? video.getVideoPlaybackQuality() : null;
         $('stats').textContent = (video.videoWidth ? video.videoWidth + '×' + video.videoHeight + ' · ' : '')
           + Math.round(Math.max(lag, 0) * 1000) + ' ms behind'
+          + (extra ? ' (+' + Math.round(extra * 1000) + ' ms for this browser)' : '')
           + (stalls ? ' · ' + stalls + ' stall' + (stalls > 1 ? 's' : '') : '')
           + (q ? ' · ' + q.droppedVideoFrames + ' dropped' : '');
       }
       setInterval(() => { follow(); watchdog(); }, 100);
-      // Out of picture: hold until `buffer` seconds are in hand again, rather than play each
-      // frame the moment it lands and stutter.
-      video.addEventListener('waiting', () => { if (!held && !video.seeking) { held = true; stalls++; video.pause(); } follow(); });
-      video.addEventListener('playing', () => { follow(); keepAwake(); });
+      // Out of picture: hold until the target is in hand again, rather than play each frame
+      // the moment it lands and stutter; and aim 10 ms further back, at most every 300 ms.
+      video.addEventListener('waiting', () => {
+        if (!held && !video.seeking) {
+          held = true; stalls++; video.pause();
+          const now = performance.now();
+          if (playingSince && now - playingSince > 2000 && now - extraChanged > 300) setExtra(Math.min(extra + 0.01, 0.5));
+        }
+        follow();
+      });
+      video.addEventListener('playing', () => { if (!playingSince) playingSince = performance.now(); follow(); keepAwake(); });
 
       // Controls.
       function setBuffer(seconds) { buffer = seconds; $('buffer').value = Math.round(seconds * 1000); $('bufferText').textContent = Math.round(seconds * 1000) + ' ms'; }
