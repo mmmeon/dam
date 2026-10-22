@@ -200,6 +200,72 @@ final class MoonlightHostTests: XCTestCase {
                       "both low-latency")
     }
 
+    func testHDRIsOfferedWhereMain10IsMadeInHardwareUnlessHEVCIsOff() {
+        let main10 = VideoCodec.Support(hardware: true, lowLatency: false, main10: true)
+        let main8 = VideoCodec.Support(hardware: true, lowLatency: false, main10: false)
+        XCTAssertTrue(MoonlightHost.offersHDR(offer: .automatic, support: [.hevc: main10]))
+        XCTAssertTrue(MoonlightHost.offersHDR(offer: .on, support: [.hevc: main10]))
+        XCTAssertFalse(MoonlightHost.offersHDR(offer: .off, support: [.hevc: main10]))
+        XCTAssertFalse(MoonlightHost.offersHDR(offer: .on, support: [.hevc: main8]))
+        XCTAssertFalse(MoonlightHost.offersHDR(offer: .on, support: [:]))
+        XCTAssertEqual(MoonlightHost.codecModes([.h264], hdr: false), 0x0001)
+        XCTAssertEqual(MoonlightHost.codecModes([.h264], hdr: true), 0x0301, "HEVC and Main10 for HDR")
+        XCTAssertEqual(MoonlightHost.codecModes([.h264, .hevc], hdr: false), 0x0101)
+    }
+
+    /// A launch that asks for HDR is offered HEVC for it, even where Automatic offers H.264
+    /// alone, and Moonlight is sent the HDR metadata once it connects to the control stream.
+    func testALaunchAskingForHDRGetsHEVCAndTheHDRMessage() throws {
+        try XCTSkipUnless(MoonlightHost.offersHDR(), "no hardware HEVC Main10 on this Mac")
+        host.requestPIN = { _, answer in answer("1234") }
+        host.apps = [MoonlightApp(id: 1, title: "DAM Streaming", displayID: try XCTUnwrap(streamingDisplay() ?? Optional(0)))]
+        startHost()
+        let client = try Client.make()
+        XCTAssertTrue(try pair(client, pin: "1234"))
+        let info = try get("/serverinfo", secure: true, identity: client.identity)
+        XCTAssertEqual(field("ServerCodecModeSupport", in: info).flatMap { Int($0) }.map { $0 & 0x0300 }, 0x0300)
+        XCTAssertEqual(field("IsHdrSupported", in: try get("/applist", secure: true, identity: client.identity)), "1")
+
+        let key = MoonlightPairing.randomBytes(16)
+        _ = try get("/launch?appid=1&mode=1280x720x60&additionalStates=1&sops=0&rikey=\(MoonlightCrypto.hex(key).lowercased())&rikeyid=1&localAudioPlayMode=0&surroundAudioInfo=196610&hdrMode=1",
+                    secure: true, identity: client.identity)
+        let common = "X-GS-ClientVersion: 14\r\nHost: 127.0.0.1\r\n"
+        let describe = rtsp("DESCRIBE rtsp://127.0.0.1:48010 RTSP/1.0\r\nCSeq: 2\r\n\(common)Accept: application/sdp\r\n\r\n")
+        XCTAssertTrue(describe.contains("sprop-parameter-sets=AAAAAU"), describe)
+        let audio = rtsp("SETUP streamid=audio/0/0 RTSP/1.0\r\nCSeq: 3\r\n\(common)Transport: unicast;X-GS-ClientPort=50000-50001\r\n\r\n")
+        let session = try XCTUnwrap(header("Session", in: audio)?.components(separatedBy: ";").first)
+        _ = rtsp("SETUP streamid=video/0/0 RTSP/1.0\r\nCSeq: 4\r\n\(common)Session: \(session)\r\n\r\n")
+        let control = rtsp("SETUP streamid=control/13/0 RTSP/1.0\r\nCSeq: 5\r\n\(common)Session: \(session)\r\n\r\n")
+        let connectData = try XCTUnwrap(header("X-SS-Connect-Data", in: control).flatMap { UInt32($0) })
+        let sdp = "v=0\r\na=x-ss-general.encryptionEnabled:1 \r\na=x-nv-video[0].clientViewportWd:1280 \r\n" +
+                  "a=x-nv-video[0].clientViewportHt:720 \r\na=x-nv-video[0].maxFPS:60 \r\n" +
+                  "a=x-nv-video[0].packetSize:1392 \r\na=x-nv-vqos[0].bw.maximumBitrateKbps:8000 \r\n" +
+                  "a=x-nv-vqos[0].bitStreamFormat:1 \r\na=x-nv-video[0].dynamicRangeMode:1 \r\n" +
+                  "a=x-nv-general.featureFlags:167 \r\na=x-nv-aqos.packetDuration:5 \r\n"
+        let announce = rtsp("ANNOUNCE streamid=control/13/0 RTSP/1.0\r\nCSeq: 6\r\n\(common)Session: \(session)\r\n" +
+                            "Content-type: application/sdp\r\nContent-length: \(sdp.utf8.count)\r\n\r\n\(sdp)")
+        XCTAssertTrue(announce.hasPrefix("RTSP/1.0 200 OK"), announce)
+
+        let enet = try XCTUnwrap(enet_host_create(nil, 1, 48, 0, 0))
+        defer { enet_host_destroy(enet) }
+        var address = ENetAddress(host: 0, port: MoonlightStream.controlPort)
+        enet_address_set_host_ip(&address, "127.0.0.1")
+        XCTAssertNotNil(enet_host_connect(enet, &address, 48, connectData))
+        var event = ENetEvent()
+        var message: (type: UInt16, payload: Data)?
+        let deadline = Date().addingTimeInterval(5)
+        while message == nil, Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+            guard enet_host_service(enet, &event, 10) > 0, event.type == ENET_EVENT_TYPE_RECEIVE else { continue }
+            let data = Data(bytes: event.packet.pointee.data, count: Int(event.packet.pointee.dataLength))
+            enet_packet_destroy(event.packet)
+            message = MoonlightControlCrypto.open(data, key: SymmetricKey(data: key), direction: .hostToClient)
+        }
+        XCTAssertEqual(message?.type, 0x010e)
+        XCTAssertEqual(message?.payload, MoonlightScreenCapture.hdrMetadata.controlPayload(enabled: true))
+        _ = try get("/cancel", secure: true, identity: client.identity)
+    }
+
     func testServerInfoOffersTheDevicesCodecs() throws {
         host.requestPIN = { _, answer in answer("4821") }
         startHost()
@@ -215,8 +281,9 @@ final class MoonlightHostTests: XCTestCase {
         for offer in [MoonlightHEVCOffer.off, .on] {
             MoonlightHost.hevcOffer = offer
             let hevc = offer == .on && VideoCodec.support[.hevc]?.hardware == true
+            let main10 = MoonlightHost.offersHDR(offer: offer) ? 0x0200 : 0
             let (modes, luma) = try offered()
-            XCTAssertEqual(modes, hevc ? 0x0101 : 0x0001, "\(offer)")
+            XCTAssertEqual(modes, (hevc ? 0x0101 : 0x0001) | main10, "\(offer)")
             XCTAssertEqual(luma, hevc ? "1869449984" : "0", "Moonlight takes HEVC only with a maximum")
         }
     }

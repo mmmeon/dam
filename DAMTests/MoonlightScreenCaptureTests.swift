@@ -229,4 +229,35 @@ final class MoonlightScreenCaptureTests: XCTestCase {
         XCTAssertEqual(SharedScreenCapture.count, before)
         subscription.cancel()
     }
+
+    /// SDR white, as a display is captured before macOS 15, goes to BT.2408's 203 nits in
+    /// HDR10's PQ, where HDR10 players show it, not macOS's 100.
+    func testHDR10PutsSDRWhiteAtTheReferenceLevel() throws {
+        var made: CVPixelBuffer?
+        XCTAssertEqual(CVPixelBufferCreate(nil, 64, 64, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+                                           [kCVPixelBufferIOSurfacePropertiesKey: [:] as [String: Any]] as CFDictionary, &made),
+                       kCVReturnSuccess)
+        let white = try XCTUnwrap(made)
+        CVPixelBufferLockBaseAddress(white, [])
+        for (plane, value) in [(0, Int32(235)), (1, Int32(128))] {
+            let base = try XCTUnwrap(CVPixelBufferGetBaseAddressOfPlane(white, plane))
+            memset(base, value, CVPixelBufferGetBytesPerRowOfPlane(white, plane) * CVPixelBufferGetHeightOfPlane(white, plane))
+        }
+        CVPixelBufferUnlockBaseAddress(white, [])
+        CVBufferSetAttachment(white, kCVImageBufferColorPrimariesKey, kCVImageBufferColorPrimaries_ITU_R_709_2, .shouldPropagate)
+        CVBufferSetAttachment(white, kCVImageBufferTransferFunctionKey, kCVImageBufferTransferFunction_ITU_R_709_2, .shouldPropagate)
+        CVBufferSetAttachment(white, kCVImageBufferYCbCrMatrixKey, kCVImageBufferYCbCrMatrix_ITU_R_709_2, .shouldPropagate)
+
+        let out = try XCTUnwrap(XCTUnwrap(HDR10Converter(width: 64, height: 64)).convert(white))
+        XCTAssertEqual(CVPixelBufferGetPixelFormatType(out), kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange)
+        XCTAssertEqual(CVBufferCopyAttachment(out, kCVImageBufferTransferFunctionKey, nil) as? String,
+                       kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ as String)
+        CVPixelBufferLockBaseAddress(out, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(out, .readOnly) }
+        let luma = try XCTUnwrap(CVPixelBufferGetBaseAddressOfPlane(out, 0)).assumingMemoryBound(to: UInt16.self)
+        let chroma = try XCTUnwrap(CVPixelBufferGetBaseAddressOfPlane(out, 1)).assumingMemoryBound(to: UInt16.self)
+        // PQ of 203 nits, in 10-bit video range: 64 + 0.5806 × 876.
+        XCTAssertEqual(Int(luma[32 * CVPixelBufferGetBytesPerRowOfPlane(out, 0) / 2 + 32] >> 6), 573, accuracy: 2)
+        XCTAssertEqual(Int(chroma[0] >> 6), 512, accuracy: 2, "still grey")
+    }
 }

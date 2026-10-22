@@ -614,6 +614,9 @@ final class MoonlightControlServer {
     private let host: UnsafeMutablePointer<ENetHost>
     private let key: SymmetricKey
     private let connectData: UInt32
+    /// The stream's HDR10 metadata, sent in Moonlight's HDR mode message when it connects;
+    /// nil for SDR, when none is sent, as Moonlight takes none to mean SDR.
+    private let hdr: MoonlightHDRMetadata?
     private let lock = NSLock()
     private var stopRequested = false
     private var peer: UnsafeMutablePointer<ENetPeer>?
@@ -630,7 +633,7 @@ final class MoonlightControlServer {
     var onConnect: (() -> Void)?
     var onDisconnect: (() -> Void)?
 
-    init(port: UInt16, key: Data, connectData: UInt32) throws {
+    init(port: UInt16, key: Data, connectData: UInt32, hdr: MoonlightHDRMetadata? = nil) throws {
         guard Self.initialized else { throw MoonlightStreamError.enet }
         var address = ENetAddress(host: 0, port: port)
         // Moonlight opens 48 channels; 0 lets it have them all.
@@ -638,6 +641,7 @@ final class MoonlightControlServer {
         self.host = host
         self.key = SymmetricKey(data: key)
         self.connectData = connectData
+        self.hdr = hdr
     }
 
     func start() {
@@ -682,6 +686,7 @@ final class MoonlightControlServer {
             }
             peer = event.peer
             msLog.debug("control: connected")
+            if let hdr { send(type: MoonlightHDRMetadata.messageType, payload: hdr.controlPayload(enabled: true), to: event.peer) }
             onConnect?()
         case ENET_EVENT_TYPE_RECEIVE:
             let data = Data(bytes: event.packet.pointee.data, count: Int(event.packet.pointee.dataLength))
@@ -709,7 +714,12 @@ final class MoonlightControlServer {
     private func sendTermination(to peer: UnsafeMutablePointer<ENetPeer>) {
         var reason = Data()
         reason.append(bigEndian: Self.gracefulReason)
-        guard let sealed = try? MoonlightControlCrypto.seal(type: Self.termination, payload: reason,
+        send(type: Self.termination, payload: reason, to: peer)
+    }
+
+    /// Sends one message, sealed, reliably and at once.
+    private func send(type: UInt16, payload: Data, to peer: UnsafeMutablePointer<ENetPeer>) {
+        guard let sealed = try? MoonlightControlCrypto.seal(type: type, payload: payload,
                                                             sequence: sequence, key: key) else { return }
         sequence += 1
         sealed.withUnsafeBytes { bytes in
@@ -839,7 +849,8 @@ final class MoonlightStream {
                                          packetSize: config.packetSize, minimumParity: config.minimumParity,
                                          bitrateKbps: config.bitrateKbps,
                                          key: config.videoEncrypted ? key : nil)
-        control = try MoonlightControlServer(port: ports.control, key: key, connectData: connectData)
+        control = try MoonlightControlServer(port: ports.control, key: key, connectData: connectData,
+                                             hdr: config.hdr ? MoonlightScreenCapture.hdrMetadata : nil)
         audio = try MoonlightAudioSender(port: ports.audio, pingPayload: pingPayload, client: clientAddress, config: config,
                                          key: key, keyID: keyID, stats: video.stats)
     }
@@ -975,14 +986,15 @@ final class MoonlightStream {
             let encoder = try MoonlightVideoEncoder(
                 settings: .init(width: config.width, height: config.height, fps: config.fps,
                                 bitrateKbps: config.bitrateKbps, codec: config.codec ?? .h264,
-                                lowLatency: config.lowLatency)) { [weak self] frame in
+                                lowLatency: config.lowLatency,
+                                hdr: config.hdr ? MoonlightScreenCapture.hdrMetadata : nil)) { [weak self] frame in
                 self?.video.send(frame)
             }
             video.onFrameTooLarge = { [weak self] in self?.sendKeyFrame(roundTrip: nil) }
             // What the Mac plays, as it plays it; where it plays is left alone.
             let audio = self.audio
             let key = SharedScreenCapture.Key(displayID: displayID, width: config.width, height: config.height,
-                                              fps: config.fps, showsCursor: Self.showsPointer)
+                                              fps: config.fps, showsCursor: Self.showsPointer, hdr: config.hdr)
             lock.lock()
             let stopped = self.ended
             if !stopped { self.encoder = encoder }
