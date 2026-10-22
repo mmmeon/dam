@@ -68,6 +68,61 @@ lives. A streamed mouse then feels much slower than the Mac's own.
 the same shape to relative moves. DAM's `MoonlightInputInjector.swift` already handles
 modifier flags, click counts and drags, but not acceleration.
 
+## The /watch page
+
+DAM's page (`WebStreamPage` in `WebStream.swift`) fetches `/stream.mp4` and plays it
+through MSE. It keeps playback a chosen buffer behind the newest frame by seeking and
+nudging `playbackRate`. moonlight-web's player is much larger, but a few of its ideas fit
+DAM's page. In order of value for the effort:
+
+1. **Keep the screen awake.** The page never asks for a wake lock, so a phone or tablet
+   used as a display dims and locks in the middle of a stream. moonlight-web takes
+   `navigator.wakeLock.request('screen')` while it streams and takes it again when the tab
+   comes back to the front, since the browser drops the lock when the tab is hidden
+   (`frontend/js/ui/StreamViewFullscreen.js`).
+
+2. **Reconnect by itself.** On "The stream broke off." or "The stream ended." the page
+   stops and waits for a reload. It only restarts when a hidden tab comes back to the
+   front. moonlight-web reconnects behind a "Reconnecting…" screen, at most twice in five
+   minutes, so a stream that keeps failing still ends
+   (`frontend/js/stream/CrashRelaunch.js`). A Wi-Fi drop of a second or two shouldn't
+   need a reload.
+
+3. **Notice a frozen picture.** If bytes keep arriving but `currentTime` stops moving
+   without a `waiting` event, the page shows a frozen frame and says nothing.
+   moonlight-web watches for "chunks in, no pictures out" over a time and frame-count
+   threshold and restarts the decoder (`frontend/js/stream/SilentDecoderWatch.js`). For
+   MSE, the same check would compare bytes appended with `currentTime` and
+   `getVideoPlaybackQuality().totalVideoFrames`.
+
+4. **Show the real delay.** "ms behind" is only the browser's buffer: newest buffered time
+   minus `currentTime`. It leaves out capture, encoding, the network and decoding.
+   moonlight-web stamps each frame with the host's capture time and measures the age of
+   each picture as it is shown. DAM's page could do the same with
+   `requestVideoFrameCallback` (its `mediaTime` is the frame's media timestamp), if the
+   host sends the wall-clock time of media time 0 and the page estimates the clock offset
+   with a ping.
+
+5. **Warn about AWDL.** moonlight-web spots stalls that come at a fixed period, which is
+   AWDL's mark, and tells the viewer to turn off AirDrop
+   (`frontend/js/stream/PeriodicStallDetector.js`). DAM's page could count its own stalls
+   by time and show the same hint. This fits with stop-stutter, the MIT helper that turns
+   AWDL off.
+
+6. **Decode with WebCodecs for Interactive.** MSE keeps a media pipeline and a buffer
+   between the bytes and the screen. moonlight-web decodes each frame with a WebCodecs
+   `VideoDecoder` (`optimizeForLatency: true`) and draws it as soon as it comes out. It
+   keeps only the newest frame when several are ready
+   (`frontend/js/stream/VideoDecodeWorker.js`). DAM's server could stay as it is: the
+   page can split DAM's own fMP4 fragments (`moof` and `mdat`) into `EncodedVideoChunk`s.
+   Audio would need an `AudioDecoder` and an AudioWorklet, or the Interactive profile could
+   stay video-only. This is the largest change. Do the VUI fix (lead 1) first, since a
+   decoder that holds frames back would undo it.
+
+The page can't send input: it is view-only. moonlight-web sends keyboard, mouse, touch and
+gamepads to the host. Adding input would make a browser a full client, but that is a
+feature decision, not a fix.
+
 ## Useful for measuring
 
 - `backend/src/LatencyFlagMac.mm` measures click-to-photon. A listen-only `CGEventTap`
