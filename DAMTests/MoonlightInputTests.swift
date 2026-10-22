@@ -145,6 +145,70 @@ final class MoonlightInputTests: XCTestCase {
 
     // MARK: - Clicks and scrolling
 
+    // MARK: Pointer acceleration
+
+    /// Points per step at each speed, worked out with IOHIDFamily's arithmetic from the
+    /// curves in macOS 13's AppleUserHIDDrivers (a script, not this code).
+    func testAcceleratesAsMacOSDoes() throws {
+        let speeds: [Double] = [1, 5, 10, 30, 60, 120]
+        let expected: [Double: [Double]] = [
+            0: [0.24, 0.24, 0.24, 0.24, 0.24, 0.24],
+            0.6875: [0.245877, 0.327217, 0.429416, 0.844027, 1.447604, 1.861947],
+            1.0: [0.275609, 0.457226, 0.686013, 1.620795, 3.017474, 3.881906],
+            1.5: [0.295684, 0.548655, 0.868095, 2.181705, 4.178943, 5.310467],
+            3.0: [0.382515, 0.961191, 1.703929, 4.89034, 10.176027, 12.498734],
+        ]
+        for (trackingSpeed, multipliers) in expected {
+            let acceleration = try XCTUnwrap(MoonlightPointerAcceleration(speed: trackingSpeed))
+            for (velocity, multiplier) in zip(speeds, multipliers) {
+                XCTAssertEqual(acceleration.multiplier(velocity: velocity), multiplier, accuracy: 1e-5,
+                               "tracking speed \(trackingSpeed), \(velocity) steps a report")
+            }
+        }
+    }
+
+    func testANegativeTrackingSpeedTurnsAccelerationOff() {
+        XCTAssertNil(MoonlightPointerAcceleration(speed: -1))
+    }
+
+    /// A move after a pause is taken as one report's steps.
+    func testAFirstMoveIsOneReport() throws {
+        var acceleration = try XCTUnwrap(MoonlightPointerAcceleration(speed: 0.6875))
+        let moved = acceleration.accelerate(dx: 30, dy: 0, at: 100)
+        XCTAssertEqual(moved.dx, 30 * acceleration.multiplier(velocity: 30), accuracy: 1e-9)
+        XCTAssertEqual(moved.dy, 0)
+    }
+
+    func testAPauseStartsAMotionAfresh() throws {
+        var acceleration = try XCTUnwrap(MoonlightPointerAcceleration(speed: 0.6875))
+        for move in 0..<10 { _ = acceleration.accelerate(dx: 60, dy: 0, at: Double(move) * 0.008) }
+        let after = acceleration.accelerate(dx: 0, dy: 5, at: 0.072 + MoonlightPointerAcceleration.pause + 0.01)
+        XCTAssertEqual(after.dy, 5 * acceleration.multiplier(velocity: 5), accuracy: 1e-9)
+    }
+
+    /// Moonlight sends moves as they come, a few steps at a time or many at once; once the
+    /// pointer is moving, the same motion goes the same distance either way.
+    func testTheSameMotionGoesAsFarHoweverItIsSplit() throws {
+        /// How far 3000 steps a second for 0.24 s go in their last 0.16 s.
+        func distance(steps: Int, every interval: TimeInterval) throws -> Double {
+            var acceleration = try XCTUnwrap(MoonlightPointerAcceleration(speed: 0.6875))
+            var total = 0.0
+            for move in 0..<Int((0.24 / interval).rounded()) {
+                let time = Double(move) * interval
+                let moved = acceleration.accelerate(dx: steps, dy: 0, at: time).dx
+                if time >= 0.08 - 1e-9 { total += moved }
+            }
+            return total
+        }
+        let reports = try distance(steps: 24, every: 0.008)
+        let perStep = try XCTUnwrap(MoonlightPointerAcceleration(speed: 0.6875)).multiplier(velocity: 24)
+        XCTAssertEqual(reports, 20 * 24 * perStep, accuracy: 1e-6)
+        XCTAssertEqual(try distance(steps: 3, every: 0.001), reports, accuracy: reports * 0.01)
+        XCTAssertEqual(try distance(steps: 48, every: 0.016), reports, accuracy: reports * 0.01)
+        // Slower motion goes less far for each step.
+        XCTAssertLessThan(try distance(steps: 1, every: 0.001) * 3, reports * 0.8)
+    }
+
     func testCountsDoubleAndTripleClicks() {
         var clicks = MoonlightClickCounter()
         let at = CGPoint(x: 100, y: 100)
