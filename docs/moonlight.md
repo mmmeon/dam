@@ -175,6 +175,18 @@ them as HID events, one injector per stream:
   pointer while they follow closely, and from where it is after a tenth of a second
   without one (it may have been moved at the Mac), kept on that display. Buttons carry a click count, and moves while a button is held
   are drags.
+- **Acceleration:** relative moves are sped up as macOS speeds up a mouse plugged into
+  the Mac, at the tracking speed set for mice (`com.apple.mouse.scaling`; negative turns
+  it off). Posted events skip the HID system, where macOS does this, so without it each
+  step the mouse reports is a point at any speed. `MoonlightPointerAcceleration` uses
+  IOHIDFamily's parametric curves and arithmetic, with macOS 13's curves for a mouse that
+  brings none, and takes the client's steps as a 400 dpi mouse's, as macOS takes a
+  mouse that doesn't state its resolution. macOS measures speed in steps per report;
+  Moonlight's moves come at no fixed rate, so speed is measured over the last 24 ms, at
+  125 reports a second. At the default speed a slow move goes about a quarter of a point
+  per step and a fast one up to about two. "Speed up the mouse as this Mac does" in
+  Settings › Moonlight turns it off, at once. Absolute moves (touch, and Moonlight's
+  "optimize mouse for remote desktop") are not accelerated.
 - **Scrolling:** whole wheel notches scroll a line each; finer amounts, from trackpads and
   touch screens, scroll by pixels. Horizontal scrolling is a Sunshine extension clients
   send DAM.

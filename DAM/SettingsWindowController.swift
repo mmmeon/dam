@@ -486,6 +486,13 @@ final class SettingsWindowController: NSWindowController {
                            "Moonlight's own when they stop. Unchecked, streams keep Moonlight's " +
                            "bitrate throughout. Takes effect from the next stream.",
                      action: { MoonlightStream.adaptsBitrate = $0 }),
+            checkbox(title: "Speed up the mouse as this Mac does",
+                     isOn: MoonlightInputInjector.acceleratesPointer,
+                     help: "Moves from a mouse Moonlight has captured go faster the faster the mouse " +
+                           "moves, at the tracking speed set for mice in System Settings, as if the " +
+                           "mouse were plugged into this Mac. Unchecked, each step the mouse reports " +
+                           "moves the pointer a point. Takes effect at once.",
+                     action: { MoonlightInputInjector.acceleratesPointer = $0 }),
             checkbox(title: "Show the pointer",
                      isOn: MoonlightStream.showsPointer,
                      help: "Draws the Mac's pointer into Moonlight streams. Takes effect from the " +

@@ -32,6 +32,9 @@ final class MoonlightInputInjector {
     /// Where the pointer was put last, and when; nil until it is.
     private var location: CGPoint?
     private var movedAt: TimeInterval = 0
+    /// How captured mouse moves are sped up; made again, at the Mac's tracking speed then,
+    /// each time the pointer starts moving. Nil when they aren't.
+    private var acceleration: MoonlightPointerAcceleration?
     private var heldButtons: Set<Int> = []
     private var heldKeys: Set<CGKeyCode> = []
     private var clicks = MoonlightClickCounter()
@@ -98,10 +101,11 @@ final class MoonlightInputInjector {
                 bounds: CGDisplayBounds(displayID), rotation: StreamRotations.shared.rotation(of: displayID))
             movePointer(to: point, dx: 0, dy: 0)
         case let .move(dx, dy):
+            let (x, y) = accelerated(dx: dx, dy: dy)
             let from = pointerLocation()
-            let to = MoonlightPointerMapping.clamp(CGPoint(x: from.x + CGFloat(dx), y: from.y + CGFloat(dy)),
+            let to = MoonlightPointerMapping.clamp(CGPoint(x: from.x + x, y: from.y + y),
                                                    to: CGDisplayBounds(displayID))
-            movePointer(to: to, dx: dx, dy: dy)
+            movePointer(to: to, dx: Int(x.rounded()), dy: Int(y.rounded()))
         case let .button(button, down):
             press(button, down: down)
         case let .scroll(amount):
@@ -119,6 +123,28 @@ final class MoonlightInputInjector {
         case let .other(magic):
             logOnce(magic, "packet 0x\(String(magic, radix: 16))")
         }
+    }
+
+    private static let acceleratesPointerKey = "\(AppIdentity.shortID).moonlight.acceleratesPointer"
+
+    /// Whether a captured mouse's moves are sped up as the Mac speeds up its own mouse;
+    /// otherwise each step the mouse reports moves the pointer a point. Takes effect at once.
+    static var acceleratesPointer: Bool {
+        get { UserDefaults.dam.object(forKey: acceleratesPointerKey) as? Bool ?? true }
+        set { UserDefaults.dam.set(newValue, forKey: acceleratesPointerKey) }
+    }
+
+    /// A relative move of `dx`, `dy` steps, in points.
+    private func accelerated(dx: Int, dy: Int) -> (CGFloat, CGFloat) {
+        guard Self.acceleratesPointer else { return (CGFloat(dx), CGFloat(dy)) }
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - movedAt >= MoonlightPointerMapping.settle {
+            acceleration = MoonlightPointerAcceleration(speed: MoonlightPointerAcceleration.trackingSpeed)
+        }
+        guard var acceleration else { return (CGFloat(dx), CGFloat(dy)) }
+        let (x, y) = acceleration.accelerate(dx: dx, dy: dy, at: now)
+        self.acceleration = acceleration
+        return (x, y)
     }
 
     /// Where the pointer is, as far as this stream's input goes (see MoonlightPointerMapping.start).

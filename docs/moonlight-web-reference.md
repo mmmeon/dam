@@ -101,6 +101,11 @@ lives. A streamed mouse then feels much slower than the Mac's own.
 the same shape to relative moves. DAM's `MoonlightInputInjector.swift` already handles
 modifier flags, click counts and drags, but not acceleration.
 
+**Done 2026-10-22,** from Apple's own arithmetic rather than moonlight-web's: IOHIDFamily
+is open source (`IOHIDEventSystemPlugIns/IOHIDAccelerationAlgorithm.cpp`), so DAM uses
+macOS's parametric curves for a mouse at the Mac's tracking speed, with a test against
+values worked out from that code. Not yet tried with a real mouse through Moonlight.
+
 ## The /watch page
 
 DAM's page (`WebStreamPage` in `WebStream.swift`) fetches `/stream.mp4` and plays it
