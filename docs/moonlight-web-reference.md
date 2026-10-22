@@ -28,9 +28,23 @@ Chrome's D3D11 decoder; with the flag, decoding took about 1 ms. Their fix rewri
 SPS ahead of each keyframe (`backend/native-host/src/encode/H264Vui.h`, notes in
 `encode/macos/VtEncoder.h`).
 
-DAM's WebStream sends VideoToolbox H.264 to browsers through MSE, and nothing in DAM adds
-a VUI. `H264OneReference.swift` already rewrites H.264 headers bit by bit, so this may be
-the cheapest delay win for `/watch`.
+**Checked 2026-10-22 on the Intel test Mac (macOS 13.7): not needed there.** Its encoder
+writes a VUI with `bitstream_restriction` in every mode DAM uses without reordering. The
+SPS was taken from 1920×1080 encodes with DAM's own settings:
+
+| Encoder | `max_num_reorder_frames` | `max_dec_frame_buffering` | References |
+|---|---|---|---|
+| Low latency (Moonlight; web streams with `lowlatency`) | 0 | 4 | 4 |
+| Plain real-time, no reordering (Interactive, Balanced) | 0 | 2 | 2 |
+| Reordering (Viewing) | no `bitstream_restriction` | — | 2 |
+
+Viewing reorders frames on purpose and keeps a second of buffer, so it does not need the
+flag. moonlight-web's numbers come from Apple Silicon Macs, whose encoder may leave the VUI
+out. On such a Mac, check the SPS before adding a rewrite: a VUI that already says 0 must
+be left as it is.
+
+The rapid stalling of the Interactive `/watch` page in WebKit (about 120 a second, on
+`main` too) therefore has another cause.
 
 ### 2. Flushing each frame with `VTCompressionSessionCompleteFrames`
 
@@ -38,9 +52,12 @@ moonlight-web calls `VTCompressionSessionCompleteFrames` after every
 `VTCompressionSessionEncodeFrame` and waits for that frame's output
 (`encode/macos/VtEncoder.mm`). DAM instead waits about 1.25 frames and resubmits the same
 picture to push the last frame out of the encoder (the "nudge" in
-`MoonlightVideoEncoder.swift`). A flush might replace the nudge, and it would suit web
-streams, where a nudge breaks the fixed frame timing. Compare with `tools/streamtest` on
-the Intel Mac before changing anything.
+`MoonlightVideoEncoder.swift`).
+
+**Already tried in DAM:** the header of `MoonlightVideoEncoder.swift` records that asking
+this Intel encoder to complete a frame brings it out at once, but makes the next frame a
+keyframe. That is why DAM uses the nudge, or Apple's low-latency rate control, which
+hands each frame back on its own. A flush could still be worth trying on Apple Silicon.
 
 ### 3. `RealTime` off
 
@@ -116,8 +133,8 @@ DAM's page. In order of value for the effort:
    (`frontend/js/stream/VideoDecodeWorker.js`). DAM's server could stay as it is: the
    page can split DAM's own fMP4 fragments (`moof` and `mdat`) into `EncodedVideoChunk`s.
    Audio would need an `AudioDecoder` and an AudioWorklet, or the Interactive profile could
-   stay video-only. This is the largest change. Do the VUI fix (lead 1) first, since a
-   decoder that holds frames back would undo it.
+   stay video-only. This is the largest change. A decoder that holds frames back would
+   undo it, so on an Apple Silicon Mac, check the SPS first (lead 1).
 
 The page can't send input: it is view-only. moonlight-web sends keyboard, mouse, touch and
 gamepads to the host. Adding input would make a browser a full client, but that is a
