@@ -603,6 +603,7 @@ final class SettingsWindowController: NSWindowController {
                           "another. Hover over each for what it trades."
 
         var https: [NSView] = [placeholderLabel(server.secureWatchURL.absoluteString)]
+        if let summary = Self.certificateSummary(server) { https.append(placeholderLabel(summary)) }
         if let certificates = server.certificates {
             let fingerprint = placeholderLabel("SHA-256 " + certificates.fingerprint.prefix(23) + "…")
             fingerprint.toolTip = certificates.fingerprint
@@ -612,7 +613,21 @@ final class SettingsWindowController: NSWindowController {
         export.bezelStyle = .rounded
         export.toolTip = "Saves the certificate authority HTTPS is signed with, for mpv's --tls-ca-file or to trust. " +
                          "An iPhone or iPad installs it from \(server.authorityURL.absoluteString)."
-        https.append(export)
+        export.isEnabled = server.certificates?.authority != nil
+        let importButton = ClosureButton(title: "Import Certificate…") { [weak self] _ in self?.importCertificate() }
+        importButton.bezelStyle = .rounded
+        importButton.toolTip = "Uses a certificate and its private key, from PEM files or a .p12 file. A certificate " +
+                               "authority signs \(AppIdentity.name)'s server certificate in place of its own, so devices " +
+                               "that already trust it need nothing more; any other certificate is served as it is."
+        https += [export, importButton]
+        if server.importedCertificate != nil {
+            let own = ClosureButton(title: "Use \(AppIdentity.name)'s Own") { [weak self] _ in
+                self?.webStream.useOwnCertificate()
+            }
+            own.bezelStyle = .rounded
+            own.toolTip = "Goes back to \(AppIdentity.name)'s own certificate authority. Devices that trusted it still do."
+            https.append(own)
+        }
 
         return formTab([
             ("Serving:", serving),
@@ -771,12 +786,74 @@ final class SettingsWindowController: NSWindowController {
 
     /// Saves the certificate authority as PEM.
     private func exportCertificate() {
-        guard let certificates = webStream.certificates else { return }
+        guard let pem = webStream.certificates?.authorityPEM else { return }
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "\(AppIdentity.name) Browser Stream.pem"
         panel.allowedContentTypes = [.init(filenameExtension: "pem") ?? .data]
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        try? Data(certificates.authorityPEM.utf8).write(to: url, options: .atomic)
+        try? Data(pem.utf8).write(to: url, options: .atomic)
+    }
+
+    /// What HTTPS is signed with, in a line; nil while it has not started with no import.
+    static func certificateSummary(_ server: WebStreamServer) -> String? {
+        func until(_ date: Date?) -> String {
+            date.map { ", until " + $0.formatted(date: .abbreviated, time: .omitted) } ?? ""
+        }
+        switch server.certificates?.source {
+        case .own:
+            return "Signed by \(AppIdentity.name)'s own certificate authority"
+        case .importedAuthority(let name, let ends):
+            return "Signed by \(name), imported\(until(ends))"
+        case .importedServer(let names, let ends):
+            return "Imported certificate for \(names.prefix(3).joined(separator: ", "))\(until(ends))"
+        case nil:
+            guard let imported = server.importedCertificate,
+                  let name = WebStreamCertificates.commonName(of: imported.certificates[0]) else { return nil }
+            return imported.kind == .authority ? "Signed by \(name), imported" : "Imported certificate for \(name)"
+        }
+    }
+
+    /// Imports a certificate and its key for HTTPS from files the user picks, asking for the
+    /// password of a .p12 file.
+    private func importCertificate() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.message = "Choose a certificate and its private key: PEM files (one or two, with any chain), or a .p12 file."
+        panel.prompt = "Import"
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+        var password: String?
+        if panel.urls.contains(where: { ["p12", "pfx"].contains($0.pathExtension.lowercased()) }) {
+            guard let typed = askCertificatePassword(wrong: false) else { return }
+            password = typed
+        }
+        while true {
+            do {
+                try webStream.useCertificate(try ImportedCertificate.read(files: panel.urls, password: password))
+                return
+            } catch let error as CertificateImportError where error == .needsPassword || error == .wrongPassword {
+                guard let typed = askCertificatePassword(wrong: error == .wrongPassword) else { return }
+                password = typed
+            } catch {
+                let alert = NSAlert()
+                alert.messageText = "The certificate wasn't imported"
+                alert.informativeText = error.localizedDescription
+                alert.runModal()
+                return
+            }
+        }
+    }
+
+    private func askCertificatePassword(wrong: Bool) -> String? {
+        let alert = NSAlert()
+        alert.messageText = wrong ? "That password doesn't open the file" : "Password for the .p12 file"
+        alert.informativeText = "The password it was exported with."
+        let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 220, height: 24))
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Import")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        return alert.runModal() == .alertFirstButtonReturn ? field.stringValue : nil
     }
 
     /// Rebuilds the Browser Stream tab if what it shows of the server has changed.
@@ -2079,6 +2156,7 @@ private struct BrowserState: Equatable {
     var lastError: String?
     var devices: [WebStreamDevice] = []
     var hasCertificates = false
+    var certificate: String?
 
     init(server: WebStreamServer?) {
         guard let server else { return }
@@ -2086,6 +2164,7 @@ private struct BrowserState: Equatable {
         lastError = server.lastError
         devices = server.devices.all
         hasCertificates = server.certificates != nil
+        certificate = SettingsWindowController.certificateSummary(server)
     }
 }
 

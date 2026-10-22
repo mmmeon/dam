@@ -129,11 +129,13 @@ final class WebStreamAccessTests: XCTestCase {
     func testTheServerCertificateIsTrustedUnderTheAuthorityForItsNames() throws {
         let names = ["test-mac.local", "localhost"]
         let first = try WebStreamCertificates(directory: directory, names: names, addresses: [[127, 0, 0, 1]])
-        XCTAssertTrue(trusts(first.server, name: "test-mac.local", authority: first.authority))
-        XCTAssertTrue(trusts(first.server, name: "localhost", authority: first.authority))
-        XCTAssertTrue(trusts(first.server, name: "127.0.0.1", authority: first.authority))
-        XCTAssertFalse(trusts(first.server, name: "other.local", authority: first.authority))
-        XCTAssertTrue(first.authorityPEM.hasPrefix("-----BEGIN CERTIFICATE-----"))
+        let authority = try XCTUnwrap(first.authority)
+        XCTAssertEqual(first.chain, [authority])
+        XCTAssertTrue(trusts(first.server, name: "test-mac.local", authority: authority))
+        XCTAssertTrue(trusts(first.server, name: "localhost", authority: authority))
+        XCTAssertTrue(trusts(first.server, name: "127.0.0.1", authority: authority))
+        XCTAssertFalse(trusts(first.server, name: "other.local", authority: authority))
+        XCTAssertEqual(first.authorityPEM?.hasPrefix("-----BEGIN CERTIFICATE-----"), true)
         XCTAssertEqual(first.fingerprint.count, 32 * 3 - 1)
 
         let kept = try WebStreamCertificates(directory: directory, names: names, addresses: [[127, 0, 0, 1]])
@@ -143,6 +145,245 @@ final class WebStreamAccessTests: XCTestCase {
         let renamed = try WebStreamCertificates(directory: directory, names: ["new-name.local"], addresses: [[127, 0, 0, 1]])
         XCTAssertEqual(renamed.authority, first.authority, "trusted once")
         XCTAssertNotEqual(renamed.server, first.server)
-        XCTAssertTrue(trusts(renamed.server, name: "new-name.local", authority: first.authority))
+        XCTAssertTrue(trusts(renamed.server, name: "new-name.local", authority: authority))
+    }
+
+    // MARK: - Imported certificates
+
+    /// Runs the system's openssl (LibreSSL) in the test's directory: the certificates and
+    /// keys imported are made with it, as a user's would be.
+    @discardableResult
+    private func openssl(_ arguments: String...) throws -> String {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/openssl")
+        process.arguments = arguments
+        process.currentDirectoryURL = directory
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0, "openssl \(arguments.joined(separator: " ")): \(text)")
+        return text
+    }
+
+    private func file(_ name: String) -> URL { directory.appendingPathComponent(name) }
+
+    private func der(_ name: String) throws -> Data {
+        try MoonlightCrypto.der(certificatePEM: String(contentsOf: file(name), encoding: .utf8))
+    }
+
+    /// A certificate authority named `name`, with its key in `key` (made by the caller, or RSA).
+    private func makeAuthority(_ name: String, key: String = "ca.key", certificate: String = "ca.pem",
+                               newRSA: Bool = true) throws {
+        try openssl("req", "-x509", "-new", newRSA ? "-newkey" : "-key", newRSA ? "rsa:2048" : key,
+                    "-nodes", "-keyout", key, "-out", certificate, "-days", "60",
+                    "-subj", "/O=Home Lab/OU=Test/CN=\(name)",
+                    "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign,cRLSign",
+                    "-addext", "subjectKeyIdentifier=hash")
+    }
+
+    /// A server certificate for mac.example.test, signed by ca.pem.
+    private func makeServer() throws {
+        try openssl("req", "-new", "-newkey", "rsa:2048", "-nodes", "-keyout", "leaf.key", "-out", "leaf.csr",
+                    "-subj", "/CN=mac.example.test")
+        try "subjectAltName=DNS:mac.example.test,IP:192.0.2.7\nbasicConstraints=CA:FALSE\nextendedKeyUsage=serverAuth\n"
+            .write(to: file("leaf.cnf"), atomically: true, encoding: .utf8)
+        try openssl("x509", "-req", "-in", "leaf.csr", "-CA", "ca.pem", "-CAkey", "ca.key", "-CAcreateserial",
+                    "-out", "leaf.pem", "-days", "30", "-extfile", "leaf.cnf")
+    }
+
+    /// An imported authority signs the server certificate under its own name, which Apple's
+    /// checks then trust through it alone; going back to DAM's own signs with that again.
+    func testAnImportedAuthoritySignsTheServerCertificate() throws {
+        let names = ["test-mac.local", "localhost"]
+        let own = try WebStreamCertificates(directory: directory, names: names, addresses: [[127, 0, 0, 1]])
+        XCTAssertEqual(own.source, .own)
+        try makeAuthority("Home Lab RSA CA")
+        let imported = try ImportedCertificate.read(files: [file("ca.pem"), file("ca.key")], password: nil)
+        XCTAssertEqual(imported.kind, .authority)
+        XCTAssertEqual(imported.keyKind, .rsa)
+        try imported.save(in: directory)
+
+        let signed = try WebStreamCertificates(directory: directory, names: names, addresses: [[127, 0, 0, 1]])
+        let authority = try der("ca.pem")
+        XCTAssertEqual(signed.authority, authority)
+        XCTAssertEqual(signed.chain, [authority])
+        guard case .importedAuthority("Home Lab RSA CA", let ends) = signed.source else {
+            return XCTFail("source \(signed.source)")
+        }
+        XCTAssertNotNil(ends)
+        XCTAssertEqual(DER.certificate(signed.server)?.issuer, DER.certificate(authority)?.subject, "the whole name, as it is")
+        XCTAssertTrue(trusts(signed.server, name: "test-mac.local", authority: authority))
+        XCTAssertTrue(trusts(signed.server, name: "127.0.0.1", authority: authority))
+        XCTAssertFalse(trusts(signed.server, name: "test-mac.local", authority: own.authority!))
+        let kept = try WebStreamCertificates(directory: directory, names: names, addresses: [[127, 0, 0, 1]])
+        XCTAssertEqual(kept.server, signed.server, "made once")
+
+        ImportedCertificate.remove(from: directory)
+        let back = try WebStreamCertificates(directory: directory, names: names, addresses: [[127, 0, 0, 1]])
+        XCTAssertEqual(back.source, .own)
+        XCTAssertEqual(back.authority, own.authority, "DAM's own was kept")
+        XCTAssertTrue(trusts(back.server, name: "test-mac.local", authority: own.authority!))
+    }
+
+    /// An EC authority signs with ECDSA, its key given in SEC1 or PKCS#8 form, on P-256 or P-384.
+    func testAnImportedECAuthoritySigns() throws {
+        for (curve, form) in [("prime256v1", "sec1"), ("prime256v1", "pkcs8"), ("secp384r1", "pkcs8")] {
+            try? FileManager.default.removeItem(at: directory)
+            try openssl("ecparam", "-name", curve, "-genkey", "-noout", "-out", "ec.key")
+            if form == "pkcs8" {
+                try openssl("pkcs8", "-topk8", "-nocrypt", "-in", "ec.key", "-out", "ec8.key")
+                try FileManager.default.removeItem(at: file("ec.key"))
+                try FileManager.default.moveItem(at: file("ec8.key"), to: file("ec.key"))
+            }
+            try makeAuthority("Home Lab EC CA", key: "ec.key", newRSA: false)
+            let imported = try ImportedCertificate.read(files: [file("ca.pem"), file("ec.key")], password: nil)
+            XCTAssertEqual(imported.keyKind, .ec, "\(curve) \(form)")
+            try imported.save(in: directory)
+            let signed = try WebStreamCertificates(directory: directory, names: ["test-mac.local"], addresses: [])
+            XCTAssertTrue(trusts(signed.server, name: "test-mac.local", authority: try der("ca.pem")), "\(curve) \(form)")
+        }
+    }
+
+    /// A server certificate is served as it is, with the chain that came with it, and links
+    /// use a name it is for.
+    func testAnImportedServerCertificateIsServedAsItIs() throws {
+        try makeAuthority("Home Lab RSA CA")
+        try makeServer()
+        let imported = try ImportedCertificate.read(files: [file("leaf.pem"), file("leaf.key"), file("ca.pem")], password: nil)
+        XCTAssertEqual(imported.kind, .server)
+        XCTAssertEqual(imported.certificates, [try der("leaf.pem"), try der("ca.pem")], "its own first")
+        try imported.save(in: directory)
+
+        let served = try WebStreamCertificates(directory: directory, names: ["test-mac.local"], addresses: [])
+        XCTAssertEqual(served.server, try der("leaf.pem"))
+        XCTAssertEqual(served.chain, [try der("ca.pem")])
+        XCTAssertEqual(served.authority, try der("ca.pem"), "the chain's top, an authority")
+        guard case .importedServer(let names, _) = served.source else { return XCTFail("source \(served.source)") }
+        XCTAssertEqual(names, ["mac.example.test", "192.0.2.7"])
+        XCTAssertEqual(served.host(preferring: "test-mac.local"), "mac.example.test")
+        XCTAssertTrue(trusts(served.server, name: "mac.example.test", authority: try der("ca.pem")))
+
+        let alone = try ImportedCertificate.read(files: [file("leaf.pem"), file("leaf.key")], password: nil)
+        try alone.save(in: directory)
+        let bare = try WebStreamCertificates(directory: directory, names: ["test-mac.local"], addresses: [])
+        XCTAssertNil(bare.authority, "nothing to hand out")
+        XCTAssertTrue(bare.chain.isEmpty)
+        XCTAssertEqual(bare.fingerprint.count, 32 * 3 - 1, "the server certificate's")
+    }
+
+    /// A .p12 file, old or new, opens with its password, and says when it is wrong or missing.
+    func testAPKCS12FileOpensWithItsPassword() throws {
+        try makeAuthority("Home Lab RSA CA")
+        try openssl("pkcs12", "-export", "-in", "ca.pem", "-inkey", "ca.key", "-out", "aes.p12", "-passout", "pass:s3cret")
+        try openssl("pkcs12", "-export", "-in", "ca.pem", "-inkey", "ca.key", "-out", "legacy.p12", "-passout", "pass:s3cret",
+                    "-keypbe", "PBE-SHA1-3DES", "-certpbe", "PBE-SHA1-3DES", "-macalg", "sha1")
+        for name in ["aes.p12", "legacy.p12"] {
+            let imported = try ImportedCertificate.read(files: [file(name)], password: "s3cret")
+            XCTAssertEqual(imported.kind, .authority, name)
+            XCTAssertEqual(imported.certificates.first, try der("ca.pem"), name)
+            XCTAssertThrowsError(try ImportedCertificate.read(files: [file(name)], password: "wrong")) {
+                XCTAssertEqual($0 as? CertificateImportError, .wrongPassword, name)
+            }
+            XCTAssertThrowsError(try ImportedCertificate.read(files: [file(name)], password: nil)) {
+                XCTAssertEqual($0 as? CertificateImportError, .needsPassword, name)
+            }
+        }
+    }
+
+    /// curl's exit status and the HTTP status for `url`, trusting only `authority`. The run
+    /// loop turns meanwhile, as the server answers on the main queue.
+    private func curl(_ url: String, authority: URL, resolve: String? = nil) throws -> (exit: Int32, status: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
+        process.arguments = ["-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "5", "--cacert", authority.path]
+            + (resolve.map { ["--resolve", $0] } ?? []) + [url]
+        let output = Pipe()
+        process.standardOutput = output
+        try process.run()
+        while process.isRunning { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }
+        return (process.terminationStatus, String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
+    }
+
+    /// A running server serves HTTPS under what is imported, from the moment it is, and under
+    /// its own again after: curl trusting only the imported authority gets the page, then not.
+    func testTheServerServesWhatIsImported() throws {
+        try makeAuthority("Home Lab RSA CA")
+        try makeServer()
+        let port = NWEndpoint.Port(rawValue: UInt16.random(in: 40000...48000) & ~1)!
+        let server = WebStreamServer(port: port, directory: directory)
+        defer { server.stop() }
+        func started() {
+            let deadline = Date().addingTimeInterval(5)
+            while !server.isListening, server.lastError == nil, Date() < deadline {
+                RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+            }
+            XCTAssertTrue(server.isListening, server.lastError ?? "")
+        }
+        server.start()
+        started()
+        let secure = Int(port.rawValue) + 1
+        let local = "https://localhost:\(secure)/watch"
+        XCTAssertEqual(try curl(local, authority: file("ca.pem")).exit, 60, "not trusted before")
+
+        try server.useCertificate(try ImportedCertificate.read(files: [file("ca.pem"), file("ca.key")], password: nil))
+        started()
+        XCTAssertNotNil(server.importedCertificate)
+        let signed = try curl(local, authority: file("ca.pem"))
+        XCTAssertEqual(signed.exit, 0)
+        XCTAssertEqual(signed.status, "200")
+
+        try server.useCertificate(try ImportedCertificate.read(files: [file("leaf.pem"), file("leaf.key"), file("ca.pem")],
+                                                               password: nil))
+        started()
+        XCTAssertEqual(server.secureWatchURL.host, "mac.example.test")
+        let served = try curl("https://mac.example.test:\(secure)/watch", authority: file("ca.pem"),
+                              resolve: "mac.example.test:\(secure):127.0.0.1")
+        XCTAssertEqual(served.exit, 0)
+        XCTAssertEqual(served.status, "200")
+
+        server.useOwnCertificate()
+        started()
+        XCTAssertNil(server.importedCertificate)
+        XCTAssertEqual(try curl(local, authority: file("ca.pem")).exit, 60, "DAM's own again")
+        try Data(XCTUnwrap(server.certificates?.authorityPEM).utf8).write(to: file("own.pem"))
+        XCTAssertEqual(try curl(local, authority: file("own.pem")).status, "200")
+    }
+
+    /// What can't be imported is refused with the reason.
+    func testWhatCannotBeImportedSaysWhy() throws {
+        try makeAuthority("Home Lab RSA CA")
+        try makeServer()
+        func reason(_ names: String...) -> CertificateImportError? {
+            do {
+                _ = try ImportedCertificate.read(files: names.map(file), password: nil)
+                return nil
+            } catch {
+                return error as? CertificateImportError
+            }
+        }
+        XCTAssertEqual(reason("ca.pem"), .noKey)
+        XCTAssertEqual(reason("ca.key"), .noCertificate)
+        XCTAssertEqual(reason("ca.pem", "leaf.key"), .keyMatchesNoCertificate)
+        XCTAssertEqual(reason("ca.pem", "ca.key", "leaf.key"), .severalKeys)
+        try openssl("pkcs8", "-topk8", "-v2", "aes-256-cbc", "-in", "ca.key", "-out", "locked.key", "-passout", "pass:x")
+        XCTAssertEqual(reason("ca.pem", "locked.key"), .encryptedKey)
+        try "not a certificate".write(to: file("note.txt"), atomically: true, encoding: .utf8)
+        XCTAssertEqual(reason("note.txt"), .needsPassword, "anything not PEM nor DER is taken for a .p12 file")
+        try "-----BEGIN NOTHING-----\n-----END NOTHING-----\n".write(to: file("empty.pem"), atomically: true, encoding: .utf8)
+        XCTAssertEqual(reason("empty.pem"), .noCertificate)
+
+        let key = try MoonlightCrypto.generatePrivateKey()
+        let old = try MoonlightCrypto.certificate(key: key, subject: "old.example.test", days: 1,
+                                                  now: Date().addingTimeInterval(-10 * 24 * 3600))
+        let pem = MoonlightCrypto.pem(certificate: old) + "-----BEGIN RSA PRIVATE KEY-----\n" +
+            (try MoonlightCrypto.exportPrivateKey(key)).base64EncodedString(options: .lineLength64Characters) +
+            "\n-----END RSA PRIVATE KEY-----\n"
+        XCTAssertThrowsError(try ImportedCertificate.read(pem: pem)) {
+            guard case .expired = $0 as? CertificateImportError else { return XCTFail("\($0)") }
+        }
     }
 }
