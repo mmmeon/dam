@@ -76,6 +76,10 @@ processing latency:
 | Plain real-time (3 runs each) | 24.6–27.6 ms (635–756 ms) | 25.0–26.9 ms (795–906 ms) |
 
 Off is worse with low-latency rate control and makes no difference to the plain encoder.
+The plain encoder's worst frames were all repeats: a frame given again to nudge the one
+before it out then waits in the encoder for the next picture, through a still screen, and
+its wait was reported to Moonlight as host processing latency. Since then a repeat reports
+0 ("not known"), which Moonlight leaves out: worst frames 60–103 ms, average unchanged.
 On Apple Silicon it may still be worth trying.
 
 ### 4. Marking video packets as DSCP AF41

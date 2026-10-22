@@ -115,6 +115,20 @@ final class MoonlightVideoEncoderTests: XCTestCase {
         XCTAssertLessThan(took, 2 * 2.5 * 1000 / 60, "two frames, each nudged out, in well under five frames' time")
     }
 
+    /// The repeats that nudge frames out say so: they wait in the encoder for the next
+    /// picture, and a stream doesn't count that wait as its delay.
+    func testRepeatsSayTheyAreRepeats() throws {
+        let collector = Collector()
+        let encoder = try makeEncoder(collector)
+        // Each frame's nudge waits for the next frame; the last one brings the others' out.
+        for seed in 0..<4 { try encodeOne(encoder, collector, seed: seed) }
+        collector.lock.lock(); defer { collector.lock.unlock() }
+        let repeats = collector.frames.filter { $0.time.timescale != 60 }
+        XCTAssertGreaterThanOrEqual(repeats.count, 3, "frames left alone are nudged out")
+        XCTAssertTrue(repeats.allSatisfy(\.isRepeat))
+        XCTAssertTrue(collector.frames.filter { $0.time.timescale == 60 }.allSatisfy { !$0.isRepeat })
+    }
+
     func testFramesArrivingFasterThanTheEncoderComeOutInOrder() throws {
         let collector = Collector()
         let encoder = try makeEncoder(collector)

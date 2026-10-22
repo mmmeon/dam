@@ -75,6 +75,9 @@ final class MoonlightVideoEncoder {
         let submitted: UInt64
         /// When the encoder handed it back.
         let encoded: UInt64
+        /// Whether it is the picture before it given again, to nudge that one out (see the
+        /// top of the file), rather than a new picture.
+        var isRepeat = false
 
         /// The access unit with 4-byte lengths before its NAL units, as MP4 wants it.
         var avcc: Data {
@@ -319,7 +322,7 @@ final class MoonlightVideoEncoder {
                 data.append(unit)
             }
             self.output(Frame(data: data, isKeyFrame: isKeyFrame, units: units, sample: sample, time: rising,
-                              submitted: submitted, encoded: DispatchTime.now().uptimeNanoseconds))
+                              submitted: submitted, encoded: DispatchTime.now().uptimeNanoseconds, isRepeat: !counted))
         }
         guard status == noErr else {
             veLog.error("encode frame: \(status)")
