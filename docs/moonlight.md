@@ -321,16 +321,20 @@ them as HID events, one injector per stream:
   own displays (off by default) lists them, as app IDs 1000 plus the display's unit
   number, streamed as they are, never resized or removed. Before macOS 15 the display is
   captured as SDR. `HDR10Converter` turns frames into 10-bit 4:2:0 PQ with Core Image
-  (about 6 ms a 1080p frame here), putting SDR white at 203 nits (BT.2408): macOS puts it
-  at 100 nits in PQ, which moonlight-qt showed dim (white 173 against SDR's 240 in a
-  recording of its window). With SDR captured, the metadata says 203 nits at most
+  (about 6 ms a 1080p frame here), putting SDR white at 203 nits (BT.2408). Where Core
+  Image puts it in PQ is measured once per stream, from a white BT.709 4:2:0 frame as
+  capture hands SDR over: 100 nits on macOS 13, which moonlight-qt showed dim (white 173
+  against SDR's 240 in a recording of its window), so it is lifted a stop; 203 on macOS 14
+  (GitHub's runners), so it is left. HDR capture's frames, in PQ already, are left as
+  ScreenCaptureKit makes them. With SDR captured, the metadata says 203 nits at most
   (`MoonlightHDRMetadata.sdr`), as with 1000 macOS's tone-mapping dims white to leave
   room for highlights; with HDR captured, a 1000-nit BT.2020 display. Measured on the
   test Mac (macOS 13, SDR Lenovo, the local Moonlight with HDR on): 1080p60 New Display,
   Main 10 decoded, 36 fps, 175 ms host processing, 274 ms delay (HEVC's encoder here);
   white 219 and the wallpaper close to SDR's; the Lenovo listed as "lenovo" (app 1002),
   720p60 HDR10 at 42 ms host processing, its mode unchanged. Not tested: HDR capture on
-  macOS 15, and whether SDR white also sits at 100 nits there (the conversion assumes so).
+  macOS 15, and whether its canonical HDR puts SDR white at 203 nits, as Core Image does
+  from macOS 14 (passing its frames as they are assumes so).
 - **Nudge:** the encoder holds each frame until the next one arrives. So if no new frame
   follows within 1.25 frame times, DAM resubmits the last picture to flush it, again
   every 1.25 frame times while the frame is still held (HEVC on the test Mac needs two).

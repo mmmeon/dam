@@ -85,7 +85,9 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         // HDR as 10-bit RGB in PQ where it can be captured, else the picture as SDR is.
         self.pixelFormat = hdr && Self.capturesHDR ? kCVPixelFormatType_ARGB2101010LEPacked
             : hdr ? kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange : pixelFormat
-        hdr10 = hdr ? HDR10Converter(width: width, height: height) : nil
+        // HDR capture's frames are in PQ already, SDR white where ScreenCaptureKit put it, so
+        // they pass as they are; only frames captured as SDR are lifted to 203 nits.
+        hdr10 = hdr ? HDR10Converter(width: width, height: height, gain: Self.capturesHDR ? 0 : nil) : nil
         self.frame = frame
     }
 
@@ -302,30 +304,12 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
 
 /// Turns captured frames into HDR10's: 10-bit 4:2:0 in BT.2020 with PQ, as the encoder takes
 /// them as is. SDR white goes to 203 nits, BT.2408's reference white, where HDR10 players
-/// show it (Moonlight's renderer included). Where macOS puts it in PQ differs: 100 nits on
-/// macOS 13, which looks dim there, 203 already on macOS 14 (GitHub's runners), so it is
-/// found by turning white into PQ once (`referenceWhiteGain`). What is brighter than SDR
-/// white, where capture has HDR, scales with it. On the GPU, about 6 ms a 1080p frame on
-/// the Intel test Mac. On the capture queue.
+/// show it (Moonlight's renderer included). Where Core Image puts it in PQ differs: 100 nits
+/// on macOS 13, which looks dim there, 203 already on macOS 14 (GitHub's runners), so it is
+/// found by turning a white frame into PQ (`measuredGain`). What is brighter than SDR white,
+/// where capture has HDR, scales with it. On the GPU, about 6 ms a 1080p frame on the Intel
+/// test Mac. On the capture queue.
 final class HDR10Converter {
-    /// The stops from where this macOS puts SDR white in PQ to 203 nits: 1.02 on macOS 13,
-    /// 0 on 14; macOS 13's when white can't be turned into PQ.
-    static let referenceWhiteGain: Double = {
-        let fallback = log2(203.0 / 100.0)
-        guard let converter = HDR10Converter(width: 16, height: 16, gain: 0),
-              let white = converter.render(CIImage(color: .white).cropped(to: CGRect(x: 0, y: 0, width: 16, height: 16)))
-        else { return fallback }
-        CVPixelBufferLockBaseAddress(white, .readOnly)
-        defer { CVPixelBufferUnlockBaseAddress(white, .readOnly) }
-        guard let luma = CVPixelBufferGetBaseAddressOfPlane(white, 0)?.assumingMemoryBound(to: UInt16.self) else { return fallback }
-        let row = CVPixelBufferGetBytesPerRowOfPlane(white, 0) / 2
-        // 10-bit video range, kept in the top bits of each 16.
-        let signal = (Double(luma[8 * row + 8] >> 6) - 64) / 876
-        let nits = pqNits(signal)
-        guard nits > 20, nits < 1000 else { return fallback }
-        return log2(203 / nits)
-    }()
-
     /// The light PQ's `signal` (0...1) stands for, in nits (SMPTE ST 2084).
     static func pqNits(_ signal: Double) -> Double {
         let m1 = 0.1593017578125, m2 = 78.84375, c1 = 0.8359375, c2 = 18.8515625, c3 = 18.6875
@@ -333,13 +317,48 @@ final class HDR10Converter {
         return 10_000 * pow(max(p - c1, 0) / (c2 - c3 * p), 1 / m1)
     }
 
+    /// The stops from where `context` puts SDR white in PQ to 203 nits: 1.02 on macOS 13, 0
+    /// on 14, as a gain too small to see is none; nil when white can't be turned into PQ.
+    /// White is measured as capture hands SDR over, BT.709 4:2:0, which Core Image may take
+    /// differently from sRGB.
+    static func measuredGain(in context: CIContext) -> Double? {
+        guard let white = sdrWhite() else { return nil }
+        var pixel = [Float](repeating: 0, count: 4)
+        context.render(CIImage(cvPixelBuffer: white), toBitmap: &pixel, rowBytes: 4 * MemoryLayout<Float>.size,
+                       bounds: CGRect(x: 0, y: 0, width: 1, height: 1), format: .RGBAf,
+                       colorSpace: CGColorSpace(name: CGColorSpace.itur_2100_PQ)!)
+        let nits = pqNits(Double(pixel[1]))
+        guard nits > 20, nits < 1000 else { return nil }
+        let gain = log2(203 / nits)
+        return abs(gain) < 0.05 ? 0 : gain
+    }
+
+    /// A 2×2 white frame as capture hands SDR over: 8-bit 4:2:0 video range in BT.709.
+    private static func sdrWhite() -> CVPixelBuffer? {
+        var made: CVPixelBuffer?
+        guard CVPixelBufferCreate(nil, 2, 2, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+                                  [kCVPixelBufferIOSurfacePropertiesKey: [:] as [String: Any]] as CFDictionary,
+                                  &made) == kCVReturnSuccess, let white = made else { return nil }
+        CVPixelBufferLockBaseAddress(white, [])
+        for (plane, value) in [(0, Int32(235)), (1, Int32(128))] {
+            guard let base = CVPixelBufferGetBaseAddressOfPlane(white, plane) else { continue }
+            memset(base, value, CVPixelBufferGetBytesPerRowOfPlane(white, plane) * CVPixelBufferGetHeightOfPlane(white, plane))
+        }
+        CVPixelBufferUnlockBaseAddress(white, [])
+        CVBufferSetAttachment(white, kCVImageBufferColorPrimariesKey, kCVImageBufferColorPrimaries_ITU_R_709_2, .shouldPropagate)
+        CVBufferSetAttachment(white, kCVImageBufferTransferFunctionKey, kCVImageBufferTransferFunction_ITU_R_709_2, .shouldPropagate)
+        CVBufferSetAttachment(white, kCVImageBufferYCbCrMatrixKey, kCVImageBufferYCbCrMatrix_ITU_R_709_2, .shouldPropagate)
+        return white
+    }
+
     private let context = CIContext(options: [.workingColorSpace: CGColorSpace(name: CGColorSpace.extendedLinearSRGB)!,
                                               .cacheIntermediates: false])
     private let pq = CGColorSpace(name: CGColorSpace.itur_2100_PQ)!
     private var pool: CVPixelBufferPool?
-    private let gain: Double
+    private var gain = 0.0
 
-    /// `gain` in stops; this macOS's reference white unless given.
+    /// `gain` in stops; where this macOS puts SDR white unless given, measured with the
+    /// context frames are turned with, or macOS 13's when it can't be.
     init?(width: Int, height: Int, gain: Double? = nil) {
         let attributes: [CFString: Any] = [
             kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
@@ -349,19 +368,16 @@ final class HDR10Converter {
         ]
         CVPixelBufferPoolCreate(nil, nil, attributes as CFDictionary, &pool)
         guard pool != nil else { return nil }
-        self.gain = gain ?? Self.referenceWhiteGain
+        self.gain = gain ?? Self.measuredGain(in: context) ?? log2(203.0 / 100.0)
     }
 
     /// `buffer`, in any format Core Image reads and tagged with its colour, as HDR10, or nil
     /// when it could not be.
     func convert(_ buffer: CVPixelBuffer) -> CVPixelBuffer? {
-        render(CIImage(cvPixelBuffer: buffer))
-    }
-
-    private func render(_ picture: CIImage) -> CVPixelBuffer? {
         guard let pool else { return nil }
         var made: CVPixelBuffer?
         guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &made) == kCVReturnSuccess, let out = made else { return nil }
+        let picture = CIImage(cvPixelBuffer: buffer)
         let image = gain == 0 ? picture : picture.applyingFilter("CIExposureAdjust", parameters: [kCIInputEVKey: gain])
         context.render(image, to: out, bounds: image.extent, colorSpace: pq)
         CVBufferSetAttachment(out, kCVImageBufferColorPrimariesKey, kCVImageBufferColorPrimaries_ITU_R_2020, .shouldPropagate)

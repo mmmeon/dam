@@ -230,12 +230,8 @@ final class WebStreamServer {
 
     private var listeners: [NWListener] = []
     private var readyListeners: Set<ObjectIdentifier> = []
-    /// Listeners of a stop still closing; the ports are theirs until they have, so a start
-    /// waits for them (a restart for a new certificate, say): on macOS 14 a listener opened
-    /// at once finds its port taken.
-    private var closingListeners = 0
-    /// Whether to start once they have.
-    private var startWhenClosed = false
+    private let restarts = MoonlightListenerRestarts()
+    /// Whether it serves, or is to once the ports are free.
     private(set) var isRunning = false
     /// Whether both ports are accepting connections.
     var isListening: Bool { !listeners.isEmpty && readyListeners.count == listeners.count }
@@ -285,10 +281,18 @@ final class WebStreamServer {
         set { UserDefaults.dam.set(newValue, forKey: allowsPairingKey) }
     }
 
-    /// Starts serving, HTTP on `port` and HTTPS on the one after. Runs on the main queue.
+    /// Starts serving, HTTP on `port` and HTTPS on the one after, once the ports of a stop
+    /// just before are free. Runs on the main queue.
     func start() {
         guard !isRunning else { return }
-        guard closingListeners == 0 else { startWhenClosed = true; return }
+        isRunning = true
+        lastError = nil
+        restarts.open { [weak self] in self?.open() }
+        onChange?()
+    }
+
+    private func open() {
+        guard isRunning else { return }
         do {
             let certificates = try WebStreamCertificates(directory: directory)
             self.certificates = certificates
@@ -317,7 +321,10 @@ final class WebStreamServer {
                     case .failed(let error):
                         wsLog.error("listener failed: \(String(describing: error), privacy: .public)")
                         let port = listener.port?.rawValue ?? self.port.rawValue
-                        if case .posix(.EADDRINUSE) = error {
+                        if self.restarts.retries(error, closing: self.listeners, open: { [weak self] in self?.open() }) {
+                            self.listeners = []
+                            self.readyListeners = []
+                        } else if case .posix(.EADDRINUSE) = error {
                             self.stop(error: "Another app is using port \(port)")
                         } else {
                             self.stop(error: error.localizedDescription)
@@ -328,32 +335,16 @@ final class WebStreamServer {
                 }
                 listener.start(queue: .main)
             }
-            isRunning = true
-            lastError = nil
         } catch {
             stop(error: error.localizedDescription)
-            return
         }
-        onChange?()
     }
 
     /// Stops serving; those watching are cut off.
     func stop() { stop(error: nil) }
 
     private func stop(error: String?) {
-        startWhenClosed = false
-        for listener in listeners {
-            closingListeners += 1
-            listener.stateUpdateHandler = { [weak self] state in
-                guard case .cancelled = state, let self else { return }
-                self.closingListeners -= 1
-                if self.closingListeners == 0, self.startWhenClosed {
-                    self.startWhenClosed = false
-                    self.start()
-                }
-            }
-            listener.cancel()
-        }
+        restarts.stop(listeners)
         listeners = []
         readyListeners = []
         http.closeAll()

@@ -1,5 +1,6 @@
 import XCTest
 import CoreGraphics
+import CoreImage
 import CoreMedia
 @testable import DAM
 
@@ -236,6 +237,18 @@ final class MoonlightScreenCaptureTests: XCTestCase {
         XCTAssertEqual(HDR10Converter.pqNits(0.5806), 203, accuracy: 0.5)
         XCTAssertEqual(HDR10Converter.pqNits(0), 0, accuracy: 0.001)
         XCTAssertEqual(HDR10Converter.pqNits(1), 10_000, accuracy: 1)
+    }
+
+    /// Where Core Image puts SDR white in PQ is measured, not fallen back on: 100 nits on
+    /// macOS 13 (a stop up to 203), 203 on macOS 14 (none).
+    func testTheReferenceWhiteIsMeasured() throws {
+        let context = CIContext(options: [.workingColorSpace: CGColorSpace(name: CGColorSpace.extendedLinearSRGB)!])
+        let gain = try XCTUnwrap(HDR10Converter.measuredGain(in: context))
+        switch ProcessInfo.processInfo.operatingSystemVersion.majorVersion {
+        case 13: XCTAssertEqual(gain, log2(203.0 / 100.0), accuracy: 0.05)
+        case 14: XCTAssertEqual(gain, 0)
+        default: break
+        }
     }
 
     /// SDR white, as a display is captured before macOS 15, goes to BT.2408's 203 nits in

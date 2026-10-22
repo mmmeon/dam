@@ -18,11 +18,23 @@ final class MoonlightHostTests: XCTestCase {
     }
 
     /// A host on ports of its own, below the ones outgoing connections take (49152 and up)
-    /// and the ones DAM itself listens on (47984–48013).
-    private func makeHost() -> MoonlightHost {
+    /// and the ones DAM itself listens on (47984–48013); set up as `other` is, when given.
+    private func makeHost(like other: MoonlightHost? = nil,
+                          limits: MoonlightConnectionLimits = MoonlightConnectionLimits()) -> MoonlightHost {
         let base = UInt16.random(in: 30000...39000)
-        return MoonlightHost(httpPort: NWEndpoint.Port(rawValue: base)!, httpsPort: NWEndpoint.Port(rawValue: base + 1)!,
-                             rtspPort: NWEndpoint.Port(rawValue: base + 2)!, directory: directory, advertises: false)
+        let host = MoonlightHost(httpPort: NWEndpoint.Port(rawValue: base)!, httpsPort: NWEndpoint.Port(rawValue: base + 1)!,
+                                 rtspPort: NWEndpoint.Port(rawValue: base + 2)!, directory: directory, advertises: false,
+                                 limits: other?.limits ?? limits)
+        guard let other else { return host }
+        // Everything a test may set before the host starts.
+        host.apps = other.apps
+        host.makeDisplay = other.makeDisplay
+        host.removeDisplay = other.removeDisplay
+        host.resizeDisplay = other.resizeDisplay
+        host.requestPIN = other.requestPIN
+        host.pairingAbandoned = other.pairingAbandoned
+        host.onChange = other.onChange
+        return host
     }
 
     override func tearDownWithError() throws {
@@ -41,15 +53,8 @@ final class MoonlightHostTests: XCTestCase {
                 RunLoop.main.run(until: Date().addingTimeInterval(0.05))
             }
             guard !host.isListening, attempt < 5, host.lastError == Spoken.moonlightPortsInUse else { break }
-            let taken = host!
-            taken.stop()
-            host = makeHost()
-            host.apps = taken.apps
-            host.makeDisplay = taken.makeDisplay
-            host.removeDisplay = taken.removeDisplay
-            host.resizeDisplay = taken.resizeDisplay
-            host.requestPIN = taken.requestPIN
-            host.pairingAbandoned = taken.pairingAbandoned
+            host.stop()
+            host = makeHost(like: host)
         }
         XCTAssertTrue(host.isListening, host.lastError ?? "not listening")
     }
@@ -621,9 +626,47 @@ final class MoonlightHostTests: XCTestCase {
         }
     }
 
+    /// A start after a stop waits for the stop's listeners to close; a port found taken soon
+    /// after is tried again, unless another stop comes first, and reported once that is long past.
+    func testListenersAreOpenedAgainOnlyWhileAStopMayHoldTheirPorts() throws {
+        let restarts = MoonlightListenerRestarts()
+        let taken = NWError.posix(.EADDRINUSE)
+        var opened = 0
+        let open = { opened += 1 }
+        XCTAssertFalse(restarts.retries(taken, closing: [], open: open), "taken before any stop: someone else's")
+
+        let listener = try NWListener(using: .tcp)
+        let ready = expectation(description: "ready")
+        listener.stateUpdateHandler = { if case .ready = $0 { ready.fulfill() } }
+        listener.newConnectionHandler = { $0.cancel() }
+        listener.start(queue: .main)
+        wait(for: [ready], timeout: 5)
+        restarts.stop([listener])
+        restarts.open(open)
+        XCTAssertEqual(opened, 0, "not while the stop's listener is closing")
+        let deadline = Date().addingTimeInterval(5)
+        while opened == 0, Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+        XCTAssertEqual(opened, 1)
+
+        XCTAssertFalse(restarts.retries(.posix(.EACCES), closing: [], open: open))
+        XCTAssertTrue(restarts.retries(taken, closing: [], open: open))
+        RunLoop.main.run(until: Date().addingTimeInterval(3 * MoonlightListenerRestarts.retryDelay))
+        XCTAssertEqual(opened, 2, "tried again")
+
+        XCTAssertTrue(restarts.retries(taken, closing: [], open: open))
+        restarts.stop([])
+        RunLoop.main.run(until: Date().addingTimeInterval(3 * MoonlightListenerRestarts.retryDelay))
+        XCTAssertEqual(opened, 2, "a stop drops the try")
+
+        let holdTime = MoonlightListenerRestarts.portHoldTime
+        MoonlightListenerRestarts.portHoldTime = 0
+        defer { MoonlightListenerRestarts.portHoldTime = holdTime }
+        restarts.stop([try NWListener(using: .tcp)])
+        XCTAssertFalse(restarts.retries(taken, closing: [], open: open), "long after the stop: someone else's")
+    }
+
     func testConnectionsAreCappedAndMustAskInTime() throws {
-        host = MoonlightHost(httpPort: host.httpPort, httpsPort: host.httpsPort, rtspPort: host.rtspPort, directory: directory,
-                             advertises: false, limits: MoonlightConnectionLimits(maxPerAddress: 2, deadline: 1))
+        host = makeHost(limits: MoonlightConnectionLimits(maxPerAddress: 2, deadline: 1))
         startHost()
         func idle() -> NWConnection {
             let connection = NWConnection(host: "127.0.0.1", port: host.httpPort, using: .tcp)

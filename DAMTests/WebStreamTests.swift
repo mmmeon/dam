@@ -448,6 +448,32 @@ final class WebStreamTests: XCTestCase {
         try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: String])
     }
 
+    /// Started again at once, as for a new certificate, the server is running from the start
+    /// and listens once the ports are free, so a toggle neither says it failed nor starts it twice.
+    func testAServerStartedAgainAtOnceIsRunningAndListens() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let port = NWEndpoint.Port(rawValue: UInt16.random(in: 30000...39000) & ~1)!
+        let server = WebStreamServer(port: port, directory: directory)
+        defer { server.stop() }
+        func listens() {
+            let deadline = Date().addingTimeInterval(8)
+            while !server.isListening, server.lastError == nil, Date() < deadline {
+                RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+            }
+            XCTAssertTrue(server.isListening, server.lastError ?? "not listening")
+        }
+        server.start()
+        listens()
+        server.stop()
+        server.start()
+        XCTAssertTrue(server.isRunning)
+        XCTAssertNil(server.lastError)
+        listens()
+        server.stop()
+        XCTAssertFalse(server.isRunning)
+    }
+
     /// The stream is served on its own ports, with Moonlight hosting off, to devices it knows.
     func testServesKnownDevicesOnItsOwnPorts() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
