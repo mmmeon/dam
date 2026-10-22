@@ -302,19 +302,45 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
 
 /// Turns captured frames into HDR10's: 10-bit 4:2:0 in BT.2020 with PQ, as the encoder takes
 /// them as is. SDR white goes to 203 nits, BT.2408's reference white, where HDR10 players
-/// show it (Moonlight's renderer included); macOS puts it at 100 nits in PQ, which looks
-/// dim there. What is brighter than SDR white, where capture has HDR, scales with it. On
-/// the GPU, about 6 ms a 1080p frame on the Intel test Mac. On the capture queue.
+/// show it (Moonlight's renderer included). Where macOS puts it in PQ differs: 100 nits on
+/// macOS 13, which looks dim there, 203 already on macOS 14 (GitHub's runners), so it is
+/// found by turning white into PQ once (`referenceWhiteGain`). What is brighter than SDR
+/// white, where capture has HDR, scales with it. On the GPU, about 6 ms a 1080p frame on
+/// the Intel test Mac. On the capture queue.
 final class HDR10Converter {
-    /// From 100 nits to 203, in stops.
-    static let referenceWhiteGain = log2(203.0 / 100.0)
+    /// The stops from where this macOS puts SDR white in PQ to 203 nits: 1.02 on macOS 13,
+    /// 0 on 14; macOS 13's when white can't be turned into PQ.
+    static let referenceWhiteGain: Double = {
+        let fallback = log2(203.0 / 100.0)
+        guard let converter = HDR10Converter(width: 16, height: 16, gain: 0),
+              let white = converter.render(CIImage(color: .white).cropped(to: CGRect(x: 0, y: 0, width: 16, height: 16)))
+        else { return fallback }
+        CVPixelBufferLockBaseAddress(white, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(white, .readOnly) }
+        guard let luma = CVPixelBufferGetBaseAddressOfPlane(white, 0)?.assumingMemoryBound(to: UInt16.self) else { return fallback }
+        let row = CVPixelBufferGetBytesPerRowOfPlane(white, 0) / 2
+        // 10-bit video range, kept in the top bits of each 16.
+        let signal = (Double(luma[8 * row + 8] >> 6) - 64) / 876
+        let nits = pqNits(signal)
+        guard nits > 20, nits < 1000 else { return fallback }
+        return log2(203 / nits)
+    }()
+
+    /// The light PQ's `signal` (0...1) stands for, in nits (SMPTE ST 2084).
+    static func pqNits(_ signal: Double) -> Double {
+        let m1 = 0.1593017578125, m2 = 78.84375, c1 = 0.8359375, c2 = 18.8515625, c3 = 18.6875
+        let p = pow(max(signal, 0), 1 / m2)
+        return 10_000 * pow(max(p - c1, 0) / (c2 - c3 * p), 1 / m1)
+    }
 
     private let context = CIContext(options: [.workingColorSpace: CGColorSpace(name: CGColorSpace.extendedLinearSRGB)!,
                                               .cacheIntermediates: false])
     private let pq = CGColorSpace(name: CGColorSpace.itur_2100_PQ)!
     private var pool: CVPixelBufferPool?
+    private let gain: Double
 
-    init?(width: Int, height: Int) {
+    /// `gain` in stops; this macOS's reference white unless given.
+    init?(width: Int, height: Int, gain: Double? = nil) {
         let attributes: [CFString: Any] = [
             kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
             kCVPixelBufferWidthKey: width,
@@ -323,15 +349,20 @@ final class HDR10Converter {
         ]
         CVPixelBufferPoolCreate(nil, nil, attributes as CFDictionary, &pool)
         guard pool != nil else { return nil }
+        self.gain = gain ?? Self.referenceWhiteGain
     }
 
     /// `buffer`, in any format Core Image reads and tagged with its colour, as HDR10, or nil
     /// when it could not be.
     func convert(_ buffer: CVPixelBuffer) -> CVPixelBuffer? {
+        render(CIImage(cvPixelBuffer: buffer))
+    }
+
+    private func render(_ picture: CIImage) -> CVPixelBuffer? {
         guard let pool else { return nil }
         var made: CVPixelBuffer?
         guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &made) == kCVReturnSuccess, let out = made else { return nil }
-        let image = CIImage(cvPixelBuffer: buffer).applyingFilter("CIExposureAdjust", parameters: [kCIInputEVKey: Self.referenceWhiteGain])
+        let image = gain == 0 ? picture : picture.applyingFilter("CIExposureAdjust", parameters: [kCIInputEVKey: gain])
         context.render(image, to: out, bounds: image.extent, colorSpace: pq)
         CVBufferSetAttachment(out, kCVImageBufferColorPrimariesKey, kCVImageBufferColorPrimaries_ITU_R_2020, .shouldPropagate)
         CVBufferSetAttachment(out, kCVImageBufferTransferFunctionKey, kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ, .shouldPropagate)
