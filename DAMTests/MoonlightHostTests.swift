@@ -14,13 +14,15 @@ final class MoonlightHostTests: XCTestCase {
 
     override func setUpWithError() throws {
         directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        // Below the ports outgoing connections take (49152 and up) and the ones DAM itself
-        // listens on (47984–48013), either of which a test's listener would find taken.
+        host = makeHost()
+    }
+
+    /// A host on ports of its own, below the ones outgoing connections take (49152 and up)
+    /// and the ones DAM itself listens on (47984–48013).
+    private func makeHost() -> MoonlightHost {
         let base = UInt16.random(in: 30000...39000)
-        host = MoonlightHost(httpPort: NWEndpoint.Port(rawValue: base)!,
-                             httpsPort: NWEndpoint.Port(rawValue: base + 1)!,
-                             rtspPort: NWEndpoint.Port(rawValue: base + 2)!,
-                             directory: directory, advertises: false)
+        return MoonlightHost(httpPort: NWEndpoint.Port(rawValue: base)!, httpsPort: NWEndpoint.Port(rawValue: base + 1)!,
+                             rtspPort: NWEndpoint.Port(rawValue: base + 2)!, directory: directory, advertises: false)
     }
 
     override func tearDownWithError() throws {
@@ -28,11 +30,26 @@ final class MoonlightHostTests: XCTestCase {
         try? FileManager.default.removeItem(at: directory)
     }
 
+    /// Starts the host, moving it to other ports while its own are taken: by another process,
+    /// as on GitHub's runners, or by one just closed, as macOS keeps a port from listeners for
+    /// a few seconds after (even after a mere bind, so they can't be checked beforehand).
     private func startHost() {
-        host.start()
-        let deadline = Date().addingTimeInterval(5)
-        while !host.isListening, host.lastError == nil, Date() < deadline {
-            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        for attempt in 1...5 {
+            host.start()
+            let deadline = Date().addingTimeInterval(5)
+            while !host.isListening, host.lastError == nil, Date() < deadline {
+                RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+            }
+            guard !host.isListening, attempt < 5, host.lastError == Spoken.moonlightPortsInUse else { break }
+            let taken = host!
+            taken.stop()
+            host = makeHost()
+            host.apps = taken.apps
+            host.makeDisplay = taken.makeDisplay
+            host.removeDisplay = taken.removeDisplay
+            host.resizeDisplay = taken.resizeDisplay
+            host.requestPIN = taken.requestPIN
+            host.pairingAbandoned = taken.pairingAbandoned
         }
         XCTAssertTrue(host.isListening, host.lastError ?? "not listening")
     }
@@ -150,6 +167,25 @@ final class MoonlightHostTests: XCTestCase {
     }
 
     // MARK: - Tests
+
+    /// The tests' own start moves the host off ports something else holds.
+    func testStartingMovesOffATakenPort() throws {
+        let taken = host.httpPort
+        let parameters = NWParameters.tcp
+        let holder = try NWListener(using: parameters, on: taken)
+        holder.newConnectionHandler = { $0.cancel() }
+        var ready = false
+        holder.stateUpdateHandler = { if case .ready = $0 { ready = true } }
+        holder.start(queue: .main)
+        defer { holder.cancel() }
+        let deadline = Date().addingTimeInterval(5)
+        while !ready, Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }
+        try XCTSkipUnless(ready, "couldn't hold the port")
+        host.requestPIN = { _, answer in answer("4821") }
+        startHost()
+        XCTAssertNotEqual(host.httpPort, taken)
+        XCTAssertNotNil(host.requestPIN, "set before the move")
+    }
 
     func testServerInfoOverHTTPSaysUnpaired() throws {
         startHost()
