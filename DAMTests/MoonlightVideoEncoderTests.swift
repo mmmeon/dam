@@ -28,13 +28,13 @@ final class MoonlightVideoEncoderTests: XCTestCase {
     }
 
     /// NAL unit types in an Annex B access unit, in order.
-    private func nalTypes(_ data: Data) -> [UInt8] {
+    private func nalTypes(_ data: Data, _ codec: VideoCodec = .h264) -> [Int] {
         let bytes = [UInt8](data)
-        var types: [UInt8] = []
+        var types: [Int] = []
         var index = 0
         while index + 4 < bytes.count {
             if bytes[index] == 0, bytes[index + 1] == 0, bytes[index + 2] == 0, bytes[index + 3] == 1 {
-                types.append(bytes[index + 4] & 0x1F)
+                types.append(codec.nalType(bytes[index + 4]))
                 index += 4
             } else {
                 index += 1
@@ -185,5 +185,64 @@ final class MoonlightVideoEncoderTests: XCTestCase {
         settings.reordering = true
         let encoder = try makeEncoder(Collector(), settings: settings)
         XCTAssertFalse(encoder.isLowLatency)
+    }
+
+    // MARK: - HEVC
+
+    private func makeHEVCEncoder(_ collector: Collector, lowLatency: Bool = false) throws -> MoonlightVideoEncoder {
+        try XCTSkipUnless(VideoCodec.support[.hevc]?.hardware == true, "no hardware HEVC encoder on this Mac")
+        var settings = self.settings
+        settings.codec = .hevc
+        settings.lowLatency = lowLatency
+        return try makeEncoder(collector, settings: settings)
+    }
+
+    /// Moonlight takes an HEVC frame as a keyframe by a VPS at its start, followed by the
+    /// SPS and PPS, then a slice it can start from.
+    func testAnHEVCKeyFrameStartsWithItsVPSThenSPSAndPPS() throws {
+        let collector = Collector()
+        let encoder = try makeHEVCEncoder(collector)
+        for seed in 0..<3 { try encodeOne(encoder, collector, seed: seed) }
+        let given = collector.given
+        XCTAssertEqual(given.map(\.isKeyFrame), [true, false, false])
+        let types = nalTypes(given[0].data, .hevc)
+        XCTAssertEqual(Array(types.prefix(3)), [32, 33, 34], "\(types)")
+        XCTAssertTrue(types.contains { (16...21).contains($0) }, "a slice to start from: \(types)")
+        XCTAssertTrue(nalTypes(given[1].data, .hevc).allSatisfy { $0 < 16 || (35...40).contains($0) }, "\(nalTypes(given[1].data, .hevc))")
+
+        encoder.requestKeyFrame()
+        try encodeOne(encoder, collector, seed: 3)
+        XCTAssertEqual(Array(nalTypes(try XCTUnwrap(collector.given.last).data, .hevc).prefix(3)), [32, 33, 34])
+    }
+
+    func testHEVCParameterSetsComeInTheOrderAKeyFrameCarriesThem() throws {
+        let collector = Collector()
+        let encoder = try makeHEVCEncoder(collector)
+        try encodeOne(encoder, collector, seed: 0)
+        let (sets, lengthSize) = try XCTUnwrap(MoonlightVideoEncoder.parameterSets(try XCTUnwrap(collector.given.first).sample))
+        XCTAssertEqual(Array(sets.map { VideoCodec.hevc.nalType($0[0]) }.prefix(3)), [32, 33, 34])
+        XCTAssertEqual(lengthSize, 4)
+    }
+
+    /// Where the HEVC encoder has no low-latency rate control, asking for it gives the
+    /// plain encoder, nudged, rather than no stream.
+    func testHEVCFallsBackToThePlainEncoderWithoutLowLatency() throws {
+        let collector = Collector()
+        let encoder = try makeHEVCEncoder(collector, lowLatency: true)
+        XCTAssertEqual(encoder.isLowLatency, VideoCodec.support[.hevc]?.lowLatency)
+        for seed in 0..<2 { try encodeOne(encoder, collector, seed: seed) }
+        XCTAssertEqual(collector.given.count, 2)
+    }
+
+    func testCodecsNameNALUnitTypesTheirOwnWay() {
+        XCTAssertEqual(VideoCodec.h264.nalType(0x67), 7)
+        XCTAssertEqual(VideoCodec.h264.nalType(0x65), 5)
+        XCTAssertEqual(VideoCodec.hevc.nalType(0x40), 32, "VPS")
+        XCTAssertEqual(VideoCodec.hevc.nalType(0x42), 33, "SPS")
+        XCTAssertEqual(VideoCodec.hevc.nalType(0x44), 34, "PPS")
+        XCTAssertEqual(VideoCodec.hevc.nalType(0x26), 19, "IDR_W_RADL")
+        XCTAssertEqual(VideoCodec(moonlightFormat: 0), .h264)
+        XCTAssertEqual(VideoCodec(moonlightFormat: 1), .hevc)
+        XCTAssertNil(VideoCodec(moonlightFormat: 2), "AV1: no Mac encodes it")
     }
 }

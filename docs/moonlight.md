@@ -1,14 +1,15 @@
 # Moonlight and web streaming — implementation
 
-*As of 2026-10-14 (merged to `main` on 2026-10-13 in 3aa3588). H.264 only. Mouse,
-keyboard and text input since 2026-10-20; no controllers, touch or pen.*
+*As of 2026-10-14 (merged to `main` on 2026-10-13 in 3aa3588). H.264, and HEVC when
+turned on (since 2026-10-22). Mouse, keyboard and text input since 2026-10-20; no
+controllers, touch or pen.*
 
 ## Summary
 
 DAM is a Moonlight host on its own, without Sunshine. A Moonlight client on the LAN
 finds the Mac and pairs with a PIN. It then sees each of DAM's streaming displays as an
 app, plus "New Display". Launching "New Display" creates a virtual display at the
-client's resolution and frame rate. DAM streams it as H.264 video with Reed-Solomon FEC
+client's resolution and frame rate. DAM streams it as H.264 (or HEVC) video with Reed-Solomon FEC
 and Opus audio. Cancelling from Moonlight removes the display; resuming keeps it,
 changed in place to the size the client asks for now.
 
@@ -119,7 +120,7 @@ flowchart LR
     C --> D["4. RTSP handshake<br/>TCP 48010"]
     D --> E["5. ENet control<br/>UDP 47999, AES-GCM"]
     E --> F["6. Capture<br/>ScreenCaptureKit, video + audio"]
-    F --> G["7. Encode<br/>VideoToolbox H.264, Opus"]
+    F --> G["7. Encode<br/>VideoToolbox H.264 or HEVC, Opus"]
     G --> H["8. Packetize + FEC<br/>Reed-Solomon parity, paced"]
     H --> I["To Moonlight<br/>UDP 47998 video, 48000 audio"]
     G --> J["Browser or player, HTTP 47995 / HTTPS 47996<br/>fragmented MP4: /watch, /stream.mp4"]
@@ -165,7 +166,8 @@ once (`MoonlightHost.maxSessions`). A fifth gets a 503.
 
 `MoonlightRTSP`, TCP 48010 (and one port on per further session):
 
-- DESCRIBE offers H.264 only. It supports encrypted control and audio, and encrypted
+- DESCRIBE offers the launch's codecs: H.264, and HEVC when Offer HEVC is on (see
+  Codecs below), by `sprop-parameter-sets=AAAAAU` as GameStream did. It supports encrypted control and audio, and encrypted
   video when Settings › Moonlight › Encrypt Video says so for the client's address: Off
   the Local Network (the default, as Sunshine's), Always or Never. "Local" is loopback,
   link-local, or a subnet of one of the Mac's interfaces. Only Always requires it
@@ -173,7 +175,7 @@ once (`MoonlightHost.maxSessions`). A fifth gets a 503.
 - Only the address that made the /launch or /resume is answered; any other gets a 403,
   as SETUP hands out the stream's tokens.
 - ANNOUNCE is parsed for size, fps, packet size, bitrate, minimum FEC and audio
-  settings. It is refused if the client asks for another codec, for encrypted video
+  settings. It is refused if the client asks for a codec it wasn't offered, for encrypted video
   that wasn't offered, for plain video under Always, or for values no client sends
   (sizes beyond 8192, rates beyond 480, packets beyond one datagram); a bitrate over
   1 Gbit/s is taken as 1 Gbit/s. A launch is announced once: another ANNOUNCE would
@@ -238,9 +240,30 @@ them as HID events, one injector per stream:
 - **Capture:** ScreenCaptureKit captures in 4:2:0 at the stream's size and rate, with a
   queue depth of 6, shared between streams that want the same.
 - **Encoding:** VideoToolbox hardware H.264 (High profile, CABAC, real time, no frame
-  reordering, keyframes only on request).
+  reordering, keyframes only on request), or HEVC Main when the client chose it.
+- **Codecs:** what differs between codecs is in `VideoCodec` (MoonlightVideoEncoder.swift):
+  the encoder's type and profile, how NAL units name their type, the order of the
+  parameter sets (HEVC: VPS, SPS, PPS, which Moonlight requires at each keyframe), and
+  Moonlight's numbers for it (ServerCodecModeSupport bit, ANNOUNCE `bitStreamFormat`).
+  What the Mac's encoder does with each is probed once, by making a session (hardware,
+  and low-latency rate control). HEVC is offered only when Settings › Moonlight › Offer
+  HEVC is on (off by default) and the Mac encodes it in hardware; serverinfo then also
+  gives Sunshine's `MaxLumaPixelsHEVC`, without which Moonlight won't take HEVC. Moonlight
+  on Auto takes HEVC whenever it's offered and the device decodes it in hardware, which is
+  why it is off by default. On the Intel test Mac (Kaby Lake, 2026-10-22) HEVC is
+  hardware but slow: about 40 frames a second at 1080p in a tight loop (H.264: 165), each
+  frame held until two more are in, encoded synchronously, no low-latency rate control
+  (-12902), and MaxFrameDelayCount, AllowOpenGOP and MaxKeyFrameIntervalDuration refused
+  (-12900). Streamed to the local Moonlight: 1080p60, 30 fps, 205 ms host processing, a
+  280 ms picture delay (H.264 at the same time: 46 fps, 10 ms, 30 ms); 720p60 HEVC, 48 fps
+  and 48 ms. Its keyframes are CRA, which Moonlight takes. Not yet: Main10 and HDR (the
+  encoder makes Main10 here, but HDR needs 10-bit capture, HDR metadata and Moonlight's
+  HDR control message), 4:4:4 (asked-for 4:4:4 and 4:2:2 come out 4:2:0 here), and AV1,
+  which no Mac encodes in hardware (Apple Silicon from M3 only decodes it). The
+  browser stream and OpenDisplay stay H.264.
 - **Nudge:** the encoder holds each frame until the next one arrives. So if no new frame
-  follows within 1.25 frame times, DAM resubmits the last picture to flush it.
+  follows within 1.25 frame times, DAM resubmits the last picture to flush it, again
+  every 1.25 frame times while the frame is still held (HEVC on the test Mac needs two).
 - **Low-latency encoding (default for Moonlight):** Apple's low-latency rate control returns each frame
   as soon as it is encoded, so no nudge is needed. On the Intel test Mac it marks frames
   long-term and predicts from them, which FFmpeg (Moonlight everywhere, mpv, ffplay, VLC)

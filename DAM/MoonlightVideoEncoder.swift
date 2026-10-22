@@ -1,16 +1,16 @@
 //
 //  MoonlightVideoEncoder.swift
 //
-//  Encodes frames to H.264 for Moonlight with as little delay as the encoder allows: in
+//  Encodes frames to H.264 or HEVC for Moonlight with as little delay as the encoder allows: in
 //  real time, without reordering frames, with one reference frame, and with keyframes only
 //  when asked for. Frames are handed over through a single slot that a newer frame takes
 //  over, and given to the encoder one at a time on a thread of their own, so the caller
 //  never waits for the encoder and the next frame encoded is always the latest.
 //
 //  The plain real-time encoder (an Intel Mac's, at least) hands a frame back only once
-//  the next one is in, so while the screen moves each frame comes out a frame's time late,
-//  and when it stops the last frame is nudged out by giving the encoder the same picture
-//  again. Apple's low-latency rate control hands each frame back on its own, but on this
+//  the next one is in (HEVC's on the Intel test Mac, the one after that), so while the
+//  screen moves each frame comes out a frame's time late, and when it stops the last
+//  frame is nudged out by giving the encoder the same picture again. Apple's low-latency rate control hands each frame back on its own, but on this
 //  encoder it predicts from long-term reference frames, which a decoder holding one
 //  reference frame cannot follow: FFmpeg, which Moonlight decodes with everywhere, and
 //  Moonlight rewrites any SPS it gets to one reference frame. Neither the SPS nor the
@@ -18,6 +18,11 @@
 //  are rewritten instead (see H264OneReference). It is used only when the settings ask for
 //  it (`lowLatency`). Asking the encoder to complete a frame would also bring it out at
 //  once, but starts the next afresh as a keyframe.
+//
+//  What differs between codecs is kept in VideoCodec: the encoder's type and profile, how
+//  a NAL unit names its type, and the order of the parameter sets. A Mac 2017 or later
+//  encodes HEVC in hardware; none encodes AV1 (Apple's media engines only decode it), so
+//  it has no case. The Intel test Mac's HEVC encoder has no low-latency rate control.
 //
 
 import CoreMedia
@@ -31,6 +36,102 @@ enum MoonlightVideoError: Error {
     case session(OSStatus)
 }
 
+/// A codec the Mac's video encoder makes, as Annex B NAL units.
+enum VideoCodec: CaseIterable {
+    /// H.264 High.
+    case h264
+    /// HEVC Main: 8-bit 4:2:0.
+    case hevc
+
+    var name: String {
+        switch self {
+        case .h264: return "H.264"
+        case .hevc: return "HEVC"
+        }
+    }
+
+    var codecType: CMVideoCodecType {
+        switch self {
+        case .h264: return kCMVideoCodecType_H264
+        case .hevc: return kCMVideoCodecType_HEVC
+        }
+    }
+
+    var profileLevel: CFString {
+        switch self {
+        case .h264: return kVTProfileLevel_H264_High_AutoLevel
+        case .hevc: return kVTProfileLevel_HEVC_Main_AutoLevel
+        }
+    }
+
+    /// The type of a NAL unit whose header starts with `byte`.
+    func nalType(_ byte: UInt8) -> Int {
+        switch self {
+        case .h264: return Int(byte & 0x1F)
+        case .hevc: return Int(byte >> 1 & 0x3F)
+        }
+    }
+
+    /// The parameter sets' NAL unit types, in the order a keyframe carries them: SPS and
+    /// PPS, with HEVC's VPS before them.
+    var parameterSetTypes: [Int] {
+        switch self {
+        case .h264: return [7, 8]
+        case .hevc: return [32, 33, 34]
+        }
+    }
+
+    /// Moonlight's bit for it in ServerCodecModeSupport (SCM_H264, SCM_HEVC).
+    var moonlightCodecMode: Int {
+        switch self {
+        case .h264: return 0x0001
+        case .hevc: return 0x0100
+        }
+    }
+
+    /// What Moonlight's ANNOUNCE calls it (x-nv-vqos[0].bitStreamFormat).
+    var moonlightFormat: Int {
+        switch self {
+        case .h264: return 0
+        case .hevc: return 1
+        }
+    }
+
+    init?(moonlightFormat: Int) {
+        guard let codec = Self.allCases.first(where: { $0.moonlightFormat == moonlightFormat }) else { return nil }
+        self = codec
+    }
+
+    /// What this Mac's encoder does with a codec.
+    struct Support: Equatable {
+        /// Whether it encodes it on the GPU's media engine.
+        var hardware: Bool
+        /// Whether it takes low-latency rate control for it (see the top of the file).
+        var lowLatency: Bool
+    }
+
+    /// What this Mac's encoder does with each codec, found the first time it is asked by
+    /// making a session of each, which takes a few milliseconds.
+    static let support: [VideoCodec: Support] = Dictionary(uniqueKeysWithValues: allCases.map { ($0, $0.probe()) })
+
+    private func probe() -> Support {
+        func makes(lowLatency: Bool) -> Bool {
+            var specification: [CFString: Any] = [kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder: true]
+            if lowLatency { specification[kVTVideoEncoderSpecification_EnableLowLatencyRateControl] = true }
+            var session: VTCompressionSession?
+            let status = VTCompressionSessionCreate(allocator: nil, width: 1920, height: 1080, codecType: codecType,
+                                                    encoderSpecification: specification as CFDictionary,
+                                                    imageBufferAttributes: nil, compressedDataAllocator: nil,
+                                                    outputCallback: nil, refcon: nil, compressionSessionOut: &session)
+            if let session { VTCompressionSessionInvalidate(session) }
+            return status == noErr && session != nil
+        }
+        let support = Support(hardware: makes(lowLatency: false), lowLatency: makes(lowLatency: true))
+        veLog.debug("\(name, privacy: .public): hardware \(support.hardware), low-latency \(support.lowLatency)")
+        return support
+    }
+}
+
 final class MoonlightVideoEncoder {
 
     struct Settings: Equatable {
@@ -38,6 +139,7 @@ final class MoonlightVideoEncoder {
         var height: Int
         var fps: Int
         var bitrateKbps: Int
+        var codec = VideoCodec.h264
         /// Whether frames may be predicted from later ones (B-frames): smaller for the
         /// same picture, at a couple of frames' delay. Never for Moonlight.
         var reordering = false
@@ -60,7 +162,8 @@ final class MoonlightVideoEncoder {
         var lowLatency = false
     }
 
-    /// One encoded frame as an H.264 Annex B access unit; a keyframe starts with its SPS and PPS.
+    /// One encoded frame as an Annex B access unit; a keyframe starts with its parameter
+    /// sets (SPS and PPS, and for HEVC the VPS before them).
     struct Frame {
         let data: Data
         let isKeyFrame: Bool
@@ -106,7 +209,8 @@ final class MoonlightVideoEncoder {
     private var busy = false
     private var waiting: [(CVPixelBuffer, CMTime)] = []
     private var keyFrameRequested = true
-    /// Frames given to the encoder and not yet handed back; under `lock`.
+    /// Frames given to the encoder and not yet handed back, not counting pictures given
+    /// again to nudge them out; under `lock`.
     private var pending = 0
     /// Frames the encoder dropped or failed on; under `lock`.
     private var dropped = 0
@@ -146,7 +250,7 @@ final class MoonlightVideoEncoder {
             if lowLatency { specification[kVTVideoEncoderSpecification_EnableLowLatencyRateControl] = true }
             var session: VTCompressionSession?
             status = VTCompressionSessionCreate(allocator: nil, width: Int32(settings.width),
-                                                height: Int32(settings.height), codecType: kCMVideoCodecType_H264,
+                                                height: Int32(settings.height), codecType: settings.codec.codecType,
                                                 encoderSpecification: specification as CFDictionary,
                                                 imageBufferAttributes: nil, compressedDataAllocator: nil,
                                                 outputCallback: nil, refcon: nil, compressionSessionOut: &session)
@@ -159,7 +263,8 @@ final class MoonlightVideoEncoder {
         guard let (session, lowLatency) = made else { throw MoonlightVideoError.session(status) }
         self.session = session
         isLowLatency = lowLatency
-        oneReference = lowLatency ? H264OneReference() : nil
+        // HEVC's references are named in each slice, which Moonlight leaves alone.
+        oneReference = lowLatency && settings.codec == .h264 ? H264OneReference() : nil
         var hardware: CFBoolean?
         VTSessionCopyProperty(session, key: kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder,
                               allocator: nil, valueOut: &hardware)
@@ -169,14 +274,18 @@ final class MoonlightVideoEncoder {
         var properties: [CFString: Any] = [
             kVTCompressionPropertyKey_RealTime: true,
             kVTCompressionPropertyKey_AllowFrameReordering: settings.reordering,
-            kVTCompressionPropertyKey_ProfileLevel: kVTProfileLevel_H264_High_AutoLevel,
-            kVTCompressionPropertyKey_H264EntropyMode: kVTH264EntropyMode_CABAC,
+            kVTCompressionPropertyKey_ProfileLevel: settings.codec.profileLevel,
             kVTCompressionPropertyKey_ExpectedFrameRate: settings.fps,
             // Keyframes only when asked for (Moonlight asks after losing packets), an hour
             // apart otherwise, unless the settings want them regularly.
             kVTCompressionPropertyKey_MaxKeyFrameInterval: settings.fps * keyFrameSeconds,
             kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration: keyFrameSeconds,
         ]
+        switch settings.codec {
+        case .h264: properties[kVTCompressionPropertyKey_H264EntropyMode] = kVTH264EntropyMode_CABAC
+        // Every keyframe one a decoder can start from, with nothing after it predicted from before it.
+        case .hevc: properties[kVTCompressionPropertyKey_AllowOpenGOP] = false
+        }
         properties.merge(Self.rateProperties(settings.bitrateKbps, settings)) { $1 }
         // Without reordering, no frame is held back for one that follows.
         if !settings.reordering { properties[kVTCompressionPropertyKey_MaxFrameDelayCount] = 0 }
@@ -186,7 +295,7 @@ final class MoonlightVideoEncoder {
             if status != noErr { veLog.debug("encoder property \(key as String, privacy: .public): \(status)") }
         }
         VTCompressionSessionPrepareToEncodeFrames(session)
-        veLog.debug("encoder \(settings.width)×\(settings.height)@\(settings.fps) \(settings.bitrateKbps) kbps, hardware \(self.isHardware), low-latency \(self.isLowLatency)")
+        veLog.debug("encoder \(settings.codec.name, privacy: .public) \(settings.width)×\(settings.height)@\(settings.fps) \(settings.bitrateKbps) kbps, hardware \(self.isHardware), low-latency \(self.isLowLatency)")
     }
 
     deinit {
@@ -262,14 +371,22 @@ final class MoonlightVideoEncoder {
             lastBuffer = buffer
             guard !settings.steady else { continue }
             // Bring this frame out should no other follow it.
-            let generation = submissions
-            queue.asyncAfter(deadline: .now() + nudgeDelay) { [weak self] in
-                guard let self, self.submissions == generation, let last = self.lastBuffer else { return }
-                self.lock.lock()
-                let held = self.pending > 0
-                self.lock.unlock()
-                if held { _ = self.submit(last, at: self.lastTime, keyFrame: false, counted: false) }
-            }
+            nudge(after: submissions)
+        }
+    }
+
+    /// Gives the encoder the last picture again a nudge's delay from now, unless another
+    /// was given meanwhile, for as long as a frame given to it is still held: once for an
+    /// encoder that holds one frame, as H.264's does, and twice for one that holds two, as
+    /// HEVC's does on the Intel test Mac.
+    private func nudge(after generation: Int) {
+        queue.asyncAfter(deadline: .now() + nudgeDelay) { [weak self] in
+            guard let self, self.submissions == generation, let last = self.lastBuffer else { return }
+            self.lock.lock()
+            let held = self.pending > 0
+            self.lock.unlock()
+            guard held, self.submit(last, at: self.lastTime, keyFrame: false, counted: false) else { return }
+            self.nudge(after: self.submissions)
         }
     }
 
@@ -283,16 +400,20 @@ final class MoonlightVideoEncoder {
         submissions += 1
         let options = keyFrame ? [kVTEncodeFrameOptionKey_ForceKeyFrame: true] as CFDictionary : nil
         let submitted = DispatchTime.now().uptimeNanoseconds
-        lock.lock()
-        pending += 1
-        lock.unlock()
+        if counted {
+            lock.lock()
+            pending += 1
+            lock.unlock()
+        }
         let status = VTCompressionSessionEncodeFrame(session, imageBuffer: buffer, presentationTimeStamp: rising,
                                                      duration: .invalid, frameProperties: options,
                                                      infoFlagsOut: nil) { [weak self] status, flags, sample in
             guard let self else { return }
-            self.lock.lock()
-            self.pending -= 1
-            self.lock.unlock()
+            if counted {
+                self.lock.lock()
+                self.pending -= 1
+                self.lock.unlock()
+            }
             guard status == noErr, !flags.contains(.frameDropped), let sample,
                   let (sets, _) = Self.parameterSets(sample), var units = Self.nalUnits(sample) else {
                 if counted {
@@ -326,10 +447,12 @@ final class MoonlightVideoEncoder {
         }
         guard status == noErr else {
             veLog.error("encode frame: \(status)")
-            lock.lock()
-            pending -= 1
-            if counted { dropped += 1 }
-            lock.unlock()
+            if counted {
+                lock.lock()
+                pending -= 1
+                dropped += 1
+                lock.unlock()
+            }
             return false
         }
         return true
@@ -341,24 +464,27 @@ final class MoonlightVideoEncoder {
         return !((attachments?.first?[kCMSampleAttachmentKey_NotSync] as? Bool) ?? false)
     }
 
-    /// The parameter sets in `sample`'s format description, SPS first, and the size of the
-    /// length before each NAL unit in its data.
+    /// The parameter sets in `sample`'s format description, in the order a keyframe carries
+    /// them (see VideoCodec), and the size of the length before each NAL unit in its data.
     static func parameterSets(_ sample: CMSampleBuffer) -> (sets: [Data], lengthSize: Int)? {
         guard let format = CMSampleBufferGetFormatDescription(sample) else { return nil }
+        let codec: VideoCodec = CMFormatDescriptionGetMediaSubType(format) == kCMVideoCodecType_HEVC ? .hevc : .h264
+        let parameterSet = codec == .hevc ? CMVideoFormatDescriptionGetHEVCParameterSetAtIndex
+                                          : CMVideoFormatDescriptionGetH264ParameterSetAtIndex
         var count = 0
         var lengthSize: Int32 = 4
-        CMVideoFormatDescriptionGetH264ParameterSetAtIndex(format, parameterSetIndex: 0, parameterSetPointerOut: nil,
-                                                           parameterSetSizeOut: nil, parameterSetCountOut: &count,
-                                                           nalUnitHeaderLengthOut: &lengthSize)
+        _ = parameterSet(format, 0, nil, nil, &count, &lengthSize)
         var sets: [Data] = []
         for index in 0..<count {
             var pointer: UnsafePointer<UInt8>?
             var size = 0
-            guard CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
-                format, parameterSetIndex: index, parameterSetPointerOut: &pointer, parameterSetSizeOut: &size,
-                parameterSetCountOut: nil, nalUnitHeaderLengthOut: nil) == noErr, let pointer else { return nil }
+            guard parameterSet(format, index, &pointer, &size, nil, nil) == noErr, let pointer else { return nil }
             sets.append(Data(bytes: pointer, count: size))
         }
+        // Each in its place; any other kept after them, as HEVC's format may hold an SEI.
+        let order = codec.parameterSetTypes
+        sets.sort { (order.firstIndex(of: codec.nalType($0.first ?? 0)) ?? order.count) <
+                    (order.firstIndex(of: codec.nalType($1.first ?? 0)) ?? order.count) }
         return (sets, Int(lengthSize))
     }
 

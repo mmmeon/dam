@@ -4,8 +4,8 @@
 //  The RTSP handshake Moonlight performs after launching an app: OPTIONS, DESCRIBE, three
 //  SETUPs, ANNOUNCE with the stream's settings, and PLAY, each on a TCP connection of its
 //  own that the host closes after replying, as that is how Moonlight finds the reply's end.
-//  The host offers H.264, the encrypted control stream (v2), encrypted audio, and
-//  encrypted video when the launch is to have it. Only the device that launched is
+//  The host offers the launch's codecs, the encrypted control stream (v2), encrypted
+//  audio, and encrypted video when the launch is to have it. Only the device that launched is
 //  answered, and only one ANNOUNCE a launch.
 //
 
@@ -33,6 +33,8 @@ struct MoonlightLaunch {
     var ownsDisplay: Bool
     /// Whether the device that launched it wants low-latency rate control.
     var lowLatency = false
+    /// The codecs offered to it, which ANNOUNCE may choose from.
+    var codecs: [VideoCodec] = [.h264]
     /// Whether encrypted video is offered; clients turn it on whenever it is.
     var offersEncryptedVideo = false
     /// Whether video must go encrypted (Encrypt Video set to Always): DESCRIBE asks for it,
@@ -177,15 +179,16 @@ final class MoonlightRTSP {
         case "OPTIONS", "PLAY":
             return reply("200 OK")
         case "DESCRIBE":
-            // No HEVC or AV1 markers, so H.264; control encryption v2 and audio encryption,
-            // which Moonlight asks for regardless, and video encryption when offered. Video
-            // is required only when it must be; otherwise a client without fast AES may
-            // leave it plain.
+            // HEVC is offered as GameStream did, by the start of a VPS in base 64; no AV1
+            // marker. Control encryption v2 and audio encryption, which Moonlight asks for
+            // regardless, and video encryption when offered. Video is required only when it
+            // must be; otherwise a client without fast AES may leave it plain.
             let supported = 0x05 | (launch.offersEncryptedVideo ? MoonlightVideoCrypto.encryptionBit : 0)
             let requested = launch.requiresEncryptedVideo ? MoonlightVideoCrypto.encryptionBit : 0
             return reply("200 OK", body: "a=x-ss-general.featureFlags:0\r\n" +
                                          "a=x-ss-general.encryptionSupported:\(supported)\r\n" +
-                                         "a=x-ss-general.encryptionRequested:\(requested)\r\n")
+                                         "a=x-ss-general.encryptionRequested:\(requested)\r\n" +
+                                         (launch.codecs.contains(.hevc) ? "sprop-parameter-sets=AAAAAU\r\n" : ""))
         case "SETUP":
             let stream = request.target.split(separator: "=").dropFirst().first?.split(separator: "/").first ?? ""
             switch stream {
@@ -209,9 +212,11 @@ final class MoonlightRTSP {
             guard var config = MoonlightStreamConfig.parse(sdp: request.body) else { return reply("400 Bad Request") }
             // Moonlight names the host in Host only when stereo may be high quality.
             config.highQualityAudio = !(request.headers["Host"] ?? "0.0.0.0").contains("0.0.0.0")
-            guard config.videoFormat == 0, !config.videoEncrypted || launch.offersEncryptedVideo else {
+            guard let codec = config.codec, launch.codecs.contains(codec) else {
+                rtLog.error("announce: codec \(config.videoFormat) was not offered")
                 return reply("400 Bad Request")
             }
+            guard !config.videoEncrypted || launch.offersEncryptedVideo else { return reply("400 Bad Request") }
             guard config.videoEncrypted || !launch.requiresEncryptedVideo else {
                 rtLog.error("announce: plain video refused, as video must be encrypted")
                 return reply("400 Bad Request")

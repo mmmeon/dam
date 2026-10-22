@@ -158,6 +158,38 @@ final class MoonlightHostTests: XCTestCase {
         XCTAssertEqual(field("HttpsPort", in: xml), "\(host.httpsPort.rawValue)")
     }
 
+    /// HEVC only when turned on, and only in hardware: Moonlight takes it whenever it is offered.
+    func testHEVCIsOfferedOnlyWhenTurnedOnAndInHardware() {
+        let none = VideoCodec.Support(hardware: false, lowLatency: false)
+        let plain = VideoCodec.Support(hardware: true, lowLatency: false)
+        XCTAssertEqual(MoonlightHost.codecs(offersHEVC: false, support: [.h264: plain, .hevc: plain]), [.h264])
+        XCTAssertEqual(MoonlightHost.codecs(offersHEVC: true, support: [.h264: plain, .hevc: plain]), [.h264, .hevc])
+        XCTAssertEqual(MoonlightHost.codecs(offersHEVC: true, support: [.h264: plain, .hevc: none]), [.h264],
+                       "not in software")
+        XCTAssertEqual(MoonlightHost.codecs(offersHEVC: true, support: [:]), [.h264])
+    }
+
+    func testServerInfoOffersTheDevicesCodecs() throws {
+        host.requestPIN = { _, answer in answer("4821") }
+        startHost()
+        let client = try Client.make()
+        XCTAssertTrue(try pair(client, pin: "4821"))
+        func offered() throws -> (modes: Int?, luma: String?) {
+            let info = try get("/serverinfo", secure: true, identity: client.identity)
+            return (field("ServerCodecModeSupport", in: info).flatMap { Int($0) }, field("MaxLumaPixelsHEVC", in: info))
+        }
+        let key = "\(AppIdentity.shortID).moonlight.offersHEVC"
+        let saved = UserDefaults.dam.object(forKey: key)
+        defer { UserDefaults.dam.set(saved, forKey: key) }
+        for offers in [false, true] {
+            MoonlightHost.offersHEVC = offers
+            let hevc = offers && VideoCodec.support[.hevc]?.hardware == true
+            let (modes, luma) = try offered()
+            XCTAssertEqual(modes, hevc ? 0x0101 : 0x0001, "offers HEVC \(offers)")
+            XCTAssertEqual(luma, hevc ? "1869449984" : "0", "Moonlight takes HEVC only with a maximum")
+        }
+    }
+
     func testPairsWithTheRightPIN() throws {
         host.requestPIN = { _, answer in answer("4821") }
         host.apps = [MoonlightApp(id: 1, title: "DAM Streaming", displayID: 0)]
