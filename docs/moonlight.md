@@ -1,7 +1,7 @@
 # Moonlight and web streaming — implementation
 
-*As of 2026-10-14 (merged to `main` on 2026-10-13 in 3aa3588). H.264, and HEVC when
-turned on (since 2026-10-22). Mouse, keyboard and text input since 2026-10-20; no
+*As of 2026-10-14 (merged to `main` on 2026-10-13 in 3aa3588). H.264, and HEVC where
+the Mac encodes it as quickly (since 2026-10-22). Mouse, keyboard and text input since 2026-10-20; no
 controllers, touch or pen.*
 
 ## Summary
@@ -166,8 +166,8 @@ once (`MoonlightHost.maxSessions`). A fifth gets a 503.
 
 `MoonlightRTSP`, TCP 48010 (and one port on per further session):
 
-- DESCRIBE offers the launch's codecs: H.264, and HEVC when Offer HEVC is on (see
-  Codecs below), by `sprop-parameter-sets=AAAAAU` as GameStream did. It supports encrypted control and audio, and encrypted
+- DESCRIBE offers the launch's codecs: H.264, and HEVC as Settings › Moonlight › HEVC
+  says (see Codecs below), by `sprop-parameter-sets=AAAAAU` as GameStream did. It supports encrypted control and audio, and encrypted
   video when Settings › Moonlight › Encrypt Video says so for the client's address: Off
   the Local Network (the default, as Sunshine's), Always or Never. "Local" is loopback,
   link-local, or a subnet of one of the Mac's interfaces. Only Always requires it
@@ -246,11 +246,20 @@ them as HID events, one injector per stream:
   parameter sets (HEVC: VPS, SPS, PPS, which Moonlight requires at each keyframe), and
   Moonlight's numbers for it (ServerCodecModeSupport bit, ANNOUNCE `bitStreamFormat`).
   What the Mac's encoder does with each is probed once, by making a session (hardware,
-  and low-latency rate control). HEVC is offered only when Settings › Moonlight › Offer
-  HEVC is on (off by default) and the Mac encodes it in hardware; serverinfo then also
-  gives Sunshine's `MaxLumaPixelsHEVC`, without which Moonlight won't take HEVC. Moonlight
-  on Auto takes HEVC whenever it's offered and the device decodes it in hardware, which is
-  why it is off by default. On the Intel test Mac (Kaby Lake, 2026-10-22) HEVC is
+  and low-latency rate control). Settings › Moonlight › HEVC is Automatic, On or Off; HEVC
+  is offered only where the Mac encodes it in hardware, and serverinfo then also gives
+  Sunshine's `MaxLumaPixelsHEVC`, without which Moonlight won't take HEVC. Moonlight on
+  Auto takes HEVC whenever it's offered and the device decodes it in hardware, so
+  Automatic (the default) offers it to a device only where it streams as quickly as H.264
+  would for that device: its encoder holds back no more frames before handing one back
+  (none with low-latency rate control, so a device with Low-Latency Encoding on gets HEVC
+  only where HEVC has it too, or holds none), and encodes at least half as many a second.
+  Both are measured once at 1080p, in the background when hosting starts (about a second
+  here), as no property tells: H.264's session here takes MaxFrameDelayCount and still
+  holds one frame. The encoder's ID (`kVTCompressionPropertyKey_EncoderID`) would name it
+  (`hevc.gva` here: Intel's), but names differ by Mac and macOS. Settings' tooltip shows
+  what was measured. Measured here, three runs: H.264 124–144 frames a second, 1 held;
+  HEVC 36–37, 2 held, so Automatic offers H.264 only. On the Intel test Mac (Kaby Lake, 2026-10-22) HEVC is
   hardware but slow: about 40 frames a second at 1080p in a tight loop (H.264: 165), each
   frame held until two more are in, encoded synchronously, no low-latency rate control
   (-12902), and MaxFrameDelayCount, AllowOpenGOP and MaxKeyFrameIntervalDuration refused

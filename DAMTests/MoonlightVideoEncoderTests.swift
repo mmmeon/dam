@@ -234,6 +234,19 @@ final class MoonlightVideoEncoderTests: XCTestCase {
         XCTAssertEqual(collector.given.count, 2)
     }
 
+    /// What Automatic goes by, measured on this Mac's encoders.
+    func testEncodersAreMeasured() throws {
+        try XCTSkipUnless(VideoCodec.support[.h264]?.hardware == true, "no hardware video encoder on this Mac")
+        let h264 = try XCTUnwrap(VideoCodec.performance[.h264])
+        XCTAssertGreaterThan(h264.framesPerSecond, 60, "H.264 keeps up with 1080p60")
+        XCTAssertLessThanOrEqual(h264.heldFrames, 1)
+        if VideoCodec.support[.hevc]?.hardware == true {
+            let hevc = try XCTUnwrap(VideoCodec.performance[.hevc])
+            XCTAssertGreaterThan(hevc.framesPerSecond, 0)
+            XCTAssertLessThan(hevc.heldFrames, 4, "comes back at all")
+        }
+    }
+
     func testCodecsNameNALUnitTypesTheirOwnWay() {
         XCTAssertEqual(VideoCodec.h264.nalType(0x67), 7)
         XCTAssertEqual(VideoCodec.h264.nalType(0x65), 5)

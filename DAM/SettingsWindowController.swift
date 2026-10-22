@@ -498,7 +498,6 @@ final class SettingsWindowController: NSWindowController {
                      help: "Draws the Mac's pointer into Moonlight streams. Takes effect from the " +
                            "next stream.",
                      action: { MoonlightStream.showsPointer = $0 }),
-            hevcCheckbox(),
         ]
 
         let encryption = popup(choosing: MoonlightStream.videoEncryption, title: \.title, tip: \.summary) {
@@ -534,6 +533,7 @@ final class SettingsWindowController: NSWindowController {
             ("Hosting:", hosting),
             ("Streams:", streams),
             ("Encrypt Video:", [encryption]),
+            ("HEVC:", [hevcPopup()]),
             ("Paired Devices:", [devices.isEmpty ? placeholderLabel("None yet") : deviceGrid]),
         ], leftAligned: true)
     }
@@ -1711,20 +1711,31 @@ final class SettingsWindowController: NSWindowController {
         return label
     }
 
-    /// Offer HEVC, with what this Mac's encoder makes of it; off where it has none in hardware.
-    private func hevcCheckbox() -> NSView {
-        let support = VideoCodec.support[.hevc]
-        var help = "Moonlight then streams HEVC to devices that decode it in hardware: a sharper picture " +
-                   "at the same bitrate. Takes effect from the next launch."
-        if support?.hardware != true {
-            help += " This Mac has no hardware HEVC encoder."
-        } else if support?.lowLatency != true {
-            help += " This Mac's HEVC encoder has no low-latency mode and may be slower than its H.264 one."
+    /// When HEVC is offered, with what this Mac's encoders were measured to do, found off the
+    /// main queue (measuring takes about a second); off where there's no HEVC in hardware.
+    private func hevcPopup() -> NSView {
+        let popup = popup(choosing: MoonlightHost.hevcOffer, title: \.title, tip: \.summary) {
+            MoonlightHost.hevcOffer = $0
         }
-        let box = checkbox(title: "Offer HEVC", isOn: MoonlightHost.offersHEVC && support?.hardware == true,
-                           help: help, action: { MoonlightHost.offersHEVC = $0 })
-        (box as? NSButton)?.isEnabled = support?.hardware == true
-        return box
+        let about = "When Moonlight is offered HEVC, which it streams wherever the device decodes it in " +
+                    "hardware: a sharper picture at the same bitrate. Takes effect from the next launch."
+        popup.toolTip = about
+        DispatchQueue.global(qos: .utility).async { [weak popup] in
+            let hardware = VideoCodec.support[.hevc]?.hardware == true
+            let measured = hardware ? VideoCodec.performance : [:]
+            func line(_ codec: VideoCodec) -> String? {
+                measured[codec].map { "\(codec.name) \(Int($0.framesPerSecond.rounded())) frames a second, " +
+                                      "holding \($0.heldFrames) back" }
+            }
+            let here = !hardware ? " This Mac has no hardware HEVC encoder."
+                : [line(.hevc), line(.h264)].compactMap { $0 }.isEmpty ? ""
+                : " This Mac at 1080p: " + [line(.hevc), line(.h264)].compactMap { $0 }.joined(separator: "; ") + "."
+            DispatchQueue.main.async {
+                popup?.toolTip = about + here
+                popup?.isEnabled = hardware
+            }
+        }
+        return popup
     }
 
     private func checkbox(title: String,
