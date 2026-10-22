@@ -456,4 +456,61 @@ final class MoonlightProtocolTests: XCTestCase {
         XCTAssertEqual(slice.read(bigEndian: Int16.self, at: 6), -2)
         XCTAssertEqual([UInt8](slice).read(littleEndian: UInt32.self, at: 2), 0xEFBE_ADDE)
     }
+
+    // MARK: - Packet marking
+
+    /// The traffic class a datagram sent from a socket for `traffic` arrives with, over loopback.
+    private func arrivingTOS(_ traffic: MoonlightUDPSocket.Traffic?) throws -> UInt8 {
+        let receiver = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
+        XCTAssertGreaterThanOrEqual(receiver, 0)
+        defer { Darwin.close(receiver) }
+        var yes: Int32 = 1
+        setsockopt(receiver, IPPROTO_IP, IP_RECVTOS, &yes, socklen_t(MemoryLayout<Int32>.size))
+        var timeout = timeval(tv_sec: 2, tv_usec: 0)
+        setsockopt(receiver, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        withUnsafeMutablePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                XCTAssertEqual(Darwin.bind(receiver, $0, length), 0)
+                XCTAssertEqual(getsockname(receiver, $0, &length), 0)
+            }
+        }
+
+        let sender = try MoonlightUDPSocket(port: 0, traffic: traffic)
+        XCTAssertTrue(sender.send(Data("frame".utf8), to: address))
+
+        var buffer = [UInt8](repeating: 0, count: 64)
+        var control = [UInt8](repeating: 0, count: 64)
+        let count = buffer.withUnsafeMutableBytes { data in
+            control.withUnsafeMutableBytes { control in
+                var vector = iovec(iov_base: data.baseAddress, iov_len: data.count)
+                return withUnsafeMutablePointer(to: &vector) { vector in
+                    var message = msghdr(msg_name: nil, msg_namelen: 0, msg_iov: vector, msg_iovlen: 1,
+                                         msg_control: control.baseAddress, msg_controllen: socklen_t(control.count),
+                                         msg_flags: 0)
+                    let count = recvmsg(receiver, &message, 0)
+                    XCTAssertGreaterThan(message.msg_controllen, 0, "the TOS came with the datagram")
+                    return count
+                }
+            }
+        }
+        XCTAssertEqual(count, 5)
+        // One cmsghdr: length, level, type, then the TOS byte.
+        let header = control.withUnsafeBytes { $0.load(as: cmsghdr.self) }
+        XCTAssertEqual(header.cmsg_level, IPPROTO_IP)
+        XCTAssertEqual(header.cmsg_type, IP_RECVTOS)
+        return control[MemoryLayout<cmsghdr>.size]
+    }
+
+    /// Video goes out as AF41 and sound as EF, so an access point queues them as video and
+    /// voice; other sockets are left unmarked.
+    func testStreamPacketsAreMarkedForTheirQueues() throws {
+        XCTAssertEqual(try arrivingTOS(.video) >> 2, 34)
+        XCTAssertEqual(try arrivingTOS(.audio) >> 2, 46)
+        XCTAssertEqual(try arrivingTOS(nil), 0)
+    }
 }

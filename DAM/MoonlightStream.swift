@@ -109,11 +109,31 @@ final class MoonlightUDPSocket {
     private let lock = NSLock()
     private var closed = false
 
-    init(port: UInt16) throws {
+    /// What a socket carries, marked on its packets as RFC 4594 and Sunshine do. The
+    /// service type picks the Wi-Fi queue the Mac sends from; the DSCP in the IP header
+    /// lets an access point put the packets in its own video or voice queue on the way to
+    /// the client, which is what keeps a picture coming during a download on the same
+    /// network. macOS writes a service type's DSCP only on networks it knows follow
+    /// DiffServ, so the DSCP is set as well.
+    enum Traffic {
+        case video, audio
+
+        /// The DSCP, AF41 for video and EF for sound.
+        var dscp: Int32 { self == .video ? 34 : 46 }
+        var serviceType: Int32 { self == .video ? NET_SERVICE_TYPE_VI : NET_SERVICE_TYPE_VO }
+    }
+
+    init(port: UInt16, traffic: Traffic? = nil) throws {
         descriptor = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
         guard descriptor >= 0 else { throw MoonlightStreamError.socket("socket", errno) }
         var yes: Int32 = 1
         setsockopt(descriptor, SOL_SOCKET, SO_REUSEADDR, &yes, socklen_t(MemoryLayout<Int32>.size))
+        if let traffic {
+            var service = traffic.serviceType
+            setsockopt(descriptor, SOL_SOCKET, SO_NET_SERVICE_TYPE, &service, socklen_t(MemoryLayout<Int32>.size))
+            var tos = traffic.dscp << 2
+            setsockopt(descriptor, IPPROTO_IP, IP_TOS, &tos, socklen_t(MemoryLayout<Int32>.size))
+        }
         // Room for a whole keyframe sent at once.
         var buffer: Int32 = 4 << 20
         setsockopt(descriptor, SOL_SOCKET, SO_SNDBUF, &buffer, socklen_t(MemoryLayout<Int32>.size))
@@ -334,7 +354,7 @@ final class MoonlightVideoSender {
     /// `key` seals every packet, for a client that turned on encrypted video.
     init(port: UInt16, pingPayload: String, client: String, packetSize: Int, minimumParity: Int, bitrateKbps: Int,
          key: Data? = nil) throws {
-        socket = try MoonlightUDPSocket(port: port)
+        socket = try MoonlightUDPSocket(port: port, traffic: .video)
         self.client = Self.ipv4(client)
         // Six times the stream's rate, within 60 to 400 Mbit/s: a typical frame in a fraction
         // of a frame's time, a keyframe spread over a few frames'.
@@ -498,7 +518,7 @@ final class MoonlightAudioSender {
 
     init(port: UInt16, pingPayload: String, client: String, config: MoonlightStreamConfig, key: Data, keyID: UInt32,
          stats: MoonlightStreamStats) throws {
-        socket = try MoonlightUDPSocket(port: port)
+        socket = try MoonlightUDPSocket(port: port, traffic: .audio)
         self.client = MoonlightVideoSender.ipv4(client)
         self.stats = stats
         self.pingPayload = Data(pingPayload.utf8)

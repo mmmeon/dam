@@ -93,6 +93,11 @@ One macOS catch: a dual-stack socket refuses `IP_TOS`, and `IPV6_TCLASS` marks o
 packets. Sends to an IPv4-mapped address need the traffic class as per-packet ancillary
 data (`backend/third_party/patches/libjuice-macos-diffserv.patch`).
 
+**Done 2026-10-22.** DAM's Moonlight sockets are IPv4 only, so `IP_TOS` works and the
+dual-stack catch doesn't apply. Video goes out as AF41 with `NET_SERVICE_TYPE_VI`, sound
+as EF with `NET_SERVICE_TYPE_VO`; a loopback test reads the DSCP back with `IP_RECVTOS`.
+The effect needs a busy Wi-Fi network to show and hasn't been measured on one yet.
+
 ### 5. Pointer acceleration for injected moves
 
 Moves posted with `CGEventPost` skip the HID driver, where all of Apple's acceleration
