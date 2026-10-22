@@ -245,6 +245,28 @@ final class WebStreamServer {
     /// The certificates of the HTTPS port, once it has started.
     private(set) var certificates: WebStreamCertificates?
 
+    /// The certificate imported for HTTPS in place of DAM's own, if any.
+    var importedCertificate: ImportedCertificate? { ImportedCertificate.load(from: directory) }
+
+    /// Keeps `imported` for HTTPS from now on, in place of DAM's own or an earlier import;
+    /// a running server starts again with it, which cuts off anyone watching.
+    func useCertificate(_ imported: ImportedCertificate) throws {
+        try imported.save(in: directory)
+        restartForCertificates()
+    }
+
+    /// Goes back to DAM's own certificates for HTTPS.
+    func useOwnCertificate() {
+        ImportedCertificate.remove(from: directory)
+        restartForCertificates()
+    }
+
+    private func restartForCertificates() {
+        guard isRunning else { onChange?(); return }
+        stop()
+        start()
+    }
+
     /// Asks the user to type the code a browser at `address` shows; `answer` is nil when
     /// they decline. On the main queue.
     var requestCode: ((_ address: String, _ name: String, _ answer: @escaping (String?) -> Void) -> Void)?
@@ -268,8 +290,8 @@ final class WebStreamServer {
             // Each fragment goes out the moment it is ready, not held for an acknowledgement.
             (parameters.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options)?.noDelay = true
             let tls = NWProtocolTLS.Options()
-            if let authority = SecCertificateCreateWithData(nil, certificates.authority as CFData),
-               let identity = sec_identity_create_with_certificates(certificates.identity, [authority] as CFArray) {
+            let chain = certificates.chain.compactMap { SecCertificateCreateWithData(nil, $0 as CFData) }
+            if let identity = sec_identity_create_with_certificates(certificates.identity, chain as CFArray) {
                 sec_protocol_options_set_local_identity(tls.securityProtocolOptions, identity)
             }
             let tcp = NWProtocolTCP.Options()
@@ -381,7 +403,9 @@ final class WebStreamServer {
     var watchURL: URL { URL(string: "http://\(hostName):\(port.rawValue)/watch")! }
 
     /// The player page over HTTPS, for a browser that trusts DAM's certificate authority.
-    var secureWatchURL: URL { URL(string: "https://\(hostName):\(securePort.rawValue)/watch")! }
+    var secureWatchURL: URL {
+        URL(string: "https://\(certificates?.host(preferring: hostName) ?? hostName):\(securePort.rawValue)/watch")!
+    }
 
     /// Where a device installs the certificate authority from.
     var authorityURL: URL { URL(string: "http://\(hostName):\(port.rawValue)/ca.cer")! }
@@ -456,10 +480,10 @@ final class WebStreamServer {
             }
             send(status: "200 OK", contentType: "text/html; charset=utf-8", body: Data(WebStreamPage.html.utf8), to: connection)
         case "/ca.cer":
-            guard let certificates else { return send(status: "404 Not Found", body: Data(), to: connection) }
+            guard let authority = certificates?.authority else { return send(status: "404 Not Found", body: Data(), to: connection) }
             send(status: "200 OK", contentType: "application/x-x509-ca-cert",
                  headers: ["Content-Disposition: attachment; filename=\"\(AppIdentity.name) Browser Stream.cer\""],
-                 body: certificates.authority, to: connection)
+                 body: authority, to: connection)
         case "/pair/begin":
             beginPairing(request, on: connection)
         case "/pair/wait":

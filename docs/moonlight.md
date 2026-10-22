@@ -59,6 +59,24 @@ Who may watch (`WebStreamAccess`):
   (Export Certificate…), an iPhone or iPad by installing `http://<mac>.local:47995/ca.cer`
   and turning on full trust for it. Without that, players that don't check certificates
   (mpv, IINA, ffmpeg by default) still play over HTTPS, and VLC asks once.
+- **Imported certificates** (Settings › Browser Stream › Import Certificate…). It takes PEM
+  files (certificates, any chain, and one RSA or EC key in PKCS#1, SEC1 or PKCS#8 form,
+  not encrypted) or a .p12 file with its password. A .p12 file is read through the system's
+  `/usr/bin/openssl` (LibreSSL), because Security on macOS 13 can't read OpenSSL 3's AES
+  files and gives an older file's key only into a keychain. The certificate the key
+  belongs to decides how it is used:
+  - **A certificate authority** (basic constraints CA) signs DAM's server certificate in
+    place of DAM's own, so devices that already trust it (mkcert's root, a home CA) need
+    nothing more. The server certificate takes the authority's whole subject as its issuer,
+    names its key identifier, is signed with RSA or ECDSA as its key is, ends before the
+    authority does, and still follows the Mac's names and addresses. Certificates that came
+    with the authority go out after it in the TLS handshake.
+  - **Any other certificate** is served as it is, with the chain that came with it (from
+    `tailscale cert`, certbot or mkcert, say). It covers only the names it was made for, so
+    the HTTPS link uses one of them, and renewing it is up to its maker: import it again.
+  The import is kept in `Browser/imported.json` and `imported-key.der`, readable only by the
+  user, beside DAM's own files; Use DAM's Own deletes it and goes back. A running server
+  starts again with the new certificate, which cuts off anyone watching.
 - The stream over HTTP crosses the network unencrypted, and with it the tokens.
 
 Three profiles (Interactive, Balanced, Viewing) set the defaults from Settings › Browser

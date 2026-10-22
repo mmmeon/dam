@@ -90,6 +90,12 @@ enum MoonlightCrypto {
 
     // MARK: - Keys and certificates
 
+    /// The kinds of private key DAM keeps: its own are RSA; one brought in may be either.
+    enum KeyKind: String, Codable {
+        case rsa
+        case ec
+    }
+
     static func generatePrivateKey() throws -> SecKey {
         var error: Unmanaged<CFError>?
         let attributes: [CFString: Any] = [kSecAttrKeyType: kSecAttrKeyTypeRSA, kSecAttrKeySizeInBits: 2048]
@@ -99,9 +105,9 @@ enum MoonlightCrypto {
         return key
     }
 
-    /// An RSA private key in PKCS#1 form, as `exportPrivateKey` writes it.
-    static func importPrivateKey(_ data: Data) throws -> SecKey {
-        let attributes: [CFString: Any] = [kSecAttrKeyType: kSecAttrKeyTypeRSA,
+    /// A private key as `exportPrivateKey` writes it: PKCS#1 for RSA, ANSI X9.63 for EC.
+    static func importPrivateKey(_ data: Data, kind: KeyKind = .rsa) throws -> SecKey {
+        let attributes: [CFString: Any] = [kSecAttrKeyType: kind == .rsa ? kSecAttrKeyTypeRSA : kSecAttrKeyTypeECSECPrimeRandom,
                                            kSecAttrKeyClass: kSecAttrKeyClassPrivate]
         guard let key = SecKeyCreateWithData(data as CFData, attributes as CFDictionary, nil) else {
             throw MoonlightCryptoError.badKey
@@ -114,28 +120,59 @@ enum MoonlightCrypto {
         return data as Data
     }
 
-    /// An X.509 v3 certificate for `key`'s public half, signed by `issuerKey` (`key` itself
-    /// when nil), from a day ago for `days`, with `extensions` as made by `DER.extension`.
-    static func certificate(key: SecKey, subject: String, issuer: String? = nil, issuerKey: SecKey? = nil,
-                            days: Int, extensions: [Data] = [], now: Date = Date()) throws -> Data {
+    /// An X.509 v3 certificate for `key`'s public half (an RSA key), signed by `issuerKey`
+    /// (`key` itself when nil), from a day ago for `days`, with `extensions` as made by
+    /// `DER.extension`. The issuer is `issuerName`, an issuer certificate's subject as it is,
+    /// or else the common name `issuer`; the signature is RSA or ECDSA, as `issuerKey` is.
+    static func certificate(key: SecKey, subject: String, issuer: String? = nil, issuerName: Data? = nil,
+                            issuerKey: SecKey? = nil, days: Int, extensions: [Data] = [],
+                            now: Date = Date()) throws -> Data {
         guard let publicKey = SecKeyCopyPublicKey(key),
               let publicKeyData = SecKeyCopyExternalRepresentation(publicKey, nil) as Data? else {
             throw MoonlightCryptoError.badKey
         }
-        let algorithm = DER.sequence(DER.oid(DER.sha256WithRSA), DER.null)
+        let signer = issuerKey ?? key
+        let (algorithm, signing) = certificateSignature(for: signer)
         func name(_ commonName: String) -> Data {
             DER.sequence(DER.set(DER.sequence(DER.oid(DER.commonName), DER.utf8String(commonName))))
         }
         var serial = Data((0..<16).map { _ in UInt8.random(in: 0...255) })
         serial[0] &= 0x7F
-        var fields = DER.explicit(0, DER.integer(Data([2]))) + DER.integer(serial) + algorithm + name(issuer ?? subject)
+        var fields = DER.explicit(0, DER.integer(Data([2]))) + DER.integer(serial) + algorithm
+            + (issuerName ?? name(issuer ?? subject))
             + DER.sequence(DER.time(now.addingTimeInterval(-24 * 3600)),
                            DER.time(now.addingTimeInterval(Double(days) * 24 * 3600)))
             + name(subject)
             + DER.sequence(DER.sequence(DER.oid(DER.rsaEncryption), DER.null), DER.bitString(publicKeyData))
         if !extensions.isEmpty { fields += DER.explicit(3, DER.tlv(0x30, extensions.reduce(Data(), +))) }
         let tbs = DER.tlv(0x30, fields)
-        return DER.sequence(tbs, algorithm, DER.bitString(try sign(tbs, with: issuerKey ?? key)))
+        var error: Unmanaged<CFError>?
+        guard let signature = SecKeyCreateSignature(signer, signing, tbs as CFData, &error) as Data? else {
+            throw MoonlightCryptoError.signing(error.map { "\($0.takeRetainedValue())" } ?? "unknown")
+        }
+        return DER.sequence(tbs, algorithm, DER.bitString(signature))
+    }
+
+    /// How `key` signs a certificate: the signature's AlgorithmIdentifier, and Security's
+    /// name for it. SHA-256 with RSA; ECDSA with the hash that matches the curve.
+    static func certificateSignature(for key: SecKey) -> (identifier: Data, algorithm: SecKeyAlgorithm) {
+        let attributes = SecKeyCopyAttributes(key) as? [CFString: Any]
+        guard (attributes?[kSecAttrKeyType] as? String) == (kSecAttrKeyTypeECSECPrimeRandom as String) else {
+            return (DER.sequence(DER.oid(DER.sha256WithRSA), DER.null), .rsaSignatureMessagePKCS1v15SHA256)
+        }
+        switch (attributes?[kSecAttrKeySizeInBits] as? Int) ?? 256 {
+        case ...256: return (DER.sequence(DER.oid(DER.ecdsaWithSHA256)), .ecdsaSignatureMessageX962SHA256)
+        case ...384: return (DER.sequence(DER.oid(DER.ecdsaWithSHA384)), .ecdsaSignatureMessageX962SHA384)
+        default: return (DER.sequence(DER.oid(DER.ecdsaWithSHA512)), .ecdsaSignatureMessageX962SHA512)
+        }
+    }
+
+    /// Whether `key` is the private half of `certificate`'s public key.
+    static func key(_ key: SecKey, matches certificate: SecCertificate) -> Bool {
+        guard let own = SecKeyCopyPublicKey(key).flatMap({ SecKeyCopyExternalRepresentation($0, nil) as Data? }),
+              let theirs = SecCertificateCopyKey(certificate).flatMap({ SecKeyCopyExternalRepresentation($0, nil) as Data? })
+        else { return false }
+        return own == theirs
     }
 
     /// The signature a certificate carries, which pairing hashes in as the certificate's
@@ -168,6 +205,26 @@ enum MoonlightCrypto {
         return der
     }
 
+    /// The blocks of PEM text in order: each one's label ("CERTIFICATE", "PRIVATE KEY"…),
+    /// its DER, and its text from BEGIN to END. What lies between blocks is skipped.
+    static func pemBlocks(_ text: String) -> [(label: String, der: Data, text: String)] {
+        var blocks: [(String, Data, String)] = []
+        var rest = text[...]
+        while let begin = rest.range(of: "-----BEGIN "),
+              let labelEnd = rest.range(of: "-----", range: begin.upperBound..<rest.endIndex) {
+            let label = String(rest[begin.upperBound..<labelEnd.lowerBound])
+            guard let end = rest.range(of: "-----END \(label)-----", range: labelEnd.upperBound..<rest.endIndex) else { break }
+            // Headers such as Proc-Type stand apart from the base64 by a blank line.
+            let body = rest[labelEnd.upperBound..<end.lowerBound]
+            let base64 = body.components(separatedBy: "\n").filter { !$0.contains(":") }.joined()
+            if let der = Data(base64Encoded: base64, options: .ignoreUnknownCharacters) {
+                blocks.append((label, der, String(rest[begin.lowerBound..<end.upperBound])))
+            }
+            rest = rest[end.upperBound...]
+        }
+        return blocks
+    }
+
     // MARK: - Hex
 
     static func hex(_ data: Data) -> String {
@@ -188,17 +245,112 @@ enum MoonlightCrypto {
     }
 }
 
-/// Just enough DER to write a self-signed certificate and read its signature back.
+/// Just enough DER to write a certificate, and to read back its signature and the fields
+/// a certificate brought in is checked by.
 enum DER {
     static let sha256WithRSA: [UInt8] = [0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B]
     static let rsaEncryption: [UInt8] = [0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01]
+    static let ecPublicKey: [UInt8] = [0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x02, 0x01]
+    static let ecdsaWithSHA256: [UInt8] = [0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x02]
+    static let ecdsaWithSHA384: [UInt8] = [0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x03]
+    static let ecdsaWithSHA512: [UInt8] = [0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x04]
     static let commonName: [UInt8] = [0x55, 0x04, 0x03]
     static let null = Data([0x05, 0x00])
     static let subjectAltName: [UInt8] = [0x55, 0x1D, 0x11]
     static let basicConstraints: [UInt8] = [0x55, 0x1D, 0x13]
     static let keyUsage: [UInt8] = [0x55, 0x1D, 0x0F]
     static let extendedKeyUsage: [UInt8] = [0x55, 0x1D, 0x25]
+    static let subjectKeyIdentifier: [UInt8] = [0x55, 0x1D, 0x0E]
+    static let authorityKeyIdentifier: [UInt8] = [0x55, 0x1D, 0x23]
     static let serverAuth: [UInt8] = [0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01]
+
+    /// What a certificate says of itself, as far as DAM needs it.
+    struct Certificate {
+        /// The subject Name as it is written, to be another certificate's issuer.
+        var subject = Data()
+        var issuer = Data()
+        /// Whether its basic constraints make it a certificate authority.
+        var isAuthority = false
+        /// Whether its key usage, if it has one, allows signing certificates.
+        var maySignCertificates = true
+        /// Its subject key identifier, or the SHA-1 of its public key as RFC 5280 suggests.
+        var keyIdentifier = Data()
+        /// Its alternative DNS names and IP addresses.
+        var names: [String] = []
+        var addresses: [[UInt8]] = []
+    }
+
+    /// Reads `der`'s subject, issuer, public key and extensions; nil if it isn't a certificate.
+    static func certificate(_ der: Data) -> Certificate? {
+        let bytes = [UInt8](der)
+        guard let outer = read(bytes, at: 0), outer.tag == 0x30,
+              let tbs = read(bytes, at: outer.content.lowerBound), tbs.tag == 0x30,
+              var field = read(bytes, at: tbs.content.lowerBound) else { return nil }
+        if field.tag == 0xA0 { guard let serial = read(bytes, at: field.next) else { return nil }; field = serial }
+        // After the serial: the signature's algorithm, the issuer, validity, subject and key.
+        var parts: [(tag: UInt8, content: Range<Int>, next: Int)] = []
+        var at = field.next
+        for _ in 0..<5 {
+            guard let part = read(bytes, at: at) else { return nil }
+            parts.append(part)
+            at = part.next
+        }
+        let whole = { (part: (tag: UInt8, content: Range<Int>, next: Int), start: Int) in Data(bytes[start..<part.next]) }
+        var certificate = Certificate()
+        certificate.issuer = whole(parts[1], parts[0].next)
+        certificate.subject = whole(parts[3], parts[2].next)
+        let key = parts[4]
+        if let algorithm = read(bytes, at: key.content.lowerBound), let bits = read(bytes, at: algorithm.next),
+           bits.tag == 0x03, bits.content.count > 1 {
+            certificate.keyIdentifier = Data(Insecure.SHA1.hash(data: bytes[(bits.content.lowerBound + 1)..<bits.content.upperBound]))
+        }
+        // Optional unique IDs, then the extensions, [3].
+        while at < tbs.content.upperBound, let item = read(bytes, at: at) {
+            at = item.next
+            guard item.tag == 0xA3, let list = read(bytes, at: item.content.lowerBound) else { continue }
+            var next = list.content.lowerBound
+            while next < list.content.upperBound, let ext = read(bytes, at: next) {
+                next = ext.next
+                guard let id = read(bytes, at: ext.content.lowerBound), id.tag == 0x06 else { continue }
+                var value = read(bytes, at: id.next)
+                if value?.tag == 0x01, let after = value?.next { value = read(bytes, at: after) }
+                guard let value, value.tag == 0x04, let inner = read(bytes, at: value.content.lowerBound) else { continue }
+                let content = { (range: Range<Int>) in Array(bytes[range]) }
+                switch content(id.content) {
+                case basicConstraints:
+                    if inner.tag == 0x30, !inner.content.isEmpty, let ca = read(bytes, at: inner.content.lowerBound), ca.tag == 0x01,
+                       ca.content.count == 1 {
+                        certificate.isAuthority = bytes[ca.content.lowerBound] != 0
+                    }
+                case keyUsage:
+                    // keyCertSign is bit 5: 0x04 of the first byte after the unused-bits count.
+                    if inner.tag == 0x03, inner.content.count > 1 {
+                        certificate.maySignCertificates = bytes[inner.content.lowerBound + 1] & 0x04 != 0
+                    }
+                case subjectKeyIdentifier:
+                    if inner.tag == 0x04 { certificate.keyIdentifier = Data(content(inner.content)) }
+                case subjectAltName:
+                    var name = inner.content.lowerBound
+                    while name < inner.content.upperBound, let alternative = read(bytes, at: name) {
+                        name = alternative.next
+                        if alternative.tag == 0x82, let dns = String(bytes: content(alternative.content), encoding: .ascii) {
+                            certificate.names.append(dns)
+                        } else if alternative.tag == 0x87 {
+                            certificate.addresses.append(content(alternative.content))
+                        }
+                    }
+                default:
+                    break
+                }
+            }
+        }
+        return certificate
+    }
+
+    /// An authority key identifier naming the issuer's key by its identifier.
+    static func authorityKeyIdentifier(_ identifier: Data) -> Data {
+        `extension`(authorityKeyIdentifier, sequence(tlv(0x80, identifier)))
+    }
 
     /// A certificate extension: its OID, whether it is critical, and its value's DER.
     static func `extension`(_ oid: [UInt8], critical: Bool = false, _ value: Data) -> Data {
