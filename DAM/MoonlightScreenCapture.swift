@@ -2,12 +2,14 @@
 //  MoonlightScreenCapture.swift
 //
 //  Captures one display for Moonlight with ScreenCaptureKit, at the stream's size and rate,
-//  in the 4:2:0 format the encoder takes as is, and, when asked, what the Mac plays at
+//  in the 4:2:0 format the encoder takes as is (for HDR, turned into HDR10's; see
+//  HDR10Converter), and, when asked, what the Mac plays at
 //  48 kHz stereo, DAM's own sounds left out. Each new frame and each piece of sound is
 //  handed on the moment it arrives. A streaming display DAM has turned on its side is
 //  captured that way up and each frame turned back, so the stream keeps its shape.
 //
 
+import CoreImage
 import CoreMedia
 import Foundation
 import ScreenCaptureKit
@@ -30,6 +32,8 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     private let height: Int
     private let fps: Int
     private let pixelFormat: OSType
+    /// Turns frames into HDR10's, for an HDR stream; on `queue`.
+    private let hdr10: HDR10Converter?
     private let frame: (CVPixelBuffer, CMTime) -> Void
     private let queue = DispatchQueue(label: "\(AppIdentity.bundleID).moonlight.capture", qos: .userInteractive)
     /// It and `rotationObserver` are under `lock`, with `stopped`.
@@ -70,16 +74,29 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
 
     /// `frame` is called on the capture thread with each frame whose picture changed, in
     /// `pixelFormat`: the encoder's 4:2:0 unless asked for another, such as BGRA to show.
+    /// With `hdr`, frames are HDR10's instead (see HDR10Converter), whatever `pixelFormat` says.
     init(displayID: CGDirectDisplayID, width: Int, height: Int, fps: Int,
-         pixelFormat: OSType = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+         pixelFormat: OSType = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, hdr: Bool = false,
          frame: @escaping (CVPixelBuffer, CMTime) -> Void) {
         self.displayID = displayID
         self.width = width
         self.height = height
         self.fps = fps
-        self.pixelFormat = pixelFormat
+        // HDR as 10-bit RGB in PQ where it can be captured, else the picture as SDR is.
+        self.pixelFormat = hdr && Self.capturesHDR ? kCVPixelFormatType_ARGB2101010LEPacked
+            : hdr ? kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange : pixelFormat
+        hdr10 = hdr ? HDR10Converter(width: width, height: height) : nil
         self.frame = frame
     }
+
+    /// Whether ScreenCaptureKit captures HDR (macOS 15 and later): its captureDynamicRange,
+    /// set by name as this SDK predates it. Earlier, a display is captured as SDR.
+    static let capturesHDR = SCStreamConfiguration().responds(to: NSSelectorFromString("setCaptureDynamicRange:"))
+    /// The HDR10 metadata of what capture makes: SDR in HDR10 unless it captures HDR.
+    static var hdrMetadata: MoonlightHDRMetadata { capturesHDR ? .canonical : .sdr }
+    /// captureDynamicRange's HDR as a canonical HDR display would show it, rather than as the
+    /// Mac's own would (1), as the stream is shown on another.
+    static let canonicalHDR = 2
 
     /// Whether DAM may record the screen, as far as macOS says ahead of trying.
     static var hasPermission: Bool { CGPreflightScreenCaptureAccess() }
@@ -177,6 +194,10 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         configuration.minimumFrameInterval = Self.minimumFrameInterval(
             fps: fps, refreshRate: CGDisplayCopyDisplayMode(displayID)?.refreshRate ?? 0)
         configuration.pixelFormat = pixelFormat
+        if hdr10 != nil, Self.capturesHDR {
+            configuration.colorSpaceName = CGColorSpace.itur_2100_PQ
+            configuration.setValue(Self.canonicalHDR, forKey: "captureDynamicRange")
+        }
         // The stream holds up to three frames at once (the last picture, the encoder's slot
         // and the one being encoded); with only that many, ScreenCaptureKit has nothing to
         // draw into and skips frames.
@@ -247,12 +268,18 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
             // A frame captured before the display was turned is the other way up still.
             guard CVPixelBufferGetWidth(buffer) == rotation.inverse.size(width: width, height: height).width,
                   let turned = rotator.rotate(buffer) else { return }
-            return frame(turned, time)
+            return hand(turned, time)
         }
         // Nor is one captured before it was turned back.
         guard width == height || CVPixelBufferGetWidth(buffer) != height || CVPixelBufferGetHeight(buffer) != width
         else { return }
-        frame(buffer, time)
+        hand(buffer, time)
+    }
+
+    private func hand(_ buffer: CVPixelBuffer, _ time: CMTime) {
+        guard let hdr10 else { return frame(buffer, time) }
+        guard let converted = hdr10.convert(buffer) else { return scLog.error("could not turn a frame into HDR10") }
+        frame(converted, time)
     }
 
     /// The shortest time ScreenCaptureKit is asked to leave between frames. Asked for exactly
@@ -270,6 +297,46 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     func stream(_ stream: SCStream, didStopWithError error: Error) {
         scLog.error("stopped: \(error.localizedDescription, privacy: .public)")
         if !isStopped { onStop?(error) }
+    }
+}
+
+/// Turns captured frames into HDR10's: 10-bit 4:2:0 in BT.2020 with PQ, as the encoder takes
+/// them as is. SDR white goes to 203 nits, BT.2408's reference white, where HDR10 players
+/// show it (Moonlight's renderer included); macOS puts it at 100 nits in PQ, which looks
+/// dim there. What is brighter than SDR white, where capture has HDR, scales with it. On
+/// the GPU, about 6 ms a 1080p frame on the Intel test Mac. On the capture queue.
+final class HDR10Converter {
+    /// From 100 nits to 203, in stops.
+    static let referenceWhiteGain = log2(203.0 / 100.0)
+
+    private let context = CIContext(options: [.workingColorSpace: CGColorSpace(name: CGColorSpace.extendedLinearSRGB)!,
+                                              .cacheIntermediates: false])
+    private let pq = CGColorSpace(name: CGColorSpace.itur_2100_PQ)!
+    private var pool: CVPixelBufferPool?
+
+    init?(width: Int, height: Int) {
+        let attributes: [CFString: Any] = [
+            kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+            kCVPixelBufferWidthKey: width,
+            kCVPixelBufferHeightKey: height,
+            kCVPixelBufferIOSurfacePropertiesKey: [:] as [CFString: Any],
+        ]
+        CVPixelBufferPoolCreate(nil, nil, attributes as CFDictionary, &pool)
+        guard pool != nil else { return nil }
+    }
+
+    /// `buffer`, in any format Core Image reads and tagged with its colour, as HDR10, or nil
+    /// when it could not be.
+    func convert(_ buffer: CVPixelBuffer) -> CVPixelBuffer? {
+        guard let pool else { return nil }
+        var made: CVPixelBuffer?
+        guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &made) == kCVReturnSuccess, let out = made else { return nil }
+        let image = CIImage(cvPixelBuffer: buffer).applyingFilter("CIExposureAdjust", parameters: [kCIInputEVKey: Self.referenceWhiteGain])
+        context.render(image, to: out, bounds: image.extent, colorSpace: pq)
+        CVBufferSetAttachment(out, kCVImageBufferColorPrimariesKey, kCVImageBufferColorPrimaries_ITU_R_2020, .shouldPropagate)
+        CVBufferSetAttachment(out, kCVImageBufferTransferFunctionKey, kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ, .shouldPropagate)
+        CVBufferSetAttachment(out, kCVImageBufferYCbCrMatrixKey, kCVImageBufferYCbCrMatrix_ITU_R_2020, .shouldPropagate)
+        return out
     }
 }
 
@@ -348,6 +415,7 @@ final class SharedScreenCapture {
         let height: Int
         let fps: Int
         let showsCursor: Bool
+        var hdr = false
     }
 
     /// One stream's part: cancel it when the stream ends.
@@ -378,7 +446,8 @@ final class SharedScreenCapture {
 
     /// Makes the capture behind a subscription; replaced by tests.
     static var makeCapture: (Key, @escaping (CVPixelBuffer, CMTime) -> Void) -> MoonlightScreenCapture = { key, frame in
-        MoonlightScreenCapture(displayID: key.displayID, width: key.width, height: key.height, fps: key.fps, frame: frame)
+        MoonlightScreenCapture(displayID: key.displayID, width: key.width, height: key.height, fps: key.fps,
+                               hdr: key.hdr, frame: frame)
     }
     /// Starts it; replaced by tests.
     static var startCapture: (MoonlightScreenCapture, @escaping (Error?) -> Void) -> Void = { $0.start(completion: $1) }

@@ -140,6 +140,27 @@ final class MoonlightRTSPTests: XCTestCase {
         XCTAssertEqual(started?.codec, .h264, "H.264 still, when the client chooses it")
     }
 
+    func testHDRIsTakenOnlyForHEVCOnALaunchThatAskedForIt() {
+        let hdrHEVC = sdp + "a=x-nv-vqos[0].bitStreamFormat:1 \r\na=x-nv-video[0].dynamicRangeMode:1 \r\n"
+        let hdrH264 = sdp + "a=x-nv-video[0].dynamicRangeMode:1 \r\n"
+        var hevc = launch
+        hevc.codecs = [.h264, .hevc]
+        XCTAssertTrue(MoonlightRTSP.response(to: request("ANNOUNCE", "streamid=control/13/0", body: hdrHEVC), from: "10.0.0.2",
+                                             launch: hevc, announce: { _, _ in XCTFail("HDR started"); return nil })
+            .hasPrefix("RTSP/1.0 400"), "the launch didn't ask for HDR")
+        var hdr = hevc
+        hdr.offersHDR = true
+        XCTAssertTrue(MoonlightRTSP.response(to: request("ANNOUNCE", "streamid=control/13/0", body: hdrH264), from: "10.0.0.2",
+                                             launch: hdr, announce: { _, _ in XCTFail("HDR H.264 started"); return nil })
+            .hasPrefix("RTSP/1.0 400"), "HDR is HEVC's")
+        var started: MoonlightStreamConfig?
+        XCTAssertTrue(MoonlightRTSP.response(to: request("ANNOUNCE", "streamid=control/13/0", body: hdrHEVC), from: "10.0.0.2",
+                                             launch: hdr, announce: { _, config in started = config; return nil })
+            .hasPrefix("RTSP/1.0 200 OK"))
+        XCTAssertEqual(started?.hdr, true)
+        XCTAssertEqual(started?.codec, .hevc)
+    }
+
     func testRefusesAHandshakeWithoutALaunch() {
         XCTAssertTrue(MoonlightRTSP.response(to: request("OPTIONS", "/"), from: "10.0.0.2", launch: nil, announce: { _, _ in nil })
             .hasPrefix("RTSP/1.0 503"))

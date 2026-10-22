@@ -276,6 +276,39 @@ final class MoonlightVideoEncoderTests: XCTestCase {
         XCTAssertTrue(fingerprint.contains("com.apple.videotoolbox.videoencoder."), fingerprint)
     }
 
+    /// HDR10 from frames as HDR capture hands them over: 10-bit RGB in BT.2100 PQ.
+    func testHDR10IsMain10InBT2020PQWithItsMetadata() throws {
+        try XCTSkipUnless(VideoCodec.support[.hevc]?.main10 == true, "no hardware HEVC Main10 on this Mac")
+        var settings = self.settings
+        settings.codec = .hevc
+        settings.hdr = .canonical
+        let collector = Collector()
+        let encoder = try makeEncoder(collector, settings: settings)
+        var made: CVPixelBuffer?
+        XCTAssertEqual(CVPixelBufferCreate(nil, settings.width, settings.height, kCVPixelFormatType_ARGB2101010LEPacked,
+                                           [kCVPixelBufferIOSurfacePropertiesKey: [:] as [String: Any]] as CFDictionary, &made),
+                       kCVReturnSuccess)
+        let picture = try XCTUnwrap(made)
+        CVBufferSetAttachment(picture, kCVImageBufferColorPrimariesKey, kCVImageBufferColorPrimaries_ITU_R_2020, .shouldPropagate)
+        CVBufferSetAttachment(picture, kCVImageBufferTransferFunctionKey, kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ, .shouldPropagate)
+        let done = expectation(description: "frame")
+        collector.onFrame = { if $0.time == self.time(0) { done.fulfill() } }
+        encoder.encode(picture, at: time(0))
+        wait(for: [done], timeout: 5)
+        let frame = try XCTUnwrap(collector.given.first)
+        let format = try XCTUnwrap(CMSampleBufferGetFormatDescription(frame.sample))
+        let extensions = try XCTUnwrap(CMFormatDescriptionGetExtensions(format) as? [String: Any])
+        XCTAssertEqual(extensions["BitsPerComponent"] as? Int, 10)
+        XCTAssertEqual(extensions[kCVImageBufferColorPrimariesKey as String] as? String, kCVImageBufferColorPrimaries_ITU_R_2020 as String)
+        XCTAssertEqual(extensions[kCVImageBufferTransferFunctionKey as String] as? String,
+                       kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ as String)
+        XCTAssertEqual(extensions[kCVImageBufferMasteringDisplayColorVolumeKey as String] as? Data,
+                       MoonlightHDRMetadata.canonical.masteringDisplayColorVolume)
+        // The SPS's general_profile_idc: 2 is Main10.
+        let sps = try XCTUnwrap(MoonlightVideoEncoder.parameterSets(frame.sample)?.sets.first { VideoCodec.hevc.nalType($0[0]) == 33 })
+        XCTAssertEqual(sps[3] & 0x1F, 2, "Main10")
+    }
+
     func testCodecsNameNALUnitTypesTheirOwnWay() {
         XCTAssertEqual(VideoCodec.h264.nalType(0x67), 7)
         XCTAssertEqual(VideoCodec.h264.nalType(0x65), 5)

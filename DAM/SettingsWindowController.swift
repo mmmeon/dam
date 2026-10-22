@@ -470,6 +470,16 @@ final class SettingsWindowController: NSWindowController {
                                 help: "Unchecked, a device that isn't paired yet is turned away without " +
                                       "asking for a PIN; paired devices still connect.",
                                 action: { MoonlightHost.allowsPairing = $0 }))
+        hosting.append(checkbox(title: "List this Mac's own displays",
+                                isOn: MoonlightHost.listsOwnDisplays,
+                                help: "Moonlight then lists the Mac's own displays beside the streaming ones, " +
+                                      "and a paired device may watch and use them. Only these can stream HDR " +
+                                      "(on macOS 15 and later, from a display showing it): macOS's virtual " +
+                                      "displays are SDR only.",
+                                action: { [weak host] in
+                                    MoonlightHost.listsOwnDisplays = $0
+                                    host?.onChange?()
+                                }))
         hosting.append(checkbox(title: "Show this Mac to Moonlight on the network",
                                 isOn: MoonlightHost.isAdvertised,
                                 help: "Unchecked, Moonlight doesn't list this Mac by itself; add it in " +
@@ -1718,7 +1728,9 @@ final class SettingsWindowController: NSWindowController {
             MoonlightHost.hevcOffer = $0
         }
         let about = "When Moonlight is offered HEVC, which it streams wherever the device decodes it in " +
-                    "hardware: a sharper picture at the same bitrate. Takes effect from the next launch."
+                    "hardware: a sharper picture at the same bitrate. A device with Moonlight's HDR setting on " +
+                    "is offered HDR10 (HEVC Main10) on Automatic too, where this Mac makes it in hardware; " +
+                    "Off turns that off as well. Takes effect from the next launch."
         popup.toolTip = about
         DispatchQueue.global(qos: .utility).async { [weak popup] in
             let hardware = VideoCodec.support[.hevc]?.hardware == true

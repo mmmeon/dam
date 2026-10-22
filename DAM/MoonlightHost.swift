@@ -123,6 +123,23 @@ final class MoonlightHost {
         return held(.hevc, hevc) <= held(.h264, h264) && hevc.framesPerSecond >= h264.framesPerSecond / 2
     }
 
+    /// Whether HDR10 is offered: HEVC Main10, which this Mac must make in hardware, unless
+    /// HEVC is off. Only a launch that asks for HDR (Moonlight's own setting, which it sends
+    /// as hdrMode) gets HEVC for it, whatever Automatic says, so serverinfo offers HEVC and
+    /// Main10 then and DESCRIBE decides; without HDR the launch is offered `codecs`.
+    static func offersHDR(offer: MoonlightHEVCOffer = MoonlightHost.hevcOffer,
+                          support: [VideoCodec: VideoCodec.Support] = VideoCodec.support) -> Bool {
+        offer != .off && support[.hevc].map { $0.hardware && $0.main10 } == true
+    }
+
+    /// ServerCodecModeSupport's bit for HEVC Main10 (SCM_HEVC_MAIN10).
+    static let main10CodecMode = 0x0200
+
+    /// What serverinfo offers: the device's codecs, and HEVC with Main10 where HDR is offered.
+    static func codecModes(_ codecs: [VideoCodec], hdr: Bool) -> Int {
+        codecs.reduce(0) { $0 | $1.moonlightCodecMode } | (hdr ? VideoCodec.hevc.moonlightCodecMode | main10CodecMode : 0)
+    }
+
     /// When HEVC is offered; see `codecs`.
     static var hevcOffer: MoonlightHEVCOffer {
         get { UserDefaults.dam.string(forKey: hevcOfferKey).flatMap(MoonlightHEVCOffer.init(rawValue:)) ?? .automatic }
@@ -171,6 +188,19 @@ final class MoonlightHost {
         get { UserDefaults.dam.object(forKey: isAdvertisedKey) as? Bool ?? true }
         set { UserDefaults.dam.set(newValue, forKey: isAdvertisedKey) }
     }
+
+    /// Whether Moonlight also lists the Mac's own displays, not only DAM's streaming ones:
+    /// the only ones that can show HDR, as macOS's virtual displays can't. Off unless turned
+    /// on, as it lets every paired device watch and use the Mac's own screens.
+    static var listsOwnDisplays: Bool {
+        get { UserDefaults.dam.bool(forKey: listsOwnDisplaysKey) }
+        set { UserDefaults.dam.set(newValue, forKey: listsOwnDisplaysKey) }
+    }
+    private static let listsOwnDisplaysKey = "\(AppIdentity.shortID).moonlight.ownDisplays"
+
+    /// The app ID of one of the Mac's own displays, by its unit number, which stays with the
+    /// display while the Mac's set of displays does; past streaming displays' and New Display's.
+    static func ownDisplayAppID(_ id: CGDirectDisplayID) -> Int { 1000 + Int(CGDisplayUnitNumber(id)) }
 
     private(set) var isRunning = false
     /// Whether both servers are accepting connections.
@@ -481,6 +511,7 @@ final class MoonlightHost {
         case "/serverinfo":
             reply(serverInfo(paired: secure, launch: secure ? session(for: certificate)?.launch : nil,
                              codecs: Self.codecs(lowLatency: client(for: certificate)?.lowLatency ?? true),
+                             hdr: Self.offersHDR(),
                              localAddress: Self.address(connection.currentPath?.localEndpoint)),
                   to: connection)
         case "/pair" where secure:
@@ -561,6 +592,8 @@ final class MoonlightHost {
         let address = Self.address(connection.currentPath?.localEndpoint)
         let peer = connection.currentPath?.remoteEndpoint ?? connection.endpoint
         let lowLatency = client(for: certificate)?.lowLatency ?? true
+        // Moonlight asks for HDR with its own setting on and a decoder for it.
+        let hdr = request.query["hdrMode"] == "1" && Self.offersHDR()
         let encryption = MoonlightStream.videoEncryption
         let answer = { [weak self] (launch: MoonlightLaunch) in
             guard let self else { return }
@@ -574,6 +607,8 @@ final class MoonlightHost {
             var launch = launch
             launch.lowLatency = lowLatency
             launch.codecs = Self.codecs(lowLatency: lowLatency)
+            if hdr && !launch.codecs.contains(.hevc) { launch.codecs.append(.hevc) }
+            launch.offersHDR = hdr
             launch.offersEncryptedVideo = encryption.offers(to: peer)
             launch.requiresEncryptedVideo = encryption == .always
             launch.clientAddress = Self.address(peer)
@@ -779,18 +814,20 @@ final class MoonlightHost {
     /// The host as `launch`'s device sees it: busy with its own launch, if it has one, and
     /// free otherwise, whatever other devices stream.
     /// Moonlight takes HEVC from `codecs` only with a MaxLumaPixelsHEVC, which is Sunshine's.
-    private func serverInfo(paired: Bool, launch: MoonlightLaunch?, codecs: [VideoCodec], localAddress: String) -> String {
-        Self.xml([
+    private func serverInfo(paired: Bool, launch: MoonlightLaunch?, codecs: [VideoCodec], hdr: Bool,
+                            localAddress: String) -> String {
+        let modes = Self.codecModes(codecs, hdr: hdr)
+        return Self.xml([
             "hostname": Self.hostName,
             "appversion": Self.appVersion,
             "GfeVersion": Self.gfeVersion,
             "uniqueid": Self.uniqueID,
             "HttpsPort": "\(httpsPort.rawValue)",
             "ExternalPort": "\(httpPort.rawValue)",
-            "MaxLumaPixelsHEVC": codecs.contains(.hevc) ? "1869449984" : "0",
+            "MaxLumaPixelsHEVC": modes & VideoCodec.hevc.moonlightCodecMode != 0 ? "1869449984" : "0",
             "mac": "00:00:00:00:00:00",
             "LocalIP": localAddress,
-            "ServerCodecModeSupport": "\(codecs.reduce(0) { $0 | $1.moonlightCodecMode })",
+            "ServerCodecModeSupport": "\(modes)",
             "PairStatus": paired ? "1" : "0",
             "currentgame": "\(launch?.appID ?? 0)",
             "state": launch == nil ? "SUNSHINE_SERVER_FREE" : "SUNSHINE_SERVER_BUSY",
@@ -798,9 +835,10 @@ final class MoonlightHost {
     }
 
     private func appList() -> String {
+        let hdr = Self.offersHDR()
         let listed = self.apps + [MoonlightApp(id: Self.newDisplayAppID, title: "New Display", displayID: 0)]
         let apps = listed.map {
-            "<App><IsHdrSupported>0</IsHdrSupported><AppTitle>\(Self.escape($0.title))</AppTitle><ID>\($0.id)</ID></App>"
+            "<App><IsHdrSupported>\(hdr ? 1 : 0)</IsHdrSupported><AppTitle>\(Self.escape($0.title))</AppTitle><ID>\($0.id)</ID></App>"
         }
         return Self.document("<root status_code=\"200\">\(apps.joined())</root>")
     }

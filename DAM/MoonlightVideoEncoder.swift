@@ -108,6 +108,8 @@ enum VideoCodec: String, CaseIterable {
         var hardware: Bool
         /// Whether it takes low-latency rate control for it (see the top of the file).
         var lowLatency: Bool
+        /// Whether it makes HEVC Main10 in hardware, as HDR10 needs.
+        var main10 = false
     }
 
     /// What this Mac's encoder does with each codec, found the first time it is asked by
@@ -115,7 +117,7 @@ enum VideoCodec: String, CaseIterable {
     static let support: [VideoCodec: Support] = Dictionary(uniqueKeysWithValues: allCases.map { ($0, $0.probe()) })
 
     private func probe() -> Support {
-        func makes(lowLatency: Bool) -> Bool {
+        func makes(lowLatency: Bool, profile: CFString? = nil) -> Bool {
             var specification: [CFString: Any] = [kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder: true]
             if lowLatency { specification[kVTVideoEncoderSpecification_EnableLowLatencyRateControl] = true }
             var session: VTCompressionSession?
@@ -123,11 +125,13 @@ enum VideoCodec: String, CaseIterable {
                                                     encoderSpecification: specification as CFDictionary,
                                                     imageBufferAttributes: nil, compressedDataAllocator: nil,
                                                     outputCallback: nil, refcon: nil, compressionSessionOut: &session)
-            if let session { VTCompressionSessionInvalidate(session) }
-            return status == noErr && session != nil
+            guard status == noErr, let session else { return false }
+            defer { VTCompressionSessionInvalidate(session) }
+            return profile.map { VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ProfileLevel, value: $0) == noErr } ?? true
         }
-        let support = Support(hardware: makes(lowLatency: false), lowLatency: makes(lowLatency: true))
-        veLog.debug("\(name, privacy: .public): hardware \(support.hardware), low-latency \(support.lowLatency)")
+        let support = Support(hardware: makes(lowLatency: false), lowLatency: makes(lowLatency: true),
+                              main10: self == .hevc && makes(lowLatency: false, profile: kVTProfileLevel_HEVC_Main10_AutoLevel))
+        veLog.debug("\(name, privacy: .public): hardware \(support.hardware), low-latency \(support.lowLatency), main10 \(support.main10)")
         return support
     }
 
@@ -316,6 +320,9 @@ final class MoonlightVideoEncoder {
         /// as soon as it is encoded, without a nudge (see the top of the file); ignored
         /// with `reordering`, which it does not allow.
         var lowLatency = false
+        /// HDR10 with this metadata, for HEVC: Main10 in BT.2020 with PQ, frames given in a
+        /// 10-bit format tagged so (see MoonlightScreenCapture); nil for SDR.
+        var hdr: MoonlightHDRMetadata?
     }
 
     /// One encoded frame as an Annex B access unit; a keyframe starts with its parameter
@@ -442,6 +449,15 @@ final class MoonlightVideoEncoder {
         // Every keyframe one a decoder can start from, with nothing after it predicted from before it.
         case .hevc: properties[kVTCompressionPropertyKey_AllowOpenGOP] = false
         }
+        if let hdr = settings.hdr, settings.codec == .hevc {
+            // Written into the SPS and SEI, which Moonlight's decoders take the picture's colour from.
+            properties[kVTCompressionPropertyKey_ProfileLevel] = kVTProfileLevel_HEVC_Main10_AutoLevel
+            properties[kVTCompressionPropertyKey_ColorPrimaries] = kCVImageBufferColorPrimaries_ITU_R_2020
+            properties[kVTCompressionPropertyKey_TransferFunction] = kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ
+            properties[kVTCompressionPropertyKey_YCbCrMatrix] = kCVImageBufferYCbCrMatrix_ITU_R_2020
+            properties[kVTCompressionPropertyKey_MasteringDisplayColorVolume] = hdr.masteringDisplayColorVolume as CFData
+            properties[kVTCompressionPropertyKey_ContentLightLevelInfo] = hdr.contentLightLevel as CFData
+        }
         properties.merge(Self.rateProperties(settings.bitrateKbps, settings)) { $1 }
         // Without reordering, no frame is held back for one that follows.
         if !settings.reordering { properties[kVTCompressionPropertyKey_MaxFrameDelayCount] = 0 }
@@ -451,7 +467,7 @@ final class MoonlightVideoEncoder {
             if status != noErr { veLog.debug("encoder property \(key as String, privacy: .public): \(status)") }
         }
         VTCompressionSessionPrepareToEncodeFrames(session)
-        veLog.debug("encoder \(settings.codec.name, privacy: .public) \(settings.width)×\(settings.height)@\(settings.fps) \(settings.bitrateKbps) kbps, hardware \(self.isHardware), low-latency \(self.isLowLatency)")
+        veLog.debug("encoder \(settings.codec.name, privacy: .public)\(settings.hdr != nil ? " HDR10" : "", privacy: .public) \(settings.width)×\(settings.height)@\(settings.fps) \(settings.bitrateKbps) kbps, hardware \(self.isHardware), low-latency \(self.isLowLatency)")
     }
 
     deinit {

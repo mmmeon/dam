@@ -268,11 +268,39 @@ them as HID events, one injector per stream:
   (-12902), and MaxFrameDelayCount, AllowOpenGOP and MaxKeyFrameIntervalDuration refused
   (-12900). Streamed to the local Moonlight: 1080p60, 30 fps, 205 ms host processing, a
   280 ms picture delay (H.264 at the same time: 46 fps, 10 ms, 30 ms); 720p60 HEVC, 48 fps
-  and 48 ms. Its keyframes are CRA, which Moonlight takes. Not yet: Main10 and HDR (the
-  encoder makes Main10 here, but HDR needs 10-bit capture, HDR metadata and Moonlight's
-  HDR control message), 4:4:4 (asked-for 4:4:4 and 4:2:2 come out 4:2:0 here), and AV1,
-  which no Mac encodes in hardware (Apple Silicon from M3 only decodes it). The
-  browser stream and OpenDisplay stay H.264.
+  and 48 ms. Its keyframes are CRA, which Moonlight takes. Not yet: 4:4:4 (asked-for
+  4:4:4 and 4:2:2 come out 4:2:0 here), and AV1, which no Mac encodes in hardware (Apple
+  Silicon from M3 only decodes it). The browser stream and OpenDisplay stay H.264.
+- **HDR10 (since 2026-10-22):** HEVC Main10 in BT.2020 with PQ, for a client whose own
+  HDR setting is on (moonlight-qt sends `hdrMode=1` with /launch then). Offered where the
+  Mac makes Main10 in hardware, unless Settings › Moonlight › HEVC is Off; such a launch
+  is offered HEVC whatever Automatic says, so serverinfo then gives the HEVC and Main10
+  bits (0x0300) and `MaxLumaPixelsHEVC` to every device, and DESCRIBE, per launch, gives
+  the HEVC marker only to launches that are to have HEVC: without it Moonlight takes
+  H.264, however serverinfo read. The app list says `IsHdrSupported` 1. ANNOUNCE asks
+  with `x-nv-video[0].dynamicRangeMode:1`, refused unless the launch asked and the codec
+  is HEVC. Once Moonlight connects to the control stream it is sent the HDR mode message
+  (0x010e, Sunshine's): enabled, then the metadata, 27 bytes little-endian; the encoder
+  writes the same metadata into the stream's SEI (`MoonlightHDRMetadata`). moonlight-qt's
+  renderer takes PQ from the stream and the metadata from the message, and has macOS
+  tone-map by it. **Picture:** macOS's virtual displays are SDR only (no HDR setting in
+  CGVirtualDisplay; BetterDisplay and Sidecar have the same limit), so a streaming display
+  carries an SDR picture in HDR10. Real HDR needs one of the Mac's own displays showing it
+  and ScreenCaptureKit's `captureDynamicRange` (macOS 15, set by name, as the SDK here is
+  13's; HDR as a canonical display would show it); Settings › Moonlight › List this Mac's
+  own displays (off by default) lists them, as app IDs 1000 plus the display's unit
+  number, streamed as they are, never resized or removed. Before macOS 15 the display is
+  captured as SDR. `HDR10Converter` turns frames into 10-bit 4:2:0 PQ with Core Image
+  (about 6 ms a 1080p frame here), putting SDR white at 203 nits (BT.2408): macOS puts it
+  at 100 nits in PQ, which moonlight-qt showed dim (white 173 against SDR's 240 in a
+  recording of its window). With SDR captured, the metadata says 203 nits at most
+  (`MoonlightHDRMetadata.sdr`), as with 1000 macOS's tone-mapping dims white to leave
+  room for highlights; with HDR captured, a 1000-nit BT.2020 display. Measured on the
+  test Mac (macOS 13, SDR Lenovo, the local Moonlight with HDR on): 1080p60 New Display,
+  Main 10 decoded, 36 fps, 175 ms host processing, 274 ms delay (HEVC's encoder here);
+  white 219 and the wallpaper close to SDR's; the Lenovo listed as "lenovo" (app 1002),
+  720p60 HDR10 at 42 ms host processing, its mode unchanged. Not tested: HDR capture on
+  macOS 15, and whether SDR white also sits at 100 nits there (the conversion assumes so).
 - **Nudge:** the encoder holds each frame until the next one arrives. So if no new frame
   follows within 1.25 frame times, DAM resubmits the last picture to flush it, again
   every 1.25 frame times while the frame is still held (HEVC on the test Mac needs two).

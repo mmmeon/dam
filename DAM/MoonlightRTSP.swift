@@ -35,6 +35,8 @@ struct MoonlightLaunch {
     var lowLatency = false
     /// The codecs offered to it, which ANNOUNCE may choose from.
     var codecs: [VideoCodec] = [.h264]
+    /// Whether it asked for HDR and the host offers it: ANNOUNCE may then ask for HDR10 HEVC.
+    var offersHDR = false
     /// Whether encrypted video is offered; clients turn it on whenever it is.
     var offersEncryptedVideo = false
     /// Whether video must go encrypted (Encrypt Video set to Always): DESCRIBE asks for it,
@@ -217,6 +219,10 @@ final class MoonlightRTSP {
                 return reply("400 Bad Request")
             }
             guard !config.videoEncrypted || launch.offersEncryptedVideo else { return reply("400 Bad Request") }
+            guard !config.hdr || (launch.offersHDR && codec == .hevc) else {
+                rtLog.error("announce: HDR was not offered for \(codec.name, privacy: .public)")
+                return reply("400 Bad Request")
+            }
             guard config.videoEncrypted || !launch.requiresEncryptedVideo else {
                 rtLog.error("announce: plain video refused, as video must be encrypted")
                 return reply("400 Bad Request")

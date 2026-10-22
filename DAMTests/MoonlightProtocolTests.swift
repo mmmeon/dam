@@ -31,6 +31,37 @@ final class MoonlightProtocolTests: XCTestCase {
                                                      bitrateKbps: 16000, videoFormat: 0, encryptionEnabled: 1))
     }
 
+    func testReadsHDRFromTheDynamicRangeMode() throws {
+        XCTAssertFalse(try XCTUnwrap(MoonlightStreamConfig.parse(sdp: announce)).hdr)
+        let hdr = try XCTUnwrap(MoonlightStreamConfig.parse(sdp: announce + "a=x-nv-video[0].dynamicRangeMode:1 \r\n"))
+        XCTAssertTrue(hdr.hdr)
+        XCTAssertFalse(try XCTUnwrap(MoonlightStreamConfig.parse(sdp: announce + "a=x-nv-video[0].dynamicRangeMode:0 \r\n")).hdr)
+    }
+
+    // MARK: - HDR metadata
+
+    /// As moonlight-common-c reads it: the enabled byte, then thirteen little-endian 16-bit
+    /// fields, primaries in RGB order.
+    func testTheHDRModeMessageIsLaidOutAsMoonlightReadsIt() {
+        let payload = [UInt8](MoonlightHDRMetadata.canonical.controlPayload(enabled: true))
+        XCTAssertEqual(payload.count, 27)
+        XCTAssertEqual(payload[0], 1)
+        func field(_ index: Int) -> UInt16 { UInt16(payload[1 + index * 2]) | UInt16(payload[2 + index * 2]) << 8 }
+        XCTAssertEqual((0..<13).map(field), [35400, 14600, 8500, 39850, 6550, 2300, 15635, 16450, 1000, 50, 1000, 400, 0])
+        XCTAssertEqual(MoonlightHDRMetadata.canonical.controlPayload(enabled: false).first, 0)
+    }
+
+    /// As ST 2086 and CTA-861.3 SEI carry them: big-endian, primaries green, blue, red.
+    func testTheEncodersMetadataIsInSEIOrder() {
+        let volume = [UInt8](MoonlightHDRMetadata.canonical.masteringDisplayColorVolume)
+        XCTAssertEqual(volume.count, 24)
+        func u16(_ at: Int) -> Int { Int(volume[at]) << 8 | Int(volume[at + 1]) }
+        XCTAssertEqual((0..<8).map { u16($0 * 2) }, [8500, 39850, 6550, 2300, 35400, 14600, 15635, 16450])
+        XCTAssertEqual(volume[16..<20].reduce(0) { $0 << 8 | Int($1) }, 10_000_000, "1000 nits in 0.0001")
+        XCTAssertEqual(volume[20..<24].reduce(0) { $0 << 8 | Int($1) }, 50)
+        XCTAssertEqual([UInt8](MoonlightHDRMetadata.canonical.contentLightLevel), [0x03, 0xE8, 0x01, 0x90])
+    }
+
     func testRefusesAnAnnounceWithoutTheSize() {
         XCTAssertNil(MoonlightStreamConfig.parse(sdp: announce.replacingOccurrences(of: "clientViewportWd", with: "x")))
     }
