@@ -484,6 +484,10 @@ final class WebStreamServer {
             send(status: "200 OK", contentType: "application/x-x509-ca-cert",
                  headers: ["Content-Disposition: attachment; filename=\"\(AppIdentity.name) Browser Stream.cer\""],
                  body: authority, to: connection)
+        case "/time":
+            // The Mac's clock, for the page to set its own against.
+            send(status: "200 OK", contentType: "text/plain",
+                 body: Data(String(format: "%.1f", Date().timeIntervalSince1970 * 1000).utf8), to: connection)
         case "/pair/begin":
             beginPairing(request, on: connection)
         case "/pair/wait":
@@ -764,6 +768,9 @@ final class WebStreamSession {
 
     // The stream's clock, on `queue`: the first frame's time is its zero.
     private var anchor: CMTime?
+    /// When the stream's zero was, in milliseconds since 1970 on the Mac's clock, for the
+    /// page to tell how long a frame took from the screen to it; on `queue`.
+    private var epoch: Double?
     /// The init segment and codecs for viewers with sound and without.
     private var initSegment: (sound: Data, silent: Data)?
     private var codecs = (sound: "", silent: "")
@@ -977,7 +984,12 @@ final class WebStreamSession {
         // The encoder's decode times matter only when it reorders frames; otherwise they
         // are the presentation times, give or take its rounding.
         let decodeTime = reorders && decode.isValid ? decode : frame.time
-        if anchor == nil { anchor = CMTimeMinimum(decodeTime, frame.time) }
+        if anchor == nil {
+            let zero = CMTimeMinimum(decodeTime, frame.time)
+            anchor = zero
+            let since = CMTimeGetSeconds(CMTimeSubtract(CMClockGetTime(CMClockGetHostTimeClock()), zero))
+            epoch = (Date().timeIntervalSince1970 - since) * 1000
+        }
         guard let anchor else { return }
         let sample = frame.avcc
         if frame.isKeyFrame, let (sets, _) = MoonlightVideoEncoder.parameterSets(frame.sample) {
@@ -1006,7 +1018,7 @@ final class WebStreamSession {
         for viewer in viewers {
             switch viewer.take(video: fragment, keyFrame: frame.isKeyFrame,
                                codecs: viewer.audio ? codecs.sound : codecs.silent,
-                               initSegment: viewer.audio ? initSegment.sound : initSegment.silent) {
+                               initSegment: viewer.audio ? initSegment.sound : initSegment.silent, epoch: epoch) {
             case .taken, .behind: break
             case .waitingForKeyFrame, .catchingUp: waiting = true
             }
@@ -1277,7 +1289,7 @@ final class WebStreamViewer {
         }
     }
 
-    func take(video fragment: Data, keyFrame: Bool, codecs: String, initSegment: Data) -> Outcome {
+    func take(video fragment: Data, keyFrame: Bool, codecs: String, initSegment: Data, epoch: Double? = nil) -> Outcome {
         lock.lock()
         guard !closed else { lock.unlock(); return .taken }
         if let behindSince {
@@ -1298,7 +1310,7 @@ final class WebStreamViewer {
             waitingForKeyFrame = false
             started = true
             lock.unlock()
-            send(Data(Self.head(codecs: codecs).utf8))
+            send(Data(Self.head(codecs: codecs, epoch: epoch).utf8))
             send(initSegment)
         } else if inFlight > maxInFlight {
             waitingForKeyFrame = true
@@ -1321,10 +1333,12 @@ final class WebStreamViewer {
         if streaming { send(fragment) }
     }
 
-    /// The response's head: a body of unknown length that ends with the connection.
-    static func head(codecs: String) -> String {
+    /// The response's head: a body of unknown length that ends with the connection. With
+    /// it, when the stream's zero was on the Mac's clock (see WebStreamSession.epoch).
+    static func head(codecs: String, epoch: Double? = nil) -> String {
         "HTTP/1.1 200 OK\r\nContent-Type: video/mp4\r\nCache-Control: no-store\r\nConnection: close\r\n" +
-        "Access-Control-Allow-Origin: *\r\nAccess-Control-Expose-Headers: X-Codecs\r\nX-Codecs: \(codecs)\r\n\r\n"
+        "Access-Control-Allow-Origin: *\r\nAccess-Control-Expose-Headers: X-Codecs, X-Stream-Epoch\r\n" +
+        "X-Codecs: \(codecs)\r\n" + (epoch.map { "X-Stream-Epoch: \(String(format: "%.1f", $0))\r\n" } ?? "") + "\r\n"
     }
 
     private func send(_ data: Data) {
@@ -1369,11 +1383,13 @@ enum WebStreamPage {
     <style>
       :root { color-scheme: dark; }
       body { margin: 0; background: #000; color: #ddd; font: 14px -apple-system, system-ui, sans-serif; }
-      #v { display: block; width: 100vw; height: 100vh; object-fit: contain; background: #000; }
+      #v, #c { display: block; width: 100vw; height: 100vh; object-fit: contain; background: #000; }
+      #v[hidden], #c[hidden] { display: none; }
       #bar { position: fixed; left: 0; right: 0; bottom: 0; display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center;
              padding: 10px 14px; background: rgba(20,20,20,.85); backdrop-filter: blur(10px); transition: opacity .3s; }
       body.idle #bar { opacity: 0; pointer-events: none; }
       label { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+      label[hidden] { display: none; }
       select, input[type=number], button { font: inherit; color: inherit; background: #333; border: 0; border-radius: 6px; padding: 4px 8px; }
       input[type=range] { width: 140px; }
       #stats { margin-left: auto; opacity: .7; font-variant-numeric: tabular-nums; }
@@ -1382,17 +1398,28 @@ enum WebStreamPage {
       #msg .code { font: 600 56px ui-monospace, Menlo, monospace; letter-spacing: 0.15em; margin: 12px 0; }
       #msg .small { opacity: 0.7; font-size: 13px; }
       code { user-select: all; }
+      #hint { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); max-width: min(560px, calc(100vw - 32px));
+              box-sizing: border-box; padding: 10px 36px 10px 14px; border-radius: 8px; background: rgba(20,20,20,.9); line-height: 1.4; }
+      #hint[hidden] { display: none; }
+      #hint button { position: absolute; top: 6px; right: 6px; padding: 2px 8px; background: none; }
     </style>
     </head>
     <body>
     <video id="v" muted playsinline></video>
+    <canvas id="c" hidden></canvas>
     <div id="msg" hidden></div>
+    <div id="hint" hidden><span></span><button aria-label="Close">×</button></div>
     <div id="bar">
       <label>Display <select id="app"></select></label>
       <label>Profile <select id="profile">
         <option value="interactive">Interactive</option>
         <option value="balanced">Balanced</option>
         <option value="viewing">Viewing</option>
+      </select></label>
+      <label>Decode <select id="decoder">
+        <option value="auto">Auto</option>
+        <option value="direct">Directly</option>
+        <option value="mse">Media Source</option>
       </select></label>
       <label>Buffer <input id="buffer" type="range" min="0" max="2000" step="10"> <span id="bufferText"></span></label>
       <label>Mbit/s <input id="bitrate" type="number" min="1" max="150" step="1" style="width:4em"></label>
@@ -1407,6 +1434,7 @@ enum WebStreamPage {
       let info = { apps: [], profile: 'interactive', bitrates: {}, buffers: {} };
       let profile = params.get('profile'), bitrate = params.get('bitrate'), app = params.get('app');
       let buffer = params.get('buffer'), lowlatency = params.get('lowlatency');
+      let decoder = ['direct', 'mse'].includes(params.get('decoder')) ? params.get('decoder') : 'auto';
       const token = params.get('token') || '';
       let abort = null, source = null, sb = null, queue = [], bytes = 0, held = true, stalls = 0, cutOff = false;
       // Whether a stream has played on this page; when the stream started; the reconnects
@@ -1418,13 +1446,34 @@ enum WebStreamPage {
       // Stalls in a stream's first 2 seconds are the decoder starting, and teach nothing.
       let extra = 0, extraChanged = 0, playingSince = 0;
       try { extra = Math.min(Math.max(+localStorage.getItem('extraBuffer') || 0, 0), 0.5); } catch (e) {}
+      // When the stream's zero was on the Mac's clock (from its response), the Mac's clock
+      // less this one's, and how long the frames shown in the last second took from the Mac's
+      // screen to this one.
+      let epoch = null, offset = null, clock = [], delays = [];
+      // When the last bytes came, and when the gaps between them began that were long
+      // enough to show.
+      let lastBytes = 0, gaps = [], hinted = false;
+      // Whether this stream is decoded directly (WebCodecs), not through Media Source; its
+      // decoder, the newest picture not yet drawn, and how many were drawn. Direct decoding
+      // that failed in this browser isn't tried again on the page.
+      let direct = false, decoding = null, picture = null, drawn = 0, directFailed = false;
+      const canvas = $('c'), context = canvas.getContext('2d');
       function setExtra(seconds) {
         extra = seconds; extraChanged = performance.now();
         try { localStorage.setItem('extraBuffer', String(extra)); } catch (e) {}
       }
 
       const MS = window.ManagedMediaSource || window.MediaSource;
-      if (!MS) { $('msg').hidden = false; $('msg').textContent = 'This browser cannot play streams (no Media Source Extensions).'; return; }
+      const canDecode = !!(window.VideoDecoder && window.EncodedVideoChunk);
+      if (!MS && !canDecode) { $('msg').hidden = false; $('msg').textContent = 'This browser cannot play streams (no Media Source Extensions).'; return; }
+      // Direct decoding draws each picture the moment it is decoded, with nothing held in
+      // between. Auto takes it for Interactive without sound (sound needs Media Source to
+      // keep it in time), where the browser can show a canvas full screen: an iPhone can
+      // show only a video so.
+      function decodesDirectly() {
+        if (!canDecode || directFailed || !video.muted) return false;
+        return decoder === 'direct' || !MS || (decoder === 'auto' && profile === 'interactive' && !!canvas.requestFullscreen);
+      }
 
       // Sound comes only when wanted: with it, each frame waits for the sound of its moment.
       function url() {
@@ -1447,11 +1496,20 @@ enum WebStreamPage {
       function start(text) {
         stop();
         queue = []; bytes = 0; held = true; stalls = 0; cutOff = false; watch = null; startedAt = performance.now(); playingSince = 0;
-        const ms = source = new MS();
-        video.disableRemotePlayback = true;
-        video.src = URL.createObjectURL(ms);
-        ms.addEventListener('sourceopen', () => open(ms), { once: true });
-        history.replaceState(null, '', '?' + new URLSearchParams({ ...(token ? { token } : {}), ...(app ? { app } : {}), profile, bitrate: Math.round(bitrate * 1000), buffer: Math.round(buffer * 1000), ...(lowlatency ? { lowlatency } : {}) }));
+        epoch = null; delays = []; lastBytes = 0; gaps = [];
+        direct = decodesDirectly(); drawn = 0;
+        video.hidden = direct; canvas.hidden = !direct; $('buffer').disabled = direct;
+        if (direct) {
+          const stream = source = {};
+          video.removeAttribute('src'); video.load();
+          openDirect(stream);
+        } else {
+          const ms = source = new MS();
+          video.disableRemotePlayback = true;
+          video.src = URL.createObjectURL(ms);
+          ms.addEventListener('sourceopen', () => open(ms), { once: true });
+        }
+        history.replaceState(null, '', '?' + new URLSearchParams({ ...(token ? { token } : {}), ...(app ? { app } : {}), profile, bitrate: Math.round(bitrate * 1000), buffer: Math.round(buffer * 1000), ...(lowlatency ? { lowlatency } : {}), ...(decoder !== 'auto' ? { decoder } : {}) }));
         // Making a display for the stream can take a while.
         $('msg').hidden = false; $('msg').textContent = text || 'Connecting…';
       }
@@ -1462,6 +1520,9 @@ enum WebStreamPage {
         abort = null; sb = null;
         if (source && source.readyState === 'open') try { source.endOfStream(); } catch (e) {}
         source = null;
+        if (decoding && decoding.state !== 'closed') try { decoding.close(); } catch (e) {}
+        decoding = null;
+        if (picture) { picture.close(); picture = null; }
       }
 
       // Each stream has its own controller: one replaced by a restart (a turn, a new
@@ -1479,6 +1540,8 @@ enum WebStreamPage {
         if (gone()) return;
         if (!response.ok) { const text = await response.text().catch(() => ''); if (!gone()) fail(text); return; }
         const codecs = response.headers.get('X-Codecs') || 'avc1.640028,mp4a.40.2';
+        epoch = +response.headers.get('X-Stream-Epoch') || null;
+        if (epoch) for (let i = 0; i < 4; i++) setTimeout(setClock, i * 300);
         const mime = 'video/mp4; codecs="' + codecs + '"';
         if (!MS.isTypeSupported(mime)) return fail('This browser cannot decode ' + codecs + '.');
         sb = ms.addSourceBuffer(mime);
@@ -1492,11 +1555,166 @@ enum WebStreamPage {
             if (gone()) return;
             if (done) break;
             $('msg').hidden = true; played = true;
+            arrived(performance.now());
             queue.push(value); bytes += value.length;
             pump();
           }
           retry('The stream ended.');
         } catch (e) { if (!gone()) retry('The stream broke off.'); }
+      }
+
+      // The stream decoded directly: its fragmented MP4 split into the H.264 samples it
+      // carries, each handed to a WebCodecs decoder as it lands, and each picture drawn on
+      // the next screen refresh, only the newest when several are waiting.
+      async function openDirect(stream) {
+        const ctl = new AbortController();
+        abort = ctl;
+        const gone = () => ctl.signal.aborted || stream !== source;
+        let response;
+        try {
+          response = await fetch(url(), { signal: ctl.signal, cache: 'no-store' });
+        } catch (e) { if (!gone()) (played ? retry : fail)('Could not reach the stream.'); return; }
+        if (gone()) return;
+        if (!response.ok) { const text = await response.text().catch(() => ''); if (!gone()) fail(text); return; }
+        const codec = (response.headers.get('X-Codecs') || 'avc1.640028').split(',')[0];
+        epoch = +response.headers.get('X-Stream-Epoch') || null;
+        if (epoch) for (let i = 0; i < 4; i++) setTimeout(setClock, i * 300);
+        const failed = e => {
+          if (gone()) return;
+          // Media Source plays it from here on.
+          directFailed = true; decoder = 'mse'; $('decoder').value = 'mse';
+          start('Decoding directly failed (' + (e && e.message || e) + '); trying Media Source…');
+        };
+        decoding = new VideoDecoder({
+          output: frame => { if (gone()) return frame.close(); if (picture) picture.close(); picture = frame; },
+          error: failed,
+        });
+        const mp4 = new FragmentReader();
+        const reader = response.body.getReader();
+        try {
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (gone()) return;
+            if (done) break;
+            $('msg').hidden = true; played = true;
+            arrived(performance.now());
+            bytes += value.length;
+            for (const item of mp4.push(value)) {
+              if (item.description) {
+                // WebKit fails every frame without the size.
+                decoding.configure({ codec, description: item.description, codedWidth: item.width, codedHeight: item.height,
+                                     optimizeForLatency: true });
+              } else if (decoding.state === 'configured') {
+                decoding.decode(new EncodedVideoChunk(item));
+              }
+            }
+          }
+          retry('The stream ended.');
+        } catch (e) { if (!gone()) { if (decoding && decoding.state === 'closed') failed(e); else retry('The stream broke off.'); } }
+      }
+
+      // Draws the newest picture decoded, at the screen's pace, and times it as `shown` does.
+      function draw(now) {
+        requestAnimationFrame(draw);
+        if (!picture) return;
+        const frame = picture; picture = null;
+        if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
+          canvas.width = frame.displayWidth; canvas.height = frame.displayHeight;
+        }
+        context.drawImage(frame, 0, 0, canvas.width, canvas.height);
+        if (epoch && offset !== null) {
+          delays.push({ now, ms: performance.timeOrigin + now + offset - (epoch + frame.timestamp / 1000) });
+          while (now - delays[0].now > 1000) delays.shift();
+        }
+        frame.close();
+        if (!drawn++) { held = false; keepAwake(); }
+      }
+      requestAnimationFrame(draw);
+
+      // A stream of fragmented MP4 cut into what a decoder takes: the video track's avcC and
+      // size from the init segment, and from each fragment, its samples with their times in
+      // microseconds and whether each is a keyframe.
+      function FragmentReader() {
+        // Where the samples of the last fragment start in its mdat, and their sizes and times.
+        let pending = new Uint8Array(0), track = 0, scale = 90000, samples = [], start = 0;
+        const u32 = (b, at) => ((b[at] << 24) >>> 0) + (b[at + 1] << 16) + (b[at + 2] << 8) + b[at + 3];
+        const type = (b, at) => String.fromCharCode(b[at + 4], b[at + 5], b[at + 6], b[at + 7]);
+        function* boxes(b, from, to) {
+          for (let at = from; at + 8 <= to;) {
+            let size = u32(b, at), head = 8;
+            if (size === 1) { size = u32(b, at + 8) * 2 ** 32 + u32(b, at + 12); head = 16; }
+            if (size < head || at + size > to) return;
+            yield { type: type(b, at), at, body: at + head, end: at + size };
+            at += size;
+          }
+        }
+        const find = (b, box, path) => {
+          for (const name of path) {
+            const inner = [...boxes(b, box.body, box.end)].find(x => x.type === name);
+            if (!inner) return null;
+            box = inner;
+          }
+          return box;
+        };
+        function moov(b, box, out) {
+          for (const trak of boxes(b, box.body, box.end)) {
+            if (trak.type !== 'trak') continue;
+            const stsd = find(b, trak, ['mdia', 'minf', 'stbl', 'stsd']);
+            const avc1 = stsd && [...boxes(b, stsd.body + 8, stsd.end)].find(x => x.type === 'avc1');
+            if (!avc1) continue;
+            const avcC = [...boxes(b, avc1.body + 78, avc1.end)].find(x => x.type === 'avcC');
+            const tkhd = find(b, trak, ['tkhd']), mdhd = find(b, trak, ['mdia', 'mdhd']);
+            if (!avcC || !tkhd || !mdhd) continue;
+            track = u32(b, tkhd.body + (b[tkhd.body] === 1 ? 20 : 12));
+            scale = u32(b, mdhd.body + (b[mdhd.body] === 1 ? 20 : 12));
+            const u16 = at => b[at] << 8 | b[at + 1];
+            out.push({ description: b.slice(avcC.body, avcC.end), width: u16(avc1.body + 24), height: u16(avc1.body + 26) });
+          }
+        }
+        function moof(b, box) {
+          samples = [];
+          for (const traf of boxes(b, box.body, box.end)) {
+            if (traf.type !== 'traf') continue;
+            const tfhd = find(b, traf, ['tfhd']), tfdt = find(b, traf, ['tfdt']), trun = find(b, traf, ['trun']);
+            if (!tfhd || !tfdt || !trun || u32(b, tfhd.body + 4) !== track) continue;
+            let time = b[tfdt.body] === 1 ? u32(b, tfdt.body + 4) * 2 ** 32 + u32(b, tfdt.body + 8) : u32(b, tfdt.body + 4);
+            const flags = u32(b, trun.body) & 0xFFFFFF, count = u32(b, trun.body + 4);
+            // The data offset counts from the moof's start; the mdat follows it.
+            start = flags & 1 ? (u32(b, trun.body + 8) | 0) - (box.end - box.at) - 8 : 0;
+            let at = trun.body + 8 + (flags & 1 ? 4 : 0) + (flags & 4 ? 4 : 0);
+            for (let i = 0; i < count; i++) {
+              const duration = flags & 0x100 ? u32(b, (at += 4) - 4) : 0;
+              const size = flags & 0x200 ? u32(b, (at += 4) - 4) : 0;
+              const sampleFlags = flags & 0x400 ? u32(b, (at += 4) - 4) : 0;
+              const shift = flags & 0x800 ? (u32(b, (at += 4) - 4) | 0) : 0;
+              samples.push({ size, key: !(sampleFlags & 0x10000), timestamp: Math.round((time + shift) * 1e6 / scale), duration: Math.round(duration * 1e6 / scale) });
+              time += duration;
+            }
+          }
+        }
+        // Takes the next bytes; gives back what they complete.
+        this.push = bytes => {
+          const joined = new Uint8Array(pending.length + bytes.length);
+          joined.set(pending); joined.set(bytes, pending.length);
+          const out = [];
+          let used = 0;
+          for (const box of boxes(joined, 0, joined.length)) {
+            if (box.type === 'moov') moov(joined, box, out);
+            else if (box.type === 'moof') moof(joined, box);
+            else if (box.type === 'mdat') {
+              let at = box.body + start;
+              for (const sample of samples) {
+                out.push({ type: sample.key ? 'key' : 'delta', timestamp: sample.timestamp, duration: sample.duration,
+                           data: joined.slice(at, at + sample.size) });
+                at += sample.size;
+              }
+              samples = [];
+            }
+            used = box.end;
+          }
+          pending = joined.slice(used);
+          return out;
+        };
       }
 
       // A stream that played and broke off starts again after 1, 2, 4… seconds; the first
@@ -1518,10 +1736,10 @@ enum WebStreamPage {
       // display takes up to about 15).
       function watchdog() {
         const now = performance.now();
-        if (!source || document.hidden || video.seeking) { watch = null; return; }
+        if (!source || document.hidden || (!direct && video.seeking)) { watch = null; return; }
         if (!bytes) { if (now - startedAt > 30000) (played ? retry : fail)('The Mac did not answer.'); return; }
-        const q = video.getVideoPlaybackQuality ? video.getVideoPlaybackQuality() : null;
-        const time = video.currentTime, frames = q ? q.totalVideoFrames : 0;
+        const q = !direct && video.getVideoPlaybackQuality ? video.getVideoPlaybackQuality() : null;
+        const time = direct ? drawn : video.currentTime, frames = direct ? drawn : q ? q.totalVideoFrames : 0;
         if (!watch) { watch = { bytes, time, frames, fed: now, moved: now, counts: false }; return; }
         if (bytes !== watch.bytes) { watch.bytes = bytes; watch.fed = now; }
         // A browser that counts frames is trusted to: time running on without them is a
@@ -1544,6 +1762,67 @@ enum WebStreamPage {
         }, () => { if (wake === asked) wake = null; });
       }
       function letSleep() { const asked = wake; wake = null; if (asked) asked.then(lock => lock && lock.release().catch(() => {})); }
+
+      // The Mac's clock against this one: the middle of the quickest of the last few asks
+      // for its time, a few as a stream starts and then every 10 seconds.
+      function setClock() {
+        if (document.hidden || !source) return;
+        const sent = performance.now();
+        fetch('/time', { cache: 'no-store' }).then(r => r.text()).then(text => {
+          const back = performance.now(), mac = +text;
+          if (!mac) return;
+          clock.push({ rtt: back - sent, offset: mac - (performance.timeOrigin + (sent + back) / 2) });
+          if (clock.length > 8) clock.shift();
+          offset = clock.reduce((a, b) => b.rtt < a.rtt ? b : a).offset;
+        }).catch(() => {});
+      }
+      setInterval(() => { if (epoch) setClock(); }, 10000);
+
+      // Each frame as it is shown: when, on the Mac's clock, less when it was captured. The
+      // capture is its slot on the stream's grid, up to a frame before. WebKit on macOS 13
+      // gives a media time of 0 and an expected display time hours off for every frame
+      // from Media Source; there the time playback stands at, and the callback's own time,
+      // stand in for them.
+      function shown(now, frame) {
+        if (epoch && offset !== null) {
+          const when = Math.abs(frame.expectedDisplayTime - now) < 1000 ? frame.expectedDisplayTime : now;
+          const media = frame.mediaTime || video.currentTime;
+          delays.push({ now, ms: performance.timeOrigin + when + offset - (epoch + media * 1000) });
+          while (now - delays[0].now > 1000) delays.shift();
+        }
+        video.requestVideoFrameCallback(shown);
+      }
+      if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(shown);
+      function delay() {
+        if (!delays.length || performance.now() - delays[delays.length - 1].now > 1000) return null;
+        const sorted = delays.map(d => d.ms).sort((a, b) => a - b);
+        return Math.round(sorted[sorted.length >> 1]);
+      }
+
+      // Wi-Fi shared with AirDrop, Handoff or AirPlay (AWDL) leaves for the devices around
+      // at a steady beat, a few times a second, and nothing comes meanwhile; a busy network
+      // stops at random. Gaps too long for the buffer to cover, six or more in 15 seconds,
+      // most of them the same time apart, between a quarter of a second and 1.2, bring a hint.
+      // Not in a stream's first 2 seconds, when the decoder starts.
+      function arrived(now) {
+        const gap = now - lastBytes, began = lastBytes;
+        lastBytes = now;
+        if (hinted || !began || !playingSince || now - playingSince < 2000) return;
+        if (gap < Math.max(50, (buffer + extra) * 1000)) return;
+        gaps = gaps.filter(t => now - t < 15000);
+        gaps.push(began);
+        if (gaps.length < 6) return;
+        const apart = gaps.slice(1).map((t, i) => t - gaps[i]);
+        const median = apart.slice().sort((a, b) => a - b)[apart.length >> 1];
+        if (median < 250 || median > 1200) return;
+        if (apart.filter(d => Math.abs(d - median) <= median * 0.15).length < apart.length * 0.7) return;
+        hinted = true;
+        $('hint').querySelector('span').textContent = 'The picture stops every ' + (median / 1000).toFixed(1)
+          + ' s, as Wi-Fi does while AirDrop, Handoff or AirPlay look for devices nearby. Turning off AirDrop, '
+          + 'on this device or the Mac, should stop it.';
+        $('hint').hidden = false;
+      }
+      $('hint').querySelector('button').onclick = () => { $('hint').hidden = true; };
 
       function pump() {
         if (!sb || sb.updating || !queue.length) return;
@@ -1568,6 +1847,7 @@ enum WebStreamPage {
       // gap the still screen left, and, when the picture runs dry, a hold until the buffer is
       // back. Half a minute without a stall gives back 5 ms of the extra.
       function follow() {
+        if (direct) return showStats(null);
         if (!sb || !sb.buffered.length) return;
         const now = performance.now();
         if (extra > 0 && !held && now - extraChanged > 30000) setExtra(Math.max(extra - 0.005, 0));
@@ -1587,11 +1867,21 @@ enum WebStreamPage {
         if (held && lag >= target + (playingSince ? 0 : 0.1)) held = false;
         if (!held && video.paused) video.play().catch(() => {});
         const q = video.getVideoPlaybackQuality ? video.getVideoPlaybackQuality() : null;
-        $('stats').textContent = (video.videoWidth ? video.videoWidth + '×' + video.videoHeight + ' · ' : '')
-          + Math.round(Math.max(lag, 0) * 1000) + ' ms behind'
-          + (extra ? ' (+' + Math.round(extra * 1000) + ' ms for this browser)' : '')
-          + (stalls ? ' · ' + stalls + ' stall' + (stalls > 1 ? 's' : '') : '')
-          + (q ? ' · ' + q.droppedVideoFrames + ' dropped' : '');
+        showStats(lag, q);
+      }
+
+      // What the stats line says: the picture's size, how long frames take from the Mac,
+      // and for Media Source, what is buffered, stalls and frames dropped.
+      function showStats(lag, q) {
+        const ms = delay();
+        const width = direct ? canvas.width : video.videoWidth, height = direct ? canvas.height : video.videoHeight;
+        $('stats').textContent = (width && (!direct || drawn) ? width + '×' + height + ' · ' : '')
+          + (ms !== null ? ms + ' ms from the Mac · ' : '')
+          + (direct ? 'decoded directly' + (decoding ? ' · ' + decoding.decodeQueueSize + ' waiting' : '')
+                    : Math.round(Math.max(lag, 0) * 1000) + ' ms buffered'
+                      + (extra ? ' (+' + Math.round(extra * 1000) + ' ms for this browser)' : '')
+                      + (stalls ? ' · ' + stalls + ' stall' + (stalls > 1 ? 's' : '') : '')
+                      + (q ? ' · ' + q.droppedVideoFrames + ' dropped' : ''));
       }
       setInterval(() => { follow(); watchdog(); }, 100);
       // Out of picture: hold until the target is in hand again, rather than play each frame
@@ -1611,9 +1901,12 @@ enum WebStreamPage {
       $('profile').onchange = () => { profile = $('profile').value; bitrate = (info.bitrates[profile] || 20000) / 1000; $('bitrate').value = bitrate; setBuffer(info.buffers[profile] || 0.05); start(); };
       $('bitrate').onchange = () => { bitrate = +$('bitrate').value || 20; start(); };
       $('app').onchange = () => { app = $('app').value || null; start(); };
+      $('decoder').value = decoder;
+      $('decoder').parentElement.hidden = !canDecode || !MS;
+      $('decoder').onchange = () => { decoder = $('decoder').value; directFailed = false; start(); };
       $('buffer').oninput = () => setBuffer(+$('buffer').value / 1000);
       $('mute').onclick = () => { video.muted = !video.muted; $('mute').textContent = video.muted ? 'Unmute' : 'Mute'; start(); };
-      $('full').onclick = () => { (video.requestFullscreen || video.webkitEnterFullscreen || (() => {})).call(video); };
+      $('full').onclick = () => { const shown = direct ? canvas : video; (shown.requestFullscreen || shown.webkitEnterFullscreen || (() => {})).call(shown); };
       let idle; function awake() { document.body.classList.remove('idle'); clearTimeout(idle); keepAwake(); idle = setTimeout(() => document.body.classList.add('idle'), 3000); }
       ['mousemove', 'touchstart', 'keydown'].forEach(e => addEventListener(e, awake)); awake();
 
