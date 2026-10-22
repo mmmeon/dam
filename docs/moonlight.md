@@ -22,6 +22,18 @@ settings.
   when the stream breaks off, ends, or goes 5 s without data, and when the picture stands
   still for 3 s while data keeps coming. Retries come after 1, 2, 4… s, at most five in
   five minutes. A first connection that gets no data within 30 s fails.
+  It plays the profile's buffer behind, plus what the browser turns out to need: each stall
+  after a stream's first 2 s adds 10 ms (at most every 300 ms), half a minute without one
+  gives back 5 ms, and the browser keeps what it learned for its next stream. WebKit needs
+  about 100 ms in hand, so a 50 ms target only stalled, every frame. A stream's first play
+  waits for 100 ms more than the target, which the decoder starting uses up.
+- Every slot of the stream's frame grid gets a frame: a captured frame that would jump over
+  empty slots gives them the picture before it first. A hole in the track makes WebKit drop
+  every frame after it until the next keyframe.
+- Interactive and Balanced send a keyframe at least every 10 s, Viewing every 2 s. The page
+  trims played video 25 s back once 40 s is buffered: a browser removes every frame up to the
+  next keyframe along with the ones asked for, so the cut needs a keyframe well before what
+  plays now.
 - `/stream.mp4` is an endless fragmented MP4 that mpv, ffplay and VLC play as is.
 - `/apps.json` lists the displays.
 

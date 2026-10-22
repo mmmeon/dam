@@ -79,7 +79,9 @@ final class WebStreamTests: XCTestCase {
         XCTAssertFalse(interactive.reordering)
         XCTAssertTrue(interactive.steady, "the stream fills its grid itself")
         XCTAssertTrue(interactive.prioritizeSpeed)
-        XCTAssertEqual(interactive.keyFrameInterval, 0)
+        XCTAssertEqual(interactive.keyFrameInterval, 10, "a browser lets go of played video only up to a keyframe")
+        XCTAssertEqual(StreamProfile.balanced.encoderSettings(width: 1920, height: 1080, fps: 60,
+                                                              bitrateKbps: 20_000).keyFrameInterval, 10)
         XCTAssertEqual(interactive.rateLimitWindow, 0.25)
         let viewing = StreamProfile.viewing.encoderSettings(width: 1920, height: 1080, fps: 60, bitrateKbps: 20_000)
         XCTAssertTrue(viewing.reordering)
@@ -143,6 +145,27 @@ final class WebStreamTests: XCTestCase {
             XCTAssertEqual(grid.lastSlot, Int64(i), "one slot a firing, none missed")
             XCTAssertLessThanOrEqual(abs(seconds(slot) - seconds(now)), 1.0 / 60)
         }
+    }
+
+    func testAFrameLeavesNoEmptySlotBehindIt() {
+        var grid = FrameGrid(fps: 60)
+        let origin = CMTime(value: 2, timescale: 1)
+        _ = grid.snap(origin)
+        var taken: [Int64] = [0]
+        let slotOf = { (time: CMTime) in Int64(((self.seconds(time) - self.seconds(origin)) * 60).rounded()) }
+        // A second of a screen changing at 30 Hz, each frame handled before the repeater has
+        // given up on the slot in between.
+        for i in 1...30 {
+            let time = CMTimeAdd(origin, CMTime(value: Int64(i) * 33_333_333, timescale: 1_000_000_000))
+            taken += grid.slotsBefore(time, limit: 4).map(slotOf)
+            taken.append(slotOf(grid.snap(time)))
+        }
+        XCTAssertGreaterThanOrEqual(grid.lastSlot, 59)
+        XCTAssertEqual(taken, Array(0...grid.lastSlot), "every slot once, in order")
+        // A frame long after the last takes no more than the limit.
+        XCTAssertEqual(grid.slotsBefore(CMTimeAdd(origin, CMTime(value: 2, timescale: 1)), limit: 4).count, 4)
+        var fresh = FrameGrid(fps: 60)
+        XCTAssertTrue(fresh.slotsBefore(origin, limit: 4).isEmpty, "nothing before the origin")
     }
 
     func testFramesFasterThanTheGridDoNotRunAheadOfTheClock() {
