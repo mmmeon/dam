@@ -130,6 +130,111 @@ enum VideoCodec: CaseIterable {
         veLog.debug("\(name, privacy: .public): hardware \(support.hardware), low-latency \(support.lowLatency)")
         return support
     }
+
+    /// How a codec's hardware encoder does at 1080p as a stream has it (real time, without
+    /// reordering), which no property tells: a session may take MaxFrameDelayCount and still
+    /// hold a frame, as H.264's does on the Intel test Mac.
+    struct Performance: Equatable {
+        /// Frames a second it encodes, given one after another as fast as it takes them.
+        var framesPerSecond: Double
+        /// Pictures the plain encoder takes before it hands the first back: 0 where each
+        /// comes out on its own; on the Intel test Mac 1 for H.264 and 2 for HEVC.
+        var heldFrames: Int
+    }
+
+    /// Each hardware encoder's performance, measured the first time it is asked, which takes
+    /// about a second on the Intel test Mac; none for a codec without one.
+    static let performance: [VideoCodec: Performance] = Dictionary(uniqueKeysWithValues: allCases.compactMap { codec in
+        guard support[codec]?.hardware == true, let measured = codec.measure() else { return nil }
+        veLog.debug("\(codec.name, privacy: .public) at 1080p: \(measured.framesPerSecond, format: .fixed(precision: 0)) frames a second, \(measured.heldFrames) held")
+        return (codec, measured)
+    })
+
+    private func measure() -> Performance? {
+        let width = 1920, height = 1080
+        var made: VTCompressionSession?
+        guard VTCompressionSessionCreate(allocator: nil, width: Int32(width), height: Int32(height), codecType: codecType,
+                                         encoderSpecification: [kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder: true] as CFDictionary,
+                                         imageBufferAttributes: nil, compressedDataAllocator: nil,
+                                         outputCallback: nil, refcon: nil, compressionSessionOut: &made) == noErr,
+              let session = made, let pictures = Self.testPictures(width: width, height: height) else { return nil }
+        defer { VTCompressionSessionInvalidate(session) }
+        let properties: [CFString: Any] = [
+            kVTCompressionPropertyKey_RealTime: true,
+            kVTCompressionPropertyKey_AllowFrameReordering: false,
+            kVTCompressionPropertyKey_ProfileLevel: profileLevel,
+            kVTCompressionPropertyKey_ExpectedFrameRate: 60,
+            kVTCompressionPropertyKey_AverageBitRate: 20_000_000,
+            kVTCompressionPropertyKey_MaxFrameDelayCount: 0,
+        ]
+        for (key, value) in properties { VTSessionSetProperty(session, key: key, value: value as CFTypeRef) }
+        VTCompressionSessionPrepareToEncodeFrames(session)
+
+        let lock = NSLock()
+        var encoded = 0
+        let came = DispatchSemaphore(value: 0)
+        var time = 0
+        func submit() -> Bool {
+            let status = VTCompressionSessionEncodeFrame(
+                session, imageBuffer: pictures[time % pictures.count],
+                presentationTimeStamp: CMTime(value: CMTimeValue(time), timescale: 60), duration: .invalid,
+                frameProperties: nil, infoFlagsOut: nil) { status, flags, sample in
+                    if status == noErr, !flags.contains(.frameDropped), sample != nil {
+                        lock.lock(); encoded += 1; lock.unlock()
+                    }
+                    came.signal()
+                }
+            time += 1
+            return status == noErr
+        }
+        // Pictures given a few frames' time apart until the first comes back.
+        var held = 0
+        while held < 4 {
+            guard submit() else { return nil }
+            if came.wait(timeout: .now() + .milliseconds(50)) == .success { break }
+            held += 1
+        }
+        VTCompressionSessionCompleteFrames(session, untilPresentationTimeStamp: .invalid)
+        // Then as fast as it takes them.
+        lock.lock(); let before = encoded; lock.unlock()
+        let start = DispatchTime.now().uptimeNanoseconds
+        for _ in 0..<30 { guard submit() else { return nil } }
+        VTCompressionSessionCompleteFrames(session, untilPresentationTimeStamp: .invalid)
+        let seconds = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000_000
+        lock.lock(); let frames = encoded - before; lock.unlock()
+        return Performance(framesPerSecond: Double(frames) / max(seconds, 0.001), heldFrames: held)
+    }
+
+    /// A few 4:2:0 pictures, each different, with detail across them for an encoder to work
+    /// at: one row of a random walk, laid on every row at another offset.
+    private static func testPictures(width: Int, height: Int) -> [CVPixelBuffer]? {
+        let period = width * 2
+        var walk = [UInt8](repeating: 128, count: period + width)
+        var seed: UInt32 = 12345
+        for index in walk.indices.dropFirst() {
+            seed = seed &* 1_664_525 &+ 1_013_904_223
+            walk[index] = walk[index - 1] &+ UInt8(truncatingIfNeeded: seed >> 28) &- 8
+        }
+        let attributes = [kCVPixelBufferIOSurfacePropertiesKey: [:] as [String: Any]] as CFDictionary
+        var pictures: [CVPixelBuffer] = []
+        for picture in 0..<4 {
+            var made: CVPixelBuffer?
+            guard CVPixelBufferCreate(nil, width, height, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+                                      attributes, &made) == kCVReturnSuccess, let buffer = made else { return nil }
+            CVPixelBufferLockBaseAddress(buffer, [])
+            for plane in 0..<CVPixelBufferGetPlaneCount(buffer) {
+                guard let base = CVPixelBufferGetBaseAddressOfPlane(buffer, plane) else { continue }
+                let stride = CVPixelBufferGetBytesPerRowOfPlane(buffer, plane)
+                for row in 0..<CVPixelBufferGetHeightOfPlane(buffer, plane) {
+                    let offset = (row * 7919 + picture * 104_729) % period
+                    _ = walk.withUnsafeBytes { memcpy(base + row * stride, $0.baseAddress! + offset, min(stride, width)) }
+                }
+            }
+            CVPixelBufferUnlockBaseAddress(buffer, [])
+            pictures.append(buffer)
+        }
+        return pictures
+    }
 }
 
 final class MoonlightVideoEncoder {

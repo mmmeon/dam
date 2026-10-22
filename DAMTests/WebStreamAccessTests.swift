@@ -313,7 +313,7 @@ final class WebStreamAccessTests: XCTestCase {
     func testTheServerServesWhatIsImported() throws {
         try makeAuthority("Home Lab RSA CA")
         try makeServer()
-        let port = NWEndpoint.Port(rawValue: UInt16.random(in: 40000...48000) & ~1)!
+        let port = NWEndpoint.Port(rawValue: UInt16.random(in: 30000...39000) & ~1)!
         let server = WebStreamServer(port: port, directory: directory)
         defer { server.stop() }
         func started() {

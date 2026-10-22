@@ -228,7 +228,7 @@ final class WebStreamTests: XCTestCase {
         init(reads: Bool = true) throws {
             let parameters = NWParameters.tcp
             parameters.allowLocalEndpointReuse = true
-            let port = NWEndpoint.Port(rawValue: UInt16.random(in: 40000...59000))!
+            let port = NWEndpoint.Port(rawValue: UInt16.random(in: 30000...39000))!
             let listener = try NWListener(using: parameters, on: port)
             self.listener = listener
             client = NWConnection(host: "127.0.0.1", port: port, using: .tcp)
@@ -452,7 +452,7 @@ final class WebStreamTests: XCTestCase {
     func testServesKnownDevicesOnItsOwnPorts() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let port = NWEndpoint.Port(rawValue: UInt16.random(in: 40000...48000) & ~1)!
+        let port = NWEndpoint.Port(rawValue: UInt16.random(in: 30000...39000) & ~1)!
         let server = WebStreamServer(port: port, directory: directory)
         defer { server.stop() }
         server.apps = { [MoonlightApp(id: 1, title: "Streaming Display 1", displayID: 7)] }
@@ -551,7 +551,7 @@ final class WebStreamTests: XCTestCase {
 
     /// A server on ports of its own, listening.
     private func startedServer(directory: URL) -> WebStreamServer {
-        let port = NWEndpoint.Port(rawValue: UInt16.random(in: 40000...48000) & ~1)!
+        let port = NWEndpoint.Port(rawValue: UInt16.random(in: 30000...39000) & ~1)!
         let server = WebStreamServer(port: port, directory: directory)
         server.start()
         let deadline = Date().addingTimeInterval(5)
@@ -655,7 +655,7 @@ final class WebStreamTests: XCTestCase {
     func testMoonlightsPortDoesNotServeTheStream() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let base = UInt16.random(in: 40000...48000)
+        let base = UInt16.random(in: 30000...39000)
         let host = MoonlightHost(httpPort: NWEndpoint.Port(rawValue: base)!, httpsPort: NWEndpoint.Port(rawValue: base + 1)!,
                                  rtspPort: NWEndpoint.Port(rawValue: base + 2)!, directory: directory, advertises: false)
         defer { host.stop() }

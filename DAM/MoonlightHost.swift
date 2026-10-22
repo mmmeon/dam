@@ -53,6 +53,31 @@ struct MoonlightClient: Codable, Equatable {
     }
 }
 
+/// When HEVC is offered, where this Mac encodes it in hardware.
+enum MoonlightHEVCOffer: String, CaseIterable {
+    case automatic
+    case on
+    case off
+
+    var title: String {
+        switch self {
+        case .automatic: return "Automatic"
+        case .on: return "On"
+        case .off: return "Off"
+        }
+    }
+
+    var summary: String {
+        switch self {
+        case .automatic:
+            return "Offers HEVC to a device only where this Mac encodes it as quickly as H.264 for that device: " +
+                   "holding back no more frames, at least half as many a second."
+        case .on: return "Offers HEVC to every device; Moonlight streams it wherever the device decodes it in hardware."
+        case .off: return "Streams H.264 only."
+        }
+    }
+}
+
 /// An app Moonlight lists.
 struct MoonlightApp: Equatable {
     let id: Int
@@ -68,22 +93,53 @@ final class MoonlightHost {
     /// (7 and up: SHA-256) and checks the GameStream version against ones it knows to fail.
     static let appVersion = "7.1.431.-1"
     static let gfeVersion = "3.23.0.74"
-    /// The codecs offered: H.264, and HEVC when the user turned it on and this Mac encodes it
-    /// in hardware. It is off unless turned on, as Moonlight takes HEVC whenever it is offered
-    /// and the device decodes it in hardware, and HEVC may be the slower codec to encode: on
-    /// the Intel test Mac it encodes about 40 frames a second at 1080p (H.264: 165), holds
-    /// each frame two frames' time, and has no low-latency rate control.
-    static func codecs(offersHEVC: Bool = MoonlightHost.offersHEVC,
-                       support: [VideoCodec: VideoCodec.Support] = VideoCodec.support) -> [VideoCodec] {
-        [.h264] + (offersHEVC && support[.hevc]?.hardware == true ? [.hevc] : [])
+    /// The codecs offered to a device with low-latency encoding on or off: H.264, and HEVC
+    /// where this Mac encodes it in hardware, as `offer` says. Moonlight takes HEVC whenever
+    /// it is offered and the device decodes it in hardware, and HEVC may be the slower codec
+    /// to encode: on the Intel test Mac it encodes about 40 frames a second at 1080p (H.264:
+    /// 165), holds each frame two frames' time, and has no low-latency rate control.
+    static func codecs(lowLatency: Bool, offer: MoonlightHEVCOffer = MoonlightHost.hevcOffer,
+                       support: [VideoCodec: VideoCodec.Support] = VideoCodec.support,
+                       performance: @autoclosure () -> [VideoCodec: VideoCodec.Performance] = VideoCodec.performance)
+        -> [VideoCodec] {
+        guard support[.hevc]?.hardware == true else { return [.h264] }
+        switch offer {
+        case .on: return [.h264, .hevc]
+        case .off: return [.h264]
+        case .automatic:
+            return hevcKeepsUp(lowLatency: lowLatency, support: support, performance: performance()) ? [.h264, .hevc] : [.h264]
+        }
     }
 
-    /// Whether HEVC is offered where this Mac encodes it in hardware; see `codecs`.
-    static var offersHEVC: Bool {
-        get { UserDefaults.dam.bool(forKey: offersHEVCKey) }
-        set { UserDefaults.dam.set(newValue, forKey: offersHEVCKey) }
+    /// Whether HEVC streams to a device at least as quickly as H.264 would: its encoder
+    /// holds back no more frames (none with low-latency rate control, which hands each back
+    /// as it is encoded), and encodes at least half as many a second.
+    static func hevcKeepsUp(lowLatency: Bool, support: [VideoCodec: VideoCodec.Support],
+                            performance: [VideoCodec: VideoCodec.Performance]) -> Bool {
+        guard let hevc = performance[.hevc], let h264 = performance[.h264] else { return false }
+        func held(_ codec: VideoCodec, _ measured: VideoCodec.Performance) -> Int {
+            lowLatency && support[codec]?.lowLatency == true ? 0 : measured.heldFrames
+        }
+        return held(.hevc, hevc) <= held(.h264, h264) && hevc.framesPerSecond >= h264.framesPerSecond / 2
     }
-    private static let offersHEVCKey = "\(AppIdentity.shortID).moonlight.offersHEVC"
+
+    /// When HEVC is offered; see `codecs`.
+    static var hevcOffer: MoonlightHEVCOffer {
+        get { UserDefaults.dam.string(forKey: hevcOfferKey).flatMap(MoonlightHEVCOffer.init(rawValue:)) ?? .automatic }
+        set {
+            UserDefaults.dam.set(newValue.rawValue, forKey: hevcOfferKey)
+            if newValue == .automatic { measureEncoders() }
+        }
+    }
+    private static let hevcOfferKey = "\(AppIdentity.shortID).moonlight.hevc"
+
+    /// Finds what the encoders do before a device asks, off the main queue; measured only
+    /// where Automatic needs it.
+    static func measureEncoders() {
+        DispatchQueue.global(qos: .utility).async {
+            if VideoCodec.support[.hevc]?.hardware == true, hevcOffer == .automatic { _ = VideoCodec.performance }
+        }
+    }
 
     private static let enabledKey = "\(AppIdentity.shortID).moonlight.enabled"
     private static let uniqueIDKey = "\(AppIdentity.shortID).moonlight.uniqueID"
@@ -250,8 +306,7 @@ final class MoonlightHost {
             let identity = try loadIdentity()
             self.identity = identity
             clients = loadClients()
-            // Found before the first device asks, off the main queue.
-            DispatchQueue.global(qos: .utility).async { _ = VideoCodec.support }
+            Self.measureEncoders()
             let http = NWParameters.tcp
             http.allowLocalEndpointReuse = true
             // Each frame goes out the moment it is ready, not held for an acknowledgement.
@@ -425,7 +480,7 @@ final class MoonlightHost {
         switch request.path {
         case "/serverinfo":
             reply(serverInfo(paired: secure, launch: secure ? session(for: certificate)?.launch : nil,
-                             codecs: Self.codecs(),
+                             codecs: Self.codecs(lowLatency: client(for: certificate)?.lowLatency ?? true),
                              localAddress: Self.address(connection.currentPath?.localEndpoint)),
                   to: connection)
         case "/pair" where secure:
@@ -518,7 +573,7 @@ final class MoonlightHost {
             }
             var launch = launch
             launch.lowLatency = lowLatency
-            launch.codecs = Self.codecs()
+            launch.codecs = Self.codecs(lowLatency: lowLatency)
             launch.offersEncryptedVideo = encryption.offers(to: peer)
             launch.requiresEncryptedVideo = encryption == .always
             launch.clientAddress = Self.address(peer)

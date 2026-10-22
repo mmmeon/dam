@@ -14,7 +14,9 @@ final class MoonlightHostTests: XCTestCase {
 
     override func setUpWithError() throws {
         directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let base = UInt16.random(in: 40000...59000)
+        // Below the ports outgoing connections take (49152 and up) and the ones DAM itself
+        // listens on (47984–48013), either of which a test's listener would find taken.
+        let base = UInt16.random(in: 30000...39000)
         host = MoonlightHost(httpPort: NWEndpoint.Port(rawValue: base)!,
                              httpsPort: NWEndpoint.Port(rawValue: base + 1)!,
                              rtspPort: NWEndpoint.Port(rawValue: base + 2)!,
@@ -158,15 +160,44 @@ final class MoonlightHostTests: XCTestCase {
         XCTAssertEqual(field("HttpsPort", in: xml), "\(host.httpsPort.rawValue)")
     }
 
-    /// HEVC only when turned on, and only in hardware: Moonlight takes it whenever it is offered.
-    func testHEVCIsOfferedOnlyWhenTurnedOnAndInHardware() {
+    /// HEVC only in hardware, and on Automatic only where it keeps up with H.264: Moonlight
+    /// takes it whenever it is offered.
+    func testHEVCIsOfferedAsTheSettingSays() {
         let none = VideoCodec.Support(hardware: false, lowLatency: false)
         let plain = VideoCodec.Support(hardware: true, lowLatency: false)
-        XCTAssertEqual(MoonlightHost.codecs(offersHEVC: false, support: [.h264: plain, .hevc: plain]), [.h264])
-        XCTAssertEqual(MoonlightHost.codecs(offersHEVC: true, support: [.h264: plain, .hevc: plain]), [.h264, .hevc])
-        XCTAssertEqual(MoonlightHost.codecs(offersHEVC: true, support: [.h264: plain, .hevc: none]), [.h264],
-                       "not in software")
-        XCTAssertEqual(MoonlightHost.codecs(offersHEVC: true, support: [:]), [.h264])
+        let quick = [VideoCodec.h264: VideoCodec.Performance(framesPerSecond: 300, heldFrames: 0),
+                     .hevc: VideoCodec.Performance(framesPerSecond: 250, heldFrames: 0)]
+        let slow = [VideoCodec.h264: VideoCodec.Performance(framesPerSecond: 165, heldFrames: 1),
+                    .hevc: VideoCodec.Performance(framesPerSecond: 40, heldFrames: 2)]
+        func codecs(_ offer: MoonlightHEVCOffer, _ support: [VideoCodec: VideoCodec.Support],
+                    _ performance: [VideoCodec: VideoCodec.Performance]) -> [VideoCodec] {
+            MoonlightHost.codecs(lowLatency: false, offer: offer, support: support, performance: performance)
+        }
+        XCTAssertEqual(codecs(.off, [.h264: plain, .hevc: plain], quick), [.h264])
+        XCTAssertEqual(codecs(.on, [.h264: plain, .hevc: plain], slow), [.h264, .hevc])
+        XCTAssertEqual(codecs(.automatic, [.h264: plain, .hevc: plain], quick), [.h264, .hevc])
+        XCTAssertEqual(codecs(.automatic, [.h264: plain, .hevc: plain], slow), [.h264], "the Intel test Mac")
+        XCTAssertEqual(codecs(.on, [.h264: plain, .hevc: none], quick), [.h264], "not in software")
+        XCTAssertEqual(codecs(.on, [:], quick), [.h264])
+        XCTAssertEqual(codecs(.automatic, [.h264: plain, .hevc: plain], [:]), [.h264], "not measured")
+    }
+
+    func testHEVCKeepsUpOnlyHoldingNoMoreAndAtHalfTheRate() {
+        let fast = VideoCodec.Support(hardware: true, lowLatency: true)
+        let plain = VideoCodec.Support(hardware: true, lowLatency: false)
+        func keepsUp(_ lowLatency: Bool, h264: (Double, Int), hevc: (Double, Int),
+                     support: [VideoCodec: VideoCodec.Support] = [.h264: fast, .hevc: plain]) -> Bool {
+            MoonlightHost.hevcKeepsUp(lowLatency: lowLatency, support: support,
+                                      performance: [.h264: .init(framesPerSecond: h264.0, heldFrames: h264.1),
+                                                    .hevc: .init(framesPerSecond: hevc.0, heldFrames: hevc.1)])
+        }
+        XCTAssertTrue(keepsUp(false, h264: (200, 1), hevc: (100, 1)))
+        XCTAssertFalse(keepsUp(false, h264: (200, 1), hevc: (99, 1)), "under half the rate")
+        XCTAssertFalse(keepsUp(false, h264: (200, 1), hevc: (200, 2)), "holds one more")
+        XCTAssertFalse(keepsUp(true, h264: (200, 1), hevc: (200, 1)), "H.264 low-latency holds none")
+        XCTAssertTrue(keepsUp(true, h264: (200, 1), hevc: (200, 0)))
+        XCTAssertTrue(keepsUp(true, h264: (200, 1), hevc: (200, 1), support: [.h264: fast, .hevc: fast]),
+                      "both low-latency")
     }
 
     func testServerInfoOffersTheDevicesCodecs() throws {
@@ -178,14 +209,14 @@ final class MoonlightHostTests: XCTestCase {
             let info = try get("/serverinfo", secure: true, identity: client.identity)
             return (field("ServerCodecModeSupport", in: info).flatMap { Int($0) }, field("MaxLumaPixelsHEVC", in: info))
         }
-        let key = "\(AppIdentity.shortID).moonlight.offersHEVC"
+        let key = "\(AppIdentity.shortID).moonlight.hevc"
         let saved = UserDefaults.dam.object(forKey: key)
         defer { UserDefaults.dam.set(saved, forKey: key) }
-        for offers in [false, true] {
-            MoonlightHost.offersHEVC = offers
-            let hevc = offers && VideoCodec.support[.hevc]?.hardware == true
+        for offer in [MoonlightHEVCOffer.off, .on] {
+            MoonlightHost.hevcOffer = offer
+            let hevc = offer == .on && VideoCodec.support[.hevc]?.hardware == true
             let (modes, luma) = try offered()
-            XCTAssertEqual(modes, hevc ? 0x0101 : 0x0001, "offers HEVC \(offers)")
+            XCTAssertEqual(modes, hevc ? 0x0101 : 0x0001, "\(offer)")
             XCTAssertEqual(luma, hevc ? "1869449984" : "0", "Moonlight takes HEVC only with a maximum")
         }
     }
