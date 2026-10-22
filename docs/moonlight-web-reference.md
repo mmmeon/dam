@@ -162,6 +162,13 @@ DAM's page. In order of value for the effort:
    stay video-only. This is the largest change. A decoder that holds frames back would
    undo it, so on an Apple Silicon Mac, check the SPS first (lead 1).
 
+   **Done 2026-10-22,** video only, for Interactive without sound, as suggested: the page
+   splits DAM's fragments itself and the server is unchanged. WebKit's decoder fails every
+   frame from an avcC description unless `codedWidth` and `codedHeight` are given. In
+   WebKit on the Intel test Mac over loopback, two alternating 30 s runs each: 57–105 ms
+   from the Mac directly, 144–149 ms through Media Source. Not yet seen in Chrome or on
+   an iPad.
+
 The page can't send input: it is view-only. moonlight-web sends keyboard, mouse, touch and
 gamepads to the host. Adding input would make a browser a full client, but that is a
 feature decision, not a fix.

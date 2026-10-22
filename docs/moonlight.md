@@ -34,6 +34,16 @@ settings.
   trims played video 25 s back once 40 s is buffered: a browser removes every frame up to the
   next keyframe along with the ones asked for, so the cut needs a keyframe well before what
   plays now.
+- Where the browser has WebCodecs, the page decodes Interactive without sound directly:
+  it splits the fragmented MP4 into its H.264 samples (`FragmentReader`), hands each to a
+  `VideoDecoder` (`optimizeForLatency`) as it lands, and draws the newest picture on a
+  canvas at each screen refresh, with no buffer in between. Sound needs Media Source to
+  keep it in time, so unmuting switches to it, as does a decoder that fails (once a
+  page). Auto takes it only where a canvas can go full screen, which an iPhone's can't;
+  Decode › Directly or Media Source (`decoder=`) choose either way. WebKit fails every
+  frame unless the configuration has the coded size, so it is taken from the init
+  segment's `avc1` box. In WebKit on the Intel test Mac over loopback: 57–112 ms from the
+  Mac against about 145 ms through Media Source.
 - The page shows how long frames take from the Mac's screen to the browser's: the stream's
   response says when its zero was on the Mac's clock (`X-Stream-Epoch`, milliseconds since
   1970), the page sets its clock against the Mac's from the quickest of its last eight asks

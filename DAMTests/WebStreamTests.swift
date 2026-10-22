@@ -475,6 +475,7 @@ final class WebStreamTests: XCTestCase {
         let html = String(decoding: page.body, as: UTF8.self)
         XCTAssertTrue(html.contains("<video"))
         XCTAssertTrue(html.contains("ManagedMediaSource"), "iPhones have only the managed kind")
+        XCTAssertTrue(html.contains("new VideoDecoder("), "Interactive decodes directly where it can")
         XCTAssertTrue(html.contains("/pair/begin"))
         for path in ["/apps.json", "/stream.mp4", "/apps.json?token=0123"] {
             XCTAssertEqual(try get(path).status, 401, path)
