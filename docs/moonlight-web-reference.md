@@ -64,7 +64,19 @@ hands each frame back on its own. A flush could still be worth trying on Apple S
 moonlight-web turns `kVTCompressionPropertyKey_RealTime` off. In real-time mode the
 encoder paces itself to the expected frame rate, which they found doubled each frame's
 delay on an M1 Pro and pushed H.264 past the frame period. DAM sets it to true
-(`MoonlightVideoEncoder.swift`). Intel's encoder may behave differently, so measure it.
+(`MoonlightVideoEncoder.swift`).
+
+**Measured 2026-10-22 on the Intel test Mac: keep it on.** `tools/streamtest` over
+loopback, 1920×1080@60, 20 s runs alternating on and off, read from Moonlight's host
+processing latency:
+
+| Encoder | `RealTime` on: average (worst) | off: average (worst) |
+|---|---|---|
+| Low latency (6 runs each) | 8.7–13.2 ms (48–81 ms) | 12.3–15.1 ms (158–327 ms) |
+| Plain real-time (3 runs each) | 24.6–27.6 ms (635–756 ms) | 25.0–26.9 ms (795–906 ms) |
+
+Off is worse with low-latency rate control and makes no difference to the plain encoder.
+On Apple Silicon it may still be worth trying.
 
 ### 4. Marking video packets as DSCP AF41
 
