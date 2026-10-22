@@ -14,7 +14,9 @@ final class MoonlightHostTests: XCTestCase {
 
     override func setUpWithError() throws {
         directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let base = UInt16.random(in: 40000...59000)
+        // Below the ports outgoing connections take (49152 and up) and the ones DAM itself
+        // listens on (47984–48013), either of which a test's listener would find taken.
+        let base = UInt16.random(in: 30000...39000)
         host = MoonlightHost(httpPort: NWEndpoint.Port(rawValue: base)!,
                              httpsPort: NWEndpoint.Port(rawValue: base + 1)!,
                              rtspPort: NWEndpoint.Port(rawValue: base + 2)!,
