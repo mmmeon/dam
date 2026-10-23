@@ -392,10 +392,19 @@ final class SettingsWindowController: NSWindowController {
             generalContent = buildGeneralTab()
             if selectedTab == TabID.general { selectTab(TabID.general) }
         }
-        if devicesState() != devicesShown {
+        // Not while a nickname is being typed, which a rebuild would throw away; its end
+        // calls here again.
+        if devicesState() != devicesShown && !isEditingNickname {
             devicesContent = buildDevicesTab()
             if selectedTab == TabID.devices { selectTab(TabID.devices) }
         }
+    }
+
+    /// Whether a nickname field of the Devices tab holds typing not yet saved.
+    private var isEditingNickname: Bool {
+        guard let editor = window?.firstResponder as? NSTextView, editor.isFieldEditor,
+              let field = editor.delegate.map({ $0 as AnyObject }) as? NicknameField else { return false }
+        return field.isDescendant(of: devicesContent) && field.hasUnsavedText
     }
 
     /// A device's visibility checkbox with a field beside it for its nickname, which the
@@ -2327,6 +2336,12 @@ private final class NicknameField: RoundedTextField, NSTextFieldDelegate {
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    /// Whether the text being typed differs from the nickname saved.
+    var hasUnsavedText: Bool {
+        guard let editor = currentEditor() else { return false }
+        return editor.string != (VisibilityPreferences.nickname(kind, for: deviceName) ?? "")
+    }
 
     func controlTextDidEndEditing(_ obj: Notification) {
         VisibilityPreferences.setNickname(stringValue, kind, for: deviceName)
