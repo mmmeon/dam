@@ -348,6 +348,13 @@ final class OpenDisplaySender {
             ids[String(session.key.dropFirst(8))] = id
             bonjourIDs = ids
             if let found = wifi.removeValue(forKey: session.key) { wifi[id] = found }
+        } else if session.transport == .usb, let serial = usbIDs.first(where: { $0.value == session.key })?.key {
+            // Over a cable the device is known by its UDID, whatever the receiver says: one
+            // installed again gives a new ID, which keys it from now on.
+            odLog.debug("\(session.name, privacy: .public): the receiver on the cable has a new ID")
+            var ids = usbIDs
+            ids[serial] = id
+            usbIDs = ids
         } else {
             // Another receiver than the one turned on, as when the address it was last reached
             // at is another device's after a network change: it mustn't get the screen and
