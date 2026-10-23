@@ -463,6 +463,7 @@ final class SettingsWindowController: NSWindowController {
         var controls: [NSView] = [rows.isEmpty ? placeholderLabel("No displays yet") : rowGrid(rows)]
         if let add = addAutoConnectMenu(listed: Set(entries.map(\.target))) { controls.append(add) }
         controls.append(autoConnectWindowRow())
+        if let loginWindow = loginWindowRow() { controls.append(loginWindow) }
         controls.append(smallNote("Connected best first. Of AirPlay displays and iPads, only the first available is " +
                                   "connected, and none while one already is; every OpenDisplay receiver listed is " +
                                   "connected. One disconnected by hand stays so until it goes away and comes back. " +
@@ -564,18 +565,107 @@ final class SettingsWindowController: NSWindowController {
     private func setAutoConnectMode(at index: Int, _ mode: AutoConnectEntry.Mode) {
         var entries = AutoConnectList.entries
         guard entries.indices.contains(index) else { return }
+        let wasStartup = entries[index].mode == .startup
         entries[index].mode = mode
         AutoConnectList.entries = entries
         autoConnectDidChange()
+        if wasStartup || mode == .startup { syncLoginAgent() }
     }
 
     private func removeAutoConnect(_ target: AutoConnectTarget) {
+        let wasStartup = AutoConnectList.entries.contains { $0.target == target && $0.mode == .startup }
         if case .openDisplay(let key) = target, let openDisplay {
             openDisplay.setOn(false, key: key)
         } else {
             AutoConnectList.entries.removeAll { $0.target == target }
         }
         autoConnectDidChange()
+        if wasStartup { syncLoginAgent() }
+    }
+
+    // MARK: Login window
+
+    /// "Login window: Installed · Screen Recording allowed [Uninstall…]": the agent that shows
+    /// receivers connected at startup the login window (LoginAgentInstaller.swift). Nil while
+    /// none is and nothing is installed.
+    private func loginWindowRow() -> NSView? {
+        let status = LoginAgentInstaller.status()
+        guard status != .notNeeded else { return nil }
+        var text: String
+        var buttons: [NSButton] = []
+        switch status {
+        case .notNeeded:
+            return nil
+        case .notInstalled:
+            text = "Not installed"
+            buttons.append(small(ClosureButton(title: "Install…") { [weak self] _ in self?.syncLoginAgent() }))
+        case .needsUpdate:
+            text = "Needs an update"
+            buttons.append(small(ClosureButton(title: "Update…") { [weak self] _ in self?.syncLoginAgent() }))
+        case .current:
+            switch LoginAgentInstaller.screenRecordingAllowed() {
+            case true?:  text = "Installed · Screen Recording allowed"
+            case false?: text = "Installed · Screen Recording not allowed yet"
+            case nil:    text = "Installed · not yet shown at the login window"
+            }
+        case .unneeded:
+            text = "Installed, though no receiver connects at startup"
+        }
+        if let wanted = LoginAgentInstaller.wanted() {
+            let unknown = LoginAgentInstaller.unknownByCable(wanted)
+            if !unknown.isEmpty {
+                text += " · connect \(unknown.joined(separator: ", ")) by cable once first"
+            }
+        }
+        if status == .current || status == .needsUpdate || status == .unneeded {
+            if status != .unneeded {
+                let recording = small(ClosureButton(title: "Screen Recording…") { _ in
+                    // The agent goes in the list by hand: it never runs where macOS could ask.
+                    NSWorkspace.shared.activateFileViewerSelecting([LoginAgentInstaller.installedAgent])
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+                        NSWorkspace.shared.open(url)
+                    }
+                })
+                recording.toolTip = "The agent needs Screen Recording to show the login window. In Privacy & Security › " +
+                                    "Screen Recording, click + and choose DAMLoginAgent, which Finder shows."
+                buttons.append(recording)
+            }
+            let remove = small(ClosureButton(title: "Uninstall…") { [weak self] _ in
+                LoginAgentInstaller.uninstall { error in self?.loginAgentDone(error) }
+            })
+            buttons.append(remove)
+        }
+        let label = smallLabel("Login window: \(text)")
+        label.toolTip = "OpenDisplay receivers set to connect At startup are shown the login window, over a cable only, " +
+                        "by an agent DAM installs. Installing, updating and uninstalling ask for an administrator's password."
+        let row = NSStackView(views: [label] + buttons)
+        row.orientation = .horizontal
+        row.spacing = 6
+        return row
+    }
+
+    /// Installs, updates or uninstalls the login window agent as the list now asks.
+    private func syncLoginAgent() {
+        switch LoginAgentInstaller.status() {
+        case .notInstalled, .needsUpdate:
+            guard let wanted = LoginAgentInstaller.wanted() else { return }
+            LoginAgentInstaller.install(wanted) { [weak self] error in self?.loginAgentDone(error) }
+        case .unneeded:
+            LoginAgentInstaller.uninstall { [weak self] error in self?.loginAgentDone(error) }
+        case .current, .notNeeded:
+            break
+        }
+    }
+
+    private func loginAgentDone(_ error: String?) {
+        if let error, error != "cancelled" {
+            let alert = NSAlert()
+            alert.messageText = "The login window agent could not be changed"
+            alert.informativeText = error
+            alert.runModal()
+        }
+        devicesContent = buildDevicesTab()
+        if selectedTab == TabID.devices { selectTab(TabID.devices) }
     }
 
     private func moveAutoConnect(at index: Int, by offset: Int) {
@@ -615,6 +705,7 @@ final class SettingsWindowController: NSWindowController {
                      sidecar: sidecarManager.devices.map(\.name),
                      displays: videoManager.allConnectedDisplays.filter { !$0.isSidecar }.map(\.name),
                      autoConnect: AutoConnectList.entries,
+                     loginAgent: "\(LoginAgentInstaller.status()) \(String(describing: LoginAgentInstaller.screenRecordingAllowed()))",
                      receivers: (openDisplay?.receivers ?? []).map { "\($0.key) \($0.name)" })
     }
 
@@ -2495,6 +2586,8 @@ private struct DevicesState: Equatable {
     var sidecar: [String] = []
     var displays: [String] = []
     var autoConnect: [AutoConnectEntry] = []
+    /// The login window agent's status, as the list's last row shows it.
+    var loginAgent = ""
     /// The receivers' keys and names, which the Connect Automatically list shows.
     var receivers: [String] = []
 }

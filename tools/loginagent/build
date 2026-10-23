@@ -6,7 +6,11 @@
 #  it shares, with LOGIN_AGENT set, and signs it with the Apple Development identity so its
 #  Screen Recording permission survives rebuilds.
 #
-#    tools/loginagent/build [output]      default: $TMPDIR/dam-loginagent/DAMLoginAgent
+#    tools/loginagent/build [output [identity]]
+#
+#  output defaults to $TMPDIR/dam-loginagent/DAMLoginAgent. DAM's build runs it into
+#  DAM.app/Contents/MacOS with Xcode's signing identity ("-" signs ad hoc). Nothing is built
+#  when the output is newer than every source.
 #
 
 set -eu
@@ -15,6 +19,7 @@ setopt pipefail
 here=${0:A:h}
 repo=${here:h:h}
 out=${1:-${TMPDIR:-/tmp}/dam-loginagent/DAMLoginAgent}
+identity=${2:-}
 mkdir -p ${out:h}
 
 # What the agent shares with DAM; each builds without the app (see LOGIN_AGENT).
@@ -26,6 +31,13 @@ shared=(
 )
 sources=(${shared/#/$repo/DAM/} )
 sources=(${^sources}.swift $repo/DAMLoginAgent/*.swift)
+inputs=($sources $repo/DAMLoginAgent/Info.plist $repo/DAM/DAM-Bridging-Header.h $repo/DAM/CGVirtualDisplayPrivate.h $0)
+
+if [[ -x $out ]]; then
+    stale=0
+    for input in $inputs; do [[ $input -nt $out ]] && { stale=1; break }; done
+    (( stale )) || { print $out; exit 0 }
+fi
 
 DEVELOPER_DIR=${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer} \
     xcrun swiftc -O -DLOGIN_AGENT -module-name DAMLoginAgent \
@@ -33,7 +45,7 @@ DEVELOPER_DIR=${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer} \
     -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker $repo/DAMLoginAgent/Info.plist \
     -o $out $sources
 
-identity=$(security find-identity -v -p codesigning | awk -F'"' '/Apple Development/ { print $2; exit }')
+[[ -n $identity ]] || identity=$(security find-identity -v -p codesigning | awk -F'"' '/Apple Development/ { print $2; exit }')
 if [[ -n $identity ]]; then
     codesign --force --options runtime --sign "$identity" $out
 else

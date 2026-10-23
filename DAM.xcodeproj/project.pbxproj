@@ -46,6 +46,7 @@
 		CC000C302F8D60780090E796 /* ScreenMirroringPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B302F8D60780090E796 /* ScreenMirroringPanel.swift */; };
 		CC000C312F8D60780090E796 /* SidecarManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B312F8D60780090E796 /* SidecarManager.swift */; };
 		AC0A00022F8D60780090E796 /* AutoConnect.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0A00012F8D60780090E796 /* AutoConnect.swift */; };
+		AC0A00252F8D60780090E796 /* LoginAgentInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0A00242F8D60780090E796 /* LoginAgentInstaller.swift */; };
 		AC0A00212F8D60780090E796 /* LoginAgentSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0A00202F8D60780090E796 /* LoginAgentSettings.swift */; };
 		AC0A001C2F8D60780090E796 /* ByteOrder.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0A001B2F8D60780090E796 /* ByteOrder.swift */; };
 		AC0A001A2F8D60780090E796 /* HDRMetadata.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0A00192F8D60780090E796 /* HDRMetadata.swift */; };
@@ -115,6 +116,7 @@
 		2127EBAB29D0AC27EB2E9065 /* H264OneReferenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA4BC78E149D0277EAA6B7E7 /* H264OneReferenceTests.swift */; };
 		DD100B0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift */; };
 		AC0A00042F8D607C0090E7A1 /* AutoConnectTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0A00032F8D607C0090E7A1 /* AutoConnectTests.swift */; };
+		AC0A00272F8D607C0090E7A1 /* LoginAgentInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0A00262F8D607C0090E7A1 /* LoginAgentInstallerTests.swift */; };
 		AC0A00232F8D607C0090E7A1 /* LoginAgentSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0A00222F8D607C0090E7A1 /* LoginAgentSettingsTests.swift */; };
 		AC0A000A2F8D607C0090E7A1 /* DisplayStreamCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0A00092F8D607C0090E7A1 /* DisplayStreamCaptureTests.swift */; };
 		EE200B012F8D60780090E796 /* MenuBarIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE200A012F8D60780090E796 /* MenuBarIcon.swift */; };
@@ -183,6 +185,7 @@
 		CC000B302F8D60780090E796 /* ScreenMirroringPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenMirroringPanel.swift; sourceTree = "<group>"; };
 		CC000B312F8D60780090E796 /* SidecarManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarManager.swift; sourceTree = "<group>"; };
 		AC0A00012F8D60780090E796 /* AutoConnect.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoConnect.swift; sourceTree = "<group>"; };
+		AC0A00242F8D60780090E796 /* LoginAgentInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginAgentInstaller.swift; sourceTree = "<group>"; };
 		AC0A00202F8D60780090E796 /* LoginAgentSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginAgentSettings.swift; sourceTree = "<group>"; };
 		AC0A001B2F8D60780090E796 /* ByteOrder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ByteOrder.swift; sourceTree = "<group>"; };
 		AC0A00192F8D60780090E796 /* HDRMetadata.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HDRMetadata.swift; sourceTree = "<group>"; };
@@ -252,6 +255,7 @@
 		FA4BC78E149D0277EAA6B7E7 /* H264OneReferenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = H264OneReferenceTests.swift; sourceTree = "<group>"; };
 		DD100A0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarDisplayTests.swift; sourceTree = "<group>"; };
 		AC0A00032F8D607C0090E7A1 /* AutoConnectTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoConnectTests.swift; sourceTree = "<group>"; };
+		AC0A00262F8D607C0090E7A1 /* LoginAgentInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginAgentInstallerTests.swift; sourceTree = "<group>"; };
 		AC0A00222F8D607C0090E7A1 /* LoginAgentSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginAgentSettingsTests.swift; sourceTree = "<group>"; };
 		AC0A00092F8D607C0090E7A1 /* DisplayStreamCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayStreamCaptureTests.swift; sourceTree = "<group>"; };
 		EE200A012F8D60780090E796 /* MenuBarIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarIcon.swift; sourceTree = "<group>"; };
@@ -354,6 +358,7 @@
 				CC000B302F8D60780090E796 /* ScreenMirroringPanel.swift */,
 				CC000B312F8D60780090E796 /* SidecarManager.swift */,
 				AC0A00012F8D60780090E796 /* AutoConnect.swift */,
+				AC0A00242F8D60780090E796 /* LoginAgentInstaller.swift */,
 				AC0A00202F8D60780090E796 /* LoginAgentSettings.swift */,
 				AC0A001B2F8D60780090E796 /* ByteOrder.swift */,
 				AC0A00192F8D60780090E796 /* HDRMetadata.swift */,
@@ -433,6 +438,7 @@
 				DD100A0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift */,
 				DD100A0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift */,
 				AC0A00032F8D607C0090E7A1 /* AutoConnectTests.swift */,
+				AC0A00262F8D607C0090E7A1 /* LoginAgentInstallerTests.swift */,
 				AC0A00222F8D607C0090E7A1 /* LoginAgentSettingsTests.swift */,
 				AC0A00092F8D607C0090E7A1 /* DisplayStreamCaptureTests.swift */,
 				DD100A1B2F8D607C0090E7A1 /* StreamingDisplayTests.swift */,
@@ -467,6 +473,7 @@
 				8BFD3BD82F8D60780090E796 /* Frameworks */,
 				8BFD3BD92F8D60780090E796 /* Resources */,
 				A0A1D0000000000000000F05 /* Stamp Commit */,
+				A0A1D0000000000000000F06 /* Build Login Agent */,
 			);
 			buildRules = (
 			);
@@ -571,6 +578,21 @@
 			shellPath = /bin/sh;
 			shellScript = "# The build is the commit it was made from: CFBundleVersion counts the commits (it must\n# be numeric), DAMCommit holds the short hash, marked \"+\" when the tree has changes.\nplist=\"$TARGET_BUILD_DIR/$INFOPLIST_PATH\"\ncd \"$SRCROOT\" || exit 0\ncount=$(git rev-list --count HEAD 2>/dev/null) || exit 0\nhash=$(git rev-parse --short HEAD)\ngit diff --quiet HEAD -- . ':!*.xcuserstate' ':!*xcuserdata*' 2>/dev/null || hash=\"$hash+\"\n/usr/libexec/PlistBuddy -c \"Set :CFBundleVersion $count\" \"$plist\"\n/usr/libexec/PlistBuddy -c \"Delete :DAMCommit\" \"$plist\" 2>/dev/null\n/usr/libexec/PlistBuddy -c \"Add :DAMCommit string $hash\" \"$plist\"\n";
 		};
+		A0A1D0000000000000000F06 /* Build Login Agent */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Build Login Agent";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# DAM's login window agent (DAMLoginAgent/), next to DAM's executable, signed as DAM is;\n# built only when its sources changed (tools/loginagent/build).\nexec \"$SRCROOT/tools/loginagent/build\" \"$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH/DAMLoginAgent\" \"${EXPANDED_CODE_SIGN_IDENTITY:--}\"\n";
+		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -607,6 +629,7 @@
 				CC000C302F8D60780090E796 /* ScreenMirroringPanel.swift in Sources */,
 				CC000C312F8D60780090E796 /* SidecarManager.swift in Sources */,
 				AC0A00022F8D60780090E796 /* AutoConnect.swift in Sources */,
+				AC0A00252F8D60780090E796 /* LoginAgentInstaller.swift in Sources */,
 				AC0A00212F8D60780090E796 /* LoginAgentSettings.swift in Sources */,
 				AC0A001C2F8D60780090E796 /* ByteOrder.swift in Sources */,
 				AC0A001A2F8D60780090E796 /* HDRMetadata.swift in Sources */,
@@ -682,6 +705,7 @@
 				DD100B0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift in Sources */,
 				DD100B0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift in Sources */,
 				AC0A00042F8D607C0090E7A1 /* AutoConnectTests.swift in Sources */,
+				AC0A00272F8D607C0090E7A1 /* LoginAgentInstallerTests.swift in Sources */,
 				AC0A00232F8D607C0090E7A1 /* LoginAgentSettingsTests.swift in Sources */,
 				AC0A000A2F8D607C0090E7A1 /* DisplayStreamCaptureTests.swift in Sources */,
 				DD100B1B2F8D607C0090E7A1 /* StreamingDisplayTests.swift in Sources */,
