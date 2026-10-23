@@ -563,6 +563,25 @@ final class MoonlightProtocolTests: XCTestCase {
     /// Ports for this file's streams, away from GameStream's and the host tests'.
     private func testPorts(_ slot: Int) -> MoonlightStream.Ports { MoonlightStream.Ports(slot: 120 + slot) }
 
+    /// Waits up to 2 s for UDP `port` to be free again, as a stopped stream's threads let go
+    /// of theirs a moment later, so a test run again finds it free.
+    private func waitUntilFree(_ port: UInt16) {
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline {
+            let probe = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
+            var address = sockaddr_in()
+            address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+            address.sin_family = sa_family_t(AF_INET)
+            address.sin_port = port.bigEndian
+            let bound = withUnsafePointer(to: &address) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(probe, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+            }
+            Darwin.close(probe)
+            if bound == 0 { return }
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+    }
+
     /// The events an ENet client sees in `seconds` of trying to connect to `port` with `token`,
     /// as Moonlight does; it stops at a disconnect.
     private func connect(_ client: UnsafeMutablePointer<ENetHost>, to port: UInt16, token: UInt32,
@@ -590,7 +609,7 @@ final class MoonlightProtocolTests: XCTestCase {
         var connects = 0
         server.onConnect = { lock.lock(); connects += 1; lock.unlock() }
         server.start()
-        defer { server.stop() }
+        defer { server.stop(); waitUntilFree(port) }
         let clients = try (0..<3).map { _ in try XCTUnwrap(enet_host_create(nil, 1, 48, 0, 0)) }
         defer { clients.forEach { enet_host_destroy($0) } }
 
@@ -610,7 +629,7 @@ final class MoonlightProtocolTests: XCTestCase {
         let port = testPorts(2).control
         let server = try MoonlightControlServer(port: port, key: Data(count: 16), connectData: 0x1234)
         server.start()
-        defer { server.stop() }
+        defer { server.stop(); waitUntilFree(port) }
         let clients = try (0..<3).map { _ in try XCTUnwrap(enet_host_create(nil, 1, 48, 0, 0)) }
         defer { clients.forEach { enet_host_destroy($0) } }
         // Two CONNECTs whose replies are never read.
@@ -742,7 +761,7 @@ final class MoonlightProtocolTests: XCTestCase {
         let caughtUp = expectation(description: "caught up")
         sender.onCaughtUp = { caughtUp.fulfill() }
         sender.startListening()
-        defer { sender.stop() }
+        defer { sender.stop(); waitUntilFree(port) }
         let receiver = TimedReceiver()
         receiver.send(Data("0123456789abcdef".utf8) + Data([0, 0, 0, 1]), to: port)
         let deadline = Date().addingTimeInterval(2)
