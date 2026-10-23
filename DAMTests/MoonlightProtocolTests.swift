@@ -93,6 +93,17 @@ final class MoonlightProtocolTests: XCTestCase {
         XCTAssertNotNil(packetizer.packets(for: Data(count: 70_000), isKeyFrame: true, timestamp: 0, latency: 0))
     }
 
+    /// The largest frame the rate limit is kept to is one the packetizer still sends, with
+    /// parity asked for or not, and a byte more is not.
+    func testTheLargestFrameIsTheLargestSent() {
+        for packetSize in [1024, 1392] {
+            let largest = MoonlightPacketizer.largestFrame(packetSize: packetSize)
+            var packetizer = MoonlightPacketizer(packetSize: packetSize, fecPercentage: 20, minimumParity: 2)
+            XCTAssertNotNil(packetizer.blocks(for: Data(count: largest), isKeyFrame: true, timestamp: 0, latency: 0))
+            XCTAssertNil(packetizer.blocks(for: Data(count: largest + 1), isKeyFrame: true, timestamp: 0, latency: 0))
+        }
+    }
+
     // MARK: - Video packets
 
     private func le32(_ packet: Data, _ offset: Int) -> UInt32 {
@@ -781,6 +792,32 @@ final class MoonlightProtocolTests: XCTestCase {
         let dataSpan = Double((data.last ?? 0) - (data.first ?? 0)) / 1000
         XCTAssertGreaterThan(dataSpan, 6, "data paced: 7.2 ms")
         wait(for: [caughtUp], timeout: 2)
+    }
+
+    /// A keyframe too large to send is reported once, as a keyframe, so one more is asked for;
+    /// the sender carries on.
+    func testAKeyFrameTooLargeToSendIsReportedOnce() throws {
+        let port = testPorts(6).video
+        let sender = try MoonlightVideoSender(port: port, pingPayload: "0123456789abcdef", client: "127.0.0.1",
+                                              packetSize: 528, minimumParity: 0, bitrateKbps: 1000)
+        let lock = NSLock()
+        var reports: [Bool] = []
+        sender.onFrameTooLarge = { lock.lock(); reports.append($0); lock.unlock() }
+        let caughtUp = expectation(description: "caught up")
+        caughtUp.assertForOverFulfill = false
+        sender.onCaughtUp = { caughtUp.fulfill() }
+        sender.startListening()
+        defer { sender.stop(); waitUntilFree(port) }
+        let receiver = TimedReceiver()
+        receiver.send(Data("0123456789abcdef".utf8) + Data([0, 0, 0, 1]), to: port)
+        let deadline = Date().addingTimeInterval(2)
+        while !sender.hasPeer, Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+        XCTAssertTrue(sender.hasPeer)
+
+        sender.send(try frame(Data(count: MoonlightPacketizer.largestFrame(packetSize: 528) + 1)))
+        wait(for: [caughtUp], timeout: 2)
+        lock.lock(); defer { lock.unlock() }
+        XCTAssertEqual(reports, [true])
     }
 
     /// Sound goes one packet a fire, one for each fire missed, and one more while the line is

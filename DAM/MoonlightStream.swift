@@ -1045,7 +1045,8 @@ final class MoonlightStream {
                 settings: .init(width: config.width, height: config.height, fps: config.fps,
                                 bitrateKbps: config.bitrateKbps, codec: config.codec ?? .h264,
                                 lowLatency: config.lowLatency,
-                                hdr: config.hdr ? MoonlightScreenCapture.hdrMetadata : nil)) { [weak self] frame in
+                                hdr: config.hdr ? MoonlightScreenCapture.hdrMetadata : nil,
+                                largestFrame: MoonlightPacketizer.largestFrame(packetSize: config.packetSize))) { [weak self] frame in
                 self?.video.send(frame)
             }
             video.onFrameTooLarge = { [weak self] wasKeyFrame in
