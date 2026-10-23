@@ -282,6 +282,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        // The icon is an image only, so VoiceOver and the pointer get the app's name.
+        statusItem.button?.setAccessibilityLabel(AppIdentity.name)
+        statusItem.button?.toolTip = AppIdentity.name
         iconAnimator = MenuBarIconAnimator(button: statusItem.button)
         rebuild()
     }

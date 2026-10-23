@@ -266,4 +266,137 @@ final class HotkeyPreferenceTests: XCTestCase {
         XCTAssertTrue(first.isRegistered)
         XCTAssertFalse(second.isRegistered)
     }
+
+    // MARK: - Rebinding
+
+    func testRebinding_freesTheKeysForAnotherShortcut() {
+        // As AppDelegate's rebind: one shortcut moves, then the others try their keys again.
+        let other = HotkeyPreference(keyCode: UInt32(kVK_F18),
+                                     modifiers: UInt32(controlKey | optionKey | shiftKey | cmdKey))
+        let first = GlobalHotkey(preference: unlikely) {}
+        let second = GlobalHotkey(preference: unlikely) {}
+        XCTAssertFalse(second.isRegistered)
+        first.update(preference: other)
+        second.registerIfNeeded()
+        XCTAssertTrue(first.isRegistered)
+        XCTAssertTrue(second.isRegistered)
+    }
+
+    func testRegisterIfNeeded_leavesARegisteredShortcutBe() {
+        let hotkey = GlobalHotkey(preference: unlikely) {}
+        hotkey.registerIfNeeded()
+        XCTAssertTrue(hotkey.isRegistered)
+    }
+
+    // MARK: - Key names
+
+    func testKeyString_namesKeysThatTypeNothingVisible() {
+        let names: [Int: String] = [
+            kVK_F1: "F1", kVK_F5: "F5", kVK_F12: "F12", kVK_F19: "F19", kVK_F20: "F20",
+            kVK_LeftArrow: "←", kVK_RightArrow: "→", kVK_UpArrow: "↑", kVK_DownArrow: "↓",
+            kVK_Space: "Space", kVK_Return: "↩", kVK_Tab: "⇥", kVK_Delete: "⌫", kVK_Escape: "⎋",
+        ]
+        for (key, name) in names {
+            XCTAssertEqual(HotkeyPreference(keyCode: UInt32(key), modifiers: UInt32(cmdKey)).keyString, name, "\(key)")
+        }
+    }
+
+    func testKeyString_everyCharacterKeyHasAName() {
+        // In whatever layout the Mac has, dead keys (^ on a German or French one) among them.
+        let keys = [kVK_ANSI_A, kVK_ANSI_Z, kVK_ANSI_1, kVK_ANSI_0, kVK_ANSI_Grave, kVK_ANSI_Equal,
+                    kVK_ANSI_LeftBracket, kVK_ANSI_Quote, kVK_ANSI_Semicolon, kVK_ANSI_Backslash,
+                    kVK_ANSI_Comma, kVK_ANSI_Slash]
+        for key in keys {
+            let name = HotkeyPreference(keyCode: UInt32(key), modifiers: UInt32(cmdKey)).keyString
+            XCTAssertFalse(name.hasPrefix("("), "\(key) is \(name)")
+        }
+    }
+}
+
+// MARK: - KeyRecorderView
+
+final class KeyRecorderViewTests: XCTestCase {
+
+    private var window: NSWindow!
+    private var recorder: KeyRecorderView!
+    private let start = HotkeyAction.switcher.defaultShortcut
+
+    // A window never put on screen, so the recorder can be first responder.
+    override func setUp() {
+        super.setUp()
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 40),
+                          styleMask: [.titled], backing: .buffered, defer: true)
+        window.isReleasedWhenClosed = false
+        recorder = KeyRecorderView(preference: start)
+        window.contentView?.addSubview(recorder)
+    }
+
+    override func tearDown() {
+        recorder.cancel()
+        recorder = nil
+        window = nil
+        super.tearDown()
+    }
+
+    private func key(_ code: Int, _ modifiers: NSEvent.ModifierFlags, _ characters: String = "q") -> NSEvent {
+        NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0,
+                         windowNumber: window.windowNumber, context: nil, characters: characters,
+                         charactersIgnoringModifiers: characters, isARepeat: false, keyCode: UInt16(code))!
+    }
+
+    func testRecording_takesTheAppsOwnShortcuts() {
+        var recorded: [HotkeyPreference] = []
+        recorder.onChanged = { recorded.append($0) }
+        let shortcuts: [(code: Int, flags: NSEvent.ModifierFlags, carbon: Int)] = [
+            (kVK_ANSI_Q, [.command], cmdKey),
+            (kVK_ANSI_H, [.command], cmdKey),
+            (kVK_ANSI_H, [.option, .command], optionKey | cmdKey),
+            (kVK_ANSI_W, [.command], cmdKey),
+        ]
+        for shortcut in shortcuts {
+            recorder.startRecording()
+            XCTAssertTrue(recorder.performKeyEquivalent(with: key(shortcut.code, shortcut.flags)), "\(shortcut.code)")
+        }
+        XCTAssertEqual(recorded, shortcuts.map { HotkeyPreference(keyCode: UInt32($0.code), modifiers: UInt32($0.carbon)) })
+        XCTAssertEqual(recorder.preference, recorded.last)
+    }
+
+    func testNotRecording_leavesKeyEquivalentsToTheApp() {
+        recorder.onChanged = { _ in XCTFail("recorded") }
+        XCTAssertFalse(recorder.performKeyEquivalent(with: key(kVK_ANSI_Q, [.command])))
+        XCTAssertEqual(recorder.preference, start)
+    }
+
+    func testBareKeyIsNotRecorded_escapeCancels() {
+        recorder.onChanged = { _ in XCTFail("recorded") }
+        recorder.startRecording()
+        recorder.keyDown(with: key(kVK_ANSI_Q, []))
+        XCTAssertEqual(recorder.accessibilityValue() as? String, "Type shortcut")
+        recorder.keyDown(with: key(kVK_Escape, [], "\u{1b}"))
+        XCTAssertEqual(recorder.preference, start)
+        XCTAssertEqual(recorder.accessibilityValue() as? String, start.displayString)
+    }
+
+    func testRecording_pausesTheAppsHotkeys() {
+        let hotkey = GlobalHotkey(preference: HotkeyPreference(
+            keyCode: UInt32(kVK_F17), modifiers: UInt32(controlKey | optionKey | shiftKey | cmdKey))) {}
+        XCTAssertTrue(hotkey.isRegistered)
+        recorder.startRecording()
+        XCTAssertFalse(hotkey.isRegistered)
+        recorder.cancel()
+        XCTAssertTrue(hotkey.isRegistered)
+    }
+
+    func testAccessibility_aButtonNamedForItsShortcut() {
+        recorder.setAccessibilityLabel(HotkeyAction.switcher.title)
+        XCTAssertTrue(recorder.isAccessibilityElement())
+        XCTAssertEqual(recorder.accessibilityRole(), .button)
+        XCTAssertEqual(recorder.accessibilityLabel(), "Switcher")
+        XCTAssertEqual(recorder.accessibilityValue() as? String, start.displayString)
+        // Pressed as VoiceOver presses it, it starts recording; pressed again, it cancels.
+        XCTAssertTrue(recorder.accessibilityPerformPress())
+        XCTAssertEqual(recorder.accessibilityValue() as? String, "Type shortcut")
+        XCTAssertTrue(recorder.accessibilityPerformPress())
+        XCTAssertEqual(recorder.accessibilityValue() as? String, start.displayString)
+    }
 }

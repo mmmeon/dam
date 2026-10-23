@@ -101,7 +101,9 @@ final class SettingsWindowController: NSWindowController {
          openDisplay: OpenDisplaySender? = nil,
          sessionCoordinator: RemoteSessionCoordinator? = nil) {
         recorders = Dictionary(uniqueKeysWithValues: HotkeyAction.allCases.map {
-            ($0, KeyRecorderView(preference: $0.shortcut))
+            let recorder = KeyRecorderView(preference: $0.shortcut)
+            recorder.setAccessibilityLabel($0.title)
+            return ($0, recorder)
         })
         self.audioManager     = audioManager
         self.videoManager     = videoManager
@@ -1571,6 +1573,8 @@ final class SettingsWindowController: NSWindowController {
                     self?.onRebuild?()
                 }
                 box = view as? NSButton
+                // The box has no title of its own; the row and column say what it is.
+                box?.setAccessibilityLabel("\(entry.name) \(rate) Hz")
                 row.append(view)
             }
             rows.append(row)
