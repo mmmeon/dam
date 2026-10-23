@@ -4,6 +4,7 @@
 
 import AppKit
 import CoreImage
+import ServiceManagement
 import UniformTypeIdentifiers
 
 final class SettingsWindowController: NSWindowController {
@@ -101,7 +102,9 @@ final class SettingsWindowController: NSWindowController {
          openDisplay: OpenDisplaySender? = nil,
          sessionCoordinator: RemoteSessionCoordinator? = nil) {
         recorders = Dictionary(uniqueKeysWithValues: HotkeyAction.allCases.map {
-            ($0, KeyRecorderView(preference: $0.shortcut))
+            let recorder = KeyRecorderView(preference: $0.shortcut)
+            recorder.setAccessibilityLabel($0.title)
+            return ($0, recorder)
         })
         self.audioManager     = audioManager
         self.videoManager     = videoManager
@@ -306,13 +309,45 @@ final class SettingsWindowController: NSWindowController {
                          action: { VisibilityPreferences.followNewDisplayAudio = $0 }),
             ]),
             ("Startup:", [
-                checkbox(title: "Launch at login",
-                         isOn: VisibilityPreferences.launchAtLogin,
-                         action: { VisibilityPreferences.launchAtLogin = $0 }),
+                launchAtLoginCheckbox(),
             ]),
             ("Screen Mirroring:", [extraRow]),
         ])
     }
+
+    /// The launch-at-login box, which shows what macOS did with the change rather than what
+    /// was clicked, and says when macOS wants the login item approved.
+    private func launchAtLoginCheckbox() -> NSView {
+        weak var box: NSButton?
+        let view = checkbox(title: "Launch at login", isOn: VisibilityPreferences.launchAtLogin,
+                            help: VisibilityPreferences.launchAtLoginNeedsApproval ? Self.loginApprovalHelp : nil) { on in
+            var failure: Error?
+            do { try VisibilityPreferences.setLaunchAtLogin(on) } catch { failure = error }
+            box?.state = VisibilityPreferences.launchAtLogin ? .on : .off
+            let needsApproval = VisibilityPreferences.launchAtLoginNeedsApproval
+            box?.toolTip = needsApproval ? Self.loginApprovalHelp : nil
+            if let failure {
+                let alert = NSAlert()
+                alert.messageText = on ? "\(AppIdentity.name) can't be set to launch at login"
+                                       : "\(AppIdentity.name) still launches at login"
+                alert.informativeText = failure.localizedDescription
+                alert.runModal()
+            } else if on && needsApproval {
+                let alert = NSAlert()
+                alert.messageText = "Allow \(AppIdentity.name) in Login Items"
+                alert.informativeText = "macOS launches \(AppIdentity.name) at login once it is allowed in " +
+                                        "System Settings, under General, Login Items."
+                alert.addButton(withTitle: "Open Login Items")
+                alert.addButton(withTitle: "Later")
+                if alert.runModal() == .alertFirstButtonReturn { SMAppService.openSystemSettingsLoginItems() }
+            }
+        }
+        box = view as? NSButton
+        return view
+    }
+
+    private static let loginApprovalHelp =
+        "Waiting to be allowed in System Settings, under General, Login Items."
 
     @objc private func openControlCenterSettings() {
         ScreenMirroringPanel.openControlCenterSettings()
@@ -390,10 +425,19 @@ final class SettingsWindowController: NSWindowController {
             generalContent = buildGeneralTab()
             if selectedTab == TabID.general { selectTab(TabID.general) }
         }
-        if devicesState() != devicesShown {
+        // Not while a nickname is being typed, which a rebuild would throw away; its end
+        // calls here again.
+        if devicesState() != devicesShown && !isEditingNickname {
             devicesContent = buildDevicesTab()
             if selectedTab == TabID.devices { selectTab(TabID.devices) }
         }
+    }
+
+    /// Whether a nickname field of the Devices tab holds typing not yet saved.
+    private var isEditingNickname: Bool {
+        guard let editor = window?.firstResponder as? NSTextView, editor.isFieldEditor,
+              let field = editor.delegate.map({ $0 as AnyObject }) as? NicknameField else { return false }
+        return field.isDescendant(of: devicesContent) && field.hasUnsavedText
     }
 
     /// A device's visibility checkbox with a field beside it for its nickname, which the
@@ -1576,6 +1620,8 @@ final class SettingsWindowController: NSWindowController {
                     self?.onRebuild?()
                 }
                 box = view as? NSButton
+                // The box has no title of its own; the row and column say what it is.
+                box?.setAccessibilityLabel("\(entry.name) \(rate) Hz")
                 row.append(view)
             }
             rows.append(row)
@@ -2328,6 +2374,12 @@ private final class NicknameField: RoundedTextField, NSTextFieldDelegate {
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    /// Whether the text being typed differs from the nickname saved.
+    var hasUnsavedText: Bool {
+        guard let editor = currentEditor() else { return false }
+        return editor.string != (VisibilityPreferences.nickname(kind, for: deviceName) ?? "")
+    }
 
     func controlTextDidEndEditing(_ obj: Notification) {
         VisibilityPreferences.setNickname(stringValue, kind, for: deviceName)

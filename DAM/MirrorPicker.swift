@@ -84,8 +84,7 @@ final class MirrorPicker {
         let choices = Self.choices(targets: targets)
         let current = Self.currentChoice(in: choices, slaves: vm.slaveDisplays(of: display),
                                          master: vm.masterDisplay(of: display))
-        picker.open(choices: choices.map(\.name),
-                    cursor: ChoicePicker.startCursor(current: current, count: choices.count)) { [weak self] i in
+        picker.open(choices: choices.map(\.name), current: current) { [weak self] i in
             guard i != current else { return }
             self?.apply(choices[i], to: display)
         }

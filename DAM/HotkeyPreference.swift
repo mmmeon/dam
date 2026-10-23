@@ -115,8 +115,10 @@ struct HotkeyPreference: Codable, Equatable {
         return s
     }
 
-    /// Localized key name via UCKeyTranslate (respects current keyboard layout).
+    /// The key's name: its symbol or name for keys that type nothing visible (F-keys,
+    /// arrows, Space, Return…), else what it types in the current keyboard layout.
     var keyString: String {
+        if let name = Self.specialKeyNames[Int(keyCode)] { return name }
         let source = TISCopyCurrentKeyboardInputSource().takeRetainedValue()
         guard let rawPtr = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) else {
             return fallbackKeyName
@@ -132,7 +134,9 @@ struct HotkeyPreference: Codable, Equatable {
             let err = UCKeyTranslate(layout, UInt16(keyCode),
                                      UInt16(kUCKeyActionDisplay), 0,
                                      UInt32(LMGetKbdType()),
-                                     OptionBits(kUCKeyTranslateNoDeadKeysBit),
+                                     // The mask, not the bit's number (0), so a dead key
+                                     // gives its accent rather than nothing.
+                                     OptionBits(kUCKeyTranslateNoDeadKeysMask),
                                      &dead, 4, &len, &chars)
             guard err == noErr, len > 0 else { return fallbackKeyName }
             return String(utf16CodeUnits: Array(chars.prefix(len)), count: len).uppercased()
@@ -140,6 +144,21 @@ struct HotkeyPreference: Codable, Equatable {
     }
 
     private var fallbackKeyName: String { "(\(keyCode))" }
+
+    /// Keys named the way macOS's menus show them, whatever the layout.
+    private static let specialKeyNames: [Int: String] = {
+        var names: [Int: String] = [
+            kVK_Return: "↩", kVK_ANSI_KeypadEnter: "⌤", kVK_Tab: "⇥", kVK_Space: "Space",
+            kVK_Delete: "⌫", kVK_ForwardDelete: "⌦", kVK_Escape: "⎋", kVK_Help: "Help",
+            kVK_Home: "↖", kVK_End: "↘", kVK_PageUp: "⇞", kVK_PageDown: "⇟",
+            kVK_LeftArrow: "←", kVK_RightArrow: "→", kVK_UpArrow: "↑", kVK_DownArrow: "↓",
+            kVK_ANSI_KeypadClear: "⌧",
+        ]
+        let fKeys = [kVK_F1, kVK_F2, kVK_F3, kVK_F4, kVK_F5, kVK_F6, kVK_F7, kVK_F8, kVK_F9, kVK_F10,
+                     kVK_F11, kVK_F12, kVK_F13, kVK_F14, kVK_F15, kVK_F16, kVK_F17, kVK_F18, kVK_F19, kVK_F20]
+        for (i, key) in fKeys.enumerated() { names[key] = "F\(i + 1)" }
+        return names
+    }()
 }
 
 // MARK: - NSEvent helper

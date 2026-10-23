@@ -52,17 +52,25 @@ final class AudioManager: ObservableObject {
         recentlyAdded = recentlyAdded.filter { now.timeIntervalSince($0.value) < 5 }
 
         let current = fetchDefaultOutputDeviceID()
-        if current != lastDefaultID,
-           !VisibilityPreferences.followNewDisplayAudio,
-           recentlyAdded[current] != nil,
-           isDisplayDevice(current),
-           ids.contains(lastDefaultID) {
+        if Self.undoesSwitch(to: current, from: lastDefaultID, devices: ids, recentlyAdded: recentlyAdded,
+                             follows: VisibilityPreferences.followNewDisplayAudio,
+                             isDisplay: isDisplayDevice) {
             recentlyAdded[current] = nil
             setDefaultDeviceID(lastDefaultID)
         } else {
             lastDefaultID = current
         }
         refresh()
+    }
+
+    /// Whether macOS's switch of the default output from `previous` to `current` is to be
+    /// undone: the user doesn't follow a new display's audio, `current` is a display's audio
+    /// that appeared within the last moments, and `previous` is still there to go back to.
+    static func undoesSwitch(to current: AudioDeviceID, from previous: AudioDeviceID,
+                             devices: Set<AudioDeviceID>, recentlyAdded: [AudioDeviceID: Date],
+                             follows: Bool, isDisplay: (AudioDeviceID) -> Bool) -> Bool {
+        current != previous && !follows && recentlyAdded[current] != nil
+            && isDisplay(current) && devices.contains(previous)
     }
 
     func refresh() {
@@ -244,23 +252,19 @@ final class AudioManager: ObservableObject {
         return t == kAudioDeviceTransportTypeHDMI || t == kAudioDeviceTransportTypeDisplayPort
     }
 
-    /// Returns true when the device uses a physical or AirPlay transport type.
-    /// Virtual devices (Teams, Zoom, BlackHole, Loopback, etc.) use
-    /// kAudioDeviceTransportTypeVirtual or kAudioDeviceTransportTypeAggregate.
+    /// Returns true unless the device is virtual.
     private func isHardwareDevice(_ id: AudioDeviceID) -> Bool {
-        guard let transport = transportType(id) else {
-            return true   // if we can't read it, include it to be safe
-        }
+        !Self.isVirtual(transport: transportType(id))
+    }
+
+    /// True for the transports of virtual devices (Teams, Zoom, BlackHole, Loopback, etc.):
+    /// virtual and aggregate ones. Any other, PCI, AVB, Continuity, unknown or unreadable
+    /// among them, is a device's own and stays shown.
+    static func isVirtual(transport: UInt32?) -> Bool {
         switch transport {
-        case kAudioDeviceTransportTypeBuiltIn,
-             kAudioDeviceTransportTypeUSB,
-             kAudioDeviceTransportTypeFireWire,
-             kAudioDeviceTransportTypeBluetooth,
-             kAudioDeviceTransportTypeBluetoothLE,
-             kAudioDeviceTransportTypeHDMI,
-             kAudioDeviceTransportTypeDisplayPort,
-             kAudioDeviceTransportTypeAirPlay,
-             kAudioDeviceTransportTypeThunderbolt:
+        case kAudioDeviceTransportTypeVirtual,
+             kAudioDeviceTransportTypeAggregate,
+             kAudioDeviceTransportTypeAutoAggregate:
             return true
         default:
             return false

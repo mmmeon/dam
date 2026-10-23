@@ -1299,6 +1299,25 @@ final class VideoManager: ObservableObject {
 
     // MARK: - Private
 
+    /// `names` with those more than one display has told apart, as macOS names identical
+    /// monitors: the first in `rank`'s order (serial number, then unit number) keeps the
+    /// name, so what was saved under it stays its own, and each other gets " (2)", " (3)"…
+    static func distinctNames(_ names: [CGDirectDisplayID: String],
+                              rank: (CGDirectDisplayID) -> (UInt32, UInt32, UInt32)) -> [CGDirectDisplayID: String] {
+        var result = names
+        var taken = Set(names.values)
+        for (name, ids) in Dictionary(grouping: names.keys, by: { names[$0]! }) where ids.count > 1 {
+            var n = 2
+            for cgID in ids.sorted(by: { rank($0) < rank($1) }).dropFirst() {
+                while taken.contains("\(name) (\(n))") { n += 1 }
+                result[cgID] = "\(name) (\(n))"
+                taken.insert("\(name) (\(n))")
+                n += 1
+            }
+        }
+        return result
+    }
+
     func mergeDevices() {
         // Build a cgID → name map from active NSScreen entries.
         // Include the built-in panel — it disappears from NSScreen in clamshell
@@ -1416,6 +1435,14 @@ final class VideoManager: ObservableObject {
         if bootstrapDisplayID != 0 { anchorIDs.insert(bootstrapDisplayID) }
 
         let streamingIDs = streamingDisplayIDs
+        // Two monitors of one model have one name; each is told apart by its own.
+        let externalNames = Self.distinctNames(idToName.filter { cgID, _ in
+            onlineSet.contains(cgID) && !airPlayIDs.contains(cgID) && !anchorIDs.contains(cgID)
+                && CGDisplayIsBuiltin(cgID) == 0 && !sidecarIDs.contains(cgID)
+        }) { (CGDisplaySerialNumber($0), CGDisplayUnitNumber($0), $0) }
+        for (cgID, name) in externalNames where name != idToName[cgID] {
+            if let base = idToName[cgID] { VisibilityPreferences.inheritDisplaySettings(from: base, to: name) }
+        }
         var physical: [DisplayInfo] = []
         for cgID in onlineIDs {
             guard !airPlayIDs.contains(cgID) else { continue }
@@ -1423,7 +1450,7 @@ final class VideoManager: ObservableObject {
             // And one not filed as an anchor: one being released, which stays online until its
             // teardown has landed, or one not found yet.
             guard !Self.isAnchorDisplay(vendor: CGDisplayVendorNumber(cgID), model: CGDisplayModelNumber(cgID)) else { continue }
-            guard let name = idToName[cgID] else { continue }
+            guard let name = externalNames[cgID] ?? idToName[cgID] else { continue }
             let isBuiltIn   = CGDisplayIsBuiltin(cgID) != 0
             // A mirror slave leaves NSScreen but is still showing a desktop.
             let isConnected = liveIDs.contains(cgID) || CGDisplayMirrorsDisplay(cgID) != CGDirectDisplayID(0)
