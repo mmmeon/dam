@@ -181,6 +181,43 @@ final class DisplayRotationTests: XCTestCase {
         XCTAssertEqual(VideoManager.standInDisplayName(for: "tv"), "tv (Rotated)")
     }
 
+    func testAStandInAndItsScreenTradePlaces() {
+        // 7 is an anchor's screen: the swap is the same, committed by itself.
+        let origins: [CGDirectDisplayID: CGPoint] = [1: .zero, 7: CGPoint(x: 1440, y: 0), 9: CGPoint(x: 3360, y: 0)]
+        XCTAssertEqual(VideoManager.swappedOrigins(9, 7, in: origins), [9: CGPoint(x: 1440, y: 0), 7: CGPoint(x: 3360, y: 0)])
+        XCTAssertTrue(VideoManager.swappedOrigins(9, 8, in: origins).isEmpty, "not without the screen")
+        XCTAssertTrue(VideoManager.swappedOrigins(9, 9, in: origins).isEmpty)
+    }
+
+    private func display(_ name: String, id: CGDirectDisplayID, connected: Bool = true,
+                         streaming: Bool = false) -> DisplayInfo {
+        DisplayInfo(id: name, name: name, isConnected: connected, cgDisplayID: connected ? id : 0,
+                    isMirroring: false, isBuiltIn: false, isStreaming: streaming)
+    }
+
+    func testASavedRotationIsPutBackOncePerConnection() {
+        let saved: (String) -> DisplayRotation = { ["tv": .quarter, "stream": .half, "off": .quarter][$0] ?? .standard }
+        let displays = [display("tv", id: 5), display("desk", id: 6), display("stream", id: 7, streaming: true),
+                        display("off", id: 8, connected: false)]
+        let first = VideoManager.presentationRestores(displays: displays, shown: [], tried: [], saved: saved)
+        XCTAssertEqual(first.restore.map(\.display.name), ["tv"])
+        XCTAssertEqual(first.restore.first?.rotation, .quarter)
+        XCTAssertEqual(first.tried, ["tv@5"])
+        let again = VideoManager.presentationRestores(displays: displays, shown: [], tried: first.tried, saved: saved)
+        XCTAssertTrue(again.restore.isEmpty, "one try per connection")
+        // It went and came back under another ID: a new connection, and the old try is dropped.
+        let back = VideoManager.presentationRestores(displays: [display("tv", id: 11)], shown: [],
+                                                     tried: first.tried.union(["gone@3"]), saved: saved)
+        XCTAssertEqual(back.restore.map(\.display.cgDisplayID), [11])
+        XCTAssertEqual(back.tried, ["tv@11"])
+    }
+
+    func testADisplayShownTurnedIsNotTurnedAgain() {
+        let plan = VideoManager.presentationRestores(displays: [display("tv", id: 5)], shown: ["tv"], tried: [],
+                                                     saved: { _ in .quarter })
+        XCTAssertTrue(plan.restore.isEmpty)
+    }
+
     func testCoveredScreensGoPastTheRest() {
         let video = VideoManager()
         let main = CGMainDisplayID()

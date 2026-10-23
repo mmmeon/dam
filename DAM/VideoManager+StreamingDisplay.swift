@@ -372,7 +372,9 @@ extension VideoManager {
     enum StreamingRequest {
         case add(StreamingDisplayModes.Mode, standIn: StandIn? = nil, identity: StreamingIdentity? = nil,
                  main: Bool = false, completion: ((CGDirectDisplayID?) -> Void)?)
-        case remove(index: Int)
+        /// The display to remove, by its CGVirtualDisplay: its slot can go to a newer one
+        /// while the removal waits.
+        case remove(display: AnyObject)
         case resize(id: CGDirectDisplayID, StreamingDisplayModes.Mode, completion: (Bool) -> Void)
         case rotate(id: CGDirectDisplayID, DisplayRotation, completion: (Bool) -> Void)
 
@@ -433,10 +435,12 @@ extension VideoManager {
 
     /// Asks for the streaming display `id` to be removed.
     func removeStreamingDisplay(id: CGDirectDisplayID) {
-        guard id != 0, let index = streamingDisplays.first(where: { $0.id == id })?.index,
-              !streamingRequests.contains(where: { if case .remove(index) = $0 { return true } else { return false } })
+        guard id != 0, let display = streamingDisplays.first(where: { $0.id == id })?.display,
+              !streamingRequests.contains(where: {
+                  if case .remove(let waiting) = $0 { return waiting === display } else { return false }
+              })
         else { return }
-        streamingRequests.append(.remove(index: index))
+        streamingRequests.append(.remove(display: display))
         processStreamingRequests()
     }
 
@@ -487,12 +491,12 @@ extension VideoManager {
 
     /// Starts the next request, unless a change is under way; that one calls this again
     /// when it is done.
-    private func processStreamingRequests() {
-        while !streamingChangeInFlight, !streamingReassertInFlight, !streamingRequests.isEmpty {
+    func processStreamingRequests() {
+        while !streamingChangeInFlight, !streamingReassertInFlight, !wakeRestoreInFlight, !streamingRequests.isEmpty {
             switch streamingRequests.removeFirst() {
             case .add(let mode, let standIn, let identity, let main, let completion):
                 addStreamingDisplay(mode, standIn: standIn, identity: identity, main: main, completion: completion)
-            case .remove(let index):                removeStreamingDisplay(index: index)
+            case .remove(let display):              removeStreamingDisplay(display)
             case .resize(let id, let mode, let completion):
                 let rotation = streamingRotation(of: id) ?? .standard
                 resizeStreamingDisplay(id: id, mode: mode.rotated(rotation), completion: completion)
@@ -549,8 +553,9 @@ extension VideoManager {
         descriptor.vendorID  = Self.anchorVendorID
         descriptor.productID = Self.streamingProductID
         descriptor.serialNum = serial
-        descriptor.terminationHandler = { [weak self] _, _ in
-            DispatchQueue.main.async { self?.streamingDisplayEnded(index: index) }
+        // By the display, not its slot: one DAM removed can end once its slot holds another.
+        descriptor.terminationHandler = { [weak self] _, vd in
+            DispatchQueue.main.async { self?.streamingDisplayEnded(vd) }
         }
 
         // Taken before the display comes, to put the others back once WindowServer has laid
@@ -580,10 +585,10 @@ extension VideoManager {
         waitForStreamingDisplay(vd, index: index, serial: serial, before: before, main: main)
     }
 
-    /// Removes streaming display `index`, if it is still there, and puts the others back
+    /// Removes streaming display `display`, if it is still there, and puts the others back
     /// where they were: where they were before the first came once it is the last.
-    private func removeStreamingDisplay(index: Int) {
-        guard let i = streamingDisplays.firstIndex(where: { $0.index == index }) else { return }
+    private func removeStreamingDisplay(_ display: AnyObject) {
+        guard let i = streamingDisplays.firstIndex(where: { $0.display === display }) else { return }
         let last = streamingDisplays[i]
         sdLog.debug("remove \(last.index): \(last.id)")
         // Right after another change, the layout kept for it: WindowServer may still be
@@ -667,6 +672,7 @@ extension VideoManager {
         // Already in it, mirroring nothing or as chosen: nothing to do.
         if CGDisplayMirrorsDisplay(id) == 0 || keepsMirror, let running, let wanted = Self.displayMode(mode, of: id),
            DisplayArrangement.sameMode(wanted, running) {
+            keepUserMode(running, for: id)
             streamingDisplays[i].start = mode
             return completion(true)
         }
@@ -743,6 +749,8 @@ extension VideoManager {
         let resized = before.excluding(id).adding(id, origin: origin, mode: target, mirroring: master)
         let settle = { [weak self] (done: Bool) in
             guard let self else { return completion(false) }
+            // Or an anchor settling would put the old size back (see reassertAnchorLayout).
+            if done { self.keepUserMode(target, for: id) }
             // Failed, it still runs its old mode, which the layout taken after the new list
             // doesn't hold.
             self.streamingSettle = (done ? resized : before.excluding(id), Date().addingTimeInterval(5))
@@ -780,17 +788,20 @@ extension VideoManager {
         }
     }
 
-    /// Forgets streaming display `index` after WindowServer ended it.
-    private func streamingDisplayEnded(index: Int) {
-        guard let i = streamingDisplays.firstIndex(where: { $0.index == index }) else { return }
-        sdLog.debug("terminationHandler: streaming display \(index) ended")
-        displaysMirroredByChoice.remove(streamingDisplays[i].id)
-        streamingDisplaysMirroringByChoice.remove(streamingDisplays[i].id)
+    /// Forgets streaming display `vd` after WindowServer ended it.
+    private func streamingDisplayEnded(_ vd: AnyObject?) {
+        guard let vd, let i = streamingDisplays.firstIndex(where: { $0.display === vd }) else { return }
+        sdLog.debug("terminationHandler: streaming display \(self.streamingDisplays[i].index) ended")
+        let id = streamingDisplays[i].id
+        // Main as last seen: gone, it is main no more.
+        let wasMain = id != 0 && (CGDisplayIsMain(id) != 0 || allConnectedDisplays.contains { $0.cgDisplayID == id && $0.isMain })
+        displaysMirroredByChoice.remove(id)
+        streamingDisplaysMirroringByChoice.remove(id)
         streamingDisplays.remove(at: i)
-        if streamingDisplays.isEmpty {
-            streamingArrangement = nil
-            streamingDisplayIsMainByChoice = false
-        }
+        if streamingDisplays.isEmpty { streamingArrangement = nil }
+        // As for one removed: main by choice no longer, or another streaming display handed
+        // main would be left it.
+        if streamingDisplays.isEmpty || wasMain { streamingDisplayIsMainByChoice = false }
         publishStreamRotations()
         mergeDevices()
     }

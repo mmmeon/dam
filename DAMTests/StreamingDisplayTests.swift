@@ -86,7 +86,7 @@ final class StreamingDisplayTests: XCTestCase {
     func testAResizeWaitingLeavesTheCountAlone() {
         let mode = StreamingDisplayModes.start
         XCTAssertEqual(VideoManager.StreamingRequest.add(mode, completion: nil).countChange, 1)
-        XCTAssertEqual(VideoManager.StreamingRequest.remove(index: 0).countChange, -1)
+        XCTAssertEqual(VideoManager.StreamingRequest.remove(display: NSObject()).countChange, -1)
         XCTAssertEqual(VideoManager.StreamingRequest.resize(id: 1, mode, completion: { _ in }).countChange, 0)
     }
 
@@ -307,6 +307,138 @@ final class DisplayArrangementSameSetTests: XCTestCase {
     func testADisplayNowMirroringDoesNotMatch() {
         XCTAssertFalse(DisplayArrangement.sameSet(captured: [1: 0, 3: 0], online: [1, 3],
                                                   mirrorOf: { $0 == 1 ? 3 : 0 }))
+    }
+}
+
+/// The queue of streaming display changes, and the layouts DAM keeps, on a VideoManager of
+/// their own with displays of no real display.
+final class StreamingRequestTests: XCTestCase {
+
+    // MARK: - Requests
+
+    /// A streaming display of no real display: nothing in these tests reaches WindowServer.
+    private func fakeDisplay(_ display: AnyObject, index: Int, id: CGDirectDisplayID) -> VideoManager.StreamingDisplay {
+        VideoManager.StreamingDisplay(display: display, index: index, name: "Test \(index)",
+                                      serial: VideoManager.streamingSerial(index),
+                                      start: StreamingDisplayModes.start, id: id)
+    }
+
+    func testAQueuedRemovalTakesItsOwnDisplayNotItsSlot() {
+        let manager = VideoManager()
+        let old = NSObject(), newer = NSObject()
+        manager.streamingDisplays = [fakeDisplay(old, index: 0, id: 9001)]
+        // Another change is under way, so the removal waits.
+        manager.streamingChangeInFlight = true
+        manager.removeStreamingDisplay(id: 9001)
+        manager.removeStreamingDisplay(id: 9001)
+        XCTAssertEqual(manager.streamingRequests.count, 1, "asked twice, removed once")
+        XCTAssertEqual(manager.plannedStreamingDisplayCount, 0)
+        // Meanwhile the system ended it, and a newer display took its slot.
+        manager.streamingDisplays = [fakeDisplay(newer, index: 0, id: 9002)]
+        manager.streamingChangeInFlight = false
+        manager.processStreamingRequests()
+        XCTAssertTrue(manager.streamingRequests.isEmpty)
+        XCTAssertEqual(manager.streamingDisplays.count, 1)
+        XCTAssertTrue(manager.streamingDisplays.first?.display === newer)
+    }
+
+    func testRemovingADisplayThatIsNoneQueuesNothing() {
+        let manager = VideoManager()
+        manager.streamingChangeInFlight = true
+        manager.removeStreamingDisplay(id: 0)
+        manager.removeStreamingDisplay(id: 9003)
+        XCTAssertTrue(manager.streamingRequests.isEmpty)
+    }
+
+    func testAdditionsWaitingCountTowardsTheLimit() {
+        let manager = VideoManager()
+        manager.streamingChangeInFlight = true
+        var refused = 0
+        for _ in 0...VideoManager.maxStreamingDisplays {
+            manager.createStreamingDisplay { if $0 == nil { refused += 1 } }
+        }
+        XCTAssertEqual(manager.streamingRequests.count, VideoManager.maxStreamingDisplays)
+        XCTAssertEqual(refused, 1, "the one past the limit is refused at once")
+        XCTAssertFalse(manager.canCreateStreamingDisplay)
+        manager.streamingRequests.removeAll()
+    }
+
+    func testRequestsWaitForTheModesPutBackAfterWake() {
+        let manager = VideoManager()
+        manager.streamingDisplays = [fakeDisplay(NSObject(), index: 0, id: 9004)]
+        manager.wakeRestoreInFlight = true
+        XCTAssertTrue(manager.displayChangeInFlight)
+        manager.removeStreamingDisplay(id: 9004)
+        XCTAssertEqual(manager.streamingRequests.count, 1)
+        manager.streamingRequests.removeAll()
+    }
+
+    // MARK: - Changes made through DAM reach the kept layouts
+
+    private let twoSideBySide = DisplayArrangement(origins: [1: .zero, 2: CGPoint(x: 1440, y: 0)],
+                                                   mirrorMasters: [1: 0, 2: 0])
+
+    func testPositionsReachEveryKeptLayout() {
+        let manager = VideoManager()
+        let until = Date().addingTimeInterval(5)
+        manager.streamingSettle = (twoSideBySide, until)
+        manager.streamingArrangement = twoSideBySide
+        manager.virtualAnchorArrangements["tv"] = twoSideBySide
+        manager.framesBeforeSetChange = [1: CGRect(x: 0, y: 0, width: 1440, height: 900),
+                                         2: CGRect(x: 1440, y: 0, width: 1920, height: 1080)]
+        let left = CGPoint(x: -1920, y: 0)
+        let undo = manager.keepUserOrigins([2: left, 3: CGPoint(x: 9, y: 9)])
+        XCTAssertEqual(manager.streamingSettle?.arrangement.origins, [1: .zero, 2: left])
+        XCTAssertEqual(manager.streamingSettle?.until, until)
+        XCTAssertEqual(manager.streamingArrangement?.origins, [1: .zero, 2: left])
+        XCTAssertEqual(manager.virtualAnchorArrangements["tv"]?.origins, [1: .zero, 2: left])
+        XCTAssertEqual(manager.framesBeforeSetChange[2], CGRect(x: -1920, y: 0, width: 1920, height: 1080))
+        XCTAssertNil(manager.framesBeforeSetChange[3], "only displays a layout already holds")
+        // The change failed: each layout gets back what it had.
+        undo()
+        XCTAssertEqual(manager.streamingSettle?.arrangement.origins, twoSideBySide.origins)
+        XCTAssertEqual(manager.streamingArrangement?.origins, twoSideBySide.origins)
+        XCTAssertEqual(manager.virtualAnchorArrangements["tv"]?.origins, twoSideBySide.origins)
+        XCTAssertEqual(manager.framesBeforeSetChange[2], CGRect(x: 1440, y: 0, width: 1920, height: 1080))
+    }
+
+    func testARemoteSessionHoldsTheLayoutFromBeforeTheStreams() {
+        let manager = VideoManager()
+        manager.streamingArrangement = twoSideBySide
+        manager.holdsStreamingArrangement = true
+        manager.keepUserOrigins([2: CGPoint(x: -1920, y: 0)])
+        XCTAssertEqual(manager.streamingArrangement?.origins, twoSideBySide.origins)
+    }
+
+    func testAnUndoLeavesALayoutKeptSinceAlone() {
+        let manager = VideoManager()
+        manager.streamingSettle = (twoSideBySide, Date().addingTimeInterval(5))
+        let undo = manager.keepUserOrigins([2: CGPoint(x: -1920, y: 0)])
+        // A streaming display came meanwhile and keeps a layout of its own.
+        let placed = twoSideBySide.adding(3, origin: CGPoint(x: 3360, y: 0), mode: nil)
+        manager.streamingSettle = (placed, Date().addingTimeInterval(6))
+        undo()
+        XCTAssertEqual(manager.streamingSettle?.arrangement.origins, placed.origins)
+    }
+
+    func testModesReachEveryKeptLayoutAndTheStreamingDisplay() throws {
+        let manager = VideoManager()
+        guard let mode = CGDisplayCopyDisplayMode(CGMainDisplayID()) else { throw XCTSkip("no display to read a mode of") }
+        let display = NSObject()
+        manager.streamingDisplays = [fakeDisplay(display, index: 0, id: 2)]
+        manager.streamingSettle = (twoSideBySide, Date().addingTimeInterval(5))
+        manager.streamingArrangement = twoSideBySide
+        manager.virtualAnchorArrangements["tv"] = twoSideBySide
+        let undo = manager.keepUserMode(mode, for: 2)
+        XCTAssertTrue(manager.streamingSettle?.arrangement.modes[2] === mode)
+        XCTAssertTrue(manager.streamingArrangement?.modes[2] === mode)
+        XCTAssertTrue(manager.virtualAnchorArrangements["tv"]?.modes[2] === mode)
+        XCTAssertEqual(manager.streamingDisplays.first?.start, StreamingDisplayModes.Mode(mode))
+        undo()
+        XCTAssertNil(manager.streamingSettle?.arrangement.modes[2])
+        XCTAssertNil(manager.streamingArrangement?.modes[2])
+        XCTAssertNil(manager.virtualAnchorArrangements["tv"]?.modes[2])
+        XCTAssertEqual(manager.streamingDisplays.first?.start, StreamingDisplayModes.start)
     }
 }
 
