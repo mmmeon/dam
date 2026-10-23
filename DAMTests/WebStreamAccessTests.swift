@@ -111,6 +111,54 @@ final class WebStreamAccessTests: XCTestCase {
         XCTAssertNil(other.wait(for: "f", now: start))
     }
 
+    /// Reached again before things have been quiet a while, the cap holds prompts back twice
+    /// as long each time, up to the longest wait; quiet, or a prompt answered, starts it over.
+    func testTheCapHoldsLongerEachTimeDeclinesKeepComing() {
+        let limits = PairingPromptLimits()
+        let start = Date()
+        var next = 0
+        func declineThree(at seconds: TimeInterval) {
+            for i in 0..<3 {
+                next += 1
+                limits.ended("a\(next)", declined: true, now: start.addingTimeInterval(seconds + Double(i)))
+            }
+        }
+        func wait(at seconds: TimeInterval) -> TimeInterval? { limits.wait(for: "new", now: start.addingTimeInterval(seconds)) }
+        declineThree(at: 0)
+        XCTAssertEqual(wait(at: 10), 50, "until the first is a minute old")
+        XCTAssertNil(wait(at: 60))
+        declineThree(at: 60)
+        XCTAssertEqual(wait(at: 70), 110, "two minutes from the first")
+        declineThree(at: 180)
+        XCTAssertEqual(wait(at: 190), 230, "four")
+        for at in stride(from: 420.0, to: 2000, by: 600) { declineThree(at: at) }
+        XCTAssertEqual(wait(at: 1630), PairingPromptLimits.longestWait - 10, "no longer than the longest wait")
+        // Quiet for long enough, it starts over.
+        let quiet: TimeInterval = 1622 + 2 * PairingPromptLimits.longestWait
+        XCTAssertNil(wait(at: quiet))
+        declineThree(at: quiet)
+        XCTAssertEqual(wait(at: quiet + 10), 50)
+        // As it does once a prompt is answered.
+        declineThree(at: quiet + 60)
+        limits.ended("someone", declined: false, now: start.addingTimeInterval(quiet + 100))
+        XCTAssertEqual(wait(at: quiet + 100), 80, "the hold it is in stays")
+        declineThree(at: quiet + 200)
+        XCTAssertEqual(wait(at: quiet + 210), 50)
+    }
+
+    /// An IPv6 host can move around in its /64, so a decline holds back the whole /64.
+    func testAnIPv6AddressIsHeldBackByItsWhole64() {
+        let limits = PairingPromptLimits()
+        let start = Date()
+        limits.ended("2001:db8:1:2::5", declined: true, now: start)
+        XCTAssertNotNil(limits.wait(for: "2001:db8:1:2:abcd:ef::9", now: start.addingTimeInterval(1)))
+        XCTAssertNil(limits.wait(for: "2001:db8:1:3::5", now: start.addingTimeInterval(1)))
+        limits.ended("10.0.0.5", declined: true, now: start)
+        XCTAssertNotNil(limits.wait(for: "10.0.0.5", now: start.addingTimeInterval(1)))
+        XCTAssertNil(limits.wait(for: "10.0.0.6", now: start.addingTimeInterval(1)), "IPv4 by the address")
+        XCTAssertEqual(PairingPromptLimits.key("2001:db8:1:2::5"), PairingPromptLimits.key("2001:0db8:0001:0002:ffff::1"))
+    }
+
     func testAQRKeyWorksOnceAndNotForLong() {
         let pairing = WebStreamPairing()
         let start = Date()

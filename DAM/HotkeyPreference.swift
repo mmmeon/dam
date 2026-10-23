@@ -143,7 +143,28 @@ struct HotkeyPreference: Codable, Equatable {
         }
     }
 
+    /// The shortcut in words, for VoiceOver, which reads the symbols as symbols: e.g.
+    /// "Control Option Command B", "Command Left Arrow".
+    var spokenString: String {
+        var words: [String] = []
+        if modifiers & UInt32(controlKey) != 0 { words.append("Control") }
+        if modifiers & UInt32(optionKey)  != 0 { words.append("Option") }
+        if modifiers & UInt32(shiftKey)   != 0 { words.append("Shift") }
+        if modifiers & UInt32(cmdKey)     != 0 { words.append("Command") }
+        words.append(Self.spokenKeyNames[Int(keyCode)] ?? keyString)
+        return words.joined(separator: " ")
+    }
+
     private var fallbackKeyName: String { "(\(keyCode))" }
+
+    /// The keys `specialKeyNames` shows as symbols, in words. F-keys and Space read as shown.
+    private static let spokenKeyNames: [Int: String] = [
+        kVK_Return: "Return", kVK_ANSI_KeypadEnter: "Enter", kVK_Tab: "Tab",
+        kVK_Delete: "Delete", kVK_ForwardDelete: "Forward Delete", kVK_Escape: "Escape",
+        kVK_Home: "Home", kVK_End: "End", kVK_PageUp: "Page Up", kVK_PageDown: "Page Down",
+        kVK_LeftArrow: "Left Arrow", kVK_RightArrow: "Right Arrow", kVK_UpArrow: "Up Arrow",
+        kVK_DownArrow: "Down Arrow", kVK_ANSI_KeypadClear: "Clear",
+    ]
 
     /// Keys named the way macOS's menus show them, whatever the layout.
     private static let specialKeyNames: [Int: String] = {

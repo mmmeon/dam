@@ -242,6 +242,11 @@ final class MoonlightHost {
     /// calls back with whether it could.
     var resizeDisplay: ((_ id: CGDirectDisplayID, _ width: Int, _ height: Int, _ fps: Int,
                          _ done: @escaping (Bool) -> Void) -> Void)?
+    /// Whether another server streams a display too, as the browser stream may one made
+    /// here, which it lists: such a display is neither resized nor removed here.
+    var othersStream: (CGDirectDisplayID) -> Bool = { _ in false }
+    /// Hands a display made here, that no device needs now, to the other server streaming it.
+    var handOverDisplay: ((CGDirectDisplayID) -> Void)?
 
     /// Asks the user for the PIN Moonlight shows on the device at `address`. The answer is
     /// nil when they decline. `isCurrent` says whether the request still waits for its PIN, for
@@ -263,16 +268,19 @@ final class MoonlightHost {
     /// How many connections may be open, and how long each may take to ask, across all ports.
     let limits: MoonlightConnectionLimits
 
-    /// GameStream's ports by default, which Moonlight tries first.
+    /// GameStream's ports by default, which Moonlight tries first. `promptLimits` is shared
+    /// with the browser stream's pairing, so that the two together bring up no more prompts.
     init(httpPort: NWEndpoint.Port = 47989, httpsPort: NWEndpoint.Port = 47984, rtspPort: NWEndpoint.Port = 48010,
          directory: URL = MoonlightHost.defaultDirectory, advertises: Bool = true,
-         limits: MoonlightConnectionLimits = MoonlightConnectionLimits()) {
+         limits: MoonlightConnectionLimits = MoonlightConnectionLimits(),
+         promptLimits: PairingPromptLimits = PairingPromptLimits()) {
         self.httpPort = httpPort
         self.httpsPort = httpsPort
         self.rtspPort = rtspPort
         self.directory = directory
         self.advertises = advertises
         self.limits = limits
+        self.promptLimits = promptLimits
         http = MoonlightHTTPConnections(limits: limits)
         rtsps = (0..<Self.maxSessions).map { _ in MoonlightRTSP(limits: limits) }
         http.onRequest = { [weak self] head, connection, secure in self?.answer(head, on: connection, secure: secure) }
@@ -290,9 +298,16 @@ final class MoonlightHost {
     /// The HTTP and HTTPS connections being served.
     private let http: MoonlightHTTPConnections
     private var pairing: MoonlightPairing?
+    /// Where the pairing in progress was asked from, which alone may take its next steps.
     private var pairingAddress = ""
+    /// When it was asked for, or its PIN typed; another device may begin once that is
+    /// `pairingTimeout` ago.
+    private var pairingStarted = Date.distantPast
+    /// How long a pairing holds others off once its PIN is typed: Moonlight takes the steps
+    /// after it within a second or two.
+    static let pairingTimeout: TimeInterval = 60
     /// How often the PIN prompt may come up.
-    let promptLimits = PairingPromptLimits()
+    let promptLimits: PairingPromptLimits
     /// The first pairing request, answered once the user has typed the PIN.
     private var waitingForPIN: NWConnection?
     /// One handshake server per session, each on a port of its own: RTSP carries no token
@@ -546,8 +561,9 @@ final class MoonlightHost {
         case "/pair":
             handlePair(request.query, on: connection)
         case "/unpair" where !secure:
-            // Moonlight sends this when pairing fails on its side, a wrong PIN among others.
-            pairing = nil
+            // Moonlight sends this when pairing fails on its side, a wrong PIN among others;
+            // only from the device pairing does it end the pairing.
+            if Self.address(connection.endpoint) == pairingAddress { pairing = nil }
             reply(Self.xml([:]), to: connection)
         case "/applist" where secure:
             reply(appList(), to: connection)
@@ -564,9 +580,15 @@ final class MoonlightHost {
     }
 
     private func handlePair(_ query: [String: String], on connection: NWConnection) {
+        // The steps after the first come only from where pairing was asked: anyone else's
+        // is refused without ending it.
+        let fromPairer = Self.address(connection.endpoint) == pairingAddress
         do {
             if query["phrase"] == "getservercert" {
                 try beginPairing(query, on: connection)
+            } else if !fromPairer {
+                mlLog.debug("pairing step refused: \(Self.address(connection.endpoint), privacy: .public) is not pairing")
+                reply(Self.xml(status: 400, message: "Not pairing", fields: ["paired": "0"]), to: connection)
             } else if let challenge = query["clientchallenge"].flatMap(MoonlightCrypto.data(hex:)) {
                 let response = try currentPairing().respond(toClientChallenge: challenge)
                 reply(Self.xml(["paired": "1", "challengeresponse": MoonlightCrypto.hex(response)]), to: connection)
@@ -585,7 +607,7 @@ final class MoonlightHost {
             }
         } catch {
             mlLog.error("pair: \(String(describing: error), privacy: .public)")
-            pairing = nil
+            if fromPairer { pairing = nil }
             reply(Self.xml(status: 400, message: "Pairing failed", fields: ["paired": "0"]), to: connection)
         }
     }
@@ -633,7 +655,7 @@ final class MoonlightHost {
             // Hosting stopped, or the device was unpaired, while a display was made for it.
             guard self.isRunning, self.client(for: certificate) != nil else {
                 if launch.ownsDisplay, !self.sessions.contains(where: { $0.launch.displayID == launch.displayID }) {
-                    self.removeDisplay?(launch.displayID)
+                    self.release(display: launch.displayID)
                 }
                 return self.reply(Self.xml(status: 503, message: "\(AppIdentity.name) is not hosting."), to: connection)
             }
@@ -655,7 +677,7 @@ final class MoonlightHost {
                 // Another device may have taken the last session while a display was made.
                 let taken = Set(self.sessions.map(\.launch.slot))
                 guard let slot = (0..<Self.maxSessions).first(where: { !taken.contains($0) }) else {
-                    if launch.ownsDisplay { self.removeDisplay?(launch.displayID) }
+                    if launch.ownsDisplay { self.release(display: launch.displayID) }
                     return self.reply(Self.xml(status: 503, message: "\(AppIdentity.name) is already streaming to \(Self.maxSessions) devices."),
                                       to: connection)
                 }
@@ -705,8 +727,9 @@ final class MoonlightHost {
             answer(MoonlightLaunch(appID: appID, displayID: current.displayID, key: key, keyID: keyID,
                                    ownsDisplay: session.launch.ownsDisplay))
         }
-        // A display another device is streaming keeps its size.
+        // A display another device is streaming keeps its size, a browser among them.
         let shared = sessions.contains { $0.certificate != certificate && $0.launch.displayID == current.displayID }
+            || othersStream(current.displayID)
         guard current.ownsDisplay, !shared, let (width, height, fps) = size, let resizeDisplay else { return reuse() }
         // Not captured while it changes size.
         endStream(of: certificate)
@@ -726,7 +749,22 @@ final class MoonlightHost {
     /// there, as made for the first device streaming it: it goes once no device streams it.
     func adopt(display id: CGDirectDisplayID) {
         guard !sessions.contains(where: { $0.launch.displayID == id && $0.launch.ownsDisplay }) else { return }
-        sessions.first { $0.launch.displayID == id }?.launch.ownsDisplay = true
+        if let heir = sessions.first(where: { $0.launch.displayID == id }) {
+            heir.launch.ownsDisplay = true
+        } else {
+            // No device streams it any longer, after all.
+            release(display: id)
+        }
+    }
+
+    /// The streaming display `id` is gone, however it went: a launch streaming it no longer
+    /// has it, so its ID, which a later display may take, is neither removed nor resized
+    /// later, and a resume makes a display again.
+    func displayGone(_ id: CGDirectDisplayID) {
+        for session in sessions where session.launch.displayID == id {
+            session.launch.displayID = kCGNullDirectDisplay
+            session.launch.ownsDisplay = false
+        }
     }
 
     /// Ends a device's launch: its stream, and the display made for it, unless another
@@ -739,13 +777,25 @@ final class MoonlightHost {
     }
 
     /// Lets go of the display `launch` was made for, as `session` no longer streams it:
-    /// another device streaming it has it next, or it is removed.
+    /// another device streaming it has it next, or the other server streaming it, or it is
+    /// removed.
     private func letGo(of launch: MoonlightLaunch, by session: Session) {
         guard launch.ownsDisplay else { return }
         if let heir = sessions.first(where: { $0 !== session && $0.launch.displayID == launch.displayID }) {
             heir.launch.ownsDisplay = true
         } else {
-            removeDisplay?(launch.displayID)
+            release(display: launch.displayID)
+        }
+    }
+
+    /// A display made here that no device streams goes to the other server streaming it,
+    /// which has it next, or is removed.
+    private func release(display id: CGDirectDisplayID) {
+        if othersStream(id) {
+            mlLog.debug("handing display \(id) over to its other stream")
+            handOverDisplay?(id)
+        } else {
+            removeDisplay?(id)
         }
     }
 
@@ -790,7 +840,11 @@ final class MoonlightHost {
     /// Starts pairing and asks the user for the PIN; the request is answered once they have.
     private func beginPairing(_ query: [String: String], on connection: NWConnection) throws {
         guard let identity else { throw MoonlightPairing.Failure.outOfOrder }
-        guard waitingForPIN == nil else {
+        let address = Self.address(connection.endpoint)
+        // Nor while another device takes the steps after its PIN.
+        let othersPairing = pairing != nil && address != pairingAddress
+            && Date().timeIntervalSince(pairingStarted) < Self.pairingTimeout
+        guard waitingForPIN == nil, !othersPairing else {
             return reply(Self.xml(status: 409, message: "Already pairing", fields: ["paired": "0"]), to: connection)
         }
         guard Self.allowsPairing else {
@@ -798,7 +852,6 @@ final class MoonlightHost {
             return reply(Self.xml(status: 403, message: "\(AppIdentity.name) is not accepting new devices",
                                   fields: ["paired": "0"]), to: connection)
         }
-        let address = Self.address(connection.endpoint)
         if let wait = promptLimits.wait(for: address) {
             mlLog.debug("pairing refused: \(address, privacy: .public) asked again too soon")
             return reply(Self.xml(status: 503, message: "Try pairing again in \(Int(wait)) seconds",
@@ -812,6 +865,7 @@ final class MoonlightHost {
                                            serverCertificate: identity.certificate, serverKey: identity.key)
         pairing = session
         pairingAddress = address
+        pairingStarted = Date()
         waitingForPIN = connection
         watchForHangUp(connection)
         mlLog.debug("pairing requested from \(address, privacy: .public)")
@@ -826,6 +880,7 @@ final class MoonlightHost {
                 return self.reply(Self.xml(["paired": "0"]), to: connection)
             }
             session.enterPIN(digits)
+            self.pairingStarted = Date()
             self.reply(Self.xml(["paired": "1",
                                  "plaincert": MoonlightCrypto.hex(Data(MoonlightCrypto.pem(certificate: identity.certificate).utf8))]),
                        to: connection)
@@ -1157,31 +1212,34 @@ final class MoonlightConnectionLimits {
     }
 }
 
-/// How often both of DAM's servers, the host's and the browser stream's, put a pairing prompt
-/// on the Mac's screen, so that no one in reach can bring it back after every Cancel: after a
-/// prompt from an address came to nothing (declined, or given up by the device), none from it
-/// for `firstWait`, doubling with each more up to `longestWait`; and at most `maxUnpairedPerMinute`
-/// prompts a minute that came to nothing, from any address. A prompt answered counts against
-/// neither. Used on the main queue.
+/// How often DAM's two servers, the host's and the browser stream's, which share one, put a
+/// pairing prompt on the Mac's screen, so that no one in reach can bring it back after every
+/// Cancel. After a prompt from an address came to nothing (declined, or given up by the
+/// device), none from it for `firstWait`, doubling with each more up to `longestWait`; an
+/// IPv6 address counts as its whole /64, which one host can move around in. And from any
+/// address, at most `maxUnpairedPerMinute` prompts that came to nothing a minute: once that
+/// many have, none until the first of them is a minute old, and each time it happens again
+/// before things have been quiet for `2 × longestWait`, twice as long, up to `longestWait`.
+/// A prompt answered lets its address off, and the cap's doubling. Used on the main queue.
 final class PairingPromptLimits {
     static let firstWait: TimeInterval = 30
     static let longestWait: TimeInterval = 600
     static let maxUnpairedPerMinute = 3
 
-    /// When prompts came to nothing, over the last minute.
+    /// When prompts came to nothing, over the last minute, since the cap was last reached.
     private var unpaired: [Date] = []
     /// Each address's prompts that came to nothing in a row, and when the last did.
     private var declines: [String: (count: Int, last: Date)] = [:]
+    /// How often in a row the cap was reached, and until when it holds prompts back.
+    private var capped = (count: 0, until: Date.distantPast)
+    /// When a prompt last came to nothing.
+    private var lastUnpaired = Date.distantPast
 
     /// Seconds until a prompt for `address` may be shown; nil when it may be now.
     func wait(for address: String, now: Date = Date()) -> TimeInterval? {
-        unpaired.removeAll { now.timeIntervalSince($0) >= 60 }
-        declines = declines.filter { now.timeIntervalSince($0.value.last) < 2 * Self.longestWait }
-        var wait: TimeInterval = 0
-        if unpaired.count >= Self.maxUnpairedPerMinute, let first = unpaired.first {
-            wait = 60 - now.timeIntervalSince(first)
-        }
-        if let declined = declines[address] {
+        forgetOld(now: now)
+        var wait = capped.until.timeIntervalSince(now)
+        if let declined = declines[Self.key(address)] {
             let backOff = min(Self.firstWait * pow(2, Double(declined.count - 1)), Self.longestWait)
             wait = max(wait, backOff - now.timeIntervalSince(declined.last))
         }
@@ -1190,12 +1248,34 @@ final class PairingPromptLimits {
 
     /// A prompt for `address` ended: answered, or come to nothing.
     func ended(_ address: String, declined: Bool, now: Date = Date()) {
+        let key = Self.key(address)
         guard declined else {
-            declines[address] = nil
+            declines[key] = nil
+            capped.count = 0
             return
         }
+        forgetOld(now: now)
         unpaired.append(now)
-        declines[address] = ((declines[address]?.count ?? 0) + 1, now)
+        lastUnpaired = now
+        declines[key] = ((declines[key]?.count ?? 0) + 1, now)
+        if unpaired.count >= Self.maxUnpairedPerMinute, let first = unpaired.first {
+            capped.count += 1
+            let hold = min(60 * pow(2, Double(capped.count - 1)), Self.longestWait)
+            capped.until = max(capped.until, first.addingTimeInterval(hold))
+            unpaired = []
+        }
+    }
+
+    private func forgetOld(now: Date) {
+        unpaired.removeAll { now.timeIntervalSince($0) >= 60 }
+        declines = declines.filter { now.timeIntervalSince($0.value.last) < 2 * Self.longestWait }
+        if now.timeIntervalSince(lastUnpaired) >= 2 * Self.longestWait { capped.count = 0 }
+    }
+
+    /// What an address is kept by: itself, or an IPv6 address's /64.
+    static func key(_ address: String) -> String {
+        guard !address.contains("."), let v6 = IPv6Address(address) else { return address }
+        return v6.rawValue.prefix(8).map { String(format: "%02x", $0) }.joined() + "/64"
     }
 }
 

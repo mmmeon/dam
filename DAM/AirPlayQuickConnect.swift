@@ -7,7 +7,8 @@
 //  pressed once the cancel window after the HUD settles has passed, and
 //  "Connecting to…" is announced once the panel closed again. An iPad is connected
 //  over Sidecar once the cancel window has passed. Pressing any key or the Touch Bar
-//  Cancel button before then cancels (and closes the panel).
+//  Cancel button, or closing its Touch Bar with the system's close box, before then
+//  cancels (and closes the panel).
 //
 
 import AppKit
@@ -115,6 +116,7 @@ final class AirPlayQuickConnect: NSObject {
     // Touch Bar
     private var touchBar: NSTouchBar?
     private var touchBarDisplays: [ConnectTarget] = []
+    private let barWatch = ModalBarWatch()
 
     private override init() { super.init() }
 
@@ -329,6 +331,7 @@ final class AirPlayQuickConnect: NSObject {
         bar.defaultItemIdentifiers = ids
         touchBar = bar
         NSTouchBar.presentSystemModal(bar)
+        watchTouchBar()
     }
 
     private func showConfirmingTouchBar(display: ConnectTarget) {
@@ -340,9 +343,19 @@ final class AirPlayQuickConnect: NSObject {
         bar.defaultItemIdentifiers = [.qcStatus, .flexibleSpace, .qcCancel]
         touchBar = bar
         NSTouchBar.presentSystemModal(bar)
+        watchTouchBar()
+    }
+
+    /// Cancels once the bar goes without being dismissed here, as by the system's close box,
+    /// so a display isn't connected after the user closed it.
+    private func watchTouchBar() {
+        barWatch.start(showing: { [weak self] in self?.touchBar?.isVisible == true }) { [weak self] state in
+            if state == .closed { self?.cancel() }
+        }
     }
 
     private func dismissTouchBar() {
+        barWatch.stop()
         if let bar = touchBar {
             NSTouchBar.dismissSystemModal(bar)
             touchBar = nil

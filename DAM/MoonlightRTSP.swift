@@ -18,7 +18,8 @@ private let rtLog = Logger(subsystem: AppIdentity.bundleID, category: "Moonlight
 /// An app launched from Moonlight, from /launch or /resume until /cancel.
 struct MoonlightLaunch {
     let appID: Int
-    let displayID: CGDirectDisplayID
+    /// The display it streams; none once that display has gone (`MoonlightHost.displayGone`).
+    var displayID: CGDirectDisplayID
     /// The session's AES key, from the launch request.
     let key: Data
     /// What the audio's IVs count from (rikeyid, sent signed).

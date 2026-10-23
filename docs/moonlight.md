@@ -70,16 +70,28 @@ Who may watch (`WebStreamAccess`):
   open to anyone in reach.
 - **Pairing.** A browser without a link asks to pair: the page shows a four-digit code,
   and DAM asks the user to type it. Right, the browser gets an HttpOnly cookie
-  (`dam_watch`, a year; Secure when paired over HTTPS). One code at a time, five minutes
-  each; a wrong code ends it. Pair with a QR Code… shows a code a phone scans instead:
-  a key in the address that works once, for five minutes. "Allow new browsers to pair"
-  turns both off.
+  (`dam_watch`, a year; `__Secure-dam_watch`, Secure, when paired over HTTPS). One code
+  at a time, five minutes each; a wrong code ends it. Pair with a QR Code… shows a code a
+  phone scans instead: a key in the address that works once, for five minutes. "Allow new
+  browsers to pair" turns both off. The prompt is held back as Moonlight's PIN prompt is,
+  by the same limits (see Discovery and pairing).
+  - A browser paired over HTTPS before HTTPS's cookie had a name of its own has a Secure
+    `dam_watch`, which keeps HTTP's cookie from being set, so pairing over HTTP went round
+    and round. Its next `/apps.json` over HTTPS gives it `__Secure-dam_watch` and ends the
+    old one. A cookie set over HTTP, which the browser sends over HTTPS too, ends the same
+    way, so such a browser pairs over HTTP once more.
+  - The page pairs again only once: turned away right after "paired", it says the browser
+    kept no cookie, rather than bring the prompt back round after round.
 - **Host check.** Against DNS rebinding, pairing and the cookie work only when the Host
-  header names the Mac: an address, the Mac's own names, a single-label name or one under
-  a local network's suffix (`.local`, `.lan`, `.home.arpa`…), an imported certificate's
-  names, or one listed under Settings › Browser Stream › Also Reachable As (a subdomain
-  of the user's own domain, say; matched exactly, no wildcards). Anything else gets a 403
-  for pairing and a 401 for the cookie. A link's token works by any name.
+  header names the Mac: an IP address; `localhost`; the Mac's Bonjour name alone or under
+  a local network's suffix (`slab`, `slab.local`, `slab.lan`, `slab.home.arpa`…); a name
+  the HTTPS certificate is for (DAM's own: the host name too; an imported one's, wildcards
+  by one label); or one listed under Settings › Browser Stream › Also Reachable As (a
+  subdomain of the user's own domain, say; matched exactly, no wildcards). Any other name
+  is refused, a local-looking one too: a host on the network can answer mDNS for
+  `evil.local` itself. Anything else gets a 403 for pairing and a 401 for the cookie. A
+  link's token works by any name, and is looked at first. Nothing in the check waits on
+  DNS: the certificate's names are those it was made with at start.
 - **Reach.** This Mac Only, This Mac's Networks (the default: loopback, link-local, or a
   subnet of the Mac's interfaces), or Anywhere. Out of reach gets a 403 for everything.
 - **HTTPS.** DAM makes a certificate authority of its own (20 years) and a server
@@ -114,6 +126,11 @@ Stream, which also has its own Show the Pointer. Each client can override profil
 bitrate, frame rate and size in the query string, and turn on low-latency encoding with
 `lowlatency=1`.
 
+A display made for browsers stands the way the viewer's screen does (`orientation=`), and
+is turned when the screen turns, unless Moonlight or another device's viewer here watches
+it too, which keeps its size. One made, or handed over by Moonlight, goes once no viewer
+needs it, however its last request ended.
+
 ## How it works
 
 A Moonlight session goes from discovery to UDP streams in eight steps. The browser
@@ -147,6 +164,17 @@ flowchart LR
 - HTTP, HTTPS and RTSP together take at most 64 connections at once, 16 from one
   address (`MoonlightConnectionLimits`). One whose request hasn't all come within 10 s
   is closed; answering may take longer, as while the user types a PIN.
+- One device pairs at a time. The steps after the first are answered only from the
+  address that asked; anyone else's, `/unpair` too, gets a 400 and leaves the pairing as
+  it was. Another device may begin only once the pairing ends, or 60 s after its PIN was
+  typed.
+- The PIN prompt, and the browser stream's code prompt, are held back together
+  (`PairingPromptLimits`, one for both servers). After a prompt from an address comes to
+  nothing (Cancel, or the device giving up), none from it for 30 s, doubling each time
+  to 10 minutes; an IPv6 address counts as its whole /64. From anywhere, three that come
+  to nothing hold every prompt back until the first is a minute old, and each time that
+  happens again before 20 quiet minutes, twice as long, up to 10 minutes. A prompt
+  answered lets its address off, and starts the doubling over.
 
 ### Several devices
 
@@ -164,6 +192,13 @@ once (`MoonlightHost.maxSessions`). A fifth gets a 503.
   sound included; one that joins gets the last picture at once.
 - A display made for one device that another device streams too stays until both are
   done.
+- Moonlight's displays and the browser stream's are listed to both, so either may stream
+  the other's. One the other streams is neither resized nor removed: a resume keeps its
+  size, and once the last device here is done it is handed over (`othersStream`,
+  `handOverDisplay`, `adopt(display:)`), to go when the other is done with it.
+- A display that goes on its own (`VideoManager.onStreamingDisplayGone`) is forgotten by
+  the launch streaming it, so its ID, which a later display may take, is neither removed
+  nor resized for it; a resume makes a display again.
 - The menu lists the devices streaming, each with End Stream.
 - On the test Mac (Intel Iris Plus 650), three 1080p60 encoders at once kept their
   frames within 25 ms (p90); with four, the slowest tenth took 43–83 ms.
@@ -190,6 +225,9 @@ once (`MoonlightHost.maxSessions`). A fifth gets a 503.
 - Video and audio go wherever the ping with the launch's payload last came from. A bare
   "PING", from clients without the payload, counts only from the launching address.
 - Control runs on UDP 47999 over vendored ENet 1.3.18, with AES-128-GCM messages.
+  A CONNECT without the launch's token is dropped unanswered before ENet gives it a peer
+  (`intercept`), so forged ones can't fill the 32 peers or use up the two one address may
+  hold; a second device with the token is connected and then turned away.
   Keyframe requests, reference-frame invalidation, frame FEC status, input and
   termination are handled; the rest (pings, loss stats) are dropped.
 
@@ -244,9 +282,16 @@ them as HID events, one injector per stream:
 `MoonlightFEC` → UDP 47998:
 
 - **Capture:** ScreenCaptureKit captures in 4:2:0 at the stream's size and rate, with a
-  queue depth of 6, shared between streams that want the same.
+  queue depth of 6, shared between streams that want the same. A frame that comes less
+  than 0.75 frame times after the last one handed on (a display faster than the stream)
+  is held, and goes 0.75 frame times after that one unless a newer goes first, so a
+  screen that goes still just after a change still sends the change (`FramePacer`).
 - **Encoding:** VideoToolbox hardware H.264 (High profile, CABAC, real time, no frame
-  reordering, keyframes only on request), or HEVC Main when the client chose it.
+  reordering, keyframes only on request), or HEVC Main when the client chose it. No more
+  than 1.5 times the bitrate goes over any quarter second; where that is more than the
+  packets can carry in one frame (4 × 1023 packets: about 120 Mbit/s at 1392-byte packets,
+  88 at 1024), the window is shortened to keep the frame within 90% of it, so a keyframe
+  asked for again is not made too large again.
 - **Codecs:** what differs between codecs is in `VideoCodec` (MoonlightVideoEncoder.swift):
   the encoder's type and profile, how NAL units name their type, the order of the
   parameter sets (HEVC: VPS, SPS, PPS, which Moonlight requires at each keyframe), and

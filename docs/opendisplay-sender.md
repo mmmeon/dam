@@ -14,7 +14,9 @@ to it (decided 2026-10-20: DAM always sends).
 
 - **Finding:** Bonjour `_opensidecar._tcp` (TXT `id`, `pv`) over Wi-Fi, and usbmuxd's
   attached devices for a cable. A cabled device is known by its UDID until its first `hello`
-  gives the receiver's ID, which is then remembered for it.
+  gives the receiver's ID, which is then remembered for it. Over a cable the UDID is what
+  counts: a receiver installed again says a new ID, which then keys it. Only over Wi-Fi does
+  a hello with another ID than the one dialed mean another receiver, which is let go.
 - **Dialing:** every second for each receiver turned on and found, by cable when there is
   one (a cable plugged in mid-session takes the stream over); Wi-Fi for 30 s after a cable
   fails twice. A dial gets 5 s (one to a withdrawn Bonjour name never ends of itself).

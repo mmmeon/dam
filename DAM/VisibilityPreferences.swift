@@ -80,6 +80,15 @@ enum VisibilityPreferences {
         set { setNames(newValue, audioSeenKey) }
     }
 
+    private static let audioOldRuleKey = "\(AppIdentity.shortID).hidden.audio.oldVirtualRule"
+
+    /// The audio devices still to be checked for having been hidden by the old virtual rule
+    /// (see `AudioManager.undoOldVirtualRule`), or nil before the list was first made.
+    static var audioHiddenByOldRule: Set<String>? {
+        get { UserDefaults.dam.stringArray(forKey: audioOldRuleKey).map(Set.init) }
+        set { UserDefaults.dam.set(newValue.map(Array.init), forKey: audioOldRuleKey) }
+    }
+
     static func isVisible(audioDevice name: String) -> Bool {
         !hiddenAudioDevices.contains(name)
     }
@@ -218,12 +227,12 @@ enum VisibilityPreferences {
     }
 
     /// Whether the app launches at login, as SMAppService has it; UserDefaults is not used.
-    /// Also while the login item waits for the user's approval in System Settings, as it is
-    /// registered and launches once approved.
+    /// Not while the login item waits for approval in System Settings: macOS reports a login
+    /// item the user turned off there the same way, and neither launches.
     static var launchAtLogin: Bool { isLaunchAtLogin(SMAppService.mainApp.status) }
 
     static func isLaunchAtLogin(_ status: SMAppService.Status) -> Bool {
-        status == .enabled || status == .requiresApproval
+        status == .enabled
     }
 
     /// Whether the login item is registered but waits for the user's approval.
@@ -370,5 +379,21 @@ enum VisibilityPreferences {
         split.insert(name)
         setNames(split, splitDisplaysKey)
         if !isVisible(display: base) { setVisible(false, display: name) }
+    }
+
+    private static let monitorNamesKey = "\(AppIdentity.shortID).names.displays"
+
+    /// The name each monitor went by when last seen, by `monitorKey`: one of a model DAM
+    /// told apart by " (2)" gets the same again when it comes back, so what is saved under it
+    /// stays its own (see `VideoManager.distinctNames`).
+    static var monitorNames: [String: String] {
+        get { UserDefaults.dam.dictionary(forKey: monitorNamesKey) as? [String: String] ?? [:] }
+        set { UserDefaults.dam.set(newValue, forKey: monitorNamesKey) }
+    }
+
+    /// What a monitor's name is remembered by: its vendor, model and serial number, or nil
+    /// when it reports no serial number, which tells nothing apart.
+    static func monitorKey(vendor: UInt32, model: UInt32, serial: UInt32) -> String? {
+        serial == 0 ? nil : String(format: "%08x-%08x-%08x", vendor, model, serial)
     }
 }

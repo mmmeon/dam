@@ -6,7 +6,7 @@
 //  The owner opens it on the current choice, or on the next one, as set; each further
 //  hotkey press moves on. Pressing a number (or tapping a choice on the Touch Bar) picks
 //  that choice, Return picks the tinted one, and pausing for the set delay picks it too.
-//  Esc cancels.
+//  Esc cancels, as does closing its Touch Bar with the system's close box.
 //
 
 import AppKit
@@ -40,6 +40,14 @@ final class ChoicePicker: NSObject {
     /// then pick the first choice, for a press meant only to see what is current.
     static func pausePicksStart(current: Int?) -> Bool {
         current != nil || !VisibilityPreferences.pickerStartsOnCurrent
+    }
+
+    /// Where a hotkey press moves the cursor from `cursor`: to the next choice, wrapping
+    /// round, or, while the pause isn't to pick (opened on the first with none current, and
+    /// not moved since), onto the choice it shows, so the first press doesn't skip it.
+    static func cursor(advancingFrom cursor: Int, count: Int, pausePicks: Bool) -> Int {
+        guard count > 0 else { return 0 }
+        return pausePicks ? (cursor + 1) % count : cursor
     }
 
     /// The display under the pointer, for a picker that changes it; nil when there is none,
@@ -77,6 +85,9 @@ final class ChoicePicker: NSObject {
     private var touchBar: NSTouchBar?
     /// The choice buttons by index, as the Touch Bar creates them.
     private var touchBarButtons: [Int: NSButton] = [:]
+    /// Cancels the picker once its bar goes without its being dismissed here, as by the
+    /// system's close box, so the pause doesn't pick after the user closed it.
+    private let barWatch = ModalBarWatch()
     private var pickTimer: Timer?
     private var localMonitor: Any?
     private var globalMonitor: Any?
@@ -135,7 +146,7 @@ final class ChoicePicker: NSObject {
             close()
             return false
         }
-        move(to: (cursor + 1) % choices.count)
+        move(to: Self.cursor(advancingFrom: cursor, count: choices.count, pausePicks: pausePicks))
         return true
     }
 
@@ -228,6 +239,9 @@ final class ChoicePicker: NSObject {
         bar.defaultItemIdentifiers = choices.indices.map { choiceID($0) } + [.flexibleSpace, cancelID]
         touchBar = bar
         NSTouchBar.presentSystemModal(bar, for: ControlStripPresenter.stripID)
+        barWatch.start(showing: { [weak self] in self?.touchBar?.isVisible == true }) { [weak self] state in
+            if state == .closed { self?.close() }
+        }
     }
 
     private func updateTouchBar() {
@@ -237,6 +251,7 @@ final class ChoicePicker: NSObject {
     }
 
     private func dismissTouchBar() {
+        barWatch.stop()
         if let bar = touchBar { NSTouchBar.dismissSystemModal(bar) }
         touchBar = nil
         touchBarButtons = [:]

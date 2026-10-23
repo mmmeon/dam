@@ -9,6 +9,7 @@ final class AudioManagerFilterTests: XCTestCase {
     private let speechUIDKey  = "\(AppIdentity.shortID).behaviour.speechOutputUID"
     private let speechNameKey = "\(AppIdentity.shortID).behaviour.speechOutputName"
     private let autoHideKey   = "\(AppIdentity.shortID).behaviour.autoHideVirtualAudio"
+    private let oldRuleKey    = "\(AppIdentity.shortID).hidden.audio.oldVirtualRule"
 
     // The host app also writes preferences (seen audio devices, for one), so start each
     // test from a clean slate as well as cleaning up after it.
@@ -23,7 +24,7 @@ final class AudioManagerFilterTests: XCTestCase {
     }
 
     private func clearPreferences() {
-        [audioKey, audioSeenKey, speechUIDKey, speechNameKey, autoHideKey].forEach { UserDefaults.dam.removeObject(forKey: $0) }
+        [audioKey, audioSeenKey, speechUIDKey, speechNameKey, autoHideKey, oldRuleKey].forEach { UserDefaults.dam.removeObject(forKey: $0) }
     }
 
     // Convenience factory — AudioDeviceID is UInt32; use arbitrary values for tests.
@@ -142,6 +143,73 @@ final class AudioManagerFilterTests: XCTestCase {
             XCTAssertFalse(AudioManager.isVirtual(transport: transport), "\(transport)")
         }
         XCTAssertFalse(AudioManager.isVirtual(transport: nil))
+    }
+
+    // MARK: - AudioManager.undoOldVirtualRule
+
+    func testOldRuleHid_everyReadableTransportButTheHardwareItListed() {
+        for transport in [kAudioDeviceTransportTypePCI, kAudioDeviceTransportTypeAVB,
+                          kAudioDeviceTransportTypeUnknown, kAudioDeviceTransportTypeVirtual] {
+            XCTAssertTrue(AudioManager.oldRuleHid(transport: transport), "\(transport)")
+        }
+        for transport in [kAudioDeviceTransportTypeBuiltIn, kAudioDeviceTransportTypeUSB,
+                          kAudioDeviceTransportTypeBluetooth, kAudioDeviceTransportTypeHDMI,
+                          kAudioDeviceTransportTypeAirPlay, kAudioDeviceTransportTypeThunderbolt] {
+            XCTAssertFalse(AudioManager.oldRuleHid(transport: transport), "\(transport)")
+        }
+        XCTAssertFalse(AudioManager.oldRuleHid(transport: nil), "an unreadable one was shown")
+    }
+
+    /// Hidden before, a PCI or AVB output shows again; a virtual one, or a USB one (which the
+    /// old rule didn't hide, so the user did), stays hidden.
+    func testUndoOldVirtualRule_showsOnlyWhatTheOldRuleAloneHid() {
+        let names = ["PCI Card", "AVB Box", "BlackHole", "USB DAC"]
+        VisibilityPreferences.seenAudioDevices = Set(names)
+        VisibilityPreferences.hiddenAudioDevices = Set(names)
+        let transports: [AudioDeviceID: UInt32] = [
+            1: kAudioDeviceTransportTypePCI, 2: kAudioDeviceTransportTypeAVB,
+            3: kAudioDeviceTransportTypeVirtual, 4: kAudioDeviceTransportTypeUSB,
+        ]
+        let devices = names.enumerated().map { device($0.element, id: AudioDeviceID($0.offset + 1)) }
+        AudioManager.undoOldVirtualRule(devices) { transports[$0] }
+        XCTAssertEqual(VisibilityPreferences.hiddenAudioDevices, ["BlackHole", "USB DAC"])
+        XCTAssertEqual(VisibilityPreferences.audioHiddenByOldRule, [])
+    }
+
+    /// Once only: hidden again by the user afterwards, a device stays hidden.
+    func testUndoOldVirtualRule_onceOnly() {
+        VisibilityPreferences.seenAudioDevices = ["PCI Card"]
+        VisibilityPreferences.hiddenAudioDevices = ["PCI Card"]
+        let pci = [device("PCI Card", id: 1)]
+        AudioManager.undoOldVirtualRule(pci) { _ in kAudioDeviceTransportTypePCI }
+        XCTAssertEqual(VisibilityPreferences.hiddenAudioDevices, [])
+        VisibilityPreferences.setVisible(false, audioDevice: "PCI Card")
+        AudioManager.undoOldVirtualRule(pci) { _ in kAudioDeviceTransportTypePCI }
+        XCTAssertEqual(VisibilityPreferences.hiddenAudioDevices, ["PCI Card"])
+    }
+
+    /// A device not connected when it first runs is checked when it next is; one hidden after
+    /// that is the user's.
+    func testUndoOldVirtualRule_checksADeviceWhenItComes() {
+        VisibilityPreferences.seenAudioDevices = ["AVB Box"]
+        VisibilityPreferences.hiddenAudioDevices = ["AVB Box"]
+        AudioManager.undoOldVirtualRule([]) { _ in nil }
+        XCTAssertEqual(VisibilityPreferences.audioHiddenByOldRule, ["AVB Box"])
+        VisibilityPreferences.seenAudioDevices.insert("PCI Card")
+        VisibilityPreferences.setVisible(false, audioDevice: "PCI Card")
+        AudioManager.undoOldVirtualRule([device("AVB Box", id: 2), device("PCI Card", id: 1)]) { _ in
+            kAudioDeviceTransportTypeAVB
+        }
+        XCTAssertEqual(VisibilityPreferences.hiddenAudioDevices, ["PCI Card"])
+    }
+
+    /// With hiding new virtual devices off, the old rule hid nothing: all that is hidden is the user's.
+    func testUndoOldVirtualRule_autoHideOff_leavesAllHidden() {
+        VisibilityPreferences.autoHideVirtualAudio = false
+        VisibilityPreferences.seenAudioDevices = ["PCI Card"]
+        VisibilityPreferences.hiddenAudioDevices = ["PCI Card"]
+        AudioManager.undoOldVirtualRule([device("PCI Card")]) { _ in kAudioDeviceTransportTypePCI }
+        XCTAssertEqual(VisibilityPreferences.hiddenAudioDevices, ["PCI Card"])
     }
 
     // MARK: - AudioManager.undoesSwitch
