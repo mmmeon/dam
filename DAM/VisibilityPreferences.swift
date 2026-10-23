@@ -358,4 +358,20 @@ enum VisibilityPreferences {
     static func setVisible(_ visible: Bool, display name: String) {
         setVisible(visible, name, hiddenKey: displayKey)
     }
+
+    private static let splitDisplaysKey = "\(AppIdentity.shortID).split.displays"
+
+    /// Gives `name`, a monitor told apart from another of its model, what was saved under
+    /// `base` while both went by it: whether it is hidden, and its nickname. Once per name,
+    /// so what is changed for it afterwards stays.
+    static func inheritDisplaySettings(from base: String, to name: String) {
+        var split = names(splitDisplaysKey)
+        guard !split.contains(name) else { return }
+        split.insert(name)
+        setNames(split, splitDisplaysKey)
+        if !isVisible(display: base) { setVisible(false, display: name) }
+        if nickname(.display, for: name) == nil, let nickname = nickname(.display, for: base) {
+            setNickname(nickname, .display, for: name)
+        }
+    }
 }

@@ -12,6 +12,8 @@ final class VisibilityPreferencesTests: XCTestCase {
     private let screenKey    = "\(AppIdentity.shortID).behaviour.screenFeedback"
     private let startKey     = "\(AppIdentity.shortID).behaviour.pickerStartsOnCurrent"
     private let delayKey     = "\(AppIdentity.shortID).behaviour.pickDelay"
+    private let splitKey     = "\(AppIdentity.shortID).split.displays"
+    private let nicknameKey  = "\(AppIdentity.shortID).nicknames.displays"
 
     // The host app also writes preferences (seen audio devices, for one), so start each
     // test from a clean slate as well as cleaning up after it.
@@ -27,7 +29,7 @@ final class VisibilityPreferencesTests: XCTestCase {
 
     private func clearPreferences() {
         [audioKey, audioSeenKey, airPlayKey, displayKey, autoConnKey, touchBarKey, screenKey,
-         startKey, delayKey].forEach {
+         startKey, delayKey, splitKey, nicknameKey].forEach {
             UserDefaults.dam.removeObject(forKey: $0)
         }
     }
@@ -271,5 +273,40 @@ final class VisibilityPreferencesTests: XCTestCase {
             entry.set(true)
             XCTAssertTrue(entry.get(), entry.key)
         }
+    }
+
+    // MARK: - Launch at login
+
+    func testLaunchAtLogin_includesWaitingForApproval() {
+        XCTAssertTrue(VisibilityPreferences.isLaunchAtLogin(.enabled))
+        XCTAssertTrue(VisibilityPreferences.isLaunchAtLogin(.requiresApproval))
+        XCTAssertFalse(VisibilityPreferences.isLaunchAtLogin(.notRegistered))
+        XCTAssertFalse(VisibilityPreferences.isLaunchAtLogin(.notFound))
+    }
+
+    // MARK: - Monitors of one model
+
+    func testInheritDisplaySettings_takesWhatBothShared() {
+        VisibilityPreferences.setVisible(false, display: "DELL U2720Q")
+        VisibilityPreferences.setNickname("Desk", .display, for: "DELL U2720Q")
+        VisibilityPreferences.inheritDisplaySettings(from: "DELL U2720Q", to: "DELL U2720Q (2)")
+        XCTAssertFalse(VisibilityPreferences.isVisible(display: "DELL U2720Q (2)"))
+        XCTAssertEqual(VisibilityPreferences.nickname(.display, for: "DELL U2720Q (2)"), "Desk")
+        XCTAssertFalse(VisibilityPreferences.isVisible(display: "DELL U2720Q"))
+    }
+
+    func testInheritDisplaySettings_onceOnly() {
+        VisibilityPreferences.setVisible(false, display: "DELL U2720Q")
+        VisibilityPreferences.inheritDisplaySettings(from: "DELL U2720Q", to: "DELL U2720Q (2)")
+        // Shown again by the user, and kept so.
+        VisibilityPreferences.setVisible(true, display: "DELL U2720Q (2)")
+        VisibilityPreferences.inheritDisplaySettings(from: "DELL U2720Q", to: "DELL U2720Q (2)")
+        XCTAssertTrue(VisibilityPreferences.isVisible(display: "DELL U2720Q (2)"))
+    }
+
+    func testInheritDisplaySettings_nothingSaved_staysShown() {
+        VisibilityPreferences.inheritDisplaySettings(from: "LG UltraFine", to: "LG UltraFine (2)")
+        XCTAssertTrue(VisibilityPreferences.isVisible(display: "LG UltraFine (2)"))
+        XCTAssertNil(VisibilityPreferences.nickname(.display, for: "LG UltraFine (2)"))
     }
 }
