@@ -27,7 +27,7 @@ final class OpenDisplaySender {
     // MARK: Settings
 
     private static let enabledKey = "\(AppIdentity.shortID).opendisplay.enabled"
-    private static let receiversKey = "\(AppIdentity.shortID).opendisplay.receivers"
+    static let receiversKey = "\(AppIdentity.shortID).opendisplay.receivers"
     private static let namesKey = "\(AppIdentity.shortID).opendisplay.names"
     private static let usbIDsKey = "\(AppIdentity.shortID).opendisplay.usbIDs"
     private static let bonjourIDsKey = "\(AppIdentity.shortID).opendisplay.bonjourIDs"
