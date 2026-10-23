@@ -195,7 +195,9 @@ struct MoonlightPacketizer {
             .flatMap { $0.packets + Self.parity(for: $0) }
     }
 
-    /// The blocks for one Annex B access unit, or nil when it is too large to send.
+    /// The blocks for one Annex B access unit, or nil when it is too large to send; its
+    /// frame index is passed over then, so Moonlight sees a frame lost and asks for a
+    /// keyframe, rather than waiting on a keyframe that was never sent.
     /// `timestamp` is in 90 kHz units; `latency` is how long the frame took, in 0.1 ms.
     mutating func blocks(for accessUnit: Data, isKeyFrame: Bool, timestamp: UInt32, latency: UInt16) -> [Block]? {
         var stream = Data(capacity: Self.frameHeaderSize + accessUnit.count)
@@ -217,7 +219,10 @@ struct MoonlightPacketizer {
             percentage = 0
             blocks = blocksNeeded(Self.maxPacketsPerBlock)
         }
-        guard blocks <= Self.maxBlocks else { return nil }
+        guard blocks <= Self.maxBlocks else {
+            frameIndex &+= 1
+            return nil
+        }
         let perBlock = (total + blocks - 1) / blocks
 
         var result: [Block] = []
@@ -395,6 +400,12 @@ struct MoonlightKeyFrameRequests {
     mutating func keyFrameSent(at now: UInt64) {
         asked = nil
         sent = now
+    }
+
+    /// A keyframe could not be sent, as too large: the one asked for no longer covers
+    /// requests, so the next is made, after the interval.
+    mutating func keyFrameDropped() {
+        asked = nil
     }
 }
 

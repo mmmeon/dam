@@ -162,9 +162,13 @@ final class MoonlightProtocolTests: XCTestCase {
         XCTAssertEqual(le32(packets[750], 28) >> 12 & 0x3FF, 0)
     }
 
-    func testRefusesAFrameTooLargeForFourBlocks() {
+    func testRefusesAFrameTooLargeForFourBlocks() throws {
         var packetizer = MoonlightPacketizer(packetSize: 1024)
         XCTAssertNil(packetizer.packets(for: Data(count: 4093 * 1008), isKeyFrame: true, timestamp: 0, latency: 0))
+        // Its index is passed over, so Moonlight sees a frame lost and asks for a keyframe.
+        let next = try XCTUnwrap(packetizer.packets(for: Data(count: 100), isKeyFrame: false, timestamp: 0, latency: 0))
+        XCTAssertEqual(le32(next[0], 20), 2)
+        XCTAssertEqual(be16(next[0], 2), 0, "no packet was sent for it")
     }
 
     // MARK: - Control messages
@@ -279,6 +283,14 @@ final class MoonlightProtocolTests: XCTestCase {
         XCTAssertEqual(requests.request(at: 0, roundTrip: 40 * ms), .now)
         XCTAssertEqual(requests.request(at: 900 * ms, roundTrip: 40 * ms), .covered)
         XCTAssertEqual(requests.request(at: 1000 * ms, roundTrip: 40 * ms), .now)
+    }
+
+    func testAKeyFrameTooLargeToSendIsAskedForAgain() {
+        var requests = MoonlightKeyFrameRequests()
+        XCTAssertEqual(requests.request(at: 0, roundTrip: 40 * ms), .now)
+        requests.keyFrameDropped()
+        XCTAssertEqual(requests.request(at: 30 * ms, roundTrip: nil), .later(220 * ms), "not covered")
+        XCTAssertEqual(requests.retry(at: 250 * ms, roundTrip: nil), .now)
     }
 
     func testARequestHeldForLaterIsDroppedOnceAKeyFrameWentOut() {

@@ -290,6 +290,13 @@ final class MoonlightKeyFrameRequester {
         lock.unlock()
     }
 
+    /// A keyframe could not be sent; the next request is not covered by it.
+    func keyFrameDropped() {
+        lock.lock()
+        requests.keyFrameDropped()
+        lock.unlock()
+    }
+
     @discardableResult
     private func handle(roundTrip: UInt64?, retry: Bool, source: @escaping Source) -> MoonlightKeyFrameRequests.Decision {
         let now = DispatchTime.now().uptimeNanoseconds
@@ -343,8 +350,9 @@ final class MoonlightVideoSender {
 
     /// Called on the ping thread when the first ping arrives.
     var onFirstPing: (() -> Void)?
-    /// Called on the sending thread when a frame could not be sent, so the next can be a keyframe.
-    var onFrameTooLarge: (() -> Void)?
+    /// Called on the sending thread when a frame could not be sent, so the next can be a
+    /// keyframe; with whether it was one.
+    var onFrameTooLarge: ((Bool) -> Void)?
     /// Called on the sending thread once a keyframe's last packet is out.
     var onKeyFrameSent: (() -> Void)?
     /// Called on the sending thread when the last frame waiting is out, so a picture left out
@@ -448,7 +456,7 @@ final class MoonlightVideoSender {
         guard let blocks = packetizer.blocks(for: frame.data, isKeyFrame: frame.isKeyFrame,
                                              timestamp: timestamp, latency: latency) else {
             msLog.error("frame of \(frame.data.count) bytes too large to send")
-            onFrameTooLarge?()
+            onFrameTooLarge?(frame.isKeyFrame)
             return
         }
         // Each block's data, then its parity, worked out only once the data is on its way:
@@ -1040,7 +1048,12 @@ final class MoonlightStream {
                                 hdr: config.hdr ? MoonlightScreenCapture.hdrMetadata : nil)) { [weak self] frame in
                 self?.video.send(frame)
             }
-            video.onFrameTooLarge = { [weak self] in self?.sendKeyFrame(roundTrip: nil) }
+            video.onFrameTooLarge = { [weak self] wasKeyFrame in
+                guard let self else { return }
+                // A keyframe too large to send answers no request, its own included.
+                if wasKeyFrame { self.keyFrames.keyFrameDropped() }
+                self.sendKeyFrame(roundTrip: nil)
+            }
             // The picture left out last, should the screen have gone still since.
             video.onCaughtUp = { [weak self] in
                 guard let self else { return }
