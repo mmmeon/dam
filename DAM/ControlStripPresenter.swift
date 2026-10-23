@@ -103,6 +103,9 @@ final class ControlStripPresenter: NSObject {
     private static let speechStatusID = NSTouchBarItem.Identifier("\(AppIdentity.bundleID).speechStatus")
     private static let modalArrangeID = NSTouchBarItem.Identifier("\(AppIdentity.bundleID).modal.arrange")
     private static let audioBackID    = NSTouchBarItem.Identifier("\(AppIdentity.bundleID).audio.back")
+    /// The switcher's own close button, in place of the system's close box, which isn't shown
+    /// while DAM is the active app.
+    private static let modalCloseID   = NSTouchBarItem.Identifier("\(AppIdentity.bundleID).modal.close")
     private static let audioSegID     = NSTouchBarItem.Identifier("\(AppIdentity.bundleID).audio.outputs")
 
     // Prefixes for per-display dynamic identifiers.
@@ -210,6 +213,15 @@ final class ControlStripPresenter: NSObject {
         NSTouchBar.presentSystemModal(bar, for: Self.stripID)
         NSTouchBar.dismissSystemModal(bar)
         modalBar = nil
+
+        // The close button comes and goes as DAM becomes the active app and stops being it.
+        for name in [NSApplication.didBecomeActiveNotification, NSApplication.didResignActiveNotification] {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                guard let self else { return }
+                if let bar = self.modalBar { self.updateModalBar(bar) }
+                if let bar = self.audioBar { bar.defaultItemIdentifiers = self.audioItemIdentifiers() }
+            }
+        }
     }
 
     /// Call whenever manager state changes.
@@ -329,7 +341,7 @@ final class ControlStripPresenter: NSObject {
     /// desktops), the audio outputs page and the AirPlay picker on the left, then a button
     /// per connected AirPlay and physical display that opens its resolutions.
     private func modalItemIdentifiers() -> [NSTouchBarItem.Identifier] {
-        var ids: [NSTouchBarItem.Identifier] = []
+        var ids: [NSTouchBarItem.Identifier] = NSApp.isActive ? [Self.modalCloseID] : []
         if (videoManager?.currentLayout().placements.count ?? 0) >= 2 { ids.append(Self.modalArrangeID) }
         ids += [Self.modalAudioID, .fixedSpaceSmall, Self.modalVideoID]
         let connectedAirPlay = (videoManager?.airPlayDevices ?? [])
@@ -712,13 +724,28 @@ final class ControlStripPresenter: NSObject {
         if let existing = audioBar { NSTouchBar.dismissSystemModal(existing) }
         let bar = NSTouchBar()
         bar.delegate = self
-        bar.defaultItemIdentifiers = [Self.audioBackID, .flexibleSpace, Self.audioSegID]
+        bar.defaultItemIdentifiers = audioItemIdentifiers()
         audioBar = bar
         NSTouchBar.presentSystemModal(bar, for: Self.stripID)
     }
 
     @objc private func audioBackTapped() {
         openModal()
+    }
+
+    private func audioItemIdentifiers() -> [NSTouchBarItem.Identifier] {
+        (NSApp.isActive ? [Self.modalCloseID] : []) + [Self.audioBackID, .flexibleSpace, Self.audioSegID]
+    }
+
+    /// Closes the switcher, its pages included, as its close box would.
+    @objc private func modalCloseTapped() {
+        closeResolutionBar()
+        for bar in [audioBar, modalBar].compactMap({ $0 }) { NSTouchBar.dismissSystemModal(bar) }
+        audioBar = nil
+        modalBar = nil
+        closeWatch?.invalidate()
+        closeWatch = nil
+        onModalClose?()
     }
 
     /// Picks the output, then returns to the modal bar.
@@ -952,6 +979,14 @@ extension ControlStripPresenter: NSTouchBarDelegate {
                 btn.image = img
                 btn.imagePosition = .imageLeading
             }
+            item.view = btn
+            return item
+
+        case Self.modalCloseID:
+            let item = NSCustomTouchBarItem(identifier: id)
+            let btn = NSButton(image: NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: "Close")!,
+                               target: self, action: #selector(modalCloseTapped))
+            btn.isBordered = false
             item.view = btn
             return item
 
