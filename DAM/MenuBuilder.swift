@@ -152,7 +152,8 @@ func buildStatusMenu(audio: AudioManager,
     if blackedOut {
         let light = NSMenuItem(title: "Light This Mac's Screens", action: #selector(AppDelegate.liftBlackout(_:)),
                                keyEquivalent: "")
-        light.toolTip = "Ends the blackout for this session; the next session blacks them out again."
+        light.toolTip = "Lights the screens for the sessions on now. Later sessions leave them lit too, "
+            + "unless blacking out is locked in Settings › Remote Sessions."
         menu.addItem(light)
     }
 

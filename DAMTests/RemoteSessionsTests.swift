@@ -1747,6 +1747,43 @@ extension RemoteSessionsTests {
         XCTAssertEqual(LogSessionDetector.lines(lines, since: Date(timeIntervalSince1970: 20), time: Self.secondsTime), [])
     }
 
+    func testAnOpenDisplayLineFromDaysAgoIsLeftOut() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let now = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 23, hour: 12)))
+        // Two days ago, at a time of day after the start's; then today's lines, over midnight.
+        let lines = [
+            "[11:00:00.000] capture started: 1x1 display 5 generation 1 mode extend localCursor=true session wifi:old",
+            "[23:50:00.000] status",
+            "[00:10:00.000] status",
+            "[10:05:00.000] status"
+        ]
+        let time = { SessionLogLines.openDisplayTime(of: $0, now: now, calendar: calendar) }
+        XCTAssertEqual(LogSessionDetector.lines(lines, since: now - 13 * 3600, time: time), Array(lines[1...]))
+        XCTAssertEqual(LogSessionDetector.lines(lines, since: now - 3 * 3600, time: time), [lines[3]])
+    }
+
+    func testOpenDisplayRunningOverADayTakesNothingUp() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("opendisplay.log")
+        try "[1] capture started: 1x1 display 6 generation 1 mode extend localCursor=true session wifi:new\n"
+            .write(to: url, atomically: false, encoding: .utf8)
+        // Every line's time of day dates it within the last day.
+        let recent: (String) -> Date? = { _ in Date() - 60 }
+        for (launched, taken) in [(Date() - 3600, true), (Date() - 2 * LogSessionDetector.day, false)] {
+            var events: [SessionEvent] = []
+            let detector = LogSessionDetector(app: "opendisplay", url: url, parse: SessionLogLines.openDisplay,
+                                              isRunning: { true }, launched: { launched }, lineTime: recent,
+                                              timesOfDay: true)
+            detector.onEvent = { events.append($0) }
+            detector.start()
+            XCTAssertEqual(events.isEmpty, !taken)
+            detector.stop()
+        }
+    }
+
     func testOpenDisplayIsntRevivedFromAnEarlierRun() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

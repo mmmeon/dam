@@ -335,6 +335,9 @@ final class LogSessionDetector: SessionDetector {
     /// started are an earlier run's, whose connections went with it, as after a crash.
     private let launched: (() -> Date?)?
     private let lineTime: ((String) -> Date?)?
+    /// Whether `lineTime` reads only a time of day, which dates every line within the last
+    /// day: then a start more than a day ago can't be told from the lines.
+    private let timesOfDay: Bool
     private var follower: LogFollower?
     private var timer: Timer?
     private var wasRunning = false
@@ -344,7 +347,7 @@ final class LogSessionDetector: SessionDetector {
 
     init(app: String, url: URL, parse: @escaping (String) -> SessionEvent?, isRunning: (() -> Bool)? = nil,
          restarted: ((String) -> Bool)? = nil, takesUpOpen: Bool = true, opensWhileRunning: Bool = false,
-         launched: (() -> Date?)? = nil, lineTime: ((String) -> Date?)? = nil) {
+         launched: (() -> Date?)? = nil, lineTime: ((String) -> Date?)? = nil, timesOfDay: Bool = false) {
         self.app = app
         self.url = url
         self.parse = parse
@@ -354,6 +357,7 @@ final class LogSessionDetector: SessionDetector {
         self.opensWhileRunning = opensWhileRunning
         self.launched = launched
         self.lineTime = lineTime
+        self.timesOfDay = timesOfDay
     }
 
     func start() {
@@ -361,7 +365,14 @@ final class LogSessionDetector: SessionDetector {
         detLog.debug("\(self.app): following \(self.url.path)")
         if takesUpOpen, let isRunning, isRunning() {
             var lines = Self.lastLines(of: url)
-            if let lineTime, let since = launched?() { lines = Self.lines(lines, since: since, time: lineTime) }
+            if let lineTime, let since = launched?() {
+                if timesOfDay, Date().timeIntervalSince(since) > Self.day {
+                    detLog.debug("\(self.app): started over a day ago, so what its log shows open isn't taken up")
+                    lines = []
+                } else {
+                    lines = Self.lines(lines, since: since, time: lineTime)
+                }
+            }
             for event in Self.stillOpen(in: lines, parse: parse, restarted: restarted) { report(event) }
         }
         let follower = LogFollower(url: url) { [weak self] in self?.handle($0) }
@@ -457,12 +468,24 @@ extension LogSessionDetector {
         return open.map(\.event)
     }
 
+    static let day: TimeInterval = 24 * 60 * 60
+
     /// `lines` from the first written at `since` or after, by `time`; a line with no time
-    /// goes with the one before it.
+    /// goes with the one before it. Read back from the end, they stop at a line later than
+    /// the one after it: with times of day only, it was written a day or more before its
+    /// time says, so before `since` too.
     static func lines(_ lines: [String], since: Date, time: (String) -> Date?) -> [String] {
         // A second's leeway: the log's times can be cut to the millisecond, the start's not.
         let since = since - 1
-        guard let first = lines.firstIndex(where: { time($0).map { $0 >= since } ?? false }) else { return [] }
+        var first = lines.endIndex
+        var next: Date?
+        for i in lines.indices.reversed() {
+            guard let t = time(lines[i]) else { continue }
+            if t < since { break }
+            if let next, t > next + 1 { break }
+            first = i
+            next = t
+        }
         return Array(lines[first...])
     }
 
@@ -689,11 +712,12 @@ enum SessionDetectors {
             let logs = home.appendingPathComponent("Library/Logs")
             let standard = newest(openDisplayNames.map { logs.appendingPathComponent("\($0)/opendisplay.log") })
             // What its log shows open counts only if written since it started: a crash leaves
-            // its last session open there.
+            // its last session open there. Its lines have times of day only, so not once it
+            // has run for over a day; a line when it starts, or full dates, would tell.
             return LogSessionDetector(app: app, url: logURL(for: app, standard: standard), parse: SessionLogLines.openDisplay,
                                       isRunning: { !RunningProcesses.names().isDisjoint(with: openDisplayNames) },
                                       launched: { RunningProcesses.started(openDisplayNames) },
-                                      lineTime: { SessionLogLines.openDisplayTime(of: $0) })
+                                      lineTime: { SessionLogLines.openDisplayTime(of: $0) }, timesOfDay: true)
         case "display":
             return DisplaySessionDetector(app: app, name: adoptName, displays: displayNames)
         default:

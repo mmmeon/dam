@@ -23,6 +23,11 @@ no URL scheme, AppleScript, notifications or socket.
 | Quality | `controller.quality` | Global. |
 | Status | `sessions`: id, name, status, mode, transport | The virtual display's ID needs an accessor on `MacSender`. |
 
+The fork's log has times of day only (`[15:26:04.995]`), so DAM can't date a line against
+OpenDisplay's start once it has run over a day, and then takes up nothing the log shows open
+(remote-sessions.md). A line when OpenDisplay starts, or full dates in the log, would fix that
+on the fork's side; notifications (1 below) would replace it.
+
 ## Ways in
 
 1. **Distributed notifications for events and status.** OpenDisplay posts e.g. `opendisplay.session`
