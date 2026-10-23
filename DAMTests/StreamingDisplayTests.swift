@@ -440,6 +440,81 @@ final class StreamingRequestTests: XCTestCase {
         XCTAssertNil(manager.virtualAnchorArrangements["tv"]?.modes[2])
         XCTAssertEqual(manager.streamingDisplays.first?.start, StreamingDisplayModes.start)
     }
+
+    // MARK: - Changes made through DAM while a streaming display is placed or resized
+
+    func testPositionsReachTheLayoutAChangeUnderWayPlaces() {
+        let manager = VideoManager()
+        manager.streamingChangesBegun = 1
+        manager.streamingChangeLayout = twoSideBySide
+        let left = CGPoint(x: -1920, y: 0)
+        let undo = manager.keepUserOrigins([2: left])
+        XCTAssertEqual(manager.streamingChangeLayout?.origins, [1: .zero, 2: left])
+        undo()
+        XCTAssertEqual(manager.streamingChangeLayout?.origins, twoSideBySide.origins)
+    }
+
+    func testAMirrorReachesTheLayoutAChangeUnderWayPlaces() {
+        let manager = VideoManager()
+        manager.streamingChangeLayout = twoSideBySide
+        manager.keepUserMirror([2], on: 1)
+        XCTAssertEqual(manager.streamingChangeLayout?.mirrorMasters[2], 1)
+    }
+
+    func testModesReachTheLayoutAChangeUnderWayPlaces() throws {
+        let manager = VideoManager()
+        guard let mode = CGDisplayCopyDisplayMode(CGMainDisplayID()) else { throw XCTSkip("no display to read a mode of") }
+        manager.streamingChangesBegun = 1
+        manager.streamingChangeLayout = twoSideBySide
+        let undo = manager.keepUserMode(mode, for: 2)
+        XCTAssertTrue(manager.streamingChangeLayout?.modes[2] === mode)
+        undo()
+        XCTAssertNil(manager.streamingChangeLayout?.modes[2])
+    }
+
+    func testAnUndoLeavesTheLayoutOfALaterChangeAlone() {
+        let manager = VideoManager()
+        manager.streamingChangesBegun = 1
+        manager.streamingChangeLayout = twoSideBySide
+        let undo = manager.keepUserOrigins([2: CGPoint(x: -1920, y: 0)])
+        // That change ended and another began, from a layout of its own.
+        let placed = twoSideBySide.adding(3, origin: CGPoint(x: 3360, y: 0), mode: nil)
+        manager.streamingChangesBegun = 2
+        manager.streamingChangeLayout = placed
+        undo()
+        XCTAssertEqual(manager.streamingChangeLayout?.origins, placed.origins)
+    }
+
+    func testAMainMadeMeanwhileReachesTheLayoutAChangeUnderWayPlaces() {
+        let manager = VideoManager()
+        manager.streamingChangeLayout = twoSideBySide
+        let display = DisplayInfo(id: "x", name: "x", isConnected: true, cgDisplayID: 2,
+                                  isMirroring: false, isBuiltIn: false, isMain: false)
+        // Display 2 is no real display: nothing is committed, the layouts are re-based only
+        // once it is main, which it isn't. Re-base the way setMainDisplay's choice does.
+        _ = display
+        let rebased = twoSideBySide.makingMain(2)
+        XCTAssertEqual(rebased.origins[2], .zero)
+        XCTAssertEqual(rebased.origins[1], CGPoint(x: -1440, y: 0))
+    }
+
+    // MARK: - The wake restore
+
+    func testTheWakeRestoreKeepsTheModeSleptInForItsSecondPass() throws {
+        let manager = VideoManager()
+        guard let mode = CGDisplayCopyDisplayMode(CGMainDisplayID()) else { throw XCTSkip("no display to read a mode of") }
+        manager.virtualAnchorArrangements["ipad"] = twoSideBySide
+        manager.modesBeforeSleep = [2: VideoManager.ModeShape(mode)]
+        let undo = manager.keepUserMode(mode, for: 2, keepingSleepMode: true)
+        // An anchor made after wake would otherwise put the mode the screens woke in back.
+        XCTAssertTrue(manager.virtualAnchorArrangements["ipad"]?.modes[2] === mode)
+        XCTAssertEqual(manager.modesBeforeSleep[2], VideoManager.ModeShape(mode))
+        undo()
+        XCTAssertNil(manager.virtualAnchorArrangements["ipad"]?.modes[2])
+        // A mode picked replaces the one slept in.
+        manager.keepUserMode(mode, for: 2)
+        XCTAssertNil(manager.modesBeforeSleep[2])
+    }
 }
 
 /// Makes and resizes a real streaming display through a VideoManager of its own. It changes

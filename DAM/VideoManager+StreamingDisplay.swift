@@ -510,6 +510,7 @@ extension VideoManager {
     /// display an addition placed, nil when it made none.
     private func finishStreamingChange(placed: CGDirectDisplayID? = nil) {
         streamingChangeInFlight = false
+        streamingChangeLayout = nil
         publishStreamRotations()
         let completion = streamingAddCompletion
         streamingAddCompletion = nil
@@ -582,7 +583,9 @@ extension VideoManager {
                                                   start: mode, rotation: rotation, standsInFor: standIn?.name))
         streamingAddCompletion = completion
         streamingChangeInFlight = true
-        waitForStreamingDisplay(vd, index: index, serial: serial, before: before, main: main)
+        // Stored, so a change made through DAM before the display is placed reaches it.
+        beginStreamingChange(from: before)
+        waitForStreamingDisplay(vd, index: index, serial: serial, main: main)
     }
 
     /// Removes streaming display `display`, if it is still there, and puts the others back
@@ -619,8 +622,14 @@ extension VideoManager {
         }
     }
 
+    /// Notes that an addition or resize has begun, putting the displays back to `layout`.
+    private func beginStreamingChange(from layout: DisplayArrangement) {
+        streamingChangesBegun += 1
+        streamingChangeLayout = layout
+    }
+
     /// The layout kept after the last change, until it expires.
-    private var activeStreamingSettle: DisplayArrangement? {
+    var activeStreamingSettle: DisplayArrangement? {
         streamingSettle.flatMap { $0.until > Date() ? $0.arrangement : nil }
     }
 
@@ -686,8 +695,8 @@ extension VideoManager {
         // the switch would put back.
         streamingSettle?.arrangement.modes[id] = nil
         streamingChangeInFlight = true
-        let before = activeStreamingSettle ?? DisplayArrangement.current()
-        switchStreamingDisplay(id, to: mode, keepingMirror: keepsMirror, before: before, attempt: 0) { [weak self, weak vd] done in
+        beginStreamingChange(from: activeStreamingSettle ?? DisplayArrangement.current())
+        switchStreamingDisplay(id, to: mode, keepingMirror: keepsMirror, attempt: 0) { [weak self, weak vd] done in
             // Only once it runs it: a rotation that failed goes back to the old one.
             if done, let i = self?.streamingDisplays.firstIndex(where: { $0.id == id }) {
                 self?.streamingDisplays[i].start = mode
@@ -727,10 +736,11 @@ extension VideoManager {
     }
 
     /// Switches `id` to `mode` once WindowServer lists it, which takes a moment after a new
-    /// mode list; gives up after two seconds. Unless `keepingMirror`, it stops mirroring.
-    /// `completion` runs before the next change starts.
+    /// mode list; gives up after two seconds. Unless `keepingMirror`, it stops mirroring. The
+    /// others go back as `streamingChangeLayout` has them. `completion` runs before the next
+    /// change starts.
     private func switchStreamingDisplay(_ id: CGDirectDisplayID, to mode: StreamingDisplayModes.Mode,
-                                        keepingMirror: Bool, before: DisplayArrangement, attempt: Int,
+                                        keepingMirror: Bool, attempt: Int,
                                         completion: @escaping (Bool) -> Void) {
         guard let target = Self.displayMode(mode, of: id) else {
             guard attempt < 20, DisplayArrangement.onlineDisplayIDs().contains(id) else {
@@ -739,21 +749,24 @@ extension VideoManager {
                 return finishStreamingChange()
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-                self?.switchStreamingDisplay(id, to: mode, keepingMirror: keepingMirror, before: before,
+                self?.switchStreamingDisplay(id, to: mode, keepingMirror: keepingMirror,
                                              attempt: attempt + 1, completion: completion)
             }
             return
         }
+        let before = streamingChangeLayout ?? DisplayArrangement.current()
         let master = keepingMirror ? CGDisplayMirrorsDisplay(id) : 0
         let origin = before.origins[id] ?? CGDisplayBounds(id).origin
-        let resized = before.excluding(id).adding(id, origin: origin, mode: target, mirroring: master)
         let settle = { [weak self] (done: Bool) in
             guard let self else { return completion(false) }
             // Or an anchor settling would put the old size back (see reassertAnchorLayout).
             if done { self.keepUserMode(target, for: id) }
+            // As it is now: a change made through DAM meanwhile is in it.
+            let others = (self.streamingChangeLayout ?? before).excluding(id)
             // Failed, it still runs its old mode, which the layout taken after the new list
             // doesn't hold.
-            self.streamingSettle = (done ? resized : before.excluding(id), Date().addingTimeInterval(5))
+            let kept = done ? others.adding(id, origin: origin, mode: target, mirroring: master) : others
+            self.streamingSettle = (kept, Date().addingTimeInterval(5))
             self.reassertStreamingLayout()
             self.mergeDevices()
             completion(done)
@@ -810,8 +823,7 @@ extension VideoManager {
         streamingDisplays.contains { $0.display === vd }
     }
 
-    private func waitForStreamingDisplay(_ vd: CGVirtualDisplay, index: Int, serial: UInt32,
-                                         before: DisplayArrangement, main: Bool) {
+    private func waitForStreamingDisplay(_ vd: CGVirtualDisplay, index: Int, serial: UInt32, main: Bool) {
         whenOnline(vd, product: Self.streamingProductID, serial: serial,
                    wanted: { [weak self] in self?.isStreamingDisplay(vd) ?? false }) { [weak self] search in
             guard let self else { return }
@@ -823,7 +835,7 @@ extension VideoManager {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                     guard let self else { return }
                     guard self.isStreamingDisplay(vd) else { return self.finishStreamingChange() }
-                    self.placeStreamingDisplay(id, before: before, main: main)
+                    self.placeStreamingDisplay(id, main: main)
                 }
             case .released:
                 // Ended meanwhile; nothing else finishes this change.
@@ -837,10 +849,12 @@ extension VideoManager {
         }
     }
 
-    /// Puts the other displays back as they were in `before`, switches the new display to
-    /// its start mode, and sets it right of the rest; with `main`, the whole arrangement then
+    /// Puts the other displays back as `streamingChangeLayout` has them (as they were before
+    /// the addition, with what was changed through DAM since), switches the new display to its
+    /// start mode, and sets it right of the rest; with `main`, the whole arrangement then
     /// slides so that it is main.
-    private func placeStreamingDisplay(_ id: CGDirectDisplayID, before: DisplayArrangement, main: Bool) {
+    private func placeStreamingDisplay(_ id: CGDirectDisplayID, main: Bool) {
+        let before = streamingChangeLayout ?? DisplayArrangement.current()
         let start = streamingDisplays.first { $0.id == id }?.start ?? StreamingDisplayModes.start
         let startMode = Self.displayMode(start, of: id)
         if startMode == nil { sdLog.error("place: no \(start.width)×\(start.height) mode") }
@@ -853,9 +867,11 @@ extension VideoManager {
         let origin = Self.streamingDisplayOrigin(others: others)
         var placed = before.adding(id, origin: origin, mode: startMode ?? CGDisplayCopyDisplayMode(id))
         if main { placed = placed.makingMain(id) }
+        // From now on what a change made through DAM reaches, until the settle takes it over.
+        streamingChangeLayout = placed
         let settle = { [weak self] in
             // WindowServer can still change the others' resolutions for the new set.
-            self?.streamingSettle = (placed, Date().addingTimeInterval(5))
+            self?.streamingSettle = (self?.streamingChangeLayout ?? placed, Date().addingTimeInterval(5))
             self?.reassertStreamingLayout()
             self?.mergeDevices()
             // The display that was main may be gone, and a commit that changes nothing

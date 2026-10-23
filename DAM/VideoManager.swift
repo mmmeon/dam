@@ -140,7 +140,7 @@ final class VideoManager: ObservableObject {
     /// The pending re-read of the display list after a display configuration change.
     private var reconfigureWork: DispatchWorkItem?
     /// Each display's mode when the screens went to sleep, put back after they wake.
-    private var modesBeforeSleep: [CGDirectDisplayID: ModeShape] = [:]
+    var modesBeforeSleep: [CGDirectDisplayID: ModeShape] = [:]
     /// Remembers the CGDirectDisplayID for each AirPlay device name the last time
     /// it appeared in NSScreen.screens (extend mode). Used to keep tracking the
     /// display when it becomes a mirror slave and drops out of NSScreen.
@@ -229,6 +229,12 @@ final class VideoManager: ObservableObject {
     var streamingSettle: (arrangement: DisplayArrangement, until: Date)?
     /// Whether that layout is being put back; later changes wait for the one it causes.
     var streamingReassertInFlight = false
+    /// The layout the addition or resize under way puts the displays back to: the one from
+    /// before it, then the one it places. Kept here rather than in the change, so one made
+    /// through DAM meanwhile reaches it too (see `keepUserMode`), and dropped as it ends.
+    var streamingChangeLayout: DisplayArrangement?
+    /// How many such changes have begun, so an undo leaves a later one's layout alone.
+    var streamingChangesBegun = 0
     /// The displays DAM didn't make online at the last re-read, to tell when one joins or leaves.
     var onlineAtLastMerge: Set<CGDirectDisplayID>?
     /// Where each display was the last time the set was settled, to put the streaming ones
@@ -335,15 +341,20 @@ final class VideoManager: ObservableObject {
                                           available: available.mapValues { Set($0.keys) }, skip: skip)
         guard !restore.isEmpty else { return }
         displayLog.debug("restoreModesAfterWake: \(restore)")
+        let modes = restore.compactMap { id, shape in available[id]?[shape].map { (id, $0) } }
+        // In the layouts DAM puts back, as a mode picked is: an anchor made after the screens
+        // woke holds the mode they woke in, and would put it back while it settles. The mode
+        // slept in stays for the second pass.
+        let undoKeeps = modes.map { keepUserMode($1, for: $0, keepingSleepMode: true) }
+        let undo = { undoKeeps.forEach { $0() } }
         // Streaming requests wait for it (see processStreamingRequests).
         wakeRestoreInFlight = true
         commitDisplayChange({ cfg in
-            for (id, shape) in restore {
-                if let mode = available[id]?[shape] { CGConfigureDisplayWithDisplayMode(cfg, id, mode, nil) }
-            }
-        }) { [weak self] result in
+            for (id, mode) in modes { CGConfigureDisplayWithDisplayMode(cfg, id, mode, nil) }
+        }, lateFailure: undo) { [weak self] result in
             if case .failure(let error) = result {
                 displayLog.error("restoreModesAfterWake: \(String(describing: error))")
+                if !error.mayStillLand { undo() }
             }
             self?.wakeRestoreInFlight = false
             self?.processStreamingRequests()
@@ -742,14 +753,15 @@ final class VideoManager: ObservableObject {
                 if let keptAnchor, let name = self.virtualAnchorCGIDs.first(where: { $0.value == keptAnchor })?.key {
                     self.anchorSetSlaves[name, default: []].formUnion(slaveIDs)
                 }
+                // Not mirrored after all: the layouts DAM puts back would make the mirror later.
+                let undoKeep: () -> Void = { [weak self] in
+                    self?.keepUserMirror(slaveIDs.filter { CGDisplayMirrorsDisplay($0) != masterID }, on: 0)
+                }
                 self.commitDisplayChange({ cfg in
                     for slave in slaveIDs { CGConfigureDisplayMirrorOfDisplay(cfg, slave, masterID) }
-                }) { result in
-                    // Not mirrored after all: the layouts DAM puts back would make the mirror
-                    // later. One that timed out may still land, and is kept as asked.
-                    if case .failure(let error) = result, !error.mayStillLand {
-                        self.keepUserMirror(slaveIDs.filter { CGDisplayMirrorsDisplay($0) != masterID }, on: 0)
-                    }
+                }, lateFailure: undoKeep) { result in
+                    // One that timed out may still land, and is kept as asked until it fails.
+                    if case .failure(let error) = result, !error.mayStillLand { undoKeep() }
                     finish(result)
                 }
             }
@@ -791,6 +803,7 @@ final class VideoManager: ObservableObject {
         }
         for name in anchorSetSlaves.keys { anchorSetSlaves[name]?.subtract(ids) }
         streamingSettle = streamingSettle.map { ($0.arrangement.mirroring(ids, on: master), $0.until) }
+        streamingChangeLayout = streamingChangeLayout?.mirroring(ids, on: master)
         for (name, arrangement) in virtualAnchorArrangements {
             virtualAnchorArrangements[name] = arrangement.mirroring(ids, on: master)
         }
@@ -798,30 +811,36 @@ final class VideoManager: ObservableObject {
 
     /// Keeps a mode set on display `id` through DAM (picked, or a streaming display resized or
     /// turned) in everything DAM puts back, or that would undo it: the layout kept after a
-    /// streaming display came or went, the one from before the first came (unless a remote
-    /// session holds it), the one each anchor restores, a streaming display's own mode, and
-    /// the mode the screens slept in. Returns what undoes it, for a change that failed: the
-    /// layouts still there get back what they had for `id`.
+    /// streaming display came or went, the one a streaming change under way places, the one
+    /// from before the first came (unless a remote session holds it), the one each anchor
+    /// restores, a streaming display's own mode, and the mode the screens slept in, unless
+    /// `keepingSleepMode` (the wake restore putting that very mode back). Returns what undoes
+    /// it, for a change that failed: the layouts still there get back what they had for `id`.
     @discardableResult
-    func keepUserMode(_ mode: CGDisplayMode, for id: CGDirectDisplayID) -> () -> Void {
+    func keepUserMode(_ mode: CGDisplayMode, for id: CGDirectDisplayID,
+                      keepingSleepMode: Bool = false) -> () -> Void {
         let settleUntil = streamingSettle?.until
         let settleMode = streamingSettle?.arrangement.modes[id]
+        let change = streamingChangesBegun
+        let changeMode = streamingChangeLayout?.modes[id]
         let arrangementMode = streamingArrangement?.modes[id]
         let anchorModes = virtualAnchorArrangements.mapValues { $0.modes[id] }
         let start = streamingDisplays.first { $0.id == id }.map { (display: $0.display, start: $0.start) }
         let sleepMode = modesBeforeSleep[id]
 
         streamingSettle?.arrangement.modes[id] = mode
+        streamingChangeLayout?.modes[id] = mode
         if !holdsStreamingArrangement { streamingArrangement?.modes[id] = mode }
         for name in virtualAnchorArrangements.keys { virtualAnchorArrangements[name]?.modes[id] = mode }
         if let i = streamingDisplays.firstIndex(where: { $0.id == id }) {
             streamingDisplays[i].start = StreamingDisplayModes.Mode(mode)
         }
-        modesBeforeSleep.removeValue(forKey: id)
+        if !keepingSleepMode { modesBeforeSleep.removeValue(forKey: id) }
 
         return { [weak self] in
             guard let self else { return }
             if self.streamingSettle?.until == settleUntil { self.streamingSettle?.arrangement.modes[id] = settleMode }
+            if self.streamingChangesBegun == change { self.streamingChangeLayout?.modes[id] = changeMode }
             if !self.holdsStreamingArrangement { self.streamingArrangement?.modes[id] = arrangementMode }
             for (name, kept) in anchorModes { self.virtualAnchorArrangements[name]?.modes[id] = kept }
             if let start, let i = self.streamingDisplays.firstIndex(where: { $0.display === start.display }) {
@@ -832,8 +851,8 @@ final class VideoManager: ObservableObject {
     }
 
     /// Keeps positions given through DAM, `origins` by display, in everything DAM puts back:
-    /// the layout kept after a streaming display came or went, the one from before the first
-    /// came (unless a remote session holds it), the one each anchor restores, and where each
+    /// the layout kept after a streaming display came or went, the one a streaming change under
+    /// way places, the one from before the first came (unless a remote session holds it), the one each anchor restores, and where each
     /// display was before one joined or left. Only for displays those already hold. Returns
     /// what undoes it, for a change that failed, as `keepUserMode` does.
     @discardableResult
@@ -842,11 +861,14 @@ final class VideoManager: ObservableObject {
         let held = { (kept: DisplayArrangement?) in kept?.origins.filter { ids.contains($0.key) } ?? [:] }
         let settleUntil = streamingSettle?.until
         let settleOrigins = held(streamingSettle?.arrangement)
+        let change = streamingChangesBegun
+        let changeOrigins = held(streamingChangeLayout)
         let arrangementOrigins = held(streamingArrangement)
         let anchorOrigins = virtualAnchorArrangements.mapValues(held)
         let frames = framesBeforeSetChange.filter { ids.contains($0.key) }
 
         streamingSettle = streamingSettle.map { ($0.arrangement.replacingOrigins(origins), $0.until) }
+        streamingChangeLayout = streamingChangeLayout?.replacingOrigins(origins)
         if !holdsStreamingArrangement { streamingArrangement = streamingArrangement?.replacingOrigins(origins) }
         for (name, arrangement) in virtualAnchorArrangements {
             virtualAnchorArrangements[name] = arrangement.replacingOrigins(origins)
@@ -857,6 +879,9 @@ final class VideoManager: ObservableObject {
             guard let self else { return }
             if self.streamingSettle?.until == settleUntil {
                 self.streamingSettle = self.streamingSettle.map { ($0.arrangement.replacingOrigins(settleOrigins), $0.until) }
+            }
+            if self.streamingChangesBegun == change {
+                self.streamingChangeLayout = self.streamingChangeLayout?.replacingOrigins(changeOrigins)
             }
             if !self.holdsStreamingArrangement {
                 self.streamingArrangement = self.streamingArrangement?.replacingOrigins(arrangementOrigins)
@@ -909,11 +934,15 @@ final class VideoManager: ObservableObject {
         }
         let byChoice = streamingDisplayIDs.contains(ownID)
         let settleBefore = streamingSettle
+        let change = streamingChangesBegun
+        let changeLayoutBefore = streamingChangeLayout
         let choose = { [weak self] in
             guard let self else { return }
             self.streamingDisplayIsMainByChoice = byChoice
-            // Or the layout kept after a streaming display came would undo it.
+            // Or the layout kept after a streaming display came, or the one a streaming change
+            // under way places, would undo it.
             self.streamingSettle = self.streamingSettle.map { ($0.arrangement.makingMain(ownID, live: live), $0.until) }
+            self.streamingChangeLayout = self.streamingChangeLayout?.makingMain(ownID, live: live)
         }
         guard CGDisplayIsMain(mainID) == 0 else { choose(); rebase(); completion?(.success(())); return }
         let online  = DisplayArrangement.onlineDisplayIDs()
@@ -935,6 +964,7 @@ final class VideoManager: ObservableObject {
                 // Not made main after all; the layout kept is put back unless replaced meanwhile.
                 self?.streamingDisplayIsMainByChoice = wasByChoice
                 if self?.streamingSettle?.until == settleBefore?.until { self?.streamingSettle = settleBefore }
+                if self?.streamingChangesBegun == change { self?.streamingChangeLayout = changeLayoutBefore }
             } else {
                 rebase()
             }
@@ -1002,10 +1032,13 @@ final class VideoManager: ObservableObject {
     /// seconds, so it runs off the main queue; once it is done and `settle` has passed, the
     /// display list is re-read and `completion` runs on the main queue with the result.
     /// A commit WindowServer has not finished after `timeout` is reported as `.timedOut`
-    /// so callers waiting on it carry on; should it finish later, the list is re-read then.
+    /// so callers waiting on it carry on; should it finish later, the list is re-read then,
+    /// and should it fail then, `lateFailure` runs: what a caller kept of the change, as one
+    /// that may still land, is undone there.
     func commitDisplayChange(_ configure: (CGDisplayConfigRef) -> Void,
                                      settle: TimeInterval = 0.5,
                                      timeout: TimeInterval = 10,
+                                     lateFailure: (() -> Void)? = nil,
                                      completion: @escaping (Result<Void, MirrorError>) -> Void) {
         // Touched on the main queue only: whichever of the commit and the timeout comes first
         // reports, and the other one does not.
@@ -1014,7 +1047,10 @@ final class VideoManager: ObservableObject {
             if err != .success { mirrorLog.error("CompleteDisplayConfiguration err=\(err.rawValue)") }
             DispatchQueue.main.asyncAfter(deadline: .now() + settle) { [weak self] in
                 self?.mergeDevices()
-                guard !reported else { return }
+                guard !reported else {
+                    if err != .success { lateFailure?() }
+                    return
+                }
                 reported = true
                 completion(err == .success ? .success(()) : .failure(.configuration(err)))
             }
@@ -1283,11 +1319,11 @@ final class VideoManager: ObservableObject {
                 CGConfigureDisplayMirrorOfDisplay(cfg, masterID, cgDisplayID)
             }
             CGConfigureDisplayWithDisplayMode(cfg, cgDisplayID, cgMode, nil)
-        }, settle: 0.3) { [weak self] result in
+        }, settle: 0.3, lateFailure: undoKeep) { [weak self] result in
             guard let self, case .success = result else {
                 if case .failure(let error) = result {
                     mirrorLog.error("setMode \(cgDisplayID): \(String(describing: error))")
-                    // One that timed out may still land, and is kept.
+                    // One that timed out may still land, and is kept until it fails.
                     if !error.mayStillLand { undoKeep() }
                 }
                 completion?(result)
