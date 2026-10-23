@@ -572,11 +572,16 @@ final class SettingsWindowController: NSWindowController {
         }
         reach.toolTip = "Where browsers and players may watch from, paired or not."
 
+        let qr = ClosureButton(title: "Pair with a QR Code…") { [weak self] _ in self?.showPairingQRCode() }
+        // A QR code pairs only while new browsers may.
+        qr.isEnabled = WebStreamServer.allowsPairing
         let allowPairing = checkbox(title: "Allow new browsers to pair", isOn: WebStreamServer.allowsPairing,
                                     help: "A browser that opens the address shows a code; typed on this Mac, it lets " +
                                           "that browser watch from then on. Unchecked, only paired browsers and links work.",
-                                    action: { WebStreamServer.allowsPairing = $0 })
-        let qr = ClosureButton(title: "Pair with a QR Code…") { [weak self] _ in self?.showPairingQRCode() }
+                                    action: { [weak qr] in
+                                        WebStreamServer.allowsPairing = $0
+                                        qr?.isEnabled = $0
+                                    })
         qr.bezelStyle = .rounded
         qr.toolTip = "Shows a QR code a phone or tablet scans to pair, with nothing to type. It works once, for five minutes."
 

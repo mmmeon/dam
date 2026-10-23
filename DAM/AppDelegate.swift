@@ -71,8 +71,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AirPlayQuickConnect.shared.configure(videoManager: videoManager, sidecarManager: sidecarManager)
         sidecarAutoConnector = SidecarAutoConnector(sidecar: sidecarManager, video: videoManager)
         sidecarAutoConnector?.start()
-        moonlightHost.requestPIN = { [weak self] address, answer in
-            self?.promptForMoonlightPIN(address: address, answer: answer)
+        moonlightHost.requestPIN = { [weak self] address, isCurrent, answer in
+            self?.promptForMoonlightPIN(address: address, isCurrent: isCurrent, answer: answer)
         }
         moonlightHost.pairingAbandoned = { [weak self] in
             if self?.moonlightPINAlert != nil { NSApp.abortModal() }
@@ -98,12 +98,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if MoonlightHost.isEnabled && !MoonlightHost.usesExternalSunshine { moonlightHost.start() }
         startRemoteSessions()
         webStream.onChange = { [weak self] in self?.rebuild() }
-        webStream.requestCode = { [weak self] address, name, answer in
-            self?.promptForBrowserCode(name: name, answer: answer)
+        webStream.requestCode = { [weak self] address, name, isCurrent, answer in
+            self?.promptForBrowserCode(name: name, isCurrent: isCurrent, answer: answer)
         }
         webStream.makeDisplay = makeStreamDisplay
         webStream.removeDisplay = removeStreamDisplay
         webStream.resizeDisplay = resizeStreamDisplay
+        // A display made for a browser is listed to Moonlight, which may stream it too.
+        webStream.othersStream = { [weak self] id in self?.moonlightHost.streams(display: id) ?? false }
+        webStream.handOverDisplay = { [weak self] id in self?.moonlightHost.adopt(display: id) }
         if WebStreamServer.isEnabled { webStream.start() }
         openDisplay.onChange = { [weak self] in self?.settingsWindow?.openDisplayDidChange() }
         openDisplay.makeDisplay = { [weak self] mode, identity, done in
@@ -113,7 +116,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         openDisplay.removeDisplay = { [weak self] id in self?.videoManager.removeStreamingDisplay(id: id) }
         // Later, not from inside VideoManager's change.
         videoManager.onStreamingDisplayGone = { [weak self] id in
-            DispatchQueue.main.async { self?.openDisplay.displayGone(id) }
+            DispatchQueue.main.async {
+                self?.openDisplay.displayGone(id)
+                self?.webStream.displayGone(id)
+            }
         }
         openDisplay.resizeDisplay = { [weak self] id, mode, done in
             guard let self else { return done(false) }
@@ -287,12 +293,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func rebuild() {
+        // Every display, those hidden from the menu bar and Touch Bar too, which hides no more.
         let apps = videoManager.streamingDisplays.filter { $0.standsInFor == nil }.compactMap { streaming in
-            videoManager.connectedDisplays.first { $0.cgDisplayID == streaming.id }
+            videoManager.allConnectedDisplays.first { $0.cgDisplayID == streaming.id }
                 .map { MoonlightApp(id: streaming.index + 1, title: $0.label, displayID: streaming.id) }
         }
         // The Mac's own displays too, when asked for, those showing a desktop of their own.
-        let own = !MoonlightHost.listsOwnDisplays ? [] : videoManager.connectedDisplays
+        let own = !MoonlightHost.listsOwnDisplays ? [] : videoManager.allConnectedDisplays
             .filter { $0.isConnected && $0.cgDisplayID != 0 && !$0.isStreaming && !$0.isMirroring }
             .map { MoonlightApp(id: MoonlightHost.ownDisplayAppID($0.cgDisplayID), title: $0.label, displayID: $0.cgDisplayID) }
         moonlightHost.apps = apps + own
@@ -742,8 +749,11 @@ extension AppDelegate: NSMenuDelegate {
     /// declines, or when the device gave up meanwhile.
     /// Asks for the code a browser shows while pairing; nil when the user declines. The code
     /// lasts five minutes, and so does the prompt.
-    private func promptForBrowserCode(name: String, answer: @escaping (String?) -> Void) {
+    private func promptForBrowserCode(name: String, isCurrent: @escaping () -> Bool,
+                                      answer: @escaping (String?) -> Void) {
         RunLoop.main.perform(inModes: [.default]) {
+            // Queued while a menu was open, it may be out of date by now.
+            guard isCurrent() else { return answer(nil) }
             let alert = NSAlert()
             alert.messageText = "Let a browser watch?"
             alert.informativeText = "\(name) wants to watch \(AppIdentity.name)'s streaming displays. " +
@@ -764,12 +774,14 @@ extension AppDelegate: NSMenuDelegate {
         }
     }
 
-    private func promptForMoonlightPIN(address: String, answer: @escaping (String?) -> Void) {
+    private func promptForMoonlightPIN(address: String, isCurrent: @escaping () -> Bool,
+                                       answer: @escaping (String?) -> Void) {
         // From the run loop rather than the main queue: a modal prompt run inside a main
         // queue block would hold every other one, the network's and the display changes',
         // until it closed.
         RunLoop.main.perform(inModes: [.default]) { [weak self] in
-            guard let self else { return answer(nil) }
+            // Queued while a menu was open, the device may have given up meanwhile.
+            guard let self, isCurrent() else { return answer(nil) }
             let alert = NSAlert()
             alert.messageText = "Pair with Moonlight?"
             alert.informativeText = "Moonlight on \(address) wants to stream from \(AppIdentity.name). " +
