@@ -37,9 +37,9 @@ final class AudioOutputPicker {
             SpeechSynthesizer.shared.announce(Spoken.noAudioOutputs)
             return
         }
-        let current = enabled.firstIndex { $0.id == audioManager.defaultDeviceID } ?? 0
-        picker.open(choices: enabled.map(\.label),
-                    cursor: ChoicePicker.startCursor(current: current, count: enabled.count)) { [weak audioManager] i in
+        // Nil when the current output is hidden.
+        let current = enabled.firstIndex { $0.id == audioManager.defaultDeviceID }
+        picker.open(choices: enabled.map(\.label), current: current) { [weak audioManager] i in
             guard let audioManager, enabled[i].id != audioManager.defaultDeviceID else { return }
             audioManager.setDefaultDevice(enabled[i])
         }

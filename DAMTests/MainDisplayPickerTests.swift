@@ -23,8 +23,9 @@ final class MainDisplayPickerTests: XCTestCase {
         XCTAssertEqual(current, 1)
     }
 
-    func testChoices_noMainMarked_fallsBackToFirst() {
+    func testChoices_noMainMarked_noneIsCurrent() {
+        // So the first can be picked, and a pause after one press doesn't pick it.
         let (_, current) = MainDisplayPicker.choices(from: [display("a", cgID: 1), display("b", cgID: 2)])
-        XCTAssertEqual(current, 0)
+        XCTAssertNil(current)
     }
 }

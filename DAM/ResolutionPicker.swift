@@ -42,8 +42,7 @@ final class ResolutionPicker {
             SpeechSynthesizer.shared.announce(Spoken.noOtherResolution(for: display.label))
             return
         }
-        let start = current.map { ChoicePicker.startCursor(current: $0, count: modes.count) } ?? 0
-        picker.open(choices: modes.map(\.resolutionLabel), cursor: start) { [weak self] i in
+        picker.open(choices: modes.map(\.resolutionLabel), current: current) { [weak self] i in
             guard i != current else { return }
             self?.select?(modes[i], display)
         }

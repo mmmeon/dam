@@ -28,10 +28,18 @@ extension String {
 final class ChoicePicker: NSObject {
 
     /// Where a picker opens for the choice that is current now: on it, or on the one after
-    /// it, as the preference says.
-    static func startCursor(current: Int, count: Int) -> Int {
-        guard count > 0 else { return 0 }
+    /// it, as the preference says. With none of them current, as when the current one is
+    /// hidden, it opens on the first.
+    static func startCursor(current: Int?, count: Int) -> Int {
+        guard count > 0, let current else { return 0 }
         return VisibilityPreferences.pickerStartsOnCurrent ? current : (current + 1) % count
+    }
+
+    /// Whether the pause picks the choice the picker opened on before any press moved it.
+    /// Not when the picker opens on what is current, yet nothing listed is: the pause would
+    /// then pick the first choice, for a press meant only to see what is current.
+    static func pausePicksStart(current: Int?) -> Bool {
+        current != nil || !VisibilityPreferences.pickerStartsOnCurrent
     }
 
     /// The display under the pointer, for a picker that changes it; nil when there is none,
@@ -59,6 +67,8 @@ final class ChoicePicker: NSObject {
     private var isPreview = false
     /// The choice last spoken, so a pick doesn't repeat it.
     private var spokenIndex: Int?
+    /// False while the pause is to close the picker rather than pick, until the cursor moves.
+    private var pausePicks = true
     /// The app to hand focus back to on close, when DAM was activated for the Touch Bar.
     private var previousApp: NSRunningApplication?
     private var onPick: ((Int) -> Void)?
@@ -84,13 +94,21 @@ final class ChoicePicker: NSObject {
 
     // MARK: - Showing
 
+    /// Shows `choices` opened for `current`, the one that is current now (nil when none
+    /// listed is), as `startCursor(current:count:)` places it. `onPick` runs with the picked index.
+    func open(choices: [String], current: Int?, onPick: @escaping (Int) -> Void) {
+        open(choices: choices, cursor: Self.startCursor(current: current, count: choices.count),
+             pausePicks: Self.pausePicksStart(current: current), onPick: onPick)
+    }
+
     /// Shows `choices` with the cursor on `cursor`. `onPick` runs with the picked index.
-    func open(choices: [String], cursor: Int, preview: Bool = false,
+    func open(choices: [String], cursor: Int, pausePicks: Bool = true, preview: Bool = false,
               onPick: @escaping (Int) -> Void) {
         close()
         self.choices = choices
         self.cursor  = cursor
         self.onPick  = onPick
+        self.pausePicks = pausePicks
         isPreview = preview
         isOpen = true
 
@@ -125,6 +143,7 @@ final class ChoicePicker: NSObject {
 
     private func move(to index: Int) {
         cursor = index
+        pausePicks = true
         content?.setCursor(index)
         updateTouchBar()
         speakCursor()
@@ -142,7 +161,7 @@ final class ChoicePicker: NSObject {
         pickTimer = .scheduledTimer(withTimeInterval: VisibilityPreferences.pickDelay,
                                     repeats: false) { [weak self] _ in
             guard let self else { return }
-            self.pick(self.cursor)
+            if self.pausePicks { self.pick(self.cursor) } else { self.close() }
         }
     }
 
@@ -157,10 +176,11 @@ final class ChoicePicker: NSObject {
 
         let name = choices[index]
         if !isPreview {
-            onPick?(index)
+            // Before the pick, so what it announces, as an error, is heard over the name.
             if Feedback.voice && spokenIndex != index {
                 SpeechSynthesizer.shared.speak(name, caption: false)
             }
+            onPick?(index)
         }
         guard let content else { close(); return }
         content.select(index, hint: pickedHint(name), pulses: false) { [weak self] in
@@ -189,6 +209,7 @@ final class ChoicePicker: NSObject {
         isFinishing = false
         isPreview = false
         spokenIndex = nil
+        pausePicks = true
         onPick = nil
         restoreFocus(to: previousApp)
         previousApp = nil

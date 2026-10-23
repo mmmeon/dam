@@ -50,6 +50,25 @@ final class VisibilityPreferencesTests: XCTestCase {
         XCTAssertEqual(ChoicePicker.startCursor(current: 2, count: 3), 0)
     }
 
+    func testStartCursor_noneCurrent_opensOnTheFirst() {
+        // In both modes: the first is also the one after none.
+        VisibilityPreferences.pickerStartsOnCurrent = true
+        XCTAssertEqual(ChoicePicker.startCursor(current: nil, count: 3), 0)
+        VisibilityPreferences.pickerStartsOnCurrent = false
+        XCTAssertEqual(ChoicePicker.startCursor(current: nil, count: 3), 0)
+        XCTAssertEqual(ChoicePicker.startCursor(current: 2, count: 0), 0)
+    }
+
+    func testPausePicksStart_notTheFirstForNoneCurrent() {
+        VisibilityPreferences.pickerStartsOnCurrent = true
+        XCTAssertTrue(ChoicePicker.pausePicksStart(current: 0))
+        XCTAssertFalse(ChoicePicker.pausePicksStart(current: nil))
+        // Opened on the next choice, a single press and the pause move on, to the first here.
+        VisibilityPreferences.pickerStartsOnCurrent = false
+        XCTAssertTrue(ChoicePicker.pausePicksStart(current: nil))
+        XCTAssertTrue(ChoicePicker.pausePicksStart(current: 1))
+    }
+
     func testPickDelay_defaultsToTwoSeconds() {
         XCTAssertEqual(VisibilityPreferences.pickDelay, 2)
     }
