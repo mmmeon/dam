@@ -377,6 +377,8 @@ extension VideoManager {
         case remove(display: AnyObject)
         case resize(id: CGDirectDisplayID, StreamingDisplayModes.Mode, completion: (Bool) -> Void)
         case rotate(id: CGDirectDisplayID, DisplayRotation, completion: (Bool) -> Void)
+        /// A stand-in and the screen it covers trading places (see `swapPlaces`).
+        case swap(standIn: CGDirectDisplayID, screen: CGDirectDisplayID)
 
         var isAddition: Bool {
             if case .add = self { return true }
@@ -388,7 +390,7 @@ extension VideoManager {
             switch self {
             case .add: return 1
             case .remove: return -1
-            case .resize, .rotate: return 0
+            case .resize, .rotate, .swap: return 0
             }
         }
     }
@@ -502,6 +504,8 @@ extension VideoManager {
                 resizeStreamingDisplay(id: id, mode: mode.rotated(rotation), completion: completion)
             case .rotate(let id, let rotation, let completion):
                 rotateStreamingDisplay(id: id, rotation: rotation, completion: completion)
+            case .swap(let standIn, let screen):
+                commitSwap(standIn, screen)
             }
         }
     }
