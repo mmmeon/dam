@@ -325,9 +325,10 @@ final class OpenDisplayTests: XCTestCase {
         let pendingSends = 0
         let transport: OpenDisplayTransport
         var started = false, closed = false
+        var sent: [Data] = []
         init(_ transport: OpenDisplayTransport) { self.transport = transport }
         func start() { started = true }
-        func send(_ data: Data) {}
+        func send(_ data: Data) { sent.append(data) }
         func close() { closed = true }
     }
 
@@ -359,6 +360,61 @@ final class OpenDisplayTests: XCTestCase {
         XCTAssertTrue(wifi.closed)
         XCTAssertEqual(session.transport, .usb)
         XCTAssertTrue(session.hasLink)
+    }
+
+    /// A connected session's channel saying `hello`.
+    private func say(_ json: String, on channel: FakeChannel) {
+        channel.onReceive?(OpenDisplayWire.framed(Data(json.utf8)))
+    }
+
+    func testAHelloFromAnotherReceiverLosesTheLink() {
+        let sender = OpenDisplaySender()
+        let session = OpenDisplaySession(key: "A-1", name: "iPad", sender: sender)
+        defer { session.end(reason: "test over") }
+        let wifi = FakeChannel(.wifi)
+        session.attach(wifi)
+        wifi.onReady?()
+        say(#"{"type":"hello","id":"B-2","pv":3}"#, on: wifi)
+        // Neither welcomed nor streamed to.
+        XCTAssertTrue(wifi.sent.isEmpty)
+        XCTAssertTrue(wifi.closed)
+        XCTAssertFalse(session.hasLink)
+        XCTAssertEqual(session.key, "A-1")
+
+        // The right one, dialed again, is.
+        let again = FakeChannel(.wifi)
+        session.attach(again)
+        again.onReady?()
+        say(#"{"type":"hello","id":"A-1","pv":3}"#, on: again)
+        XCTAssertFalse(again.sent.isEmpty)
+        XCTAssertFalse(again.closed)
+        XCTAssertTrue(session.hasLink)
+    }
+
+    func testAHelloGivesACabledReceiverItsID() {
+        let sender = OpenDisplaySender()
+        sender.setOn(true, key: "usb:00008027-AB")
+        defer { sender.forget(key: "A-1") }
+        let session = OpenDisplaySession(key: "usb:00008027-AB", name: "iPad", sender: sender)
+        defer { session.end(reason: "test over") }
+        let cable = FakeChannel(.usb)
+        session.attach(cable)
+        cable.onReady?()
+        say(#"{"type":"hello","id":"A-1","pv":3}"#, on: cable)
+        XCTAssertEqual(session.key, "A-1")
+        XCTAssertTrue(session.hasLink)
+        XCTAssertFalse(cable.sent.isEmpty)
+        // Turned on by its ID now, and no longer by its cable's.
+        XCTAssertEqual(sender.receivers.filter(\.isOn).map(\.key), ["A-1"])
+    }
+
+    func testWiFiDialsAlternateWithTheAddressReachedLast() {
+        let found = NWEndpoint.service(name: "iPad", type: OpenDisplayWire.serviceType, domain: "local.", interface: nil)
+        let last = NWEndpoint.hostPort(host: "192.168.1.20", port: 9000)
+        XCTAssertEqual(OpenDisplaySender.wifiEndpoint(found: found, lastReached: last, failures: 0), found)
+        XCTAssertEqual(OpenDisplaySender.wifiEndpoint(found: found, lastReached: last, failures: 1), last)
+        XCTAssertEqual(OpenDisplaySender.wifiEndpoint(found: found, lastReached: last, failures: 2), found)
+        XCTAssertEqual(OpenDisplaySender.wifiEndpoint(found: found, lastReached: nil, failures: 1), found)
     }
 
     func testTCPChannelTalksToAListener() throws {
