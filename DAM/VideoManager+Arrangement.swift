@@ -100,10 +100,10 @@ extension VideoManager {
             for (id, origin) in origins {
                 CGConfigureDisplayOrigin(cfg, id, Int32(origin.x), Int32(origin.y))
             }
-        }) { result in
+        }, lateFailure: undoKeep) { result in
             if case .failure(let error) = result {
                 arrangeLog.error("arrange: \(String(describing: error))")
-                // One that timed out may still land, and is kept.
+                // One that timed out may still land, and is kept until it fails.
                 if !error.mayStillLand { undoKeep() }
             }
             completion?(result)

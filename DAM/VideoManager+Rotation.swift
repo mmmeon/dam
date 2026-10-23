@@ -178,14 +178,37 @@ extension VideoManager {
     }
 
     /// Swaps the places of a stand-in and the screen it covers, held for a moment by the layout
-    /// kept after a streaming change. Committed here, not by putting that layout back: it
+    /// kept after a streaming change. Committed by itself, not by putting that layout back: it
     /// leaves an anchor's place to the anchor, and a screen an anchor drives is the anchor.
+    /// Queued with the streaming changes, so it races neither one under way nor a reassert,
+    /// and a removal asked for after it (the stand-in's, as a presentation ends) comes after.
     private func swapPlaces(_ standInID: CGDirectDisplayID, _ screenID: CGDirectDisplayID) {
-        let live = DisplayArrangement.current()
-        let swapped = Self.swappedOrigins(standInID, screenID, in: live.origins)
-        guard !swapped.isEmpty else { return }
-        streamingSettle = (live.replacingOrigins(swapped), Date().addingTimeInterval(5))
-        // As a reassert: streaming changes wait for it, and it looks again once it has landed.
+        streamingRequests.append(.swap(standIn: standInID, screen: screenID))
+        processStreamingRequests()
+    }
+
+    /// The layout to keep once displays `a` and `b` have swapped places, and the origins that
+    /// swap them: by where they are in `settle`, the layout kept after the last streaming
+    /// change, which WindowServer may not have reached yet, else by `live`. Nil when either
+    /// isn't in them.
+    static func swappedLayout(_ a: CGDirectDisplayID, _ b: CGDirectDisplayID, settle: DisplayArrangement?,
+                              live: DisplayArrangement) -> (layout: DisplayArrangement, origins: [CGDirectDisplayID: CGPoint])? {
+        for layout in [settle, live].compactMap({ $0 }) {
+            let swapped = swappedOrigins(a, b, in: layout.origins)
+            if !swapped.isEmpty { return (layout.replacingOrigins(swapped), swapped) }
+        }
+        return nil
+    }
+
+    /// Commits a swap queued by `swapPlaces`, as a reassert: streaming changes wait for it, and
+    /// it looks again once it has landed.
+    func commitSwap(_ standInID: CGDirectDisplayID, _ screenID: CGDirectDisplayID) {
+        // A removal, or a display going, can have come first.
+        let online = DisplayArrangement.onlineDisplayIDs()
+        guard online.contains(standInID), online.contains(screenID),
+              let (layout, swapped) = Self.swappedLayout(standInID, screenID, settle: activeStreamingSettle,
+                                                         live: DisplayArrangement.current()) else { return }
+        streamingSettle = (layout, Date().addingTimeInterval(5))
         let start = Self.configureDisplays(in: .permanently, { cfg in
             for (id, origin) in swapped { CGConfigureDisplayOrigin(cfg, id, Int32(origin.x), Int32(origin.y)) }
             return true

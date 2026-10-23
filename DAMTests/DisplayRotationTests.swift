@@ -189,6 +189,37 @@ final class DisplayRotationTests: XCTestCase {
         XCTAssertTrue(VideoManager.swappedOrigins(9, 9, in: origins).isEmpty)
     }
 
+    func testASwapGoesByTheLayoutKeptAfterAStreamingChange() throws {
+        // The stand-in 9 was just placed right of the rest; WindowServer still has it elsewhere.
+        let settle = DisplayArrangement(origins: [1: .zero, 7: CGPoint(x: 1440, y: 0), 9: CGPoint(x: 3360, y: 0)],
+                                        mirrorMasters: [1: 0, 7: 0, 9: 0])
+        let live = DisplayArrangement(origins: [1: .zero, 7: CGPoint(x: 1440, y: 0), 9: CGPoint(x: 0, y: -1080)],
+                                      mirrorMasters: [1: 0, 7: 0, 9: 0])
+        let swap = try XCTUnwrap(VideoManager.swappedLayout(9, 7, settle: settle, live: live))
+        XCTAssertEqual(swap.origins, [9: CGPoint(x: 1440, y: 0), 7: CGPoint(x: 3360, y: 0)])
+        XCTAssertEqual(swap.layout.origins, [1: .zero, 9: CGPoint(x: 1440, y: 0), 7: CGPoint(x: 3360, y: 0)])
+        // A kept layout without them: by the live one.
+        let other = DisplayArrangement(origins: [1: .zero], mirrorMasters: [1: 0])
+        let byLive = try XCTUnwrap(VideoManager.swappedLayout(9, 7, settle: other, live: live))
+        XCTAssertEqual(byLive.origins, [9: CGPoint(x: 1440, y: 0), 7: CGPoint(x: 0, y: -1080)])
+        XCTAssertNil(VideoManager.swappedLayout(9, 8, settle: settle, live: live))
+    }
+
+    func testASwapWaitsForAStreamingChangeUnderWay() {
+        let manager = VideoManager()
+        manager.streamingChangeInFlight = true
+        // Asked as a presentation ends, the stand-in's removal after it.
+        manager.streamingRequests.append(.swap(standIn: 9001, screen: 9002))
+        manager.processStreamingRequests()
+        XCTAssertEqual(manager.streamingRequests.count, 1)
+        XCTAssertEqual(manager.streamingRequests.first?.countChange, 0)
+        // Once it has landed, the swap runs, and does nothing with displays that are gone.
+        manager.streamingChangeInFlight = false
+        manager.processStreamingRequests()
+        XCTAssertTrue(manager.streamingRequests.isEmpty)
+        XCTAssertFalse(manager.streamingReassertInFlight)
+    }
+
     private func display(_ name: String, id: CGDirectDisplayID, connected: Bool = true,
                          streaming: Bool = false) -> DisplayInfo {
         DisplayInfo(id: name, name: name, isConnected: connected, cgDisplayID: connected ? id : 0,

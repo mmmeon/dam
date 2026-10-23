@@ -67,6 +67,67 @@ final class VideoManagerFilterTests: XCTestCase {
                        [2: "Dell", 3: "Dell (3)", 4: "Dell (4)", 5: "Dell (2)"])
     }
 
+    func testDistinctNames_aSecondWithALowerSerialLeavesTheFirstItsName() {
+        // "DELL" was alone; one more comes with a lower serial number.
+        let names: [CGDirectDisplayID: String] = [2: "DELL", 3: "DELL"]
+        XCTAssertEqual(VideoManager.distinctNames(names, kept: [2: "DELL"], rank: ranked([2: 900, 3: 100])),
+                       [2: "DELL", 3: "DELL (2)"])
+    }
+
+    func testDistinctNames_oneLeftOfTwoKeepsItsNumber() {
+        // "DELL" went: what is saved under "DELL" is the other one's.
+        XCTAssertEqual(VideoManager.distinctNames([3: "DELL"], kept: [3: "DELL (2)"], rank: ranked([:])),
+                       [3: "DELL (2)"])
+        // It comes back and takes its name again.
+        XCTAssertEqual(VideoManager.distinctNames([2: "DELL", 3: "DELL"], kept: [3: "DELL (2)"],
+                                                  rank: ranked([2: 900, 3: 100])),
+                       [2: "DELL", 3: "DELL (2)"])
+    }
+
+    func testDistinctNames_aNewcomerTakesTheNameItHadWhenLastSeen() {
+        let names: [CGDirectDisplayID: String] = [2: "DELL", 3: "DELL"]
+        // Both come at once (a launch), the one with the higher serial last seen as "DELL".
+        let remembered: [CGDirectDisplayID: String] = [2: "DELL", 3: "DELL (2)"]
+        XCTAssertEqual(VideoManager.distinctNames(names, remembered: { remembered[$0] }, rank: ranked([2: 900, 3: 100])),
+                       [2: "DELL", 3: "DELL (2)"])
+        // One kept now wins over one remembered.
+        XCTAssertEqual(VideoManager.distinctNames(names, kept: [3: "DELL"], remembered: { remembered[$0] },
+                                                  rank: ranked([:])),
+                       [3: "DELL", 2: "DELL (2)"])
+    }
+
+    func testDistinctNames_keptOrRememberedNamesThatNoLongerFitAreDropped() {
+        let names: [CGDirectDisplayID: String] = [2: "Dell", 3: "Dell", 5: "Dell (2)"]
+        // Another model's name, and a display that really goes by "Dell (2)".
+        XCTAssertEqual(VideoManager.distinctNames(names, kept: [2: "LG", 3: "Dell (2)"], rank: ranked([:])),
+                       [2: "Dell", 3: "Dell (3)", 5: "Dell (2)"])
+        XCTAssertEqual(VideoManager.distinctNames(names, remembered: { $0 == 2 ? "Dell (x)" : nil }, rank: ranked([:])),
+                       [2: "Dell", 3: "Dell (3)", 5: "Dell (2)"])
+    }
+
+    func testDistinctNames_twoKeptUnderOneNameAreToldApart() {
+        let names: [CGDirectDisplayID: String] = [2: "DELL", 3: "DELL"]
+        XCTAssertEqual(VideoManager.distinctNames(names, kept: [2: "DELL", 3: "DELL"], rank: ranked([2: 900, 3: 100])),
+                       [3: "DELL", 2: "DELL (2)"])
+    }
+
+    func testMonitorKey_noSerialNoKey() {
+        XCTAssertNil(VisibilityPreferences.monitorKey(vendor: 0x10ac, model: 0xa0c4, serial: 0))
+        XCTAssertNotEqual(VisibilityPreferences.monitorKey(vendor: 0x10ac, model: 0xa0c4, serial: 1),
+                          VisibilityPreferences.monitorKey(vendor: 0x10ac, model: 0xa0c4, serial: 2))
+    }
+
+    // MARK: - VideoManager.isDAMDisplayGoing
+
+    func testDAMsDisplaysAreListedOnlyWhileStreaming() {
+        let dam = VideoManager.anchorVendorID
+        // The bootstrap stand-in or an anchor going, a streaming display removed or not found yet.
+        XCTAssertTrue(VideoManager.isDAMDisplayGoing(7, vendor: dam, streaming: []))
+        XCTAssertTrue(VideoManager.isDAMDisplayGoing(7, vendor: dam, streaming: [8]))
+        XCTAssertFalse(VideoManager.isDAMDisplayGoing(7, vendor: dam, streaming: [7]))
+        XCTAssertFalse(VideoManager.isDAMDisplayGoing(7, vendor: 0x10ac, streaming: []))
+    }
+
     // MARK: - VideoManager.filter(airPlayDevices:hidden:)
 
     func testFilterAirPlay_emptyList_returnsEmpty() {

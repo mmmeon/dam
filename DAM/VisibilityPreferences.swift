@@ -371,4 +371,20 @@ enum VisibilityPreferences {
         setNames(split, splitDisplaysKey)
         if !isVisible(display: base) { setVisible(false, display: name) }
     }
+
+    private static let monitorNamesKey = "\(AppIdentity.shortID).names.displays"
+
+    /// The name each monitor went by when last seen, by `monitorKey`: one of a model DAM
+    /// told apart by " (2)" gets the same again when it comes back, so what is saved under it
+    /// stays its own (see `VideoManager.distinctNames`).
+    static var monitorNames: [String: String] {
+        get { UserDefaults.dam.dictionary(forKey: monitorNamesKey) as? [String: String] ?? [:] }
+        set { UserDefaults.dam.set(newValue, forKey: monitorNamesKey) }
+    }
+
+    /// What a monitor's name is remembered by: its vendor, model and serial number, or nil
+    /// when it reports no serial number, which tells nothing apart.
+    static func monitorKey(vendor: UInt32, model: UInt32, serial: UInt32) -> String? {
+        serial == 0 ? nil : String(format: "%08x-%08x-%08x", vendor, model, serial)
+    }
 }
