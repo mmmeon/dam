@@ -454,6 +454,11 @@ final class WebStreamTests: XCTestCase {
     /// The status line of the answer to `request`, sent as it is, as a page on another name
     /// would have its browser send it; empty if the connection closed without one.
     private func raw(_ request: String, port: NWEndpoint.Port) -> String {
+        rawAnswer(request, port: port).components(separatedBy: "\r\n").first ?? ""
+    }
+
+    /// The whole answer to `request`, sent as it is.
+    private func rawAnswer(_ request: String, port: NWEndpoint.Port) -> String {
         let connection = NWConnection(host: "127.0.0.1", port: port, using: .tcp)
         defer { connection.cancel() }
         let done = expectation(description: "answer")
@@ -468,7 +473,7 @@ final class WebStreamTests: XCTestCase {
         connection.send(content: Data(request.utf8), completion: .idempotent)
         read()
         wait(for: [done], timeout: 10)
-        return String(decoding: response, as: UTF8.self).components(separatedBy: "\r\n").first ?? ""
+        return String(decoding: response, as: UTF8.self)
     }
 
     /// Started again at once, as for a new certificate, the server is running from the start
@@ -645,6 +650,74 @@ final class WebStreamTests: XCTestCase {
         // Stopped, it answers nothing.
         server.stop()
         XCTAssertEqual(try get("/watch").status, 0)
+    }
+
+    /// Names the user adds are kept as a Host header gives them, and only one of them exactly
+    /// counts as the Mac's.
+    func testNamesTheUserAddsAreKeptAsHostsGiveThem() {
+        let saved = WebStreamServer.extraHostNames
+        defer { WebStreamServer.extraHostNames = saved }
+        WebStreamServer.extraHostNames = [" Mac.Home.Example.com. ", "mac.home.example.com:47995", "", "  ",
+                                          "[fd00::1]:47995", "nas.example.org"]
+        XCTAssertEqual(WebStreamServer.extraHostNames, ["mac.home.example.com", "fd00::1", "nas.example.org"])
+        XCTAssertEqual(WebStreamServer.hostName("::1"), "::1", "an IPv6 address has no port without brackets")
+
+        let server = WebStreamServer(directory: FileManager.default.temporaryDirectory)
+        func names(_ host: String) -> Bool {
+            server.namesThisMac(WebStreamServer.Request(path: "/", query: [:], headers: ["host": host],
+                                                        secure: false, peer: nil))
+        }
+        XCTAssertTrue(names("mac.home.example.com:47995"))
+        XCTAssertTrue(names("MAC.home.example.com."))
+        XCTAssertFalse(names("evil.example"), "a name not listed")
+        XCTAssertFalse(names("home.example.com"), "no more than the name")
+        XCTAssertFalse(names("x.mac.home.example.com"), "nor anything under it")
+        WebStreamServer.extraHostNames = []
+        XCTAssertFalse(names("mac.home.example.com"))
+    }
+
+    /// A browser on a name the user added pairs and uses its cookie there, as on the Mac's own.
+    func testANameTheUserAddedPairsAndUsesTheCookie() throws {
+        let saved = WebStreamServer.extraHostNames
+        defer { WebStreamServer.extraHostNames = saved }
+        WebStreamServer.extraHostNames = ["mac.home.example.com"]
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let server = startedServer(directory: directory)
+        defer { server.stop() }
+        var prompt: ((String?) -> Void)?
+        server.requestCode = { _, _, _, answer in prompt = answer }
+        let port = server.port
+
+        /// The answer to `method path` from a page on `host`: its status line, JSON body and cookie.
+        func answer(_ method: String, _ path: String, host: String, cookie: String? = nil)
+            -> (status: String, body: [String: String], cookie: String?) {
+            var request = "\(method) \(path) HTTP/1.1\r\nHost: \(host):\(port.rawValue)\r\n" +
+                          "Origin: http://\(host):\(port.rawValue)\r\n"
+            if let cookie { request += "Cookie: \(cookie)\r\n" }
+            let parts = rawAnswer(request + "\r\n", port: port).components(separatedBy: "\r\n\r\n")
+            let lines = parts[0].components(separatedBy: "\r\n")
+            let set = lines.first { $0.lowercased().hasPrefix("set-cookie:") }
+                .flatMap { $0.dropFirst("set-cookie:".count).trimmingCharacters(in: .whitespaces)
+                    .components(separatedBy: ";").first }
+            let body = parts.count > 1
+                ? (try? JSONSerialization.jsonObject(with: Data(parts[1].utf8))) as? [String: String] ?? [:] : [:]
+            return (lines[0], body, set)
+        }
+
+        XCTAssertEqual(answer("POST", "/pair/begin", host: "evil.example").status, "HTTP/1.1 403 Forbidden",
+                       "a name not listed")
+        let begun = answer("POST", "/pair/begin", host: "mac.home.example.com")
+        XCTAssertEqual(begun.status, "HTTP/1.1 200 OK")
+        XCTAssertEqual(begun.body["state"], "waiting")
+        prompt?(begun.body["code"])
+        let waited = answer("GET", "/pair/wait?id=\(begun.body["id"] ?? "")", host: "mac.home.example.com")
+        XCTAssertEqual(waited.body["state"], "paired")
+        let cookie = try XCTUnwrap(waited.cookie)
+        XCTAssertEqual(answer("GET", "/apps.json", host: "mac.home.example.com", cookie: cookie).status,
+                       "HTTP/1.1 200 OK")
+        XCTAssertEqual(answer("GET", "/apps.json", host: "evil.example", cookie: cookie).status,
+                       "HTTP/1.1 401 Unauthorized", "the cookie only on a name of the Mac's")
     }
 
     /// A server on ports of its own, listening.

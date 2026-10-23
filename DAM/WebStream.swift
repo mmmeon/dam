@@ -423,15 +423,7 @@ final class WebStreamServer {
         }
 
         /// The Host header's name or address, in lower case and without its port; nil without one.
-        var host: String? {
-            guard var host = headers["host"]?.lowercased(), !host.isEmpty else { return nil }
-            if host.hasPrefix("[") {
-                guard let end = host.firstIndex(of: "]") else { return nil }
-                return String(host[host.index(after: host.startIndex)..<end])
-            }
-            if let colon = host.lastIndex(of: ":") { host = String(host[..<colon]) }
-            return host.hasSuffix(".") ? String(host.dropLast()) : host
-        }
+        var host: String? { headers["host"].flatMap(WebStreamServer.hostName) }
 
         /// Whether a browser's page sent it from its own origin: the Origin header, when there
         /// is one, is this server's as the Host header names it, and Sec-Fetch-Site, when sent,
@@ -444,18 +436,47 @@ final class WebStreamServer {
         }
     }
 
+    /// The name or address in `value`, as a Host header or the user gives it: in lower case,
+    /// without whitespace, its port or a trailing dot; nil if nothing is left.
+    static func hostName(_ value: String) -> String? {
+        var host = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if host.hasPrefix("[") {
+            guard let end = host.firstIndex(of: "]") else { return nil }
+            host = String(host[host.index(after: host.startIndex)..<end])
+        } else if IPv6Address(host) == nil, let colon = host.lastIndex(of: ":") {
+            host = String(host[..<colon])
+        }
+        if host.hasSuffix(".") { host.removeLast() }
+        return host.isEmpty ? nil : host
+    }
+
+    private static let extraHostNamesKey = "\(AppIdentity.shortID).browser.extraHostNames"
+
+    /// Names of the user's own that lead to the Mac, such as a subdomain of a domain of
+    /// theirs: a Host that is exactly one of them pairs and uses the cookie as the Mac's own
+    /// names do. Kept as `hostName` gives them, without repeats.
+    static var extraHostNames: [String] {
+        get { UserDefaults.dam.stringArray(forKey: extraHostNamesKey) ?? [] }
+        set {
+            var names: [String] = []
+            for name in newValue.compactMap(hostName) where !names.contains(name) { names.append(name) }
+            UserDefaults.dam.set(names, forKey: extraHostNamesKey)
+        }
+    }
+
     /// Names only a local network gives out, as a router's DNS does: no page on the internet
     /// can have one.
     private static let localSuffixes = [".local", ".lan", ".home", ".home.arpa", ".internal", ".localdomain", ".localhost"]
 
     /// Whether `request` was sent to one of the Mac's names or to an address, not to a name
     /// of someone else's that leads here (DNS rebinding), whose page would otherwise pair as
-    /// its own origin and hold the cookie. Any name of the local network's counts, and the
-    /// names of an imported server certificate.
+    /// its own origin and hold the cookie. Any name of the local network's counts, the names
+    /// of an imported server certificate, and those the user added (`extraHostNames`).
     func namesThisMac(_ request: Request) -> Bool {
         guard let host = request.host else { return false }
         if IPv4Address(host) != nil || IPv6Address(host) != nil { return true }
         if !host.contains(".") || Self.localSuffixes.contains(where: { host.hasSuffix($0) }) { return true }
+        if Self.extraHostNames.contains(host) { return true }
         var names = WebStreamCertificates.hostNames().map { $0.lowercased() }
         if let local = WebStreamCertificates.localHostName?.lowercased() { names.append(local) }
         if case .importedServer(let covered, _)? = certificates?.source {
