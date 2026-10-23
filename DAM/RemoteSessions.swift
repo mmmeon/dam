@@ -276,6 +276,8 @@ enum SessionError: Error, Equatable, CustomStringConvertible {
     case notFromLink(String)
     /// A link asked to black out the screens.
     case blackoutFromLink
+    /// A link asked for a display to be adopted, which could be one of the Mac's own.
+    case adoptFromLink
 
     var description: String {
         switch self {
@@ -286,6 +288,8 @@ enum SessionError: Error, Equatable, CustomStringConvertible {
             return "The \(RemoteSessionApp.name(of: app)) session wasn't started by a link, so a link can't end or join it."
         case .blackoutFromLink:
             return "A link can't black out the screens; the command line can."
+        case .adoptFromLink:
+            return "A link can't ask for a display to be adopted; the command line can."
         }
     }
 }
@@ -310,6 +314,11 @@ protocol SessionDisplays: AnyObject {
     func isListed(_ id: CGDirectDisplayID) -> Bool
     /// Places display `id` as `placement` says; `completion` gets whether it was done.
     func place(_ id: CGDirectDisplayID, _ placement: SessionProfile.Placement, completion: @escaping (Bool) -> Void)
+    /// Undoes `placement` on display `id`, which DAM didn't make: frees it from mirroring, or
+    /// makes `main` the main display again while it is online.
+    func unplace(_ id: CGDirectDisplayID, _ placement: SessionProfile.Placement, main: CGDirectDisplayID?)
+    /// The main display now.
+    var mainDisplayID: CGDirectDisplayID? { get }
     var outputUID: String? { get }
     /// Makes the output with `uid` the default; false when it isn't connected.
     func setOutput(uid: String) -> Bool
@@ -342,6 +351,10 @@ final class RemoteSessionCoordinator {
         var displayID: CGDirectDisplayID?
         /// Whether DAM made the display, and removes it at the end.
         var madeDisplay = false
+        /// For a display DAM didn't make, how it was placed and which display was main before
+        /// DAM placed it, to put back at the end: removing it isn't DAM's to do.
+        var placementBefore: SessionProfile.Placement?
+        var mainBefore: CGDirectDisplayID?
         /// The mode DAM made it in.
         var madeMode: StreamingDisplayModes.Mode?
         /// What setting up came to, which may not be what was asked: the display's mode
@@ -464,9 +477,14 @@ final class RemoteSessionCoordinator {
     func begin(_ request: SessionRequest, completion: @escaping (Result<SessionStart, SessionError>) -> Void) {
         let app = request.app
         if request.origin == .link, request.blackout == true { return completion(.failure(.blackoutFromLink)) }
+        if request.origin == .link, request.display == .adopt { return completion(.failure(.adoptFromLink)) }
         if var session = sessions[app] {
             if request.origin == .link, session.fromLinks < session.count {
                 return completion(.failure(.notFromLink(app)))
+            }
+            if request.origin != .link, session.fromLinks >= session.count {
+                guard request.applied(to: profile(for: app)).enabled else { return completion(.failure(.disabled(app))) }
+                return setUpAgain(session, for: request, completion: completion)
             }
             session.count += 1
             if request.origin == .link { session.fromLinks += 1 }
@@ -543,9 +561,34 @@ final class RemoteSessionCoordinator {
                     return self.switchOutput(app, profile: profile, start: start)
                 }
                 start.displayID = displayID
+                self.sessions[app]?.placementBefore = self.displays.placement(of: displayID)
+                self.sessions[app]?.mainBefore = self.displays.mainDisplayID
                 self.place(app, displayID, profile: profile, start: start)
             }
         }
+    }
+
+    /// Sets `app`'s session, which only links started, up again for `request`, from the
+    /// command line or a detector: what a link set up isn't what the app's own start asks
+    /// for (its display, output and placement, and the screens left lit), and its end would
+    /// leave the links' starts keeping the session on. The links' starts are carried over,
+    /// so each of them still ends one.
+    private func setUpAgain(_ session: Session, for request: SessionRequest,
+                            completion: @escaping (Result<SessionStart, SessionError>) -> Void) {
+        let app = request.app
+        // Once it is set up, or has failed.
+        guard !session.starting else {
+            waiting[app, default: []].append { [weak self] _ in self?.begin(request, completion: completion) }
+            return
+        }
+        rsLog.debug("\(app): setting up again for a start that isn't a link's")
+        let links = session.fromLinks
+        end(app: app, all: true)
+        begin(request, completion: completion)
+        // Unless it failed at once.
+        guard links > 0, let new = sessions[app], new.id != session.id else { return }
+        sessions[app]?.count += links
+        sessions[app]?.fromLinks = links
     }
 
     /// How many times to look for the display an app makes, `adoptInterval` apart.
@@ -579,6 +622,14 @@ final class RemoteSessionCoordinator {
             var start = start
             if !placed { start.warnings.append("The display couldn't be made \(profile.placement.rawValue).") }
             self.sessions[app]?.placementAtStart = self.displays.placement(of: id)
+            // Taking main or mirroring moves the others' displays: as setting up came to for
+            // them, not a change of theirs to learn.
+            if placed {
+                for (other, session) in self.sessions where other != app {
+                    guard let theirs = session.displayID else { continue }
+                    self.sessions[other]?.placementAtStart = self.displays.placement(of: theirs)
+                }
+            }
             self.switchOutput(app, profile: profile, start: start)
         }
     }
@@ -657,10 +708,25 @@ final class RemoteSessionCoordinator {
         learn(from: session)
         // Removing the display puts the other displays back as they were before it came.
         if let id = session.displayID, session.madeDisplay { displays.removeDisplay(id) }
+        // An app's display stays: what DAM made of it is put back, main or mirroring.
+        if let id = session.displayID, !session.madeDisplay, let now = displays.placement(of: id),
+           now != .extend, now != session.placementBefore {
+            displays.unplace(id, now, main: session.mainBefore)
+        }
         if session.blacksOut { updateBlackout() }
-        if session.ownsOutput, !sessions.values.contains(where: \.ownsOutput), let uid = outputToRestore {
-            if !displays.setOutput(uid: uid) { rsLog.error("\(app): the output from before isn't connected") }
-            outputToRestore = nil
+        if session.ownsOutput {
+            if let owner = sessions.values.filter(\.ownsOutput).max(by: { $0.started < $1.started }) {
+                // Back to the output of the latest session still with its own, unless it was
+                // changed since this one switched it.
+                if let uid = owner.profile.audioOutputUID ?? owner.outputAfterStart,
+                   displays.outputUID == session.outputAfterStart, displays.outputUID != uid,
+                   !displays.setOutput(uid: uid) {
+                    rsLog.error("\(app): \(owner.app)'s output isn't connected")
+                }
+            } else if let uid = outputToRestore {
+                if !displays.setOutput(uid: uid) { rsLog.error("\(app): the output from before isn't connected") }
+                outputToRestore = nil
+            }
             // Put back for the others, not changed by them: theirs to compare with, not learn.
             for other in sessions.keys { sessions[other]?.outputAfterStart = displays.outputUID }
         }
@@ -850,6 +916,23 @@ final class LiveSessionDisplays: SessionDisplays {
         StreamingDisplayModes.Mode(width: width, height: height, refreshRate: Int(refreshRate.rounded()),
                                    hiDPI: pixelWidth > width).rotated((turned ?? .standard).inverse)
     }
+
+    func unplace(_ id: CGDirectDisplayID, _ placement: SessionProfile.Placement, main: CGDirectDisplayID?) {
+        let online = video.allConnectedDisplays
+        guard let display = online.first(where: { $0.cgDisplayID == id }) else { return }
+        let done: (Result<Void, VideoManager.MirrorError>) -> Void = { result in
+            if case .failure(let error) = result { rsLog.error("put back \(id): \(String(describing: error))") }
+        }
+        switch placement {
+        case .extend: break
+        case .main:
+            guard let main, main != id, let before = online.first(where: { $0.cgDisplayID == main }) else { return }
+            video.setMainDisplay(before, completion: done)
+        case .mirror: video.extend(display, completion: done)
+        }
+    }
+
+    var mainDisplayID: CGDirectDisplayID? { CGMainDisplayID() }
 
     func holdLayout(_ hold: Bool) { video.holdsStreamingArrangement = hold }
 

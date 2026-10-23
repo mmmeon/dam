@@ -408,6 +408,30 @@ final class OpenDisplayTests: XCTestCase {
         XCTAssertEqual(sender.receivers.filter(\.isOn).map(\.key), ["A-1"])
     }
 
+    func testAReceiverInstalledAgainOnTheCableTakesItsNewID() {
+        let sender = OpenDisplaySender()
+        sender.setOn(true, key: "usb:00008027-CD")
+        defer { sender.forget(key: "A-2") }
+        let session = OpenDisplaySession(key: "usb:00008027-CD", name: "iPad", sender: sender)
+        defer { session.end(reason: "test over") }
+        let cable = FakeChannel(.usb)
+        session.attach(cable)
+        cable.onReady?()
+        say(#"{"type":"hello","id":"A-1","pv":3}"#, on: cable)
+        XCTAssertEqual(session.key, "A-1")
+
+        // Installed again, it says another ID over the same cable: still the device's.
+        let again = FakeChannel(.usb)
+        session.attach(again)
+        again.onReady?()
+        say(#"{"type":"hello","id":"A-2","pv":3}"#, on: again)
+        XCTAssertEqual(session.key, "A-2")
+        XCTAssertTrue(session.hasLink)
+        XCTAssertFalse(again.closed)
+        XCTAssertFalse(again.sent.isEmpty)
+        XCTAssertEqual(sender.receivers.filter(\.isOn).map(\.key), ["A-2"])
+    }
+
     func testWiFiDialsAlternateWithTheAddressReachedLast() {
         let found = NWEndpoint.service(name: "iPad", type: OpenDisplayWire.serviceType, domain: "local.", interface: nil)
         let last = NWEndpoint.hostPort(host: "192.168.1.20", port: 9000)

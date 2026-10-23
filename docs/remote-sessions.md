@@ -37,10 +37,14 @@ are kept instead, in the app's profile, for its next session:
 - **Placement:** the session's display made main or mirrored through DAM, or put back to
   extended. Main and mirrored count only when chosen through DAM, not when WindowServer
   applied a layout it saved for the display. Nothing is kept when the display is already gone,
-  as when an app removes its own display and so ends the session.
+  as when an app removes its own display and so ends the session. Nor when another session's
+  display took main or was mirrored: with Parsec and RustDesk both on, both Main, the first
+  doesn't learn Extend.
 - **Size:** a resolution or refresh rate picked for the display DAM made.
 - **Sound:** another output picked while the session was on. An output another session
-  switched to, or put back when it ended, doesn't count.
+  switched to, or put back when it ended, doesn't count. When two sessions each switch the
+  output and the later ends first, the output goes back to the earlier one's, unless it was
+  changed meanwhile; an output picked while both are on is kept by neither.
 - **Blackout:** lifting it from the menu turns it off for the next sessions.
 
 A setting picked in Settings › Remote Sessions is locked, and the lock beside it closes.
@@ -120,13 +124,22 @@ which would keep it on after the app's own end. Such a URL is refused and logged
 URL black out the screens, which would leave whoever is at the Mac in the dark: one with
 `blackout=yes` is refused and logged too, and a session a URL starts leaves the screens lit
 even when the app's profile blacks out, as `--blackout no` would, and leaves the profile as
-it is.
+it is. Nor can a URL ask for a display to be adopted (`display=adopt`), as it could name one
+of the Mac's own screens (`app=retina`) and make it main or mirrored; a profile that adopts
+still does.
+
+A session only URLs started is set up again when the app's own start joins it (the command
+line or a detector): its display, placement, output and blackout are then the app's profile's,
+not the URL's. The URLs' starts carry over, each still ending one, and the app's end ends the
+session.
 
 Every session has *End and Put Back* in its menu. One that follows another app's display
 (OpenDisplay, or a profile that adopts, when DAM saw the session start) also says it ends when
 the app stops; ending it by hand puts the output back and lights the screens, and leaves the
-app's display and stream as they are. A session asked to adopt a display that never comes
-doesn't black out the screens, as nothing would be left lit.
+app's display and stream as they are. An adopted display stays when its session ends, so
+DAM puts back what it made of it: mirroring is undone, and a display made main hands main back
+to the one that had it. A session asked to adopt a display that never comes doesn't black out
+the screens, as nothing would be left lit.
 
 ## Watching for sessions
 
@@ -137,7 +150,7 @@ doesn't black out the screens, as nothing would be left lit.
 | Screen Sharing | `screensharingd` running; it runs only while someone is connected. The session ends 5 s after it exits. | No (Screen Sharing is off here) |
 | Chrome Remote Desktop | `Client connected:` / `Client disconnected:` in `/var/log/org.chromium.chromoting.log`; ends too when `remoting_me2me_host` quits | No (not installed) |
 | TeamViewer | `TeamViewer_Desktop` running | No (not installed) |
-| OpenDisplay | `capture started: … display ID … mode extend\|mirror … session ID` / `capture ended: session ID` in `~/Library/Logs/OpenDisplay/opendisplay.log` (`OpenDisplay Dev/` for the Debug build, whichever changed last). Ends too when OpenDisplay quits or starts again, and a session already on when DAM starts is taken up while OpenDisplay runs, if its line was written since OpenDisplay started (by the line's time of day), so a crash's leftover isn't. Extending, the session adopts that display; mirroring, it leaves the displays alone. | Yes, with an iPad over WiFi: extend, mirror, switching between them, and DAM relaunched mid-session |
+| OpenDisplay | `capture started: … display ID … mode extend\|mirror … session ID` / `capture ended: session ID` in `~/Library/Logs/OpenDisplay/opendisplay.log` (`OpenDisplay Dev/` for the Debug build, whichever changed last). Ends too when OpenDisplay quits or starts again, and a session already on when DAM starts is taken up while OpenDisplay runs, if its line was written since OpenDisplay started (by the line's time of day), so a crash's leftover isn't. Times of day can't date a line against a start over a day ago, so once OpenDisplay has run that long nothing is taken up (a session on then starts with the next `capture started`); read back from the end, the lines also stop at one later in the day than the line after it, written a day or more before. Extending, the session adopts that display; mirroring, it leaves the displays alone. | Yes, with an iPad over WiFi: extend, mirror, switching between them, and DAM relaunched mid-session |
 | Another app's display | A display whose name contains the given text is online | Yes, with a stand-in virtual display |
 | An app added in Settings | Its log's lines matching the Opened and Closed patterns; a process running; or a display it makes, as above. A log's app can be given its process too: then its sessions end when that process quits, a line opening a connection counts only while it runs, and what the log shows open when DAM starts watching isn't taken up, as with Parsec | In unit tests only |
 
