@@ -54,7 +54,12 @@ extension VideoManager {
                 completion(done)
             }
         } else if !hasVirtualAnchor(for: display.name), SystemRotation.canRotate(display.cgDisplayID) {
-            completion(SystemRotation.set(rotation, for: display.cgDisplayID))
+            let done = SystemRotation.set(rotation, for: display.cgDisplayID)
+            // macOS keeps this one, and one undone in System Settings stays undone: a rotation
+            // saved from a stand-in shown on it before (with an anchor, say) would turn it again
+            // on every connection.
+            if done { PresentedRotationPreferences.setRotation(.standard, for: display.name) }
+            completion(done)
         } else {
             startPresentation(on: display, rotation: rotation) { done in
                 if done { PresentedRotationPreferences.setRotation(rotation, for: display.name) }
@@ -76,20 +81,34 @@ extension VideoManager {
         return parked
     }
 
+    /// The displays among `displays` to turn again as they were last turned through a stand-in,
+    /// with the rotation saved for each, and the connections ("name@id") tried from now on:
+    /// each display connected, not streaming and not shown turned already (`shown`, by name)
+    /// whose rotation `saved` isn't standard, once per connection in `tried`. A connection
+    /// that went keeps no try: a display often comes back under the same ID.
+    static func presentationRestores(displays: [DisplayInfo], shown: Set<String>, tried: Set<String>,
+                                     saved: (String) -> DisplayRotation)
+        -> (restore: [(display: DisplayInfo, rotation: DisplayRotation)], tried: Set<String>) {
+        let connected = displays.filter { $0.isConnected && $0.cgDisplayID != 0 }
+        var tried = tried.intersection(connected.map { "\($0.name)@\($0.cgDisplayID)" })
+        var restore: [(display: DisplayInfo, rotation: DisplayRotation)] = []
+        for display in connected where !display.isStreaming && !shown.contains(display.name) {
+            let rotation = saved(display.name)
+            let connection = "\(display.name)@\(display.cgDisplayID)"
+            guard rotation != .standard, tried.insert(connection).inserted else { continue }
+            restore.append((display, rotation))
+        }
+        return (restore, tried)
+    }
+
     /// Turns a display that came back the way it was last turned through a stand-in, once
     /// it has settled; once per connection.
     private func restorePresentations() {
-        // A display that went keeps no try: it often comes back under the same ID.
-        let live = Set((allAirPlayDevices + allConnectedDisplays).filter { $0.isConnected && $0.cgDisplayID != 0 }
-            .map { "\($0.name)@\($0.cgDisplayID)" })
-        presentationRestores.formIntersection(live)
-        for display in allAirPlayDevices + allConnectedDisplays
-        where display.isConnected && display.cgDisplayID != 0 && !display.isStreaming
-            && rotatedPresentations[display.name] == nil {
-            let saved = PresentedRotationPreferences.rotation(for: display.name)
-            let connection = "\(display.name)@\(display.cgDisplayID)"
-            guard saved != .standard, !presentationRestores.contains(connection) else { continue }
-            presentationRestores.insert(connection)
+        let plan = Self.presentationRestores(displays: allAirPlayDevices + allConnectedDisplays,
+                                             shown: Set(rotatedPresentations.keys), tried: presentationRestores,
+                                             saved: PresentedRotationPreferences.rotation(for:))
+        presentationRestores = plan.tried
+        for (display, saved) in plan.restore {
             rotLog.debug("\(display.name, privacy: .public) was turned \(saved.rawValue); turning it again")
             // AirPlay and anchors move the displays about for some seconds after connecting.
             DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
@@ -147,20 +166,52 @@ extension VideoManager {
     /// was placed, past the others, so the pointer goes from the other displays onto the
     /// stand-in as it went onto the screen.
     private func putStandIn(_ standInID: CGDirectDisplayID, inPlaceOf screenID: CGDirectDisplayID) {
-        let swapped = DisplayArrangement.current().replacingOrigins([
-            standInID: CGDisplayBounds(screenID).origin,
-            screenID: CGDisplayBounds(standInID).origin
-        ])
-        streamingSettle = (swapped, Date().addingTimeInterval(5))
-        reassertStreamingLayout()
+        swapPlaces(standInID, screenID)
     }
 
-    /// Stops showing the display named `name` turned, and removes its stand-in.
+    /// The origins that swap the places of displays `a` and `b`, by where they are in `origins`;
+    /// none when either isn't there.
+    static func swappedOrigins(_ a: CGDirectDisplayID, _ b: CGDirectDisplayID,
+                               in origins: [CGDirectDisplayID: CGPoint]) -> [CGDirectDisplayID: CGPoint] {
+        guard a != b, let atA = origins[a], let atB = origins[b] else { return [:] }
+        return [a: atB, b: atA]
+    }
+
+    /// Swaps the places of a stand-in and the screen it covers, held for a moment by the layout
+    /// kept after a streaming change. Committed here, not by putting that layout back: it
+    /// leaves an anchor's place to the anchor, and a screen an anchor drives is the anchor.
+    private func swapPlaces(_ standInID: CGDirectDisplayID, _ screenID: CGDirectDisplayID) {
+        let live = DisplayArrangement.current()
+        let swapped = Self.swappedOrigins(standInID, screenID, in: live.origins)
+        guard !swapped.isEmpty else { return }
+        streamingSettle = (live.replacingOrigins(swapped), Date().addingTimeInterval(5))
+        // As a reassert: streaming changes wait for it, and it looks again once it has landed.
+        let start = Self.configureDisplays(in: .permanently, { cfg in
+            for (id, origin) in swapped { CGConfigureDisplayOrigin(cfg, id, Int32(origin.x), Int32(origin.y)) }
+            return true
+        }) { [weak self] err in
+            rotLog.debug("swap \(standInID) and \(screenID): err=\(err.rawValue)")
+            guard let self else { return }
+            self.streamingReassertInFlight = false
+            self.reassertStreamingLayout()
+            self.processStreamingRequests()
+        }
+        if case .committing = start { streamingReassertInFlight = true }
+    }
+
+    /// Stops showing the display named `name` turned, and removes its stand-in. The screen it
+    /// covered goes back where the stand-in was, its own place, before the stand-in goes.
     func endPresentation(for name: String) {
         guard let presentation = rotatedPresentations.removeValue(forKey: name) else { return }
         rotLog.debug("end stand-in for \(name, privacy: .public)")
         presentation.stop()
-        if presentation.standInID != 0 { removeStreamingDisplay(id: presentation.standInID) }
+        if presentation.standInID != 0 {
+            let online = DisplayArrangement.onlineDisplayIDs()
+            if online.contains(presentation.standInID), online.contains(presentation.screenID) {
+                swapPlaces(presentation.standInID, presentation.screenID)
+            }
+            removeStreamingDisplay(id: presentation.standInID)
+        }
         mergeDevices()
     }
 
