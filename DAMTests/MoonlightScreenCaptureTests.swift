@@ -48,19 +48,27 @@ final class MoonlightScreenCaptureTests: XCTestCase {
     private var savedFetch = MoonlightScreenCapture.fetchContent
     private var savedRestart = MoonlightScreenCapture.restartService
     private var savedTimeout = MoonlightScreenCapture.answerTimeout
+    private var savedBusyTimeout = MoonlightScreenCapture.busyAnswerTimeout
+    private var savedLive = MoonlightScreenCapture.liveCaptures
 
     override func setUp() {
         super.setUp()
         savedFetch = MoonlightScreenCapture.fetchContent
         savedRestart = MoonlightScreenCapture.restartService
         savedTimeout = MoonlightScreenCapture.answerTimeout
+        savedBusyTimeout = MoonlightScreenCapture.busyAnswerTimeout
+        savedLive = MoonlightScreenCapture.liveCaptures
         MoonlightScreenCapture.answerTimeout = 0.1
+        MoonlightScreenCapture.busyAnswerTimeout = 0.1
+        MoonlightScreenCapture.liveCaptures = { 0 }
     }
 
     override func tearDown() {
         MoonlightScreenCapture.fetchContent = savedFetch
         MoonlightScreenCapture.restartService = savedRestart
         MoonlightScreenCapture.answerTimeout = savedTimeout
+        MoonlightScreenCapture.busyAnswerTimeout = savedBusyTimeout
+        MoonlightScreenCapture.liveCaptures = savedLive
         super.tearDown()
     }
 
@@ -94,6 +102,18 @@ final class MoonlightScreenCaptureTests: XCTestCase {
         let (error, asked, restarts) = start(answers: [nil, nil])
         XCTAssertEqual(restarts, 1)
         XCTAssertEqual(asked, 2)
+        guard case MoonlightCaptureError.serviceNotAnswering? = error else {
+            return XCTFail("expected serviceNotAnswering, got \(String(describing: error))")
+        }
+    }
+
+    /// While another capture runs replayd answers it, so a slow lookup is waited for longer
+    /// rather than ended by killing replayd, which would end the other capture too.
+    func testLeavesReplaydAloneWhileAnotherCaptureRuns() {
+        MoonlightScreenCapture.liveCaptures = { 1 }
+        let (error, asked, restarts) = start(answers: [nil])
+        XCTAssertEqual(restarts, 0)
+        XCTAssertEqual(asked, 1)
         guard case MoonlightCaptureError.serviceNotAnswering? = error else {
             return XCTFail("expected serviceNotAnswering, got \(String(describing: error))")
         }
@@ -280,5 +300,42 @@ final class MoonlightScreenCaptureTests: XCTestCase {
         // PQ of 203 nits, in 10-bit video range: 64 + 0.5806 × 876.
         XCTAssertEqual(Int(luma[32 * CVPixelBufferGetBytesPerRowOfPlane(out, 0) / 2 + 32] >> 6), 573, accuracy: 2)
         XCTAssertEqual(Int(chroma[0] >> 6), 512, accuracy: 2, "still grey")
+    }
+
+    /// A saturated colour is written with BT.2020's matrix, as the frame is tagged, from the
+    /// first frame on: the buffer is tagged before Core Image renders into it.
+    func testHDR10WritesSaturatedColoursWithBT2020sMatrix() throws {
+        var made: CVPixelBuffer?
+        XCTAssertEqual(CVPixelBufferCreate(nil, 64, 64, kCVPixelFormatType_32BGRA,
+                                           [kCVPixelBufferIOSurfacePropertiesKey: [:] as [String: Any]] as CFDictionary, &made),
+                       kCVReturnSuccess)
+        let red = try XCTUnwrap(made)
+        CVPixelBufferLockBaseAddress(red, [])
+        let pixels = try XCTUnwrap(CVPixelBufferGetBaseAddress(red)).assumingMemoryBound(to: UInt32.self)
+        for index in 0..<(CVPixelBufferGetBytesPerRow(red) / 4 * 64) { pixels[index] = 0xFFFF_0000 }
+        CVPixelBufferUnlockBaseAddress(red, [])
+
+        // The colour in PQ and BT.2020, as Core Image makes it, then through BT.2020's matrix.
+        let context = CIContext(options: [.workingColorSpace: CGColorSpace(name: CGColorSpace.extendedLinearSRGB)!])
+        var rgb = [Float](repeating: 0, count: 4)
+        context.render(CIImage(cvPixelBuffer: red), toBitmap: &rgb, rowBytes: 16, bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
+                       format: .RGBAf, colorSpace: CGColorSpace(name: CGColorSpace.itur_2100_PQ)!)
+        let y = 0.2627 * Double(rgb[0]) + 0.6780 * Double(rgb[1]) + 0.0593 * Double(rgb[2])
+        let expected = (y: 64 + 876 * y, cb: 512 + 896 * (Double(rgb[2]) - y) / 1.8814,
+                        cr: 512 + 896 * (Double(rgb[0]) - y) / 1.4746)
+
+        let converter = try XCTUnwrap(HDR10Converter(width: 64, height: 64, gain: 0))
+        for frame in ["first", "second"] {
+            let out = try XCTUnwrap(converter.convert(red))
+            XCTAssertEqual(CVBufferCopyAttachment(out, kCVImageBufferYCbCrMatrixKey, nil) as? String,
+                           kCVImageBufferYCbCrMatrix_ITU_R_2020 as String)
+            CVPixelBufferLockBaseAddress(out, .readOnly)
+            defer { CVPixelBufferUnlockBaseAddress(out, .readOnly) }
+            let luma = try XCTUnwrap(CVPixelBufferGetBaseAddressOfPlane(out, 0)).assumingMemoryBound(to: UInt16.self)
+            let chroma = try XCTUnwrap(CVPixelBufferGetBaseAddressOfPlane(out, 1)).assumingMemoryBound(to: UInt16.self)
+            XCTAssertEqual(Double(luma[0] >> 6), expected.y, accuracy: 3, "\(frame) frame's luma")
+            XCTAssertEqual(Double(chroma[0] >> 6), expected.cb, accuracy: 3, "\(frame) frame's Cb")
+            XCTAssertEqual(Double(chroma[1] >> 6), expected.cr, accuracy: 3, "\(frame) frame's Cr")
+        }
     }
 }
