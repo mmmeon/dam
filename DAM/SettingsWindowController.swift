@@ -4,6 +4,7 @@
 
 import AppKit
 import CoreImage
+import ServiceManagement
 import UniformTypeIdentifiers
 
 final class SettingsWindowController: NSWindowController {
@@ -308,13 +309,45 @@ final class SettingsWindowController: NSWindowController {
                          action: { VisibilityPreferences.followNewDisplayAudio = $0 }),
             ]),
             ("Startup:", [
-                checkbox(title: "Launch at login",
-                         isOn: VisibilityPreferences.launchAtLogin,
-                         action: { VisibilityPreferences.launchAtLogin = $0 }),
+                launchAtLoginCheckbox(),
             ]),
             ("Screen Mirroring:", [extraRow]),
         ])
     }
+
+    /// The launch-at-login box, which shows what macOS did with the change rather than what
+    /// was clicked, and says when macOS wants the login item approved.
+    private func launchAtLoginCheckbox() -> NSView {
+        weak var box: NSButton?
+        let view = checkbox(title: "Launch at login", isOn: VisibilityPreferences.launchAtLogin,
+                            help: VisibilityPreferences.launchAtLoginNeedsApproval ? Self.loginApprovalHelp : nil) { on in
+            var failure: Error?
+            do { try VisibilityPreferences.setLaunchAtLogin(on) } catch { failure = error }
+            box?.state = VisibilityPreferences.launchAtLogin ? .on : .off
+            let needsApproval = VisibilityPreferences.launchAtLoginNeedsApproval
+            box?.toolTip = needsApproval ? Self.loginApprovalHelp : nil
+            if let failure {
+                let alert = NSAlert()
+                alert.messageText = on ? "\(AppIdentity.name) can't be set to launch at login"
+                                       : "\(AppIdentity.name) still launches at login"
+                alert.informativeText = failure.localizedDescription
+                alert.runModal()
+            } else if on && needsApproval {
+                let alert = NSAlert()
+                alert.messageText = "Allow \(AppIdentity.name) in Login Items"
+                alert.informativeText = "macOS launches \(AppIdentity.name) at login once it is allowed in " +
+                                        "System Settings, under General, Login Items."
+                alert.addButton(withTitle: "Open Login Items")
+                alert.addButton(withTitle: "Later")
+                if alert.runModal() == .alertFirstButtonReturn { SMAppService.openSystemSettingsLoginItems() }
+            }
+        }
+        box = view as? NSButton
+        return view
+    }
+
+    private static let loginApprovalHelp =
+        "Waiting to be allowed in System Settings, under General, Login Items."
 
     @objc private func openControlCenterSettings() {
         ScreenMirroringPanel.openControlCenterSettings()

@@ -217,16 +217,25 @@ enum VisibilityPreferences {
         set { UserDefaults.dam.set(newValue, forKey: followNewDisplayAudioKey) }
     }
 
-    /// Launch the app at login. Backed by SMAppService; UserDefaults is not used.
-    static var launchAtLogin: Bool {
-        get { SMAppService.mainApp.status == .enabled }
-        set {
-            do {
-                if newValue { try SMAppService.mainApp.register() }
-                else        { try SMAppService.mainApp.unregister() }
-            } catch {
-                NSLog("\(AppIdentity.name): launch-at-login toggle failed: \(error)")
-            }
+    /// Whether the app launches at login, as SMAppService has it; UserDefaults is not used.
+    /// Also while the login item waits for the user's approval in System Settings, as it is
+    /// registered and launches once approved.
+    static var launchAtLogin: Bool { isLaunchAtLogin(SMAppService.mainApp.status) }
+
+    static func isLaunchAtLogin(_ status: SMAppService.Status) -> Bool {
+        status == .enabled || status == .requiresApproval
+    }
+
+    /// Whether the login item is registered but waits for the user's approval.
+    static var launchAtLoginNeedsApproval: Bool { SMAppService.mainApp.status == .requiresApproval }
+
+    /// Registers or unregisters the app as a login item, throwing what SMAppService throws.
+    static func setLaunchAtLogin(_ on: Bool) throws {
+        do {
+            if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+        } catch {
+            NSLog("\(AppIdentity.name): launch-at-login toggle failed: \(error)")
+            throw error
         }
     }
 
