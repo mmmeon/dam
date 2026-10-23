@@ -129,12 +129,17 @@ worked.
   every permission granted. `CGWarpMouseCursorPosition` does. A
   `CGEventSource(stateID: .hidSystemState)` was made, but posting an event from it hung the
   probe until sign-in.
+- **Streaming works**: `loginprobe install stream` serves the main display as MJPEG on port
+  8090 (`CGDisplayStream` → `CIContext` JPEG → HTTP). Watched from another device at the login
+  window: ~9 fps captured and sent while the pointer moved (capture is capped at 15 fps and
+  only delivers on change), 21 ms per 1920×1080 JPEG, 64–90 KB a frame. launchd stops it at
+  sign-in. No authentication: a test, not something to leave installed.
 - Clicks and keys not tried: remote input at the login window is out of scope (decided
   2026-10-23). The password field holds secure input (`kCGSSessionSecureInputPID`) anyway.
 
 ### Order
 
 1. Lock screen: does the user's DAM stream it and take typing? Nothing new to build.
-2. `tools/loginprobe` at the login window: done (above). Capture and a virtual display work;
-   no remote input wanted there.
+2. `tools/loginprobe` at the login window: done (above). Capture, a virtual display and an
+   MJPEG stream work; no remote input wanted there.
 3. Only if both work: the root daemon and the hand-off between the two agents.

@@ -8,6 +8,7 @@
 //  LaunchAgent in the login window's session.
 //
 //    loginprobe <folder> [--delay seconds]
+//    loginprobe <folder> --stream port [--delay seconds]   (MJPEG over HTTP, below)
 //
 
 import AppKit
@@ -22,8 +23,13 @@ if let i = arguments.firstIndex(of: "--delay"), i + 1 < arguments.count {
     delay = Double(arguments[i + 1]) ?? 0
     arguments.removeSubrange(i...(i + 1))
 }
+var streamPort: UInt16?
+if let i = arguments.firstIndex(of: "--stream"), i + 1 < arguments.count {
+    streamPort = UInt16(arguments[i + 1])
+    arguments.removeSubrange(i...(i + 1))
+}
 guard let folderPath = arguments.first else {
-    FileHandle.standardError.write(Data("usage: loginprobe <folder> [--delay seconds]\n".utf8))
+    FileHandle.standardError.write(Data("usage: loginprobe <folder> [--stream port] [--delay seconds]\n".utf8))
     exit(2)
 }
 let folder = URL(fileURLWithPath: folderPath)
@@ -244,6 +250,16 @@ func pointer() {
     move("HID tap, HID system state source", 70, event(source, .cghidEventTap))
 }
 
+if let streamPort {
+    note("loginprobe --stream, macOS \(ProcessInfo.processInfo.operatingSystemVersionString)")
+    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+        session()
+        listDisplays()
+        LoginStream(display: CGMainDisplayID(), port: streamPort, fps: 15).start()
+    }
+    dispatchMain()
+}
+
 // At the login window a capture call can hang until someone logs in; the report then says
 // so, and that the step above it is the one.
 DispatchQueue.global().asyncAfter(deadline: .now() + delay + 120) {
@@ -271,3 +287,196 @@ Task {
     exit(0)
 }
 dispatchMain()
+
+// MARK: --stream
+
+// The main display as MJPEG over HTTP, to see the login window from another device.
+// CGDisplayStream, since ScreenCaptureKit crashes there; CIContext makes the JPEGs. A browser
+// on the network opens http://<this Mac>:<port>/. Runs until launchd stops it at sign-in.
+// For a test only: no authentication, so anyone on the network can watch the login window
+// while it runs.
+
+final class LoginStream {
+    private let display: CGDirectDisplayID
+    private let port: UInt16
+    private let fps: Double
+    private let lock = NSCondition()
+    private var jpeg = Data()
+    private var sequence = 0
+    private var captured = 0
+    private var encodeTime = 0.0
+    private var viewers = 0
+    private var sent = 0
+    private var stream: CGDisplayStream?
+
+    init(display: CGDirectDisplayID, port: UInt16, fps: Double) {
+        self.display = display
+        self.port = port
+        self.fps = fps
+    }
+
+    func start() {
+        let bounds = CGDisplayBounds(display)
+        let properties: [CFString: Any] = [
+            CGDisplayStream.minimumFrameTime: 1 / fps,
+            CGDisplayStream.showCursor: true,
+        ]
+        let queue = DispatchQueue(label: "loginstream.capture")
+        stream = CGDisplayStream(dispatchQueueDisplay: display, outputWidth: Int(bounds.width),
+                                 outputHeight: Int(bounds.height),
+                                 pixelFormat: Int32(kCVPixelFormatType_32BGRA),
+                                 properties: properties as CFDictionary, queue: queue) { [weak self] status, _, surface, _ in
+            guard status == .frameComplete, let surface, let self else { return }
+            let started = ProcessInfo.processInfo.systemUptime
+            let image = CIImage(ioSurface: surface)
+            guard let data = ciContext.jpegRepresentation(
+                of: image, colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
+                options: [CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String): 0.6])
+            else { return }
+            self.lock.lock()
+            self.jpeg = data
+            self.sequence += 1
+            self.captured += 1
+            self.encodeTime += ProcessInfo.processInfo.systemUptime - started
+            self.lock.broadcast()
+            self.lock.unlock()
+        }
+        guard let stream else { return note("stream: CGDisplayStream could not be made") }
+        let error = stream.start()
+        guard error == .success else { return note("stream: CGDisplayStream start → \(error.rawValue)") }
+        note("stream: capturing display \(display), \(Int(bounds.width))×\(Int(bounds.height)), up to \(Int(fps)) fps")
+        listen()
+        report()
+    }
+
+    // MARK: HTTP
+
+    private func listen() {
+        signal(SIGPIPE, SIG_IGN)
+        let server = socket(AF_INET, SOCK_STREAM, 0)
+        var yes: Int32 = 1
+        setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &yes, socklen_t(MemoryLayout<Int32>.size))
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = port.bigEndian
+        address.sin_addr.s_addr = INADDR_ANY
+        let bound = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(server, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+        }
+        guard bound == 0, Darwin.listen(server, 8) == 0 else {
+            return note("stream: could not listen on port \(port): \(String(cString: strerror(errno)))")
+        }
+        note("stream: open " + addresses().map { "http://\($0):\(port)/" }.joined(separator: " or "))
+        Thread.detachNewThread {
+            while true {
+                let client = accept(server, nil, nil)
+                guard client >= 0 else { continue }
+                Thread.detachNewThread { self.serve(client) }
+            }
+        }
+    }
+
+    private func serve(_ client: Int32) {
+        defer { close(client) }
+        var request = [UInt8](repeating: 0, count: 2048)
+        let count = recv(client, &request, request.count, 0)
+        guard count > 0 else { return }
+        let line = String(decoding: request.prefix(count), as: UTF8.self).prefix { $0 != "\r" && $0 != "\n" }
+        let path = line.split(separator: " ").dropFirst().first.map(String.init) ?? "/"
+        switch path {
+        case "/mjpeg":
+            mjpeg(client)
+        case "/frame.jpg":
+            lock.lock(); let frame = jpeg; lock.unlock()
+            _ = write(client, "HTTP/1.1 200 OK\r\nContent-Type: image/jpeg\r\nContent-Length: \(frame.count)\r\n"
+                      + "Cache-Control: no-store\r\nConnection: close\r\n\r\n")
+            _ = write(client, frame)
+        default:
+            let page = """
+                <!doctype html><meta name="viewport" content="width=device-width">
+                <title>Login window</title>
+                <style>body{margin:0;background:#000}img{width:100vw;height:100vh;object-fit:contain}</style>
+                <img src="/mjpeg">
+                """
+            _ = write(client, "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"
+                      + "Content-Length: \(page.utf8.count)\r\nConnection: close\r\n\r\n" + page)
+        }
+    }
+
+    /// Every new frame as one part of a multipart/x-mixed-replace response, until the viewer
+    /// goes away. A slow viewer skips frames rather than queueing them.
+    private func mjpeg(_ client: Int32) {
+        var timeout = timeval(tv_sec: 5, tv_usec: 0)
+        setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        guard write(client, "HTTP/1.1 200 OK\r\nContent-Type: multipart/x-mixed-replace; boundary=frame\r\n"
+                    + "Cache-Control: no-store\r\nConnection: close\r\n\r\n") else { return }
+        lock.lock(); viewers += 1; lock.unlock()
+        note("stream: viewer connected")
+        defer {
+            lock.lock(); viewers -= 1; lock.unlock()
+            note("stream: viewer left")
+        }
+        var last = -1
+        while true {
+            lock.lock()
+            // CGDisplayStream sends nothing while the screen is still, as the login window
+            // mostly is: the last frame again each second, since some browsers draw a part only
+            // once the next begins, and a viewer who left is noticed only on a send.
+            if sequence == last { lock.wait(until: Date() + 1) }
+            last = sequence
+            let frame = jpeg
+            lock.unlock()
+            guard write(client, "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: \(frame.count)\r\n\r\n"),
+                  write(client, frame), write(client, "\r\n") else { return }
+            lock.lock(); sent += 1; lock.unlock()
+        }
+    }
+
+    private func write(_ client: Int32, _ text: String) -> Bool { write(client, Data(text.utf8)) }
+
+    private func write(_ client: Int32, _ data: Data) -> Bool {
+        data.withUnsafeBytes { buffer in
+            var offset = 0
+            while offset < buffer.count {
+                let n = send(client, buffer.baseAddress! + offset, buffer.count - offset, 0)
+                guard n > 0 else { return false }
+                offset += n
+            }
+            return true
+        }
+    }
+
+    // MARK: Report
+
+    /// Every 10 s: frames captured and sent, what a JPEG costs, how many are watching.
+    private func report() {
+        DispatchQueue.global().asyncAfter(deadline: .now() + 10) { [self] in
+            lock.lock()
+            let line = String(format: "stream: %.1f fps captured, %.1f fps sent, %.0f ms per JPEG, %ld KB a frame, %ld watching",
+                              Double(captured) / 10, Double(sent) / 10,
+                              captured > 0 ? encodeTime / Double(captured) * 1000 : 0.0, jpeg.count / 1024, viewers)
+            captured = 0; sent = 0; encodeTime = 0
+            lock.unlock()
+            note(line)
+            report()
+        }
+    }
+
+    private func addresses() -> [String] {
+        var result: [String] = []
+        var list: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&list) == 0 else { return ["<this Mac>"] }
+        defer { freeifaddrs(list) }
+        var next = list
+        while let entry = next {
+            defer { next = entry.pointee.ifa_next }
+            guard let address = entry.pointee.ifa_addr, address.pointee.sa_family == sa_family_t(AF_INET),
+                  entry.pointee.ifa_flags & UInt32(IFF_LOOPBACK) == 0 else { continue }
+            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            if getnameinfo(address, socklen_t(address.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 {
+                result.append(String(cString: host))
+            }
+        }
+        return result.isEmpty ? ["<this Mac>"] : result
+    }
+}

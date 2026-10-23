@@ -10,6 +10,8 @@
 #
 #    tools/loginprobe/loginprobe run          in this session, for comparison (no root)
 #    tools/loginprobe/loginprobe install      the LaunchAgent (asks for the admin password)
+#    tools/loginprobe/loginprobe install stream   instead streams the login window as MJPEG on
+#                                                 port 8090 until sign-in
 #    tools/loginprobe/loginprobe results      every report so far, newest last
 #    tools/loginprobe/loginprobe uninstall    the LaunchAgent and its binary; keeps results
 #
@@ -17,7 +19,10 @@
 #  probe waits 15 s for the window server to settle, then takes ~20 s. A display flickers as
 #  the virtual one comes and goes, and the pointer jumps 40 px and back. Log in, then
 #  `results`. Each run leaves report.txt and PNGs in /Library/Logs/DAMLoginProbe/<time>
-#  (or /tmp/dam-loginprobe/<time> for `run`).
+#  (or /tmp/dam-loginprobe/<time> for `run`). `run --stream 8090` tries the stream here.
+#
+#  sudo can't ask for a password without a terminal (Claude Code's `!` prompt); the root steps
+#  then ask through macOS's administrator dialog instead.
 #
 
 set -u
@@ -34,6 +39,16 @@ logs=/Library/Logs/DAMLoginProbe
 
 die() { print -u2 "loginprobe: $*"; exit 1 }
 say() { print "loginprobe: $*" }
+
+# Runs a /bin/sh script as root.
+as_root() {
+    if [[ -t 0 ]] || sudo -n true 2>/dev/null; then
+        sudo /bin/sh -c "$1"
+    else
+        print -r -- "$1" > $cache/as-root.sh
+        osascript -e "do shell script \"/bin/sh '$cache/as-root.sh'\" with administrator privileges" >/dev/null
+    fi
+}
 
 build() {
     mkdir -p $cache
@@ -55,16 +70,21 @@ build() {
 
 cmd_run() {
     build
-    $binary /tmp/dam-loginprobe/$(date +%Y%m%d-%H%M%S)-${USER}
+    $binary /tmp/dam-loginprobe/$(date +%Y%m%d-%H%M%S)-${USER} "$@"
 }
 
 cmd_install() {
     build
-    local staged=$cache/$label.plist
+    local staged=$cache/$label.plist mode=loginwindow extra=
+    case ${1:-} in
+        "") ;;
+        stream) mode=stream extra=" --stream 8090" ;;
+        *) die "install takes nothing or stream" ;;
+    esac
     # A wrapper names each run's folder by the time it starts.
     cat > $cache/start <<EOF
 #!/bin/sh
-exec "$installed/loginprobe" "$logs/\$(date +%Y%m%d-%H%M%S)-loginwindow" --delay 15
+exec "$installed/loginprobe" "$logs/\$(date +%Y%m%d-%H%M%S)-$mode" --delay 15$extra
 EOF
     cat > $staged <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -89,8 +109,8 @@ EOF
 </plist>
 EOF
     plutil -lint -s $staged || die "the plist does not parse"
-    say "installing $plist and \"$installed\" (sudo)"
-    sudo /bin/sh -c "
+    say "installing $plist and \"$installed\" ($mode; as root)"
+    as_root "
         set -e
         mkdir -p '$installed' '$logs'
         install -o root -g wheel -m 755 '$binary' '$installed/loginprobe'
@@ -98,6 +118,7 @@ EOF
         install -o root -g wheel -m 644 '$staged' '$plist'
         chmod 755 '$logs'
     " || die "install failed"
+    [[ $mode == stream ]] && say "at the login window, open http://<this Mac>:8090/ from another device; its address is in the report"
     say "installed. Log out, wait ~30 s at the login window, log in, then: $0 results (it runs at every login window until $0 uninstall)"
 }
 
@@ -113,14 +134,14 @@ cmd_results() {
 }
 
 cmd_uninstall() {
-    say "removing $plist and \"$installed\" (sudo); results stay in $logs"
-    sudo /bin/sh -c "rm -f '$plist'; rm -rf '$installed'; rmdir '${installed:h}' 2>/dev/null; true"
+    say "removing $plist and \"$installed\" (as root); results stay in $logs"
+    as_root "rm -f '$plist'; rm -rf '$installed'; rmdir '${installed:h}' 2>/dev/null; true"
 }
 
 case ${1:-} in
-    run) cmd_run ;;
-    install) cmd_install ;;
+    run) shift; cmd_run "$@" ;;
+    install) cmd_install ${2:-} ;;
     results) cmd_results ;;
     uninstall) cmd_uninstall ;;
-    *) sed -n '3,21p' $0 | sed -E 's/^# ?//'; exit 2 ;;
+    *) sed -n '3,25p' $0 | sed -E 's/^# ?//'; exit 2 ;;
 esac
