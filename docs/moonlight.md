@@ -244,7 +244,10 @@ them as HID events, one injector per stream:
 `MoonlightFEC` → UDP 47998:
 
 - **Capture:** ScreenCaptureKit captures in 4:2:0 at the stream's size and rate, with a
-  queue depth of 6, shared between streams that want the same.
+  queue depth of 6, shared between streams that want the same. A frame that comes less
+  than 0.75 frame times after the last one handed on (a display faster than the stream)
+  is held, and goes 0.75 frame times after that one unless a newer goes first, so a
+  screen that goes still just after a change still sends the change (`FramePacer`).
 - **Encoding:** VideoToolbox hardware H.264 (High profile, CABAC, real time, no frame
   reordering, keyframes only on request), or HEVC Main when the client chose it.
 - **Codecs:** what differs between codecs is in `VideoCodec` (MoonlightVideoEncoder.swift):
