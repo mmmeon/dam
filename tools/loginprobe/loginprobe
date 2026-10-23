@@ -44,6 +44,12 @@ build() {
         DEVELOPER_DIR=${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer} \
             swiftc -O -suppress-warnings -import-objc-header $repo/DAM/CGVirtualDisplayPrivate.h \
             -o $binary $source || die "could not build loginprobe.swift"
+        # Signed, TCC's Screen Recording and Accessibility grants follow the identifier and
+        # team; unsigned, they follow the exact binary and are lost on every rebuild.
+        local identity=$(security find-identity -v -p codesigning | awk -F'"' '/Apple Development/ { print $2; exit }')
+        if [[ -n $identity ]]; then
+            codesign --force --sign "$identity" --identifier $label $binary || die "could not sign loginprobe"
+        fi
     fi
 }
 

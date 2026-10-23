@@ -100,18 +100,41 @@ it generally works; typing into it meets secure input.
 
 ### tools/loginprobe
 
-On `feat/loginprobe`. It reports the session and permissions, captures the main display with
-`CGDisplayCreateImage`, `CGDisplayStream` and ScreenCaptureKit (PNG and mean brightness, since
-a refused capture comes back black), makes and captures a `CGVirtualDisplay`, and posts a
-pointer move. `run` tries it in the current session; `install` puts it in as a LoginWindow
-LaunchAgent; `results` prints the reports from `/Library/Logs/DAMLoginProbe`.
+It reports the session and permissions, captures the main display with `CGDisplayCreateImage`
+and `CGDisplayStream` (PNG and mean brightness, since a refused capture comes back black),
+makes and captures a `CGVirtualDisplay`, moves the pointer four ways, and last tries
+ScreenCaptureKit. `run` tries it in the current session; `install` puts it in as a
+LoginWindow LaunchAgent; `results` prints the reports from `/Library/Logs/DAMLoginProbe`. The
+build signs it with an Apple Development identity when there is one, so TCC grants survive
+rebuilds (unsigned, every rebuild lost them).
 
 Run in the user session on 2026-10-20 (macOS 13.7.8, from Ghostty, which has Screen
 Recording and Accessibility): all three captures, the virtual display and the pointer move
-worked. Not yet run at the login window.
+worked.
+
+**At the login window, 2026-10-23** (macOS 13.7.8, FileVault off, one 1920×1080 display):
+
+- It runs there as root, console user `loginwindow`, and launchd removes it at sign-in.
+- TCC applies to it as to any app: with no grants every capture was refused and nothing
+  moved. Screen Recording and Accessibility granted to its binary in System Settings work
+  there.
+- **Capture works** with `CGDisplayCreateImage` and `CGDisplayStream`: a clean frame of the
+  login window.
+- **ScreenCaptureKit crashes the process** every time: ReplayKit calls
+  `NSApplication.shared` on a background queue, and the LaunchServices check-in under it
+  segfaults (`_LSScheduleNotificationFunction`). `CGDisplayStream` it is.
+- **A virtual display works**: made, online, captured by both. It lists as 1×1 for the
+  first moment and is 1920×1080 by 2 s.
+- **Posted mouse events do not move the pointer**, to the HID tap or the session tap, with
+  every permission granted. `CGWarpMouseCursorPosition` does. A
+  `CGEventSource(stateID: .hidSystemState)` was made, but posting an event from it hung the
+  probe until sign-in.
+- Clicks and keys not tried: remote input at the login window is out of scope (decided
+  2026-10-23). The password field holds secure input (`kCGSSessionSecureInputPID`) anyway.
 
 ### Order
 
 1. Lock screen: does the user's DAM stream it and take typing? Nothing new to build.
-2. `tools/loginprobe` at the login window: which capture API, virtual display, input.
+2. `tools/loginprobe` at the login window: done (above). Capture and a virtual display work;
+   no remote input wanted there.
 3. Only if both work: the root daemon and the hand-off between the two agents.

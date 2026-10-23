@@ -207,6 +207,8 @@ func virtualDisplay() {
     note("CGVirtualDisplay: online \(displays().contains(id)); new: \(Set(displays()).subtracting(before).sorted())")
     listDisplays()
     sleep(2)
+    // At the login window it first listed as 1×1: whether its mode has applied by now.
+    listDisplays()
     displayImage(id, "virtual")
     displayStream(id)
     vd = nil
@@ -214,17 +216,32 @@ func virtualDisplay() {
     note("CGVirtualDisplay: released; still online \(displays().contains(id))")
 }
 
+// At the login window, with every permission granted, a plain post to the HID tap still left
+// the pointer where it was: each way of moving it, tried and reported on its own.
 func pointer() {
-    guard let start = CGEvent(source: nil)?.location else { return note("pointer: no location") }
-    let target = CGPoint(x: start.x + 40, y: start.y + 40)
-    CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: target, mouseButton: .left)?
-        .post(tap: .cghidEventTap)
-    usleep(300_000)
-    let after = CGEvent(source: nil)?.location ?? .zero
-    note("pointer: at \(Int(start.x)),\(Int(start.y)), posted a move to \(Int(target.x)),\(Int(target.y)), "
-         + "now at \(Int(after.x)),\(Int(after.y)) → \(hypot(after.x - target.x, after.y - target.y) < 2 ? "moved" : "did not move")")
-    CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: start, mouseButton: .left)?
-        .post(tap: .cghidEventTap)
+    func move(_ how: String, _ by: CGFloat, _ post: (CGPoint) -> Void) {
+        // At the login window one of these hung, silently: each step is noted before it starts.
+        note("pointer, \(how): trying")
+        guard let start = CGEvent(source: nil)?.location else { return note("pointer: no location") }
+        let target = CGPoint(x: start.x + by, y: start.y + by)
+        post(target)
+        usleep(300_000)
+        let after = CGEvent(source: nil)?.location ?? .zero
+        note("pointer, \(how): at \(Int(start.x)),\(Int(start.y)), moved to \(Int(target.x)),\(Int(target.y)), "
+             + "now at \(Int(after.x)),\(Int(after.y)) → \(hypot(after.x - target.x, after.y - target.y) < 2 ? "moved" : "did not move")")
+        post(start)
+        usleep(100_000)
+        note("pointer, \(how): moved back")
+    }
+    func event(_ source: CGEventSource?, _ tap: CGEventTapLocation) -> (CGPoint) -> Void {
+        { CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: $0, mouseButton: .left)?.post(tap: tap) }
+    }
+    move("HID tap", 40, event(nil, .cghidEventTap))
+    move("session tap", 50, event(nil, .cgSessionEventTap))
+    move("CGWarpMouseCursorPosition", 60) { CGWarpMouseCursorPosition($0) }
+    note("pointer: making a HID system state source")
+    let source = CGEventSource(stateID: .hidSystemState)
+    move("HID tap, HID system state source", 70, event(source, .cghidEventTap))
 }
 
 // At the login window a capture call can hang until someone logs in; the report then says
@@ -245,9 +262,11 @@ Task {
     let main = CGMainDisplayID()
     displayImage(main, "displayimage")
     displayStream(main)
-    await screenCaptureKit()
     virtualDisplay()
     pointer()
+    // Last: at the login window ScreenCaptureKit crashed the probe, in ReplayKit's
+    // NSApplication.shared on a background queue (LaunchServices check-in as root).
+    await screenCaptureKit()
     note("done")
     exit(0)
 }
