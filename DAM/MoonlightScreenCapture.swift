@@ -507,6 +507,9 @@ final class SharedScreenCapture {
         fileprivate let frame: (CVPixelBuffer, CMTime) -> Void
         fileprivate let audio: (CMSampleBuffer) -> Void
         fileprivate let stopped: (Error) -> Void
+        /// Frames are handed over under it, one at a time, with `hasFrame`.
+        private let delivery = NSLock()
+        private var hasFrame = false
 
         fileprivate init(frame: @escaping (CVPixelBuffer, CMTime) -> Void, audio: @escaping (CMSampleBuffer) -> Void,
                          stopped: @escaping (Error) -> Void) {
@@ -516,6 +519,21 @@ final class SharedScreenCapture {
         }
 
         func cancel() { capture?.remove(self) }
+
+        /// Hands over a frame as it is captured.
+        fileprivate func deliver(_ buffer: CVPixelBuffer, _ time: CMTime) {
+            delivery.lock(); defer { delivery.unlock() }
+            hasFrame = true
+            frame(buffer, time)
+        }
+
+        /// Hands over the capture's last picture on joining, unless a newer came first.
+        fileprivate func deliverLast(_ buffer: CVPixelBuffer, _ time: CMTime) {
+            delivery.lock(); defer { delivery.unlock() }
+            guard !hasFrame else { return }
+            hasFrame = true
+            frame(buffer, time)
+        }
     }
 
     private static let registryLock = NSLock()
@@ -608,7 +626,7 @@ final class SharedScreenCapture {
         DispatchQueue.global(qos: .userInteractive).async {
             if case .failure(let error) = outcome { return started(error) }
             started(nil)
-            if let last { subscription.frame(last.buffer, last.time) }
+            if let last { subscription.deliverLast(last.buffer, last.time) }
         }
     }
 
@@ -628,7 +646,7 @@ final class SharedScreenCapture {
         last = (buffer, time)
         let subscriptions = self.subscriptions
         lock.unlock()
-        for subscription in subscriptions { subscription.frame(buffer, time) }
+        for subscription in subscriptions { subscription.deliver(buffer, time) }
     }
 
     private func took(_ sample: CMSampleBuffer) {

@@ -203,6 +203,39 @@ final class MoonlightScreenCaptureTests: XCTestCase {
         XCTAssertEqual(made.count, 3, "started afresh")
     }
 
+    /// A stream joining as a new frame comes never gets the older last picture after it.
+    func testAJoiningStreamNeverGetsAnOlderPictureAfterANewer() throws {
+        let makeCapture = SharedScreenCapture.makeCapture, startCapture = SharedScreenCapture.startCapture
+        defer { SharedScreenCapture.makeCapture = makeCapture; SharedScreenCapture.startCapture = startCapture }
+        var deliver: ((CVPixelBuffer, CMTime) -> Void)?
+        SharedScreenCapture.makeCapture = { key, frame in
+            deliver = frame
+            return MoonlightScreenCapture(displayID: key.displayID, width: key.width, height: key.height, fps: key.fps, frame: frame)
+        }
+        SharedScreenCapture.startCapture = { _, done in done(nil) }
+        let key = SharedScreenCapture.Key(displayID: 6, width: 64, height: 64, fps: 60, showsCursor: true)
+        let first = SharedScreenCapture.subscribe(key, frame: { _, _ in }, audio: { _ in }, started: { _ in })
+        defer { first.cancel() }
+        var made: CVPixelBuffer?
+        CVPixelBufferCreate(nil, 64, 64, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, nil, &made)
+        let buffer = try XCTUnwrap(made)
+        deliver?(buffer, CMTime(value: 1, timescale: 60))
+
+        for round in 2..<20 {
+            let lock = NSLock()
+            var times: [CMTime] = []
+            let joined = SharedScreenCapture.subscribe(key, frame: { _, time in lock.lock(); times.append(time); lock.unlock() },
+                                                       audio: { _ in }, started: { _ in })
+            // A newer frame at once, racing the last picture handed over on joining.
+            deliver?(buffer, CMTime(value: CMTimeValue(round), timescale: 60))
+            Thread.sleep(forTimeInterval: 0.02)
+            joined.cancel()
+            lock.lock()
+            XCTAssertEqual(times.last, CMTime(value: CMTimeValue(round), timescale: 60), "round \(round): \(times)")
+            lock.unlock()
+        }
+    }
+
     /// A capture that stops on its own, as when replayd dies, is let go: its streams hear,
     /// and the next to come starts another rather than join it.
     func testACaptureThatStopsIsLetGoAndItsStreamsAreTold() {
