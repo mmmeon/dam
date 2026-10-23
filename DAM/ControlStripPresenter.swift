@@ -74,12 +74,16 @@ extension NSTouchBar {
                                    for itemID: NSTouchBarItem.Identifier) {
         let sel = NSSelectorFromString("presentSystemModalTouchBar:systemTrayItemIdentifier:")
         msgSend_present(NSTouchBar.self, sel, bar, itemID.rawValue as NSString)
+        // Set before presenting only, the close box shows once another app comes to the
+        // front; set again after, it shows at once.
+        DFRSystemModalShowsCloseBoxWhenFrontMost(true)
     }
 
     /// Present without anchoring to a control-strip item.
     static func presentSystemModal(_ bar: NSTouchBar) {
         let sel = NSSelectorFromString("presentSystemModalTouchBar:systemTrayItemIdentifier:")
         msgSend_present(NSTouchBar.self, sel, bar, nil)
+        DFRSystemModalShowsCloseBoxWhenFrontMost(true)
     }
 
     static func dismissSystemModal(_ bar: NSTouchBar) {
