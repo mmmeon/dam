@@ -410,7 +410,130 @@ final class SettingsWindowController: NSWindowController {
             ("AirPlay Displays:",   airPlay.isEmpty  ? [placeholderLabel("None discovered yet")] : airPlay),
             ("Sidecar:",            sidecar.isEmpty  ? [placeholderLabel("No Sidecar devices found")] : sidecar),
             ("Connected Displays:", displays.isEmpty ? [placeholderLabel("No external displays")] : displays),
+            ("Connect Automatically:", autoConnectControls()),
         ])
+    }
+
+    // MARK: Connect Automatically
+
+    /// The trusted displays, best first (AutoConnect.swift): a row each, to move it, set when it
+    /// applies, or take it off; then a menu of the displays found now that could be added.
+    private func autoConnectControls() -> [NSView] {
+        let entries = AutoConnectList.entries
+        let rows: [[NSView]] = entries.enumerated().map { i, entry in
+            let (name, kind) = autoConnectName(entry.target)
+            let up = small(ClosureButton(title: "↑") { [weak self] _ in self?.moveAutoConnect(at: i, by: -1) })
+            up.isEnabled = i > 0
+            up.setAccessibilityLabel("Move \(name) up")
+            let down = small(ClosureButton(title: "↓") { [weak self] _ in self?.moveAutoConnect(at: i, by: 1) })
+            down.isEnabled = i < entries.count - 1
+            down.setAccessibilityLabel("Move \(name) down")
+            let when = ClosurePopup(onSelect: { [weak self] value in
+                self?.setAutoConnectCondition(at: i, onlyWithoutOwnDisplay: value == "without")
+            })
+            when.controlSize = .small
+            when.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+            for (title, value) in [("Always", "always"), ("Only with no display of its own", "without")] {
+                let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+                item.representedObject = value
+                when.menu?.addItem(item)
+            }
+            when.selectItem(at: entry.onlyWithoutOwnDisplay ? 1 : 0)
+            when.setAccessibilityLabel("When to connect \(name)")
+            let remove = small(ClosureButton(title: "Remove") { [weak self] _ in self?.removeAutoConnect(entry.target) })
+            remove.setAccessibilityLabel("Remove \(name)")
+            return [up, down, rowLabel(name), placeholderLabel(kind), when, remove]
+        }
+        var controls: [NSView] = [rows.isEmpty ? placeholderLabel("No displays yet") : rowGrid(rows)]
+        if let add = addAutoConnectMenu(listed: Set(entries.map(\.target))) { controls.append(add) }
+        controls.append(smallNote("Connected best first, at login and whenever they come within reach. Of AirPlay " +
+                                  "displays and iPads, only the first available is connected, and none while one " +
+                                  "already is; every OpenDisplay receiver listed is connected. One disconnected by " +
+                                  "hand stays so until it goes away and comes back."))
+        return controls
+    }
+
+    /// An entry's name as the app shows it, and its kind.
+    private func autoConnectName(_ target: AutoConnectTarget) -> (name: String, kind: String) {
+        switch target {
+        case .openDisplay(let key):
+            return (openDisplay?.receivers.first { $0.key == key }?.name ?? key, "OpenDisplay")
+        case .airPlay(let name):
+            return (VisibilityPreferences.nickname(.display, for: name) ?? name, "AirPlay")
+        case .sidecar(let name):
+            return (VisibilityPreferences.nickname(.sidecar, for: name) ?? name, "Sidecar")
+        case .anyIPadOnUSB:
+            return ("Any iPad plugged in", "Sidecar")
+        }
+    }
+
+    /// "Add Display", listing what is found now and not on the list; nil when there is nothing.
+    private func addAutoConnectMenu(listed: Set<AutoConnectTarget>) -> NSView? {
+        var targets = videoManager.allAirPlayDevices.map { AutoConnectTarget.airPlay(name: $0.name) }
+        targets += sidecarManager.devices.map { AutoConnectTarget.sidecar(name: $0.name) }
+        targets.append(.anyIPadOnUSB)
+        targets += (openDisplay?.receivers ?? []).map { AutoConnectTarget.openDisplay(key: $0.key) }
+        var seen = listed
+        targets = targets.filter { seen.insert($0).inserted }
+        guard !targets.isEmpty else { return nil }
+        let menu = ClosurePopup(onSelect: { [weak self] value in
+            guard let index = value.flatMap(Int.init), targets.indices.contains(index) else { return }
+            self?.addAutoConnect(targets[index])
+        })
+        menu.pullsDown = true
+        menu.controlSize = .small
+        menu.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        menu.addItem(withTitle: "Add Display")
+        for (i, target) in targets.enumerated() {
+            let (name, kind) = autoConnectName(target)
+            let item = NSMenuItem(title: "\(name) (\(kind))", action: nil, keyEquivalent: "")
+            item.representedObject = String(i)
+            menu.menu?.addItem(item)
+        }
+        menu.toolTip = "Adds a display found now to the end of the list."
+        return menu
+    }
+
+    /// Receivers go through the sender, which dials one added and hangs up on one removed.
+    private func addAutoConnect(_ target: AutoConnectTarget) {
+        if case .openDisplay(let key) = target, let openDisplay {
+            openDisplay.setOn(true, key: key)
+        } else {
+            AutoConnectList.entries.append(AutoConnectEntry(target: target))
+        }
+        autoConnectDidChange()
+    }
+
+    private func removeAutoConnect(_ target: AutoConnectTarget) {
+        if case .openDisplay(let key) = target, let openDisplay {
+            openDisplay.setOn(false, key: key)
+        } else {
+            AutoConnectList.entries.removeAll { $0.target == target }
+        }
+        autoConnectDidChange()
+    }
+
+    private func moveAutoConnect(at index: Int, by offset: Int) {
+        var entries = AutoConnectList.entries
+        let other = index + offset
+        guard entries.indices.contains(index), entries.indices.contains(other) else { return }
+        entries.swapAt(index, other)
+        AutoConnectList.entries = entries
+        autoConnectDidChange()
+    }
+
+    private func setAutoConnectCondition(at index: Int, onlyWithoutOwnDisplay: Bool) {
+        var entries = AutoConnectList.entries
+        guard entries.indices.contains(index) else { return }
+        entries[index].onlyWithoutOwnDisplay = onlyWithoutOwnDisplay
+        AutoConnectList.entries = entries
+        autoConnectDidChange()
+    }
+
+    /// The list shows on the Devices tab, and the receivers' switches on the OpenDisplay page.
+    private func autoConnectDidChange() {
+        devicesDidChange()
+        openDisplayDidChange()
     }
 
     /// What the General tab shows that changes outside it: the outputs to speak through, by
@@ -425,7 +548,9 @@ final class SettingsWindowController: NSWindowController {
         DevicesState(audio: audioManager.allOutputDevices.map(\.name),
                      airPlay: videoManager.allAirPlayDevices.map(\.name),
                      sidecar: sidecarManager.devices.map(\.name),
-                     displays: videoManager.allConnectedDisplays.filter { !$0.isSidecar }.map(\.name))
+                     displays: videoManager.allConnectedDisplays.filter { !$0.isSidecar }.map(\.name),
+                     autoConnect: AutoConnectList.entries,
+                     receivers: (openDisplay?.receivers ?? []).map { "\($0.key) \($0.name)" })
     }
 
     /// Rebuilds the General and Devices tabs if what they list has changed, as when a device
@@ -481,16 +606,12 @@ final class SettingsWindowController: NSWindowController {
                                             "other resolutions. " +
                                             "Applies on the next Sidecar connection.",
                                       action: { VisibilityPreferences.backsSidecarWithVirtualDisplay = $0 })
-        let sidecarAutoConnect = checkbox(title: "Connect a plugged-in iPad when there is no other display",
-                                          isOn: VisibilityPreferences.autoConnectsSidecarWithoutDisplay,
-                                          help: "When an iPad is plugged in over USB and the Mac has no " +
-                                                "display of its own, connect it over Sidecar. Also " +
-                                                "applies at login with the iPad already plugged in.",
-                                          action: { VisibilityPreferences.autoConnectsSidecarWithoutDisplay = $0 })
         return formTab([
             ("Refresh Rates:", [rates]),
             ("On AirPlay Connect:", [airPlayDefault]),
-            ("On Sidecar Connect:", [sidecarBacking, sidecarAutoConnect]),
+            ("On Sidecar Connect:", [sidecarBacking,
+                                     smallNote("To connect an iPad by itself when it is plugged in, add it, or " +
+                                               "“Any iPad plugged in”, under Devices › Connect Automatically.")]),
         ], leftAligned: true)
     }
 
@@ -792,7 +913,8 @@ final class SettingsWindowController: NSWindowController {
             ("Sending:", [send]),
             ("Bitrate:", [bitrate]),
             ("Receivers:", [receivers,
-                            smallNote("A receiver takes the newest sender, so DAM dials only those turned on. " +
+                            smallNote("A receiver takes the newest sender, so DAM dials only those turned on, " +
+                                      "in their order under Devices › Connect Automatically. " +
                                       "Turning one on takes it from the OpenDisplay Mac app if that is streaming to it.")]),
         ], leftAligned: true)
     }
@@ -805,6 +927,8 @@ final class SettingsWindowController: NSWindowController {
 
     /// Rebuilds the OpenDisplay page if what it shows of the receivers has changed.
     func openDisplayDidChange() {
+        // The Connect Automatically list names receivers and shows which are on.
+        devicesDidChange()
         guard let sender = openDisplay,
               sender.receivers != openDisplayShown || sender.isRunning != openDisplayRunning else { return }
         openDisplayContent = buildOpenDisplayTab()
@@ -2305,6 +2429,9 @@ private struct DevicesState: Equatable {
     var airPlay: [String] = []
     var sidecar: [String] = []
     var displays: [String] = []
+    var autoConnect: [AutoConnectEntry] = []
+    /// The receivers' keys and names, which the Connect Automatically list shows.
+    var receivers: [String] = []
 }
 
 /// What the Browser Stream tab shows of the server, to tell when it must be rebuilt.

@@ -20,7 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var openDisplay = OpenDisplaySender()
     /// The PIN prompt for Moonlight pairing, while it shows.
     private var moonlightPINAlert: NSAlert?
-    private var sidecarAutoConnector: SidecarAutoConnector?
+    private var autoConnector: AutoConnector?
     private var controlStrip: ControlStripPresenter!
     /// The app the Touch Bar switcher took focus from, handed back when it closes.
     private var switcherFocus = SwitcherFocus<NSRunningApplication>()
@@ -89,8 +89,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controlStrip.install()
 
         AirPlayQuickConnect.shared.configure(videoManager: videoManager, sidecarManager: sidecarManager)
-        sidecarAutoConnector = SidecarAutoConnector(sidecar: sidecarManager, video: videoManager)
-        sidecarAutoConnector?.start()
+        autoConnector = AutoConnector(sidecar: sidecarManager, video: videoManager)
+        autoConnector?.start()
         moonlightHost.requestPIN = { [weak self] address, isCurrent, answer in
             self?.promptForMoonlightPIN(address: address, isCurrent: isCurrent, answer: answer)
         }
@@ -149,6 +149,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return done(false) }
             self.videoManager.resizeStreamingDisplay(id: id, to: mode, completion: done)
         }
+        openDisplay.hasOwnDisplay = { [weak self] in self?.videoManager.hasOwnDisplay() ?? true }
         if OpenDisplaySender.isEnabled { openDisplay.start() }
         AudioOutputPicker.shared.configure(audioManager: audioManager)
         MirrorPicker.shared.configure(videoManager: videoManager)

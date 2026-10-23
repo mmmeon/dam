@@ -64,10 +64,22 @@ final class OpenDisplaySender {
         UserDefaults.dam.object(forKey: pointerUDPKey) as? Bool ?? true
     }
 
-    /// The receivers turned on, by key.
+    /// The receivers turned on, by key: those on the Connect Automatically list. One turned on
+    /// goes to the end of the list; the list keeps the order (AutoConnect.swift). The older
+    /// setting under `receiversKey` is read once, when the list is first made.
     private var turnedOn: Set<String> {
-        get { Set(UserDefaults.dam.stringArray(forKey: Self.receiversKey) ?? []) }
-        set { UserDefaults.dam.set(newValue.sorted(), forKey: Self.receiversKey) }
+        get { Set(AutoConnectList.openDisplayKeys(in: AutoConnectList.entries, hasOwnDisplay: false)) }
+        set {
+            var entries = AutoConnectList.entries
+            for key in turnedOn.subtracting(newValue) { entries = AutoConnectList.settingOpenDisplay(key, on: false, in: entries) }
+            for key in newValue.subtracting(turnedOn).sorted() { entries = AutoConnectList.settingOpenDisplay(key, on: true, in: entries) }
+            AutoConnectList.entries = entries
+        }
+    }
+
+    /// The receivers to dial now, best first: those turned on whose condition holds.
+    private var toDial: [String] {
+        AutoConnectList.openDisplayKeys(in: AutoConnectList.entries, hasOwnDisplay: hasOwnDisplay())
     }
 
     /// The names receivers were last seen with, by key, for those not found now.
@@ -97,6 +109,8 @@ final class OpenDisplaySender {
     var resizeDisplay: ((CGDirectDisplayID, StreamingDisplayModes.Mode, @escaping (Bool) -> Void) -> Void)?
     /// Called on the main queue when the receivers or their sessions change.
     var onChange: (() -> Void)?
+    /// Whether the Mac has a display of its own, for receivers listed "only without".
+    var hasOwnDisplay: () -> Bool = { false }
 
     // MARK: State
 
@@ -262,11 +276,12 @@ final class OpenDisplaySender {
     // MARK: Dialing
 
     /// Dials each receiver turned on and found that has no live connection, by cable if it
-    /// has one, as a cable is the better path and the receiver keeps the newest.
+    /// has one, as a cable is the better path and the receiver keeps the newest; in the
+    /// list's order. One whose condition stops holding isn't hung up, only not dialled again.
     private func dialWhatIsOn() {
         guard isRunning, Self.isEnabled else { return }
         let now = Date()
-        for key in turnedOn {
+        for key in toDial {
             if let at = retryAt[key], at > now { continue }
             let device = usbDevices.first { self.key(for: $0) == key }
             let cable = device != nil && (preferWiFiUntil[key] ?? .distantPast) < now
@@ -377,10 +392,9 @@ final class OpenDisplaySender {
     /// is on, its name, and how dials to it went, as the last address reached. Its session is
     /// the caller's to move.
     private func rekey(from old: String, to new: String) {
-        var on = turnedOn
-        if on.remove(old) != nil {
-            on.insert(new)
-            turnedOn = on
+        // In place: the receiver keeps its rank on the list.
+        if turnedOn.contains(old) {
+            AutoConnectList.entries = AutoConnectList.renamingOpenDisplay(old, to: new, in: AutoConnectList.entries)
         }
         var saved = names
         if saved[new] == nil { saved[new] = wifi[new]?.name ?? saved[old] }

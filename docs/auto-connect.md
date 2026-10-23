@@ -52,7 +52,8 @@ One ordered list in Settings, **Connect Automatically**. Each entry:
   condition, `video.hasOwnDisplay()`).
 
 Rows are added from the displays DAM sees now, through the same lists the menu shows, and
-dragged to reorder. Nicknames (`VisibilityPreferences.nickname`) show as elsewhere.
+moved with ↑ and ↓ buttons (simpler in the form's grid than dragging, and usable with
+VoiceOver). The list is the last group of the Devices tab. Nicknames (`VisibilityPreferences.nickname`) show as elsewhere.
 
 ## Behaviour
 
@@ -81,8 +82,9 @@ its attempts. It then starts at most one connection.
    connects, so an iPad on the list isn't connected when the TV already is.
 2. **No switching up.** When a higher entry appears while a lower one of the same exclusive
    kind is connected, the lower one stays: switching would tear down a screen in use.
-3. **AirPlay at sign-in is allowed**, but only after Control Center's panel has answered once,
-   and never while a key is held down, since the user may be typing.
+3. **AirPlay at sign-in is allowed**, but only once Control Center answers Accessibility (asked
+   without opening anything) and no key has been pressed for 2 s, since the user may be
+   typing. Accessibility is never asked for by the connector.
 4. **Migration.**
    - Today's receivers turned on become OpenDisplay entries in their current order (as
      stored: sorted by key).
