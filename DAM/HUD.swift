@@ -678,6 +678,40 @@ func activateForHUDTouchBar() -> NSRunningApplication? {
     return previous
 }
 
+/// Whom focus goes back to when the Touch Bar switcher closes: the app DAM came forward from
+/// to show it, unless the user has since gone on in a window of DAM's or in another app, or
+/// an alert of DAM's is up. Generic over the app, so the decision can be tested.
+struct SwitcherFocus<App: AnyObject> {
+    /// The app focus goes back to, while there is one.
+    private(set) var previous: App?
+
+    /// The switcher opened, DAM coming forward from `app`, or nil when DAM didn't (it was
+    /// active already, or no window of its own kept the switcher from showing). Opened again
+    /// while open, the app it first came from is kept.
+    mutating func opened(from app: App?) {
+        if let app { previous = app }
+    }
+
+    /// The user clicked or typed in a window of DAM's, or went to another app: focus stays
+    /// wherever they are now.
+    mutating func userMovedOn() {
+        previous = nil
+    }
+
+    /// Whether the switcher closed isn't known, as the system never said whether it showed:
+    /// a later close mustn't hand focus to an app from long ago.
+    mutating func watchGaveUp() {
+        previous = nil
+    }
+
+    /// The switcher closed: the app to hand focus back to, if any, which is then forgotten.
+    /// Not while an alert of DAM's is up, which keeps it.
+    mutating func closed(alertUp: Bool) -> App? {
+        defer { previous = nil }
+        return alertUp ? nil : previous
+    }
+}
+
 /// Hands focus back to `app`, unless the user has moved on from DAM meanwhile.
 func restoreFocus(to app: NSRunningApplication?) {
     guard let app, NSApp.isActive else { return }

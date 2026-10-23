@@ -21,7 +21,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var sidecarAutoConnector: SidecarAutoConnector?
     private var controlStrip: ControlStripPresenter!
     /// The app the Touch Bar switcher took focus from, handed back when it closes.
-    private var switcherPreviousApp: NSRunningApplication?
+    private var switcherFocus = SwitcherFocus<NSRunningApplication>()
+    /// Tells `switcherFocus` when the user goes on in a window of DAM's, while it holds an app.
+    private var switcherFocusMonitor: Any?
+    /// Whether the menu bar menu is open, so the Switcher hotkey closes it rather than
+    /// opening it again once it has closed.
+    private weak var openStatusMenu: NSMenu?
     private var hotkeys: [HotkeyAction: GlobalHotkey] = [:]
     private var settingsWindow: SettingsWindowController?
     private var aboutWindow: NSWindow?
@@ -60,6 +65,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             sidecarManager: sidecarManager
         )
         controlStrip.onModalClose = { [weak self] in self?.switcherClosed() }
+        controlStrip.onModalWatchGaveUp = { [weak self] in
+            self?.switcherFocus.watchGaveUp()
+            self?.watchSwitcherFocus()
+        }
+        // Gone to another app while the switcher is open, the user stays where they went.
+        NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification,
+                                               object: nil, queue: .main) { [weak self] _ in
+            self?.switcherFocus.userMovedOn()
+            self?.watchSwitcherFocus()
+        }
         setupStatusItem()
         // Name Sidecar displays after their iPad, re-reading SidecarCore on each display merge
         // so a connection made from Control Center is recognised too; before the first merge.
@@ -359,24 +374,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // so DAM comes forward while the switcher is open, and hands focus back when it
             // closes. Opened again while open, DAM is active already and the app is kept.
             if NSApp.windows.contains(where: { $0.isVisible && $0.styleMask.contains(.titled) }) {
-                switcherPreviousApp = activateForHUDTouchBar() ?? switcherPreviousApp
+                switcherFocus.opened(from: activateForHUDTouchBar())
+                watchSwitcherFocus()
             }
             controlStrip.openModal()
+        } else if let menu = openStatusMenu {
+            // Pressed to close the menu: it closes, and isn't opened again once it has.
+            menu.cancelTracking()
         } else {
             // From the run loop, as the PIN prompt is: the menu tracks until it closes, and
             // inside a main queue block (as a hotkey's action is) it would hold every other one.
             RunLoop.main.perform(inModes: [.default]) { [weak self] in
-                self?.statusItem.button?.performClick(nil)
+                guard let self, self.openStatusMenu == nil else { return }
+                self.statusItem.button?.performClick(nil)
             }
         }
     }
 
-    /// Hands focus back to the app the switcher took it from, unless an alert of DAM's came
-    /// up meanwhile (a pairing prompt, say), which keeps it. No pick opens a window or alert.
+    /// Hands focus back to the app the switcher took it from, unless the user has gone on in
+    /// a window of DAM's or another app meanwhile, or an alert of DAM's is up (a pairing
+    /// prompt, say), which keeps it. The switcher's close is seen while an alert is up too,
+    /// as its watch ticks in the alert's run loop mode. No pick opens a window or alert.
     private func switcherClosed() {
-        defer { switcherPreviousApp = nil }
-        guard NSApp.modalWindow == nil else { return }
-        restoreFocus(to: switcherPreviousApp)
+        restoreFocus(to: switcherFocus.closed(alertUp: NSApp.modalWindow != nil))
+        watchSwitcherFocus()
+    }
+
+    /// Watches for a click or key in a window of DAM's, an alert's included, while the
+    /// switcher holds an app to hand focus back to, and only then.
+    private func watchSwitcherFocus() {
+        if switcherFocus.previous == nil {
+            if let monitor = switcherFocusMonitor { NSEvent.removeMonitor(monitor) }
+            switcherFocusMonitor = nil
+        } else if switcherFocusMonitor == nil {
+            switcherFocusMonitor = NSEvent.addLocalMonitorForEvents(
+                matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown]
+            ) { [weak self] event in
+                // A HUD's panel, untitled, takes a picker's keys; those don't count.
+                if let window = event.window, window.styleMask.contains(.titled) || window === NSApp.modalWindow {
+                    self?.switcherFocus.userMovedOn()
+                    DispatchQueue.main.async { self?.watchSwitcherFocus() }
+                }
+                return event
+            }
+        }
     }
 
     /// SwiftUI's `Settings` scene owns ⌘, and the app menu's "Settings…" item, and opens
@@ -432,6 +473,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 // MARK: - NSMenuDelegate
 
 extension AppDelegate: NSMenuDelegate {
+    // The status menu is the only one with this delegate. Kept rather than compared with
+    // `statusItem.menu`, which a rebuild while the menu is open replaces.
+    func menuWillOpen(_ menu: NSMenu) {
+        if menu.supermenu == nil { openStatusMenu = menu }
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        if menu.supermenu == nil { openStatusMenu = nil }
+    }
+
     /// Fills the menu that is about to open from the current state, in place. Assigning a
     /// freshly built menu to the status item here would not change the one already opening,
     /// which is what made the menu run one open behind the display state.

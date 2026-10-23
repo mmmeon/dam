@@ -280,4 +280,132 @@ final class ControlStripPresenterTests: XCTestCase {
         }
         XCTAssertEqual(visibility.check(showing: false), .unknown)
     }
+
+    // MARK: - Ways out of the switcher's pages
+
+    /// Every page of a display has a way out: the resolutions page a ◀ back to the switcher,
+    /// the others a ◀ back to it (`.back`, in their own items), and while DAM is the active
+    /// app, when the system shows no close box, DAM's own close button on each.
+    func testEveryDisplayPageHasAWayOut() {
+        let back = NSTouchBarItem.Identifier(ControlStripPresenter.displayResPrefix + "tv.switcher")
+        for onResolutions in [true, false] {
+            let active = ControlStripPresenter.pageExits(displayID: "tv", onResolutions: onResolutions, damActive: true)
+            XCTAssertEqual(active.first, ControlStripPresenter.modalCloseID, "the close button comes first")
+            let inactive = ControlStripPresenter.pageExits(displayID: "tv", onResolutions: onResolutions, damActive: false)
+            XCTAssertFalse(inactive.contains(ControlStripPresenter.modalCloseID), "the system's close box shows then")
+            XCTAssertEqual(active.contains(back), onResolutions)
+            XCTAssertEqual(inactive.contains(back), onResolutions)
+        }
+    }
+
+    /// The arrange flow's pages have the close button while DAM is active, when opened from
+    /// something to close.
+    func testArrangePagesHaveACloseButtonWhileDAMIsActive() {
+        XCTAssertEqual(ArrangeTouchBar.exits(damActive: true, canClose: true), ["close"])
+        XCTAssertEqual(ArrangeTouchBar.exits(damActive: false, canClose: true), [])
+        XCTAssertEqual(ArrangeTouchBar.exits(damActive: true, canClose: false), [])
+    }
+
+    // MARK: - No re-present after close
+
+    /// A change started while the switcher was open doesn't bring it back once it has closed,
+    /// even if it was opened again meanwhile.
+    func testAChangeSettlingAfterACloseDoesNotReopen() {
+        var closes = SwitcherCloses()
+        let started = closes.count
+        XCTAssertTrue(closes.noneSince(started))
+        closes.closed()
+        XCTAssertFalse(closes.noneSince(started))
+        let later = closes.count
+        XCTAssertTrue(closes.noneSince(later))
+    }
+
+    // MARK: - A bar's watch
+
+    private func spin(until done: () -> Bool, timeout: TimeInterval = 3) {
+        let end = Date().addingTimeInterval(timeout)
+        while !done() && Date() < end { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+    }
+
+    /// A bar seen showing and then gone, as when its close box is tapped, ends the watch as
+    /// closed: a picker then cancels rather than picks.
+    func testWatch_barGone_endsClosed() {
+        let watch = ModalBarWatch()
+        var showing = true
+        var ended: [SwitcherVisibility.State] = []
+        watch.start(showing: { showing }) { ended.append($0) }
+        spin(until: { false }, timeout: 3 * SwitcherVisibility.interval)
+        XCTAssertEqual(ended, [], "still showing")
+        showing = false
+        spin(until: { !ended.isEmpty })
+        XCTAssertEqual(ended, [.closed])
+        XCTAssertFalse(watch.isWatching)
+    }
+
+    /// Stopped, as when the picker dismisses its own bar, the watch says nothing.
+    func testWatch_stopped_saysNothing() {
+        let watch = ModalBarWatch()
+        var ended: [SwitcherVisibility.State] = []
+        watch.start(showing: { false }) { ended.append($0) }
+        watch.stop()
+        spin(until: { false }, timeout: 4 * SwitcherVisibility.interval)
+        XCTAssertEqual(ended, [])
+    }
+
+    /// It ticks while an alert or a menu is up, in the run loop's other modes.
+    func testWatch_ticksInTheModalPanelMode() {
+        let watch = ModalBarWatch()
+        var showing = true
+        var ended: [SwitcherVisibility.State] = []
+        watch.start(showing: { showing }) { ended.append($0) }
+        let hide = Date().addingTimeInterval(3 * SwitcherVisibility.interval)
+        let end = Date().addingTimeInterval(3)
+        while ended.isEmpty && Date() < end {
+            RunLoop.main.run(mode: .modalPanel, before: Date().addingTimeInterval(0.05))
+            if Date() > hide { showing = false }
+        }
+        XCTAssertEqual(ended, [.closed])
+    }
+
+    // MARK: - Focus after the switcher
+
+    private final class App {}
+
+    /// Focus goes back to the app DAM came forward from, once, and not while an alert is up.
+    func testFocus_handedBackOnce_notOverAnAlert() {
+        let mail = App()
+        var focus = SwitcherFocus<App>()
+        focus.opened(from: mail)
+        XCTAssertTrue(focus.closed(alertUp: false) === mail)
+        XCTAssertNil(focus.closed(alertUp: false), "forgotten once handed back")
+        focus.opened(from: mail)
+        XCTAssertNil(focus.closed(alertUp: true))
+        XCTAssertNil(focus.previous)
+    }
+
+    /// Opened again while open, DAM is active already and the first app is kept.
+    func testFocus_reopenedKeepsTheFirstApp() {
+        let mail = App()
+        var focus = SwitcherFocus<App>()
+        focus.opened(from: mail)
+        focus.opened(from: nil)
+        XCTAssertTrue(focus.closed(alertUp: false) === mail)
+    }
+
+    /// The user going on in a window of DAM's, or to another app, keeps focus where they are.
+    func testFocus_userMovedOn_keepsIt() {
+        var focus = SwitcherFocus<App>()
+        focus.opened(from: App())
+        focus.userMovedOn()
+        XCTAssertNil(focus.closed(alertUp: false))
+    }
+
+    /// Where the watch gave up, a later close doesn't hand focus to the app from back then.
+    func testFocus_watchGaveUp_forgetsTheApp() {
+        var focus = SwitcherFocus<App>()
+        focus.opened(from: App())
+        focus.watchGaveUp()
+        focus.opened(from: nil)
+        XCTAssertNil(focus.closed(alertUp: false))
+    }
 }
