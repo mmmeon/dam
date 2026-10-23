@@ -20,17 +20,20 @@ final class MoonlightHostTests: XCTestCase {
     /// A host on ports of its own, below the ones outgoing connections take (49152 and up)
     /// and the ones DAM itself listens on (47984–48013); set up as `other` is, when given.
     private func makeHost(like other: MoonlightHost? = nil,
-                          limits: MoonlightConnectionLimits = MoonlightConnectionLimits()) -> MoonlightHost {
+                          limits: MoonlightConnectionLimits = MoonlightConnectionLimits(),
+                          promptLimits: PairingPromptLimits = PairingPromptLimits()) -> MoonlightHost {
         let base = UInt16.random(in: 30000...39000)
         let host = MoonlightHost(httpPort: NWEndpoint.Port(rawValue: base)!, httpsPort: NWEndpoint.Port(rawValue: base + 1)!,
                                  rtspPort: NWEndpoint.Port(rawValue: base + 2)!, directory: directory, advertises: false,
-                                 limits: other?.limits ?? limits)
+                                 limits: other?.limits ?? limits, promptLimits: other?.promptLimits ?? promptLimits)
         guard let other else { return host }
         // Everything a test may set before the host starts.
         host.apps = other.apps
         host.makeDisplay = other.makeDisplay
         host.removeDisplay = other.removeDisplay
         host.resizeDisplay = other.resizeDisplay
+        host.othersStream = other.othersStream
+        host.handOverDisplay = other.handOverDisplay
         host.requestPIN = other.requestPIN
         host.pairingAbandoned = other.pairingAbandoned
         host.onChange = other.onChange
@@ -134,15 +137,19 @@ final class MoonlightHostTests: XCTestCase {
     }
 
     /// Pairs as moonlight-qt's NvPairingManager does: four steps over HTTP, the last over
-    /// HTTPS. Returns whether the host said paired at the last step it reached.
+    /// HTTPS. Returns whether the host said paired at the last step it reached. `duringPrompt`
+    /// runs once the first step is sent, before its answer is read.
     @discardableResult
-    private func pair(_ client: Client, pin: String) throws -> Bool {
+    private func pair(_ client: Client, pin: String, duringPrompt: (() throws -> Void)? = nil) throws -> Bool {
         let hex = MoonlightCrypto.hex
         let salt = MoonlightPairing.randomBytes(16)
         let key = MoonlightCrypto.pairingKey(salt: salt, pin: pin)
         let pem = Data(MoonlightCrypto.pem(certificate: client.certificate).utf8)
 
-        var xml = try get("/pair?devicename=roth&updateState=1&phrase=getservercert&salt=\(hex(salt))&clientcert=\(hex(pem))")
+        let first = open("/pair?devicename=roth&updateState=1&phrase=getservercert&salt=\(hex(salt))&clientcert=\(hex(pem))",
+                         secure: false)
+        try duringPrompt?()
+        var xml = try body(of: first)
         guard field("paired", in: xml) == "1" else { return false }
         let serverPEM = String(decoding: try XCTUnwrap(field("plaincert", in: xml).flatMap(MoonlightCrypto.data(hex:))),
                                as: UTF8.self)
@@ -476,6 +483,46 @@ final class MoonlightHostTests: XCTestCase {
         XCTAssertTrue(host.clients.isEmpty)
     }
 
+    /// Only the device pairing takes the steps after the first: another address's step out
+    /// of order, or its /unpair, is refused and leaves the pairing as it was.
+    func testPairingStepsComeOnlyFromTheDevicePairing() throws {
+        var answer: ((String?) -> Void)?
+        let asked = expectation(description: "PIN asked")
+        host.requestPIN = { _, _, give in answer = give; asked.fulfill() }
+        startHost()
+        let client = try Client.make()
+        let paired = try pair(client, pin: "1234", duringPrompt: {
+            self.wait(for: [asked], timeout: 5)
+            let step = try self.get("/pair?devicename=x&updateState=1&clientchallenge=00112233445566778899AABBCCDDEEFF",
+                                    address: "::1")
+            XCTAssertEqual(self.status(step), "400")
+            XCTAssertEqual(self.field("paired", in: step), "0")
+            _ = try self.get("/unpair", address: "::1")
+            let other = try Client.make()
+            let pem = MoonlightCrypto.hex(Data(MoonlightCrypto.pem(certificate: other.certificate).utf8))
+            let begin = try self.get("/pair?devicename=x&updateState=1&phrase=getservercert&salt=00112233445566778899AABBCCDDEEFF&clientcert=\(pem)",
+                                     address: "::1")
+            XCTAssertEqual(self.status(begin), "409", "nor another pairing meanwhile")
+            answer?("1234")
+        })
+        XCTAssertTrue(paired)
+        XCTAssertEqual(host.clients.map(\.certificate), [client.certificate])
+    }
+
+    /// The host's PIN prompts and the browser stream's are held back together: a device
+    /// declined here waits there too.
+    func testThePromptLimitsAreTheOnesGiven() throws {
+        let limits = PairingPromptLimits()
+        host = makeHost(promptLimits: limits)
+        host.requestPIN = { _, _, answer in answer(nil) }
+        startHost()
+        XCTAssertTrue(host.promptLimits === limits)
+        XCTAssertFalse(try pair(try Client.make(), pin: "4821"))
+        guard case .failure(.wait) = WebStreamPairing(limits: limits).begin(address: "127.0.0.1", name: "Safari") else {
+            return XCTFail("the browser's pairing is held back too")
+        }
+    }
+
     /// The stream's sockets are IPv4 only, so a launch reaching the host over IPv6 is
     /// refused at once, with a message saying what to do.
     func testALaunchOverIPv6IsRefusedAtOnce() throws {
@@ -590,6 +637,83 @@ final class MoonlightHostTests: XCTestCase {
         XCTAssertEqual(resizes, [])
         XCTAssertEqual(removed, [])
         XCTAssertEqual(host.launches.first?.displayID, CGMainDisplayID())
+    }
+
+    /// A display made for a device that a browser streams too is neither resized nor removed
+    /// under the browser: a resume keeps its size, and a cancel hands it to the browser.
+    func testADisplayABrowserAlsoStreamsIsHandedOverRatherThanResizedOrRemoved() throws {
+        let online = CGMainDisplayID()
+        var resizes = 0
+        var removed: [CGDirectDisplayID] = [], handed: [CGDirectDisplayID] = []
+        host.requestPIN = { _, _, answer in answer("1234") }
+        host.makeDisplay = { _, _, _, done in done(online) }
+        host.resizeDisplay = { _, _, _, _, done in resizes += 1; done(true) }
+        host.removeDisplay = { removed.append($0) }
+        host.othersStream = { $0 == online }
+        host.handOverDisplay = { handed.append($0) }
+        startHost()
+        let client = try Client.make()
+        XCTAssertTrue(try pair(client, pin: "1234"))
+        XCTAssertEqual(field("gamesession", in: try launchNewDisplay(client)), "1")
+        let key = MoonlightCrypto.hex(MoonlightPairing.randomBytes(16))
+        XCTAssertEqual(field("resume", in: try get("/resume?appid=\(MoonlightHost.newDisplayAppID)&mode=2532x1170x60&rikey=\(key)&rikeyid=2",
+                                                   secure: true, identity: client.identity)), "1")
+        XCTAssertEqual(resizes, 0, "the browser's picture keeps its size")
+        XCTAssertEqual(host.launches.first?.displayID, online)
+        _ = try get("/cancel", secure: true, identity: client.identity)
+        XCTAssertEqual(handed, [online])
+        XCTAssertEqual(removed, [])
+    }
+
+    /// A launch whose display went forgets it: the display that next takes its ID is neither
+    /// resized by a resume, which makes one again, nor removed by a cancel.
+    func testALaunchForgetsADisplayThatWent() throws {
+        let online = CGMainDisplayID()
+        var made = 0, resizes = 0
+        var removed: [CGDirectDisplayID] = []
+        host.requestPIN = { _, _, answer in answer("1234") }
+        // Each made with the same ID, as a display made in the slot of one gone gets.
+        host.makeDisplay = { _, _, _, done in made += 1; done(online) }
+        host.resizeDisplay = { _, _, _, _, done in resizes += 1; done(true) }
+        host.removeDisplay = { removed.append($0) }
+        startHost()
+        let client = try Client.make()
+        XCTAssertTrue(try pair(client, pin: "1234"))
+        XCTAssertEqual(field("gamesession", in: try launchNewDisplay(client)), "1")
+        host.displayGone(online)
+        XCTAssertEqual(host.launches.first?.ownsDisplay, false)
+        let key = MoonlightCrypto.hex(MoonlightPairing.randomBytes(16))
+        XCTAssertEqual(field("resume", in: try get("/resume?appid=\(MoonlightHost.newDisplayAppID)&mode=2532x1170x60&rikey=\(key)&rikeyid=2",
+                                                   secure: true, identity: client.identity)), "1")
+        XCTAssertEqual(resizes, 0)
+        XCTAssertEqual(made, 2, "a display made again")
+        XCTAssertEqual(removed, [], "not the one that took the gone one's ID")
+        XCTAssertEqual(host.launches.first?.ownsDisplay, true)
+        _ = try get("/cancel", secure: true, identity: client.identity)
+        XCTAssertEqual(removed, [online], "the one made for the resume")
+    }
+
+    /// A display handed over that no device streams by then goes at once; one a device
+    /// streams is that device's.
+    func testAnAdoptedDisplayGoesWithTheLastDeviceStreamingIt() throws {
+        var removed: [CGDirectDisplayID] = []
+        host.requestPIN = { _, _, answer in answer("1234") }
+        host.removeDisplay = { removed.append($0) }
+        host.adopt(display: 5)
+        XCTAssertEqual(removed, [5], "no device streams it")
+        let online = CGMainDisplayID()
+        host.apps = [MoonlightApp(id: 1, title: "Streaming Display 1", displayID: online)]
+        startHost()
+        let client = try Client.make()
+        XCTAssertTrue(try pair(client, pin: "1234"))
+        let key = MoonlightCrypto.hex(MoonlightPairing.randomBytes(16))
+        XCTAssertEqual(field("gamesession", in: try get("/launch?appid=1&mode=1920x1080x60&rikey=\(key)&rikeyid=1",
+                                                        secure: true, identity: client.identity)), "1")
+        XCTAssertEqual(host.launches.first?.ownsDisplay, false)
+        host.adopt(display: online)
+        XCTAssertEqual(host.launches.first?.ownsDisplay, true)
+        _ = try get("/cancel", secure: true, identity: client.identity)
+        XCTAssertEqual(removed, [5, online])
     }
 
     func testSaysSoWhenNoDisplayCanBeMade() throws {

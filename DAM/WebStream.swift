@@ -210,9 +210,12 @@ final class WebStreamServer {
     /// Where the devices, the certificates and their keys are kept.
     let directory: URL
 
-    init(port: NWEndpoint.Port = WebStreamServer.defaultPort, directory: URL = WebStreamServer.defaultDirectory) {
+    /// `promptLimits` is shared with Moonlight's pairing; see PairingPromptLimits.
+    init(port: NWEndpoint.Port = WebStreamServer.defaultPort, directory: URL = WebStreamServer.defaultDirectory,
+         promptLimits: PairingPromptLimits = PairingPromptLimits()) {
         self.port = port
         self.directory = directory
+        pairing = WebStreamPairing(limits: promptLimits)
     }
 
     /// The streaming displays, which viewers pick from.
@@ -248,7 +251,7 @@ final class WebStreamServer {
 
     /// The devices that may watch.
     private(set) lazy var devices = WebStreamDevices(directory: directory)
-    let pairing = WebStreamPairing()
+    let pairing: WebStreamPairing
     /// The certificates of the HTTPS port, once it has started.
     private(set) var certificates: WebStreamCertificates?
 
@@ -464,31 +467,23 @@ final class WebStreamServer {
         }
     }
 
-    /// Names only a local network gives out, as a router's DNS does: no page on the internet
-    /// can have one.
-    private static let localSuffixes = [".local", ".lan", ".home", ".home.arpa", ".internal", ".localdomain", ".localhost"]
+    /// The suffixes a local network's DNS, as a router's, gives the Mac's name under.
+    private static let localSuffixes = [".local", ".lan", ".home", ".home.arpa", ".internal", ".localdomain"]
 
     /// Whether `request` was sent to one of the Mac's names or to an address, not to a name
     /// of someone else's that leads here (DNS rebinding), whose page would otherwise pair as
-    /// its own origin and hold the cookie. Any name of the local network's counts, the names
-    /// of an imported server certificate, and those the user added (`extraHostNames`).
+    /// its own origin and hold the cookie. The Mac's names are its Bonjour name, alone or
+    /// under a local network's suffix ("slab", "slab.local", "slab.lan"), `localhost`, the
+    /// names the HTTPS certificate is for, and those the user added (`extraHostNames`): any
+    /// other name, a local network's too, may be anyone's, as a host on the network can
+    /// answer for "evil.local" itself. Nothing here waits on DNS.
     func namesThisMac(_ request: Request) -> Bool {
         guard let host = request.host else { return false }
         if IPv4Address(host) != nil || IPv6Address(host) != nil { return true }
-        if !host.contains(".") || Self.localSuffixes.contains(where: { host.hasSuffix($0) }) { return true }
-        if Self.extraHostNames.contains(host) { return true }
-        var names = WebStreamCertificates.hostNames().map { $0.lowercased() }
-        if let local = WebStreamCertificates.localHostName?.lowercased() { names.append(local) }
-        if case .importedServer(let covered, _)? = certificates?.source {
-            for name in covered.map({ $0.lowercased() }) {
-                if name.hasPrefix("*.") {
-                    if host.split(separator: ".", maxSplits: 1).last.map({ "*." + $0 }) == name { return true }
-                } else {
-                    names.append(name)
-                }
-            }
-        }
-        return names.contains(host)
+        if host == "localhost" || Self.extraHostNames.contains(host) { return true }
+        if let local = WebStreamCertificates.localHostName?.lowercased(),
+           host == local || Self.localSuffixes.contains(where: { host == local + $0 }) { return true }
+        return certificates?.covers(host) == true
     }
 
     // MARK: Addresses
@@ -544,8 +539,9 @@ final class WebStreamServer {
     // MARK: Requests
 
     private var sessions: [WebStreamSession.Key: WebStreamSession] = [:]
-    /// A display made for streams, removed once no session uses it.
-    private var ownedDisplay: CGDirectDisplayID?
+    /// The displays made for streams, or handed over by Moonlight, each removed (or handed
+    /// back) once no session uses it.
+    private var ownedDisplays: Set<CGDirectDisplayID> = []
     /// Requests waiting for the display being made.
     private var waitingForDisplay: [(WebStreamRequest, NWConnection)] = []
     private var makingDisplay = false
@@ -616,15 +612,28 @@ final class WebStreamServer {
             }
             sendJSON(["state": pending.declined ? "declined" : "waiting"], to: connection)
         case "/apps.json", "/stream.mp4":
-            // A link's token is the device's own; a cookie counts only on one of the Mac's names.
-            let cookie = !namesThisMac(request) ? nil
-                : (request.secure ? request.cookie(Self.secureCookieName) : nil) ?? request.cookie(Self.cookieName)
-            guard let device = devices.device(token: request.query["token"]) ?? devices.device(token: cookie) else {
+            // A link's token is the device's own, and looked at first; a cookie counts only on
+            // one of the Mac's names.
+            let linked = devices.device(token: request.query["token"])
+            var sent: String?
+            var legacy = false
+            if linked == nil, namesThisMac(request) {
+                sent = request.secure ? request.cookie(Self.secureCookieName) : nil
+                if sent == nil, let old = request.cookie(Self.cookieName) {
+                    sent = old
+                    legacy = request.secure
+                }
+            }
+            guard let device = linked ?? devices.device(token: sent) else {
                 return send(status: "401 Unauthorized", body: Data("Pair this browser, or use a link from \(AppIdentity.name).\n".utf8),
                             to: connection)
             }
             if request.path == "/apps.json" {
-                send(status: "200 OK", contentType: "application/json", body: appsJSON(), to: connection)
+                // A browser paired over HTTPS before the cookie had a name of its own there
+                // has a Secure cookie by HTTP's name, which keeps HTTP's from being set: it
+                // gets HTTPS's name now, and the old one goes.
+                let renamed = legacy ? [cookie(for: device, secure: true), Self.expiredLegacyCookie] : []
+                send(status: "200 OK", contentType: "application/json", headers: renamed, body: appsJSON(), to: connection)
             } else {
                 var stream = WebStreamRequest.parse(request.query, preferred: preferredProfile())
                 stream.device = device.id
@@ -673,6 +682,10 @@ final class WebStreamServer {
             + "HttpOnly; SameSite=Strict" + (secure ? "; Secure" : "")
     }
 
+    /// The header that ends a cookie by HTTP's name set over HTTPS, which only HTTPS can.
+    /// One set over HTTP, sent over HTTPS too, goes as well: HTTP pairs again, once.
+    static let expiredLegacyCookie = "Set-Cookie: \(cookieName)=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict; Secure"
+
     private func refuseHost(_ request: Request, on connection: NWConnection) {
         wsLog.debug("refused \(request.address, privacy: .public): asked for \(request.host ?? "no host", privacy: .public)")
         send(status: "403 Forbidden", body: Data("Open this page by the Mac's name or address.\n".utf8), to: connection)
@@ -698,25 +711,37 @@ final class WebStreamServer {
         for (_, connection) in waitingForDisplay { connection.cancel() }
         waitingForDisplay = []
         holds = 0
-        if let ownedDisplay { letGo(of: ownedDisplay) }
+        for id in ownedDisplays { letGo(of: id) }
     }
 
     /// The streaming display `id` is gone, however it went: one made here is no longer, and its
     /// ID, which another display may take, is not to be removed later.
     func displayGone(_ id: CGDirectDisplayID) {
-        if ownedDisplay == id { ownedDisplay = nil }
+        ownedDisplays.remove(id)
     }
 
-    /// Lets go of the display made for streams once nothing here needs it: no session streams
+    /// Whether a viewer here streams display `id`.
+    func streams(display id: CGDirectDisplayID) -> Bool {
+        sessions.keys.contains { $0.displayID == id }
+    }
+
+    /// Takes display `id`, made elsewhere for a stream (Moonlight's) and no longer needed
+    /// there, as made here: it goes once no viewer here streams it.
+    func adopt(display id: CGDirectDisplayID) {
+        ownedDisplays.insert(id)
+        releaseOwnedDisplayIfUnused()
+    }
+
+    /// Lets go of each display made for streams that nothing here needs: no session streams
     /// it, and no request is about to.
     private func releaseOwnedDisplayIfUnused() {
-        guard holds == 0, let ownedDisplay, !sessions.keys.contains(where: { $0.displayID == ownedDisplay }) else { return }
-        letGo(of: ownedDisplay)
+        guard holds == 0 else { return }
+        for id in ownedDisplays where !streams(display: id) { letGo(of: id) }
     }
 
-    /// The display made for streams goes, or to another device streaming it, which has it next.
+    /// A display made for streams goes, or to another device streaming it, which has it next.
     private func letGo(of id: CGDirectDisplayID) {
-        if ownedDisplay == id { ownedDisplay = nil }
+        ownedDisplays.remove(id)
         if othersStream(id) {
             wsLog.debug("handing display \(id) over to its other stream")
             handOverDisplay?(id)
@@ -746,8 +771,8 @@ final class WebStreamServer {
             displayID = listed.displayID
         } else if let first = apps.first {
             displayID = first.displayID
-        } else if let ownedDisplay, DisplayArrangement.onlineDisplayIDs().contains(ownedDisplay) {
-            displayID = ownedDisplay
+        } else if let owned = ownedDisplays.first(where: DisplayArrangement.onlineDisplayIDs().contains) {
+            displayID = owned
         } else {
             guard let makeDisplay else {
                 return send(status: "503 Service Unavailable", body: Data("No display to stream\n".utf8), to: connection)
@@ -776,8 +801,9 @@ final class WebStreamServer {
                     self.removeDisplay?(id)
                     return
                 }
-                if let old = self.ownedDisplay, old != id { self.letGo(of: old) }
-                self.ownedDisplay = id
+                // Those made before, which had gone off, unless a viewer still has one.
+                for old in self.ownedDisplays where old != id && !self.streams(display: old) { self.letGo(of: old) }
+                self.ownedDisplays.insert(id)
                 // Kept through them all, and let go after if none of them streams it.
                 self.holds += 1
                 for (request, connection) in waiting { self.serve(request, on: connection) }
@@ -787,9 +813,12 @@ final class WebStreamServer {
             return
         }
         // A display made for the stream follows the viewer's screen when it is turned; the
-        // page asks again when it is. Not one another device streams, which keeps its size.
-        if displayID == ownedDisplay, !othersStream(displayID), let resizeDisplay,
-           let wanted = Self.turnedSize(of: displayID, for: request) {
+        // page asks again when it is. Not one another device streams, which keeps its size:
+        // Moonlight's, or another viewer's here (the viewer's own stream from before the
+        // turn may not have ended yet).
+        if ownedDisplays.contains(displayID), !othersStream(displayID),
+           !sessions.values.contains(where: { $0.key.displayID == displayID && $0.hasViewers(otherThan: request.device) }),
+           let resizeDisplay, let wanted = Self.turnedSize(of: displayID, for: request) {
             wsLog.debug("turning display \(displayID) to \(wanted.width)×\(wanted.height) for the viewer")
             let generation = self.generation
             // Kept while it turns, however long, though the session before it ends meanwhile.
@@ -801,6 +830,9 @@ final class WebStreamServer {
                 var request = request
                 request.portrait = nil
                 self.serve(request, on: connection)
+                // Let go after if it doesn't stream it after all: its device forgotten
+                // meanwhile, say.
+                self.releaseOwnedDisplayIfUnused()
             }
         }
         guard let size = Self.pictureSize(of: displayID, request: request) else {
@@ -1068,6 +1100,13 @@ final class WebStreamSession {
             self.lock.unlock()
             if stillEmpty { self.end("last viewer left") }
         }
+    }
+
+    /// Whether a viewer of another device than `device` watches.
+    func hasViewers(otherThan device: String?) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return viewers.contains { $0.device != device }
     }
 
     /// Closes the connections of `device`'s viewers; the session ends as when they leave.
@@ -2094,7 +2133,7 @@ enum WebStreamPage {
           box.querySelector('.code').textContent = j.code;
           $('msg').append(box);
           const poll = () => fetch('/pair/wait?id=' + encodeURIComponent(j.id), { cache: 'no-store' }).then(r => r.json()).then(w => {
-            if (w.state === 'paired') { $('msg').hidden = true; return load(); }
+            if (w.state === 'paired') { $('msg').hidden = true; justPaired = true; return load(); }
             if (w.state === 'waiting') return setTimeout(poll, 1000);
             $('msg').textContent = w.state === 'declined' ? 'Not paired: the code was wrong, or the Mac said no. Reload to try again.'
                                                           : 'The code ran out. Reload to try again.';
@@ -2103,9 +2142,17 @@ enum WebStreamPage {
         }).catch(() => fail('Could not reach the host.'));
       }
 
+      // Turned away just after pairing, the browser kept no cookie: pairing again would only
+      // bring the Mac's prompt back, round after round.
+      let justPaired = false;
       function load() {
       fetch('/apps.json?' + new URLSearchParams(token ? { token } : {}), { cache: 'no-store' }).then(r => {
-        if (r.status === 401) { if (token) fail('This link no longer works. Ask for a new one.'); else pair(); return null; }
+        if (r.status === 401) {
+          if (token) fail('This link no longer works. Ask for a new one.');
+          else if (justPaired) fail('Paired, but this browser kept no cookie for the page. Allow cookies here, or clear this site’s cookies, and reload.');
+          else pair();
+          return null;
+        }
         if (!r.ok) return r.text().then(t => { fail(t); return null; });
         return r.json();
       }).then(j => {

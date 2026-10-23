@@ -12,9 +12,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var audioManager = AudioManager()
     private lazy var videoManager = VideoManager()
     private lazy var sidecarManager = SidecarManager()
-    private lazy var moonlightHost = MoonlightHost()
+    /// How often either server's pairing prompt may come up, the two together.
+    private let pairingPromptLimits = PairingPromptLimits()
+    private lazy var moonlightHost = MoonlightHost(promptLimits: pairingPromptLimits)
     /// The stream for browsers and players, apart from Moonlight.
-    private lazy var webStream = WebStreamServer()
+    private lazy var webStream = WebStreamServer(promptLimits: pairingPromptLimits)
     private lazy var openDisplay = OpenDisplaySender()
     /// The PIN prompt for Moonlight pairing, while it shows.
     private var moonlightPINAlert: NSAlert?
@@ -98,6 +100,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         moonlightHost.makeDisplay = makeStreamDisplay
         moonlightHost.removeDisplay = removeStreamDisplay
         moonlightHost.resizeDisplay = resizeStreamDisplay
+        // A display made for Moonlight is listed to browsers, which may stream it too.
+        moonlightHost.othersStream = { [weak self] id in self?.webStream.streams(display: id) ?? false }
+        moonlightHost.handOverDisplay = { [weak self] id in self?.webStream.adopt(display: id) }
         if MoonlightHost.isEnabled && !MoonlightHost.usesExternalSunshine { moonlightHost.start() }
         startRemoteSessions()
         webStream.onChange = { [weak self] in self?.rebuild() }
@@ -122,6 +127,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.async {
                 self?.openDisplay.displayGone(id)
                 self?.webStream.displayGone(id)
+                self?.moonlightHost.displayGone(id)
             }
         }
         openDisplay.resizeDisplay = { [weak self] id, mode, done in

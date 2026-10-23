@@ -194,7 +194,12 @@ final class WebStreamPairing {
 
     private(set) var request: Request?
     private var keys: [String: Date] = [:]
-    var limits = PairingPromptLimits()
+    /// Shared with Moonlight's pairing, so that the two together bring up no more prompts.
+    var limits: PairingPromptLimits
+
+    init(limits: PairingPromptLimits = PairingPromptLimits()) {
+        self.limits = limits
+    }
 
     /// Why a request can't begin now.
     enum Refusal: Error, Equatable {
@@ -307,6 +312,8 @@ final class WebStreamCertificates {
     /// The certificates sent after the server's: its authority's, and any above that.
     let chain: [Data]
     let source: Source
+    /// The names the server certificate is for, in lower case, wildcards among them.
+    let names: [String]
 
     private let directory: URL
 
@@ -331,6 +338,7 @@ final class WebStreamCertificates {
                 let facts = DER.certificate(server)
                 source = .importedServer(names: (facts?.names ?? []) + (facts?.addresses ?? []).map(Self.addressText),
                                          until: Self.notAfter(of: certificate))
+                self.names = (facts?.names ?? []).map { $0.lowercased() }
                 return
             }
             waLog.error("the imported server certificate can't be used; serving DAM's own")
@@ -418,6 +426,16 @@ final class WebStreamCertificates {
         chain = [authority] + signer.above
         source = signer.name == nil ? .own
             : .importedAuthority(name: Self.commonName(of: authority) ?? "Imported authority", until: authorityEnds)
+        self.names = names.map { $0.lowercased() }
+    }
+
+    /// Whether the server certificate is for the name `host`, given in lower case: one of
+    /// its names, or under one of its wildcards by one label.
+    func covers(_ host: String) -> Bool {
+        let parts = host.split(separator: ".", maxSplits: 1)
+        return names.contains { name in
+            name.hasPrefix("*.") ? parts.count == 2 && "*." + parts[1] == name : name == host
+        }
     }
 
     private struct Covers: Codable, Equatable {
