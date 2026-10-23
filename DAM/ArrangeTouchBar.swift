@@ -3,8 +3,9 @@
 //
 //  The Touch Bar's arrange flow, opened by the "Arrange" button on the modal bar: pick the
 //  display to move, the side to put it on, the display to put it beside, then confirm from
-//  a preview of the result. Each page has a back button; the first goes back to the modal
-//  bar. The result is applied through `VideoManager.arrange`.
+//  a preview of the result. Each page has a back button, the first going back to the modal
+//  bar, and a close button while DAM is the active app. The result is applied through
+//  `VideoManager.arrange`.
 //
 
 import AppKit
@@ -46,6 +47,8 @@ final class ArrangeTouchBar: NSObject {
     private weak var videoManager: VideoManager?
     /// Re-presents the bar the flow was opened from.
     private var back: (() -> Void)?
+    /// Closes the switcher the flow is part of, for the close button shown while DAM is active.
+    private var closeSwitcher: (() -> Void)?
     private var layout = DisplayLayout(placements: [])
     private var step: Step = .pickDisplay
     private var bar: NSTouchBar?
@@ -54,16 +57,16 @@ final class ArrangeTouchBar: NSObject {
 
     private override init() {}
 
-    /// Whether a page of the flow shows on the Touch Bar.
-    var isShowing: Bool { bar?.isVisible == true }
-
     // MARK: - Flow
 
     /// Reads the arrangement and presents the first page. `back` re-presents the bar the
-    /// flow replaces, and is called when the flow ends.
-    func start(videoManager: VideoManager, back: @escaping () -> Void) {
+    /// flow replaces, and is called when the flow ends. `close` closes what the flow is part
+    /// of, from the close button each page has while DAM is the active app, as the system
+    /// shows no close box then.
+    func start(videoManager: VideoManager, back: @escaping () -> Void, close: (() -> Void)? = nil) {
         self.videoManager = videoManager
         self.back = back
+        self.closeSwitcher = close
         videoManager.refresh()
         layout = videoManager.currentLayout()
         guard layout.placements.count >= 2 else {
@@ -90,10 +93,23 @@ final class ArrangeTouchBar: NSObject {
     }
 
     private func end() {
+        close()
+        back?()
+    }
+
+    /// Takes the flow's page away without going back, as when the switcher closes. An
+    /// arrangement still being applied then goes back only if `back` allows it.
+    func close() {
         if let bar { NSTouchBar.dismissSystemModal(bar) }
         bar = nil
         actions.removeAll()
-        back?()
+    }
+
+    /// Shows or hides the page's close button as DAM becomes the active app or stops being it.
+    func activeAppChanged() {
+        guard let bar else { return }
+        let ids = identifiers(for: step)
+        if bar.defaultItemIdentifiers != ids { bar.defaultItemIdentifiers = ids }
     }
 
     private func goBack() {
@@ -130,7 +146,18 @@ final class ArrangeTouchBar: NSObject {
     }
 
     private func identifiers(for step: Step) -> [NSTouchBarItem.Identifier] {
-        var ids: [NSTouchBarItem.Identifier] = [id("back"), .flexibleSpace, id("label")]
+        Self.exits(damActive: NSApp.isActive, canClose: closeSwitcher != nil).map(id)
+            + [id("back"), .flexibleSpace, id("label")] + pageIdentifiers(for: step)
+    }
+
+    /// The keys of the ways out every page has before its ◀: a close button while DAM is the
+    /// active app, when there is something to close.
+    static func exits(damActive: Bool, canClose: Bool) -> [String] {
+        damActive && canClose ? ["close"] : []
+    }
+
+    private func pageIdentifiers(for step: Step) -> [NSTouchBarItem.Identifier] {
+        var ids: [NSTouchBarItem.Identifier] = []
         switch step {
         case .pickDisplay:
             ids += layout.placements.indices.map { id("display.\($0)") }
@@ -218,6 +245,15 @@ extension ArrangeTouchBar: NSTouchBarDelegate {
         let item = NSCustomTouchBarItem(identifier: identifier)
         let parts = key.split(separator: ".").map(String.init)
         switch (parts.first ?? "", parts.count > 1 ? Int(parts[1]) : nil, step) {
+        case ("close", _, _):
+            let btn = button("") { [weak self] in
+                self?.close()
+                self?.closeSwitcher?()
+            }
+            btn.image = NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: "Close")
+            btn.imagePosition = .imageOnly
+            btn.isBordered = false
+            item.view = btn
         case ("back", _, _):
             item.view = button("◀") { [weak self] in self?.goBack() }
         case ("label", _, _):

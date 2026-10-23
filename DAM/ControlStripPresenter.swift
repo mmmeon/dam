@@ -70,10 +70,22 @@ private func msgSend_dismiss(_ recv: AnyObject, _ sel: Selector, _ bar: NSTouchB
 // Internal so AirPlayQuickConnect can reuse the same bridge without duplicating
 // the objc_msgSend wiring.
 extension NSTouchBar {
+    /// The system-modal bars DAM has presented and not dismissed.
+    private static let presentedSystemModals = NSHashTable<NSTouchBar>.weakObjects()
+
+    /// Whether any system-modal bar of DAM's shows: the switcher's, a picker's, or another.
+    static var anySystemModalShowing: Bool {
+        presentedSystemModals.allObjects.contains { $0.isVisible }
+    }
+
+    // Every system-modal bar gets the system's close box while another app is active,
+    // whatever is set: the setter takes no bar, and on macOS 13 it is an empty function. So a
+    // bar whose pick is still to come watches for being closed (see `ModalBarWatch`).
     static func presentSystemModal(_ bar: NSTouchBar,
                                    for itemID: NSTouchBarItem.Identifier) {
         let sel = NSSelectorFromString("presentSystemModalTouchBar:systemTrayItemIdentifier:")
         msgSend_present(NSTouchBar.self, sel, bar, itemID.rawValue as NSString)
+        presentedSystemModals.add(bar)
         // Set before presenting only, the close box shows once another app comes to the
         // front; set again after, it shows at once.
         DFRSystemModalShowsCloseBoxWhenFrontMost(true)
@@ -83,12 +95,50 @@ extension NSTouchBar {
     static func presentSystemModal(_ bar: NSTouchBar) {
         let sel = NSSelectorFromString("presentSystemModalTouchBar:systemTrayItemIdentifier:")
         msgSend_present(NSTouchBar.self, sel, bar, nil)
+        presentedSystemModals.add(bar)
         DFRSystemModalShowsCloseBoxWhenFrontMost(true)
     }
 
     static func dismissSystemModal(_ bar: NSTouchBar) {
         let sel = NSSelectorFromString("dismissSystemModalTouchBar:")
         msgSend_dismiss(NSTouchBar.self, sel, bar)
+        presentedSystemModals.remove(bar)
+    }
+}
+
+// MARK: - Watching a bar
+
+/// Checks now and then whether a system-modal bar still shows, and says once it has stopped,
+/// as when its close box was tapped: the system tells nothing of that. It ticks in the common
+/// modes, so it goes on while an alert or a menu is up.
+final class ModalBarWatch {
+    private var timer: Timer?
+    private var visibility = SwitcherVisibility()
+
+    var isWatching: Bool { timer != nil }
+
+    /// Starts watching what `showing` reports, unless already watching. `ended` is called once,
+    /// with `.closed` when it was seen showing and no longer is, or `.unknown` when it never
+    /// was seen showing.
+    func start(showing: @escaping () -> Bool, ended: @escaping (SwitcherVisibility.State) -> Void) {
+        guard timer == nil else { return }
+        visibility = SwitcherVisibility()
+        let timer = Timer(timeInterval: SwitcherVisibility.interval, repeats: true) { [weak self] timer in
+            guard let self else { return timer.invalidate() }
+            let state = self.visibility.check(showing: showing())
+            guard state != .open else { return }
+            self.stop()
+            ended(state)
+        }
+        // The alert's and the menu's modes by name too: AppKit may make them common only
+        // once the first one runs.
+        for mode in [RunLoop.Mode.common, .modalPanel, .eventTracking] { RunLoop.main.add(timer, forMode: mode) }
+        self.timer = timer
+    }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
     }
 }
 
@@ -105,12 +155,12 @@ final class ControlStripPresenter: NSObject {
     private static let audioBackID    = NSTouchBarItem.Identifier("\(AppIdentity.bundleID).audio.back")
     /// The switcher's own close button, in place of the system's close box, which isn't shown
     /// while DAM is the active app.
-    private static let modalCloseID   = NSTouchBarItem.Identifier("\(AppIdentity.bundleID).modal.close")
+    static let modalCloseID           = NSTouchBarItem.Identifier("\(AppIdentity.bundleID).modal.close")
     private static let audioSegID     = NSTouchBarItem.Identifier("\(AppIdentity.bundleID).audio.outputs")
 
     // Prefixes for per-display dynamic identifiers.
     private static let displayPopoverPrefix = "\(AppIdentity.bundleID).modal.display."
-    private static let displayResPrefix     = "\(AppIdentity.bundleID).modal.res."
+    static let displayResPrefix             = "\(AppIdentity.bundleID).modal.res."
 
     private weak var audioManager: AudioManager?
     private weak var videoManager: VideoManager?
@@ -143,9 +193,13 @@ final class ControlStripPresenter: NSObject {
     /// close box, or a pick that took its last bar away. Never where the system doesn't say
     /// whether its bars show.
     var onModalClose: (() -> Void)?
+    /// Called instead of `onModalClose` when the system never said whether the switcher's bars
+    /// show, so whether it closed is not known.
+    var onModalWatchGaveUp: (() -> Void)?
     /// Checks whether the switcher still shows, while it may.
-    private var closeWatch: Timer?
-    private var visibility = SwitcherVisibility()
+    private let closeWatch = ModalBarWatch()
+    /// Counts the switcher's closes, so a change that settles after one doesn't bring it back.
+    private var closes = SwitcherCloses()
 
     init(audioManager: AudioManager, videoManager: VideoManager, sidecarManager: SidecarManager? = nil) {
         self.audioManager = audioManager
@@ -214,12 +268,15 @@ final class ControlStripPresenter: NSObject {
         NSTouchBar.dismissSystemModal(bar)
         modalBar = nil
 
-        // The close button comes and goes as DAM becomes the active app and stops being it.
+        // The close button comes and goes as DAM becomes the active app and stops being it,
+        // on every page of the switcher.
         for name in [NSApplication.didBecomeActiveNotification, NSApplication.didResignActiveNotification] {
             NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 guard let self else { return }
                 if let bar = self.modalBar { self.updateModalBar(bar) }
                 if let bar = self.audioBar { bar.defaultItemIdentifiers = self.audioItemIdentifiers() }
+                self.refreshResolutionBar()
+                ArrangeTouchBar.shared.activeAppChanged()
             }
         }
     }
@@ -453,8 +510,21 @@ final class ControlStripPresenter: NSObject {
         return bar
     }
 
-    /// The items of `page` of `display`'s resolution bar, for its current state.
+    /// The ways out of a display's page, put before its items: DAM's own close button while
+    /// DAM is the active app, as the system shows no close box then, and on the resolutions
+    /// page a ◀ back to the switcher. The other pages have a ◀ back to the resolutions page.
+    static func pageExits(displayID: String, onResolutions: Bool, damActive: Bool) -> [NSTouchBarItem.Identifier] {
+        (damActive ? [modalCloseID] : [])
+            + (onResolutions ? [NSTouchBarItem.Identifier(displayResPrefix + displayID + ".switcher")] : [])
+    }
+
+    /// The items of `page` of `display`'s resolution bar, for its current state, its ways out first.
     private func resolutionItemIdentifiers(for display: DisplayInfo, page: DisplayPage) -> [NSTouchBarItem.Identifier] {
+        Self.pageExits(displayID: display.id, onResolutions: page == .resolutions, damActive: NSApp.isActive)
+            + pageItemIdentifiers(for: display, page: page)
+    }
+
+    private func pageItemIdentifiers(for display: DisplayInfo, page: DisplayPage) -> [NSTouchBarItem.Identifier] {
         if page == .rates {
             return [
                 NSTouchBarItem.Identifier(Self.displayResPrefix + display.id + ".back"),
@@ -696,26 +766,40 @@ final class ControlStripPresenter: NSObject {
     }
 
     /// Checks now and then whether any of the switcher's bars shows, its pages and the arrange
-    /// flow's included, until it has closed: the system tells nothing of its close box.
+    /// flow's included, until it has closed: the system tells nothing of its close box. Any
+    /// other bar of DAM's counts too: a picker over the switcher hides it without closing it.
     private func watchForClose() {
-        guard closeWatch == nil else { return }
-        visibility = SwitcherVisibility()
-        closeWatch = Timer.scheduledTimer(withTimeInterval: SwitcherVisibility.interval, repeats: true) { [weak self] timer in
-            guard let self else { return timer.invalidate() }
-            let showing = [self.modalBar, self.audioBar, self.resolutionBar].contains { $0?.isVisible == true }
-                || ArrangeTouchBar.shared.isShowing
-            let state = self.visibility.check(showing: showing)
-            guard state != .open else { return }
-            timer.invalidate()
-            self.closeWatch = nil
-            if state == .closed { self.onModalClose?() }
+        closeWatch.start(showing: { NSTouchBar.anySystemModalShowing }) { [weak self] state in
+            guard let self else { return }
+            switch state {
+            case .closed:
+                self.closes.closed()
+                self.onModalClose?()
+            case .unknown:
+                self.onModalWatchGaveUp?()
+            case .open:
+                break
+            }
         }
     }
 
-    /// Opens the arrange flow in place of the modal bar; it comes back here when done.
+    /// `body`, to run once a change has settled, made to do nothing if the switcher has been
+    /// closed by then: a change still settling doesn't bring a closed switcher back.
+    private func unlessClosedMeanwhile(_ body: @escaping (ControlStripPresenter) -> Void) -> () -> Void {
+        let closesNow = closes.count
+        return { [weak self] in
+            guard let self, self.closes.noneSince(closesNow) else { return }
+            body(self)
+        }
+    }
+
+    /// Opens the arrange flow in place of the modal bar; it comes back here when done, unless
+    /// the switcher was closed meanwhile.
     @objc private func arrangeTapped() {
         guard let vm = videoManager else { return }
-        ArrangeTouchBar.shared.start(videoManager: vm) { [weak self] in self?.openModal() }
+        ArrangeTouchBar.shared.start(videoManager: vm,
+                                     back: unlessClosedMeanwhile { $0.openModal() },
+                                     close: { [weak self] in self?.modalCloseTapped() })
     }
 
     /// Presents the audio outputs page over the modal bar.
@@ -737,15 +821,21 @@ final class ControlStripPresenter: NSObject {
         (NSApp.isActive ? [Self.modalCloseID] : []) + [Self.audioBackID, .flexibleSpace, Self.audioSegID]
     }
 
-    /// Closes the switcher, its pages included, as its close box would.
+    /// Closes the switcher, its pages and the arrange flow included, as its close box would.
     @objc private func modalCloseTapped() {
         closeResolutionBar()
+        ArrangeTouchBar.shared.close()
         for bar in [audioBar, modalBar].compactMap({ $0 }) { NSTouchBar.dismissSystemModal(bar) }
         audioBar = nil
         modalBar = nil
-        closeWatch?.invalidate()
-        closeWatch = nil
+        closeWatch.stop()
+        closes.closed()
         onModalClose?()
+    }
+
+    /// From a display's resolutions page back to the switcher.
+    @objc private func switcherBackTapped() {
+        openModal()
     }
 
     /// Picks the output, then returns to the modal bar.
@@ -804,22 +894,24 @@ final class ControlStripPresenter: NSObject {
     @objc private func optimizeTapped(_ btn: NSButton) {
         guard let display = tappedDisplay(btn) else { return }
         // Re-present the modal once the display config has settled so the buttons refresh.
-        videoManager?.setAsOptimizedDisplay(display) { [weak self] result in
+        let reopen = unlessClosedMeanwhile { $0.openModal() }
+        videoManager?.setAsOptimizedDisplay(display) { result in
             if case .failure(let error) = result {
                 SpeechSynthesizer.shared.announce(error.localizedDescription)
             }
-            self?.openModal()
+            reopen()
         }
     }
 
     @objc private func mainTapped(_ btn: NSButton) {
         guard let display = tappedDisplay(btn) else { return }
         // Re-present the modal once the arrangement has settled so the tint refreshes.
-        videoManager?.setMainDisplay(display) { [weak self] result in
+        let reopen = unlessClosedMeanwhile { $0.openModal() }
+        videoManager?.setMainDisplay(display) { result in
             if case .failure(let error) = result {
                 SpeechSynthesizer.shared.announce(error.localizedDescription)
             }
-            self?.openModal()
+            reopen()
         }
     }
 
@@ -831,23 +923,27 @@ final class ControlStripPresenter: NSObject {
     @objc private func mirrorTargetTapped(_ btn: NSButton) {
         guard let selection = mirrorChoiceMap[ObjectIdentifier(btn)] else { return }
         // Re-present the page once the change has settled so the tints refresh.
-        videoManager?.applyMirrorSelection(selection) { [weak self] result in
+        let reshow = unlessClosedMeanwhile { presenter in
+            guard let display = presenter.latest(selection.display) else { return }
+            presenter.showDisplayPage(display, .mirrorTargets)
+        }
+        videoManager?.applyMirrorSelection(selection) { result in
             if case .failure(let error) = result {
                 SpeechSynthesizer.shared.announce(error.localizedDescription)
             }
-            guard let self, let display = self.latest(selection.display) else { return }
-            self.showDisplayPage(display, .mirrorTargets)
+            reshow()
         }
     }
 
     @objc private func mirrorToggleTapped(_ btn: NSButton) {
         guard let display = tappedDisplay(btn) else { return }
         // Re-present the modal once the display config has settled so the label refreshes.
-        videoManager?.toggleMirroring(for: display) { [weak self] result in
+        let reopen = unlessClosedMeanwhile { $0.openModal() }
+        videoManager?.toggleMirroring(for: display) { result in
             if case .failure(let error) = result {
                 SpeechSynthesizer.shared.announce(error.localizedDescription)
             }
-            self?.openModal()
+            reopen()
         }
     }
 
@@ -923,6 +1019,19 @@ final class ControlStripPresenter: NSObject {
         let start = min(max((current ?? 0) - limit / 2, 0), items.count - limit)
         return items[start..<start + limit]
     }
+}
+
+// MARK: - Switcher closes
+
+/// Counts the switcher's closes, so what was started while it was open (a change still
+/// settling) can tell later whether it has closed since.
+struct SwitcherCloses {
+    private(set) var count = 0
+
+    mutating func closed() { count += 1 }
+
+    /// Whether it hasn't closed since `count` was `earlier`.
+    func noneSince(_ earlier: Int) -> Bool { count == earlier }
 }
 
 // MARK: - Switcher visibility
@@ -1054,6 +1163,13 @@ extension ControlStripPresenter: NSTouchBarDelegate {
             case ".back":
                 return displayActionItem(id: id, title: "◀ Resolution", display: display,
                                          action: #selector(backToResolutionsTapped(_:)))
+            case ".switcher":
+                let item = NSCustomTouchBarItem(identifier: id)
+                let btn = NSButton(title: "◀", target: self, action: #selector(switcherBackTapped))
+                btn.bezelStyle = .rounded
+                btn.setAccessibilityLabel("Back")
+                item.view = btn
+                return item
             case ".rates":
                 return makeRateSegItem(id: id, display: display)
             case "":
