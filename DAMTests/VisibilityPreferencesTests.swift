@@ -286,12 +286,14 @@ final class VisibilityPreferencesTests: XCTestCase {
 
     // MARK: - Monitors of one model
 
-    func testInheritDisplaySettings_takesWhatBothShared() {
+    func testInheritDisplaySettings_takesTheHiddenStateNotTheNickname() {
         VisibilityPreferences.setVisible(false, display: "DELL U2720Q")
         VisibilityPreferences.setNickname("Desk", .display, for: "DELL U2720Q")
         VisibilityPreferences.inheritDisplaySettings(from: "DELL U2720Q", to: "DELL U2720Q (2)")
         XCTAssertFalse(VisibilityPreferences.isVisible(display: "DELL U2720Q (2)"))
-        XCTAssertEqual(VisibilityPreferences.nickname(.display, for: "DELL U2720Q (2)"), "Desk")
+        // The nickname stays the first monitor's own.
+        XCTAssertNil(VisibilityPreferences.nickname(.display, for: "DELL U2720Q (2)"))
+        XCTAssertEqual(VisibilityPreferences.nickname(.display, for: "DELL U2720Q"), "Desk")
         XCTAssertFalse(VisibilityPreferences.isVisible(display: "DELL U2720Q"))
     }
 
