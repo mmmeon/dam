@@ -104,6 +104,21 @@ enum StreamingDisplayModes {
 struct StreamingDisplayIdentity: Equatable {
     /// Its name, as System Settings and the app capturing it show it.
     let name: String
-    /// What its serial number comes from (see `VideoManager.streamingSerial(seed:)`).
+    /// What its serial number comes from.
     let seed: String
+
+    /// Its serial number: the same for the same seed, in DAM and in the login window agent,
+    /// so macOS keeps its place and resolution from one session to the next.
+    var serial: UInt32 { Self.serial(seed: seed) }
+
+    /// Never one of `VideoManager.streamingSerial(_:)`'s slot serials.
+    static func serial(seed: String) -> UInt32 {
+        // FNV-1a, which is the same on every launch, unlike Hasher.
+        let hash = seed.utf8.reduce(UInt32(2_166_136_261)) { ($0 ^ UInt32($1)) &* 16_777_619 }
+        return 0x8000_0000 | (hash & 0x7FFF_FFFF)
+    }
+
+    /// The vendor and product numbers a streaming display is made with, as DAM's.
+    static let vendorID: UInt32 = 0x3456
+    static let productID: UInt32 = 0x1236
 }

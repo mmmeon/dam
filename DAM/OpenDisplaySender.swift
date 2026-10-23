@@ -106,15 +106,7 @@ final class OpenDisplaySender {
     func start() {
         guard !isRunning else { return }
         isRunning = true
-        let parameters = NWParameters()
-        parameters.includePeerToPeer = false
-        let browser = NWBrowser(for: .bonjourWithTXTRecord(type: OpenDisplayWire.serviceType, domain: nil), using: parameters)
-        browser.browseResultsChangedHandler = { [weak self] results, _ in self?.found(results) }
-        browser.stateUpdateHandler = { state in
-            if case .failed(let error) = state { odLog.error("browse: \(error.localizedDescription, privacy: .public)") }
-        }
-        browser.start(queue: .main)
-        self.browser = browser
+        if !store.usbOnly { browse() }
         usbWatcher.changed = { [weak self] devices in
             guard let self, self.isRunning, self.usbDevices != devices else { return }
             self.usbDevices = devices
@@ -128,6 +120,19 @@ final class OpenDisplaySender {
         dialTimer = timer
         odLog.debug("sending to OpenDisplay receivers")
         onChange?()
+    }
+
+    /// Looks for receivers on the network.
+    private func browse() {
+        let parameters = NWParameters()
+        parameters.includePeerToPeer = false
+        let browser = NWBrowser(for: .bonjourWithTXTRecord(type: OpenDisplayWire.serviceType, domain: nil), using: parameters)
+        browser.browseResultsChangedHandler = { [weak self] results, _ in self?.found(results) }
+        browser.stateUpdateHandler = { state in
+            if case .failed(let error) = state { odLog.error("browse: \(error.localizedDescription, privacy: .public)") }
+        }
+        browser.start(queue: .main)
+        self.browser = browser
     }
 
     func stop() {
@@ -270,7 +275,7 @@ final class OpenDisplaySender {
                         done(Result { try Usbmuxd.connect(to: device, port: OpenDisplayWire.port) })
                     }
                 }
-            } else if let endpoint = wifi[key]?.endpoint {
+            } else if !store.usbOnly, let endpoint = wifi[key]?.endpoint {
                 channel = OpenDisplayTCPChannel(endpoint: Self.wifiEndpoint(found: endpoint, lastReached: lastAddress[key],
                                                                             failures: failures[key] ?? 0))
             } else {

@@ -47,7 +47,7 @@ extension VideoManager {
 
     /// Vendor and product the streaming displays carry. Their own product keeps the anchor
     /// search from taking one for an anchor.
-    static let streamingProductID: UInt32 = 0x1236
+    static let streamingProductID: UInt32 = StreamingDisplayIdentity.productID
 
     /// How many streaming displays there can be.
     static let maxStreamingDisplays = 4
@@ -66,11 +66,7 @@ extension VideoManager {
     /// The serial number of a streaming display made for `seed`: the same for the same seed,
     /// so macOS keeps its place and resolution from one session to the next, and never one
     /// of `streamingSerial(_:)`'s.
-    static func streamingSerial(seed: String) -> UInt32 {
-        // FNV-1a, which is the same on every launch, unlike Hasher.
-        let hash = seed.utf8.reduce(UInt32(2_166_136_261)) { ($0 ^ UInt32($1)) &* 16_777_619 }
-        return 0x8000_0000 | (hash & 0x7FFF_FFFF)
-    }
+    static func streamingSerial(seed: String) -> UInt32 { StreamingDisplayIdentity.serial(seed: seed) }
 
     /// The name of a stand-in for the display named `name`: "tv (Rotated)".
     static func standInDisplayName(for name: String) -> String { "\(name) (Rotated)" }

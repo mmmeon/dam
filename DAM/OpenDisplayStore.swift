@@ -16,6 +16,9 @@ protocol OpenDisplayStore: AnyObject {
     var bitrateKbps: Int { get set }
     /// Whether the pointer may go over UDP where a receiver offers it.
     var pointerOverUDP: Bool { get }
+    /// Whether receivers are reached by cable only: over Wi-Fi a receiver can't prove who it
+    /// is, so the login window agent doesn't look for them there.
+    var usbOnly: Bool { get }
 
     /// The receivers turned on, by key. One turned on goes after those already on.
     var turnedOn: Set<String> { get set }
@@ -58,6 +61,8 @@ final class DefaultsOpenDisplayStore: OpenDisplayStore {
     }
 
     var pointerOverUDP: Bool { OpenDisplaySender.pointerOverUDP }
+
+    let usbOnly = false
 
     /// The list keeps the order. The older setting under `OpenDisplaySender.receiversKey` is
     /// read once, when the list is first made.
@@ -102,12 +107,14 @@ final class MemoryOpenDisplayStore: OpenDisplayStore {
     private var _bonjourIDs: [String: String]
     let isEnabled: Bool
     let pointerOverUDP: Bool
+    let usbOnly: Bool
 
-    init(isEnabled: Bool = true, bitrateKbps: Int = 20_000, pointerOverUDP: Bool = true,
+    init(isEnabled: Bool = true, bitrateKbps: Int = 20_000, pointerOverUDP: Bool = true, usbOnly: Bool = false,
          entries: [AutoConnectEntry] = [], names: [String: String] = [:],
          usbIDs: [String: String] = [:], bonjourIDs: [String: String] = [:]) {
         self.isEnabled = isEnabled
         self.pointerOverUDP = pointerOverUDP
+        self.usbOnly = usbOnly
         _bitrateKbps = bitrateKbps
         _entries = entries
         _names = names

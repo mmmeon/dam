@@ -1,0 +1,42 @@
+#!/bin/zsh
+#
+#  build
+#
+#  Builds DAM's login window agent (DAMLoginAgent/) from its own files and the parts of DAM
+#  it shares, with LOGIN_AGENT set, and signs it with the Apple Development identity so its
+#  Screen Recording permission survives rebuilds.
+#
+#    tools/loginagent/build [output]      default: $TMPDIR/dam-loginagent/DAMLoginAgent
+#
+
+set -eu
+setopt pipefail
+
+here=${0:A:h}
+repo=${here:h:h}
+out=${1:-${TMPDIR:-/tmp}/dam-loginagent/DAMLoginAgent}
+mkdir -p ${out:h}
+
+# What the agent shares with DAM; each builds without the app (see LOGIN_AGENT).
+shared=(
+    AppIdentity DAMDefaults AutoConnect LoginAgentSettings
+    OpenDisplaySender OpenDisplayTransport OpenDisplayProtocol OpenDisplayStore
+    SharedScreenCapture DisplayStreamCapture StreamingDisplayModes DisplayRotation
+    MoonlightVideoEncoder KeyFrameRequests H264OneReference HDRMetadata ByteOrder ControlSocketPath
+)
+sources=(${shared/#/$repo/DAM/} )
+sources=(${^sources}.swift $repo/DAMLoginAgent/*.swift)
+
+DEVELOPER_DIR=${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer} \
+    xcrun swiftc -O -DLOGIN_AGENT -module-name DAMLoginAgent \
+    -Xcc -I$repo/DAM/Vendor/enet/include -import-objc-header $repo/DAM/DAM-Bridging-Header.h \
+    -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker $repo/DAMLoginAgent/Info.plist \
+    -o $out $sources
+
+identity=$(security find-identity -v -p codesigning | awk -F'"' '/Apple Development/ { print $2; exit }')
+if [[ -n $identity ]]; then
+    codesign --force --options runtime --sign "$identity" $out
+else
+    print -u2 "build: no Apple Development identity; left unsigned"
+fi
+print $out
