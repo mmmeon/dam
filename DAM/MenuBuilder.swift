@@ -263,16 +263,19 @@ private func remoteSessionItem(_ session: RemoteSessionCoordinator.Session) -> N
     item.state = .on
     let submenu = NSMenu()
     if session.count > 1 { submenu.addItem(disabledItem("\(session.count) connections")) }
+    let end = NSMenuItem(title: "End and Put Back", action: #selector(AppDelegate.endRemoteSession(_:)), keyEquivalent: "")
+    end.representedObject = session.app
     if session.followsApp {
-        // Its display and stream are the app's, so only the app can end it.
+        // Its display and stream are the app's, so it ends with them; ending it here is for
+        // when their end goes unseen, as when the app crashes.
         submenu.addItem(disabledItem("Ends when \(RemoteSessionApp.name(of: session.app)) stops"))
+        end.toolTip = "Puts the sound output back and lights the screens, as when it ends. " +
+                      "The other app's display and stream stay."
     } else {
-        let end = NSMenuItem(title: "End and Put Back", action: #selector(AppDelegate.endRemoteSession(_:)), keyEquivalent: "")
-        end.representedObject = session.app
         end.toolTip = "Removes the session's display and puts the sound output back, as when it ends. " +
                       "The other app's connection stays open."
-        submenu.addItem(end)
     }
+    submenu.addItem(end)
     submenu.addItem(.separator())
     submenu.addItem(withTitle: "Remote Sessions Settings…", action: #selector(AppDelegate.openSessionSettings(_:)),
                     keyEquivalent: "")

@@ -280,7 +280,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               let url = URL(string: text), let request = ControlHandler.request(from: url) else { return }
         // Before launch has finished, once it has.
         DispatchQueue.main.async { [weak self] in
-            self?.controlHandler?.handle(request) { response in
+            self?.controlHandler?.handle(request, from: .link) { response in
                 if !response.ok { NSLog("\(AppIdentity.name): \(url.absoluteString): \(response.message ?? "failed")") }
             }
         }

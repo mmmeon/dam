@@ -6,7 +6,8 @@
 
 DAM follows OpenDisplay's sessions by reading its log (the fork's `dam-session-log` lines; see
 remote-sessions.md). DAM can't end one: the display and the stream are OpenDisplay's. So the
-menu shows "Ends when OpenDisplay stops" in place of "End and Put Back".
+menu shows "Ends when OpenDisplay stops"; since 2026-10-23 also "End and Put Back", which ends
+only DAM's part of it.
 
 The fork (`/Users/Shared/opendisplay`, remote `fork` = mmmeon/opd) has no way in from outside:
 no URL scheme, AppleScript, notifications or socket.
