@@ -667,6 +667,7 @@ extension VideoManager {
         // Already in it, mirroring nothing or as chosen: nothing to do.
         if CGDisplayMirrorsDisplay(id) == 0 || keepsMirror, let running, let wanted = Self.displayMode(mode, of: id),
            DisplayArrangement.sameMode(wanted, running) {
+            keepUserMode(running, for: id)
             streamingDisplays[i].start = mode
             return completion(true)
         }
@@ -743,6 +744,8 @@ extension VideoManager {
         let resized = before.excluding(id).adding(id, origin: origin, mode: target, mirroring: master)
         let settle = { [weak self] (done: Bool) in
             guard let self else { return completion(false) }
+            // Or an anchor settling would put the old size back (see reassertAnchorLayout).
+            if done { self.keepUserMode(target, for: id) }
             // Failed, it still runs its old mode, which the layout taken after the new list
             // doesn't hold.
             self.streamingSettle = (done ? resized : before.excluding(id), Date().addingTimeInterval(5))
