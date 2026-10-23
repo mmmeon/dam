@@ -1334,6 +1334,14 @@ final class SettingsWindowController: NSWindowController {
                 "Regular expressions, matched anywhere in a line. A line matching Opened starts a connection, one " +
                 "matching Closed ends it. Name a group id in both, as (?<id>\\d+), for connections that overlap, " +
                 "and one client in Opened to name the display after the client.")]))
+            let process = ClosureTextField(text: detection.logProcessName, placeholder: "Optional, e.g. jumpd") { text in
+                store { $0.logProcessName = text }
+            }
+            process.widthAnchor.constraint(equalToConstant: 200).isActive = true
+            groups.append(("Process:", [process, smallNote(
+                "The app's process, as Activity Monitor shows it. With it, a session ends when the process quits, " +
+                "even if the log doesn't say, and a line that opens a connection counts only while it runs. " +
+                "Names are matched to their first 16 characters.")]))
             groups.append(("Try a Line:", [tryField, tried]))
         case .process:
             let process = ClosureTextField(text: detection.processName, placeholder: "e.g. screensharingd") { text in

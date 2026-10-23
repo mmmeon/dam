@@ -116,7 +116,11 @@ The same requests work as URLs, for example
 `dam://session/start?app=rustdesk&width=1280&height=800&placement=main`. A URL gets no answer.
 Any page or app can open one, so a URL ends and joins only sessions URLs started: it can't end
 a session that DAM saw, or that a script or Sunshine started, and it can't join one either,
-which would keep it on after the app's own end. Such a URL is refused and logged.
+which would keep it on after the app's own end. Such a URL is refused and logged. Nor can a
+URL black out the screens, which would leave whoever is at the Mac in the dark: one with
+`blackout=yes` is refused and logged too, and a session a URL starts leaves the screens lit
+even when the app's profile blacks out, as `--blackout no` would, and leaves the profile as
+it is.
 
 Every session has *End and Put Back* in its menu. One that follows another app's display
 (OpenDisplay, or a profile that adopts, when DAM saw the session start) also says it ends when
@@ -135,6 +139,7 @@ doesn't black out the screens, as nothing would be left lit.
 | TeamViewer | `TeamViewer_Desktop` running | No (not installed) |
 | OpenDisplay | `capture started: … display ID … mode extend\|mirror … session ID` / `capture ended: session ID` in `~/Library/Logs/OpenDisplay/opendisplay.log` (`OpenDisplay Dev/` for the Debug build, whichever changed last). Ends too when OpenDisplay quits or starts again, and a session already on when DAM starts is taken up while OpenDisplay runs, if its line was written since OpenDisplay started (by the line's time of day), so a crash's leftover isn't. Extending, the session adopts that display; mirroring, it leaves the displays alone. | Yes, with an iPad over WiFi: extend, mirror, switching between them, and DAM relaunched mid-session |
 | Another app's display | A display whose name contains the given text is online | Yes, with a stand-in virtual display |
+| An app added in Settings | Its log's lines matching the Opened and Closed patterns; a process running; or a display it makes, as above. A log's app can be given its process too: then its sessions end when that process quits, a line opening a connection counts only while it runs, and what the log shows open when DAM starts watching isn't taken up, as with Parsec | In unit tests only |
 
 Follow the logs from their end, through rotation and truncation. A close for a connection
 opened before DAM started watching is ignored. Processes are listed with `sysctl`, which sees

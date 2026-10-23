@@ -328,6 +328,9 @@ final class LogSessionDetector: SessionDetector {
     /// Whether the connections the log's end shows open count when watching starts, while
     /// the app runs; not for an app whose log may hold an earlier run's.
     private let takesUpOpen: Bool
+    /// Whether a line opening a connection counts only while the app runs: one written while
+    /// it doesn't, as by hand, would start a session that its quit never ends.
+    private let opensWhileRunning: Bool
     /// When the app running now started, and when a line was written: lines from before it
     /// started are an earlier run's, whose connections went with it, as after a crash.
     private let launched: (() -> Date?)?
@@ -340,14 +343,15 @@ final class LogSessionDetector: SessionDetector {
     private(set) var open: Set<String> = []
 
     init(app: String, url: URL, parse: @escaping (String) -> SessionEvent?, isRunning: (() -> Bool)? = nil,
-         restarted: ((String) -> Bool)? = nil, takesUpOpen: Bool = true, launched: (() -> Date?)? = nil,
-         lineTime: ((String) -> Date?)? = nil) {
+         restarted: ((String) -> Bool)? = nil, takesUpOpen: Bool = true, opensWhileRunning: Bool = false,
+         launched: (() -> Date?)? = nil, lineTime: ((String) -> Date?)? = nil) {
         self.app = app
         self.url = url
         self.parse = parse
         self.isRunning = isRunning
         self.restarted = restarted
         self.takesUpOpen = takesUpOpen
+        self.opensWhileRunning = opensWhileRunning
         self.launched = launched
         self.lineTime = lineTime
     }
@@ -411,6 +415,14 @@ final class LogSessionDetector: SessionDetector {
             _ = parse(line)
             closeAll()
         } else if let event = parse(line) {
+            if case .opened = event, opensWhileRunning, let isRunning {
+                guard isRunning() else {
+                    detLog.debug("\(self.app): an open while it isn't running, ignored")
+                    return
+                }
+                // So a quit before the next look still ends it.
+                wasRunning = true
+            }
             report(event)
         }
     }
@@ -695,7 +707,12 @@ enum SessionDetectors {
         switch detection.kind {
         case .log:
             guard let parse = SessionLogLines.custom(opened: detection.opened, closed: detection.closed) else { return nil }
-            return LogSessionDetector(app: app, url: logURL(for: app, standard: detection.logURL), parse: parse)
+            // With its process, a quit ends connections as Parsec's does, and what the log
+            // shows open isn't taken up, as it may be an earlier run's.
+            let name = detection.logProcessName
+            return LogSessionDetector(app: app, url: logURL(for: app, standard: detection.logURL), parse: parse,
+                                      isRunning: name.isEmpty ? nil : { RunningProcesses.isRunning(name) },
+                                      takesUpOpen: false, opensWhileRunning: true)
         case .process:
             return ProcessSessionDetector(app: app, processName: detection.processName)
         case .display:

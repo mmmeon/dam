@@ -1261,9 +1261,68 @@ final class RemoteSessionsTests: XCTestCase {
         detection.opened = "in"
         detection.closed = "out"
         profile.detection = detection
+        detection.logProcessName = "minehost"
+        profile.detection = detection
         let decoded = try JSONDecoder().decode(SessionProfile.self, from: JSONEncoder().encode(profile))
         XCTAssertEqual(decoded, profile)
         XCTAssertNil(try JSONDecoder().decode(SessionProfile.self, from: Data("{}".utf8)).detection)
+        // Saved before it had a process.
+        let older = try JSONDecoder().decode(SessionDetection.self, from: Data(#"{"kind":"log","logPath":"~/x.log"}"#.utf8))
+        XCTAssertEqual(older.logProcessName, "")
+        XCTAssertEqual(older.logPath, "~/x.log")
+    }
+
+    func testAnAddedAppsLogCountsOnlyWhileItsProcessRuns() throws {
+        func detector(process: String) throws -> LogSessionDetector {
+            var detection = SessionDetection()
+            detection.logPath = "/nonexistent/x.log"
+            detection.opened = "client joined"
+            detection.closed = "client left"
+            detection.logProcessName = process
+            return try XCTUnwrap(SessionDetectors.make(added: "mine", detection, adoptName: nil) as? LogSessionDetector)
+        }
+        var events: [SessionEvent] = []
+        let gone = try detector(process: "minehost_not_running_here")
+        gone.onEvent = { events.append($0) }
+        gone.handle("a client joined")
+        XCTAssertTrue(events.isEmpty)
+        let running = try detector(process: "launchd")
+        running.onEvent = { events.append($0) }
+        running.handle("a client joined")
+        XCTAssertEqual(events, [.opened(key: "", client: nil)])
+        // Without one, as before.
+        let none = try detector(process: "")
+        none.onEvent = { events.append($0) }
+        none.handle("a client joined")
+        XCTAssertEqual(events.count, 2)
+    }
+
+    func testALogCountingOnlyWhileTheAppRunsEndsWhenItQuits() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("x.log")
+        try "a client joined\n".write(to: url, atomically: false, encoding: .utf8)
+        let parse = try XCTUnwrap(SessionLogLines.custom(opened: "client joined", closed: "client left"))
+        var running = true
+        var events: [SessionEvent] = []
+        let detector = LogSessionDetector(app: "mine", url: url, parse: parse, isRunning: { running },
+                                          takesUpOpen: false, opensWhileRunning: true)
+        detector.onEvent = { events.append($0) }
+        detector.start()
+        defer { detector.stop() }
+        // What the log shows open isn't taken up.
+        XCTAssertTrue(events.isEmpty)
+        running = false
+        detector.checkRunning()
+        detector.handle("a client joined")
+        XCTAssertTrue(events.isEmpty)
+        // Quits before the next look: the open saw it running, so the quit still ends it.
+        running = true
+        detector.handle("a client joined")
+        running = false
+        detector.checkRunning()
+        XCTAssertEqual(events, [.opened(key: "", client: nil), .closed(key: "")])
     }
 
     func testWatcherRemakesAnAddedAppsDetector() {
@@ -1447,6 +1506,31 @@ extension RemoteSessionsTests {
         XCTAssertTrue(refusedAsNotFromLink(c.end(app: "sunshine", from: .link)))
         c.end(app: "sunshine")
         XCTAssertNil(c.sessions["sunshine"])
+    }
+
+    func testALinkCantBlackOutTheScreens() throws {
+        let fake = FakeSessionDisplays()
+        var profile = SessionProfile()
+        profile.blackout = true
+        let c = coordinator(fake, profiles: ["rustdesk": profile])
+        // Asking to is refused, with nothing set up.
+        XCTAssertEqual(start(c, SessionRequest(app: "sunshine", origin: .link, blackout: true)), .failure(.blackoutFromLink))
+        XCTAssertNil(c.sessions["sunshine"])
+        XCTAssertTrue(fake.made.isEmpty)
+        // A profile that blacks out doesn't for a link, which is told.
+        let started = try XCTUnwrap(try start(c, SessionRequest(app: "rustdesk", origin: .link))?.get())
+        XCTAssertEqual(started.displayID, 100)
+        XCTAssertEqual(started.warnings, ["The screens weren't blacked out, as a link can't black them out."])
+        XCTAssertNil(fake.blackoutKeeping)
+        XCTAssertFalse(c.isBlackedOut)
+        c.end(app: "rustdesk", from: .link)
+        // Nor is the profile changed, so the app's own sessions still black out.
+        XCTAssertTrue(c.profile(for: "rustdesk").blackout)
+        XCTAssertNoThrow(try start(c, SessionRequest(app: "rustdesk"))?.get())
+        XCTAssertEqual(fake.blackoutKeeping, [100])
+        // Asking not to is a link's to ask.
+        c.end(app: "rustdesk")
+        XCTAssertNoThrow(try start(c, SessionRequest(app: "sunshine", origin: .link, blackout: false))?.get())
     }
 
     // MARK: Sessions only DAM sees
