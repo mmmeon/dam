@@ -173,7 +173,8 @@ enum WebStreamFiles {
 // MARK: - Pairing
 
 /// Browsers asking to pair. A browser shows a code and the user types it on the Mac; or the
-/// Mac shows a QR code holding a key that works once, for a few minutes. One code at a time.
+/// Mac shows a QR code holding a key that works once, for a few minutes. One code at a time,
+/// and its prompt only as often as `limits` let it come up.
 final class WebStreamPairing {
     struct Request {
         let id: String
@@ -184,6 +185,8 @@ final class WebStreamPairing {
         /// The device made once the user typed the code; nil until then.
         var device: WebStreamDevice?
         var declined = false
+        /// Whether the browser has had its cookie, once paired.
+        var collected = false
     }
 
     /// How long a code or a QR key lasts.
@@ -191,16 +194,27 @@ final class WebStreamPairing {
 
     private(set) var request: Request?
     private var keys: [String: Date] = [:]
+    var limits = PairingPromptLimits()
 
-    /// A new request with its code, or nil while another is waiting.
-    func begin(address: String, name: String, now: Date = Date()) -> Request? {
-        if let request, request.device == nil, !request.declined, now.timeIntervalSince(request.started) < Self.lifetime {
-            return nil
+    /// Why a request can't begin now.
+    enum Refusal: Error, Equatable {
+        /// Another is waiting for its code, or for its browser to collect the cookie.
+        case busy
+        /// Prompts came to nothing too often; seconds to wait.
+        case wait(TimeInterval)
+    }
+
+    /// A new request with its code, or why there can't be one now.
+    func begin(address: String, name: String, now: Date = Date()) -> Result<Request, Refusal> {
+        if let request, !request.declined, request.device == nil || !request.collected,
+           now.timeIntervalSince(request.started) < Self.lifetime {
+            return .failure(.busy)
         }
+        if let wait = limits.wait(for: address, now: now) { return .failure(.wait(wait)) }
         let code = String(format: "%04d", Int.random(in: 0...9999))
         let request = Request(id: UUID().uuidString, code: code, address: address, name: name, started: now)
         self.request = request
-        return request
+        return .success(request)
     }
 
     /// The request `id`, while it lasts.
@@ -215,13 +229,27 @@ final class WebStreamPairing {
         guard let code, code.trimmingCharacters(in: .whitespaces) == request.code else {
             request.declined = true
             self.request = request
+            limits.ended(request.address, declined: true, now: now)
             return false
         }
+        limits.ended(request.address, declined: false, now: now)
         let device = WebStreamDevice(name: request.name, kind: .browser)
         add(device)
         request.device = device
         self.request = request
         return true
+    }
+
+    /// Request `id`'s browser has had its cookie: another may begin.
+    func collected(id: String) {
+        guard request?.id == id, request?.device != nil else { return }
+        request?.collected = true
+    }
+
+    /// Whether request `id` still waits for its code to be typed, for a prompt shown later.
+    func isWaiting(id: String, now: Date = Date()) -> Bool {
+        guard let request = request(id: id, now: now) else { return false }
+        return request.device == nil && !request.declined
     }
 
     /// A key for a QR code, which pairs whoever opens it once within `lifetime`.

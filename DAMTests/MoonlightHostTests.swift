@@ -76,7 +76,8 @@ final class MoonlightHostTests: XCTestCase {
     }
 
     /// Opens a connection and sends a GET for `target`; over TLS as `identity` when given.
-    private func open(_ target: String, secure: Bool, identity: SecIdentity? = nil) -> NWConnection {
+    private func open(_ target: String, secure: Bool, identity: SecIdentity? = nil,
+                      address: NWEndpoint.Host = "127.0.0.1") -> NWConnection {
         let parameters: NWParameters
         if secure {
             let tls = NWProtocolTLS.Options()
@@ -90,7 +91,7 @@ final class MoonlightHostTests: XCTestCase {
             parameters = .tcp
         }
         let port = secure ? host.httpsPort : host.httpPort
-        let connection = NWConnection(host: "127.0.0.1", port: port, using: parameters)
+        let connection = NWConnection(host: address, port: port, using: parameters)
         connection.start(queue: .global())
         let separator = target.contains("?") ? "&" : "?"
         let request = "GET \(target)\(separator)uniqueid=0123456789ABCDEF HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"
@@ -100,8 +101,8 @@ final class MoonlightHostTests: XCTestCase {
 
     /// The body of the response to a GET for `target`.
     private func get(_ target: String, secure: Bool = false, identity: SecIdentity? = nil,
-                     timeout: TimeInterval = 10) throws -> String {
-        try body(of: open(target, secure: secure, identity: identity), timeout: timeout)
+                     timeout: TimeInterval = 10, address: NWEndpoint.Host = "127.0.0.1") throws -> String {
+        try body(of: open(target, secure: secure, identity: identity, address: address), timeout: timeout)
     }
 
     /// The body of the response on `connection`, read to its end.
@@ -186,7 +187,7 @@ final class MoonlightHostTests: XCTestCase {
         let deadline = Date().addingTimeInterval(5)
         while !ready, Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }
         try XCTSkipUnless(ready, "couldn't hold the port")
-        host.requestPIN = { _, answer in answer("4821") }
+        host.requestPIN = { _, _, answer in answer("4821") }
         startHost()
         XCTAssertNotEqual(host.httpPort, taken)
         XCTAssertNotNil(host.requestPIN, "set before the move")
@@ -258,7 +259,7 @@ final class MoonlightHostTests: XCTestCase {
     /// alone, and Moonlight is sent the HDR metadata once it connects to the control stream.
     func testALaunchAskingForHDRGetsHEVCAndTheHDRMessage() throws {
         try XCTSkipUnless(MoonlightHost.offersHDR(), "no hardware HEVC Main10 on this Mac")
-        host.requestPIN = { _, answer in answer("1234") }
+        host.requestPIN = { _, _, answer in answer("1234") }
         host.apps = [MoonlightApp(id: 1, title: "DAM Streaming", displayID: try XCTUnwrap(streamingDisplay() ?? Optional(0)))]
         startHost()
         let client = try Client.make()
@@ -308,7 +309,7 @@ final class MoonlightHostTests: XCTestCase {
     }
 
     func testServerInfoOffersTheDevicesCodecs() throws {
-        host.requestPIN = { _, answer in answer("4821") }
+        host.requestPIN = { _, _, answer in answer("4821") }
         startHost()
         let client = try Client.make()
         XCTAssertTrue(try pair(client, pin: "4821"))
@@ -330,7 +331,7 @@ final class MoonlightHostTests: XCTestCase {
     }
 
     func testPairsWithTheRightPIN() throws {
-        host.requestPIN = { _, answer in answer("4821") }
+        host.requestPIN = { _, _, answer in answer("4821") }
         host.apps = [MoonlightApp(id: 1, title: "DAM Streaming", displayID: 0)]
         startHost()
         let client = try Client.make()
@@ -345,14 +346,14 @@ final class MoonlightHostTests: XCTestCase {
     }
 
     func testRefusesAWrongPIN() throws {
-        host.requestPIN = { _, answer in answer("4812") }
+        host.requestPIN = { _, _, answer in answer("4812") }
         startHost()
         XCTAssertFalse(try pair(try Client.make(), pin: "4821"))
         XCTAssertTrue(host.clients.isEmpty)
     }
 
     func testRefusesWhenTheUserDeclines() throws {
-        host.requestPIN = { _, answer in answer(nil) }
+        host.requestPIN = { _, _, answer in answer(nil) }
         startHost()
         XCTAssertFalse(try pair(try Client.make(), pin: "4821"))
         XCTAssertTrue(host.clients.isEmpty)
@@ -362,7 +363,7 @@ final class MoonlightHostTests: XCTestCase {
         MoonlightHost.allowsPairing = false
         defer { MoonlightHost.allowsPairing = true }
         var asked = false
-        host.requestPIN = { _, answer in asked = true; answer("4821") }
+        host.requestPIN = { _, _, answer in asked = true; answer("4821") }
         startHost()
         XCTAssertFalse(try pair(try Client.make(), pin: "4821"))
         XCTAssertFalse(asked)
@@ -376,7 +377,7 @@ final class MoonlightHostTests: XCTestCase {
     }
 
     func testLowLatencyIsSetPerDeviceAndKept() throws {
-        host.requestPIN = { _, answer in answer("1234") }
+        host.requestPIN = { _, _, answer in answer("1234") }
         startHost()
         let client = try Client.make()
         XCTAssertTrue(try pair(client, pin: "1234"))
@@ -388,7 +389,7 @@ final class MoonlightHostTests: XCTestCase {
     }
 
     func testInputIsAllowedPerDeviceAndKept() throws {
-        host.requestPIN = { _, answer in answer("1234") }
+        host.requestPIN = { _, _, answer in answer("1234") }
         startHost()
         let client = try Client.make()
         XCTAssertTrue(try pair(client, pin: "1234"))
@@ -422,7 +423,7 @@ final class MoonlightHostTests: XCTestCase {
     }
 
     func testForgottenDeviceMustPairAgain() throws {
-        host.requestPIN = { _, answer in answer("1234") }
+        host.requestPIN = { _, _, answer in answer("1234") }
         startHost()
         let client = try Client.make()
         XCTAssertTrue(try pair(client, pin: "1234"))
@@ -431,7 +432,7 @@ final class MoonlightHostTests: XCTestCase {
     }
 
     func testKeepsItsCertificateAndPairingsAcrossRestarts() throws {
-        host.requestPIN = { _, answer in answer("1234") }
+        host.requestPIN = { _, _, answer in answer("1234") }
         startHost()
         let client = try Client.make()
         XCTAssertTrue(try pair(client, pin: "1234"))
@@ -443,7 +444,8 @@ final class MoonlightHostTests: XCTestCase {
     func testGivesUpWhenTheDeviceHangsUpDuringThePrompt() throws {
         let asked = expectation(description: "PIN asked")
         let abandoned = expectation(description: "pairing abandoned")
-        host.requestPIN = { _, _ in asked.fulfill() }
+        var isCurrent: (() -> Bool)?
+        host.requestPIN = { _, current, _ in isCurrent = current; asked.fulfill() }
         host.pairingAbandoned = { abandoned.fulfill() }
         startHost()
         let client = try Client.make()
@@ -451,8 +453,43 @@ final class MoonlightHostTests: XCTestCase {
         let connection = open("/pair?devicename=roth&updateState=1&phrase=getservercert&salt=00112233445566778899AABBCCDDEEFF&clientcert=\(pem)",
                               secure: false)
         wait(for: [asked], timeout: 5)
+        XCTAssertEqual(isCurrent?(), true)
         connection.cancel()
         wait(for: [abandoned], timeout: 5)
+        XCTAssertEqual(isCurrent?(), false, "a prompt shown only now is not shown")
+    }
+
+    /// Declined, a device is told to wait before the Mac is asked again, rather than bring
+    /// the prompt back after every Cancel.
+    func testADeclinedDeviceWaitsBeforeThePromptComesAgain() throws {
+        var asked = 0
+        host.requestPIN = { _, _, answer in asked += 1; answer(nil) }
+        startHost()
+        let client = try Client.make()
+        XCTAssertFalse(try pair(client, pin: "4821"))
+        XCTAssertEqual(asked, 1)
+        let pem = MoonlightCrypto.hex(Data(MoonlightCrypto.pem(certificate: client.certificate).utf8))
+        let xml = try get("/pair?devicename=roth&updateState=1&phrase=getservercert&salt=00112233445566778899AABBCCDDEEFF&clientcert=\(pem)")
+        XCTAssertEqual(status(xml), "503")
+        XCTAssertEqual(field("paired", in: xml), "0")
+        XCTAssertEqual(asked, 1, "not asked again")
+        XCTAssertTrue(host.clients.isEmpty)
+    }
+
+    /// The stream's sockets are IPv4 only, so a launch reaching the host over IPv6 is
+    /// refused at once, with a message saying what to do.
+    func testALaunchOverIPv6IsRefusedAtOnce() throws {
+        host.requestPIN = { _, _, answer in answer("1234") }
+        host.makeDisplay = { _, _, _, done in XCTFail("no display for it"); done(nil) }
+        startHost()
+        let client = try Client.make()
+        XCTAssertTrue(try pair(client, pin: "1234"))
+        let key = MoonlightCrypto.hex(MoonlightPairing.randomBytes(16))
+        let launch = try get("/launch?appid=\(MoonlightHost.newDisplayAppID)&mode=1920x1080x60&rikey=\(key)&rikeyid=1",
+                             secure: true, identity: client.identity, address: "::1")
+        XCTAssertEqual(status(launch), "503")
+        XCTAssertTrue(launch.contains("IPv4"), launch)
+        XCTAssertTrue(host.launches.isEmpty)
     }
 
     // MARK: - Displays made on demand
@@ -460,7 +497,7 @@ final class MoonlightHostTests: XCTestCase {
     func testNewDisplayIsListedAndLaunchingItMakesADisplayThatCancelRemoves() throws {
         var made: [Int] = []
         var removed: [CGDirectDisplayID] = []
-        host.requestPIN = { _, answer in answer("1234") }
+        host.requestPIN = { _, _, answer in answer("1234") }
         host.makeDisplay = { width, height, fps, done in
             made = [width, height, fps]
             // Placing a display takes a while; the launch waits for it.
@@ -490,7 +527,7 @@ final class MoonlightHostTests: XCTestCase {
 
     func testAnAppWhoseDisplayIsGoneGetsANewOne() throws {
         var made = false
-        host.requestPIN = { _, answer in answer("1234") }
+        host.requestPIN = { _, _, answer in answer("1234") }
         host.makeDisplay = { _, _, _, done in made = true; done(7) }
         startHost()
         let client = try Client.make()
@@ -508,7 +545,7 @@ final class MoonlightHostTests: XCTestCase {
         throws -> (made: [[Int]], resizes: [[Int]], removed: [CGDirectDisplayID]) {
         let online = CGMainDisplayID()
         var made: [[Int]] = [], resizes: [[Int]] = [], removed: [CGDirectDisplayID] = []
-        host.requestPIN = { _, answer in answer("1234") }
+        host.requestPIN = { _, _, answer in answer("1234") }
         host.apps = apps
         host.makeDisplay = { width, height, fps, done in
             made.append([width, height, fps])
@@ -556,7 +593,7 @@ final class MoonlightHostTests: XCTestCase {
     }
 
     func testSaysSoWhenNoDisplayCanBeMade() throws {
-        host.requestPIN = { _, answer in answer("1234") }
+        host.requestPIN = { _, _, answer in answer("1234") }
         host.makeDisplay = { _, _, _, done in done(nil) }
         startHost()
         let client = try Client.make()
@@ -570,7 +607,7 @@ final class MoonlightHostTests: XCTestCase {
     func testTwoLaunchesAtOnceLeaveNoDisplayBehind() throws {
         var removed: [CGDirectDisplayID] = []
         var made = 0
-        host.requestPIN = { _, answer in answer("1234") }
+        host.requestPIN = { _, _, answer in answer("1234") }
         host.makeDisplay = { _, _, _, done in
             made += 1
             let id = CGDirectDisplayID(89 + made)
@@ -598,7 +635,7 @@ final class MoonlightHostTests: XCTestCase {
     func testALaunchOutlivingTheHostOrThePairingLeavesNothing() throws {
         var removed: [CGDirectDisplayID] = []
         var asked: XCTestExpectation?
-        host.requestPIN = { _, answer in answer("1234") }
+        host.requestPIN = { _, _, answer in answer("1234") }
         host.makeDisplay = { _, _, _, done in
             asked?.fulfill()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { done(96) }
@@ -718,7 +755,7 @@ final class MoonlightHostTests: XCTestCase {
 
     func testEachDeviceHasASessionOfItsOwnAndSeesOnlyItsOwn() throws {
         var made: [CGDirectDisplayID] = [], removed: [CGDirectDisplayID] = []
-        host.requestPIN = { _, answer in answer("1234") }
+        host.requestPIN = { _, _, answer in answer("1234") }
         host.makeDisplay = { _, _, _, done in made.append(CGDirectDisplayID(50 + made.count)); done(made.last) }
         host.removeDisplay = { removed.append($0) }
         startHost()
@@ -753,7 +790,7 @@ final class MoonlightHostTests: XCTestCase {
 
     func testTurnsAwayADeviceBeyondTheMostSessions() throws {
         var made = 0
-        host.requestPIN = { _, answer in answer("1234") }
+        host.requestPIN = { _, _, answer in answer("1234") }
         host.makeDisplay = { _, _, _, done in made += 1; done(CGDirectDisplayID(60 + made)) }
         startHost()
         for _ in 0..<MoonlightHost.maxSessions {
@@ -769,7 +806,7 @@ final class MoonlightHostTests: XCTestCase {
 
     func testADisplayTwoDevicesStreamGoesOnlyWhenBothAreDone() throws {
         var removed: [CGDirectDisplayID] = []
-        host.requestPIN = { _, answer in answer("1234") }
+        host.requestPIN = { _, _, answer in answer("1234") }
         host.makeDisplay = { _, _, _, done in done(70) }
         host.removeDisplay = { removed.append($0) }
         startHost()
@@ -792,7 +829,7 @@ final class MoonlightHostTests: XCTestCase {
     /// Two devices shake hands at once, each on its own RTSP port, and each connects to
     /// the control stream on its session's ports.
     func testTwoDevicesConnectSideBySide() throws {
-        host.requestPIN = { _, answer in answer("1234") }
+        host.requestPIN = { _, _, answer in answer("1234") }
         host.makeDisplay = { _, _, _, done in done(80) }
         startHost()
         var controls: [(UnsafeMutablePointer<ENetHost>, Bool)] = []
@@ -838,7 +875,7 @@ final class MoonlightHostTests: XCTestCase {
     /// Another device can't shake hands on a launch; the device that launched can start its
     /// stream once, and again after a resume, which is a launch of its own with a new key.
     func testOnlyTheLaunchingDeviceShakesHandsAndAResumeStreamsAgain() throws {
-        host.requestPIN = { _, answer in answer("1234") }
+        host.requestPIN = { _, _, answer in answer("1234") }
         host.makeDisplay = { _, _, _, done in done(81) }
         startHost()
         let client = try Client.make()
@@ -915,7 +952,7 @@ final class MoonlightHostTests: XCTestCase {
     /// that the stream ends saying why; then cancels.
     func testLaunchesAndStreamsAsMoonlightExpects() throws {
         let display = try XCTUnwrap(streamingDisplay() ?? Optional(0))
-        host.requestPIN = { _, answer in answer("1234") }
+        host.requestPIN = { _, _, answer in answer("1234") }
         host.apps = [MoonlightApp(id: 1, title: "DAM Streaming", displayID: display)]
         startHost()
         let client = try Client.make()
