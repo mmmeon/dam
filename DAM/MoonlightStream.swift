@@ -347,6 +347,13 @@ final class MoonlightVideoSender {
     var onFrameTooLarge: (() -> Void)?
     /// Called on the sending thread once a keyframe's last packet is out.
     var onKeyFrameSent: (() -> Void)?
+    /// Called on the sending thread when the last frame waiting is out, so a picture left out
+    /// while it was behind can be encoded.
+    var onCaughtUp: (() -> Void)?
+
+    /// How far behind its pace sending may fall and still catch up all at once: after a block's
+    /// parity was worked out, say, the packets due meanwhile go out at the pace, not in a burst.
+    static let mostBehind: UInt64 = 500_000
 
     /// Parity for a fifth of each block's data, as Sunshine sends by default.
     static let fecPercentage = 20
@@ -419,7 +426,9 @@ final class MoonlightVideoSender {
             lock.lock()
             guard running, let peer, !waiting.isEmpty else {
                 sending = false
+                let caughtUp = running
                 lock.unlock()
+                if caughtUp { onCaughtUp?() }
                 return
             }
             let frame = waiting.removeFirst()
@@ -445,7 +454,7 @@ final class MoonlightVideoSender {
         // Each block's data, then its parity, worked out only once the data is on its way:
         // Moonlight needs the parity only when data was lost, and gives up on a block once
         // the next one starts.
-        let began = DispatchTime.now().uptimeNanoseconds
+        var began = DispatchTime.now().uptimeNanoseconds
         var bytes = 0, packets = 0, refused = 0
         func send(_ plain: Data) {
             // Sealed last, after parity was worked out over the plain packets.
@@ -453,7 +462,11 @@ final class MoonlightVideoSender {
             // Paced: wait until this packet's share of the rate is due.
             let due = began + UInt64(Double(bytes) * nanosecondsPerByte)
             let now = DispatchTime.now().uptimeNanoseconds
-            if due > now + 50_000 { usleep(useconds_t((due - now) / 1000)) }
+            if due > now + 50_000 {
+                usleep(useconds_t((due - now) / 1000))
+            } else if now > due + Self.mostBehind {
+                began += now - due - Self.mostBehind
+            }
             if !socket.send(packet, to: peer) { refused += 1 }
             bytes += packet.count
             packets += 1
@@ -493,9 +506,10 @@ final class MoonlightVideoSender {
 /// Learns where Moonlight wants sound from its pings, and sends it the Mac's sound as Opus,
 /// one packet per packet's time. Capture hands sound over in pieces of about 20 ms, which
 /// would reach Moonlight as bursts; Moonlight drops sound once more than 30 ms of it waits,
-/// so packets go out evenly instead, from a line kept short: at most 40 ms, the oldest
-/// dropped beyond that. While nothing is captured it sends encoded silence, so the first
-/// half second Moonlight throws away at the start is silence, not sound.
+/// so packets go out evenly instead, from a line kept short (see MoonlightAudioPacing): at
+/// most eight packets, 40 ms of 5 ms packets or 80 of 10 ms ones, the oldest dropped beyond
+/// that. While nothing is captured it sends encoded silence, so the first half second
+/// Moonlight throws away at the start is silence, not sound.
 final class MoonlightAudioSender {
     /// Encoding and sending happen here, captured sound and silence alike.
     let queue = DispatchQueue(label: "\(AppIdentity.bundleID).moonlight.audio", qos: .userInteractive)
@@ -512,7 +526,6 @@ final class MoonlightAudioSender {
     private var lastCaptured: UInt64 = 0
     /// Encoded packets waiting for their turn; on `queue`.
     private var waiting: [Data] = []
-    private static let maxWaiting = 8
     private var pacer: DispatchSourceTimer?
     private let stats: MoonlightStreamStats
 
@@ -530,7 +543,7 @@ final class MoonlightAudioSender {
                                             bitrate: config.highQualityAudio ? 512_000 : 96_000) { [weak self] opus in
             guard let self else { return }
             self.waiting.append(opus)
-            if self.waiting.count > Self.maxWaiting { self.waiting.removeFirst() }
+            if self.waiting.count > MoonlightAudioPacing.mostWaiting { self.waiting.removeFirst() }
         }
     }
 
@@ -576,11 +589,15 @@ final class MoonlightAudioSender {
         timer.schedule(deadline: .now(), repeating: .milliseconds(packetDuration), leeway: .microseconds(500))
         timer.setEventHandler { [weak self] in
             guard let self else { return }
-            if self.waiting.isEmpty, DispatchTime.now().uptimeNanoseconds - self.lastCaptured > 100_000_000 {
-                silence.withUnsafeBufferPointer { self.encoder?.encode(interleaved: $0) }
+            // Fires the queue was too busy to take come as one, each a packet's time.
+            let fires = max(Int(self.pacer?.data ?? 1), 1)
+            if DispatchTime.now().uptimeNanoseconds - self.lastCaptured > 100_000_000 {
+                for _ in self.waiting.count..<max(fires, self.waiting.count) {
+                    silence.withUnsafeBufferPointer { self.encoder?.encode(interleaved: $0) }
+                }
             }
-            guard !self.waiting.isEmpty else { return }
-            self.send(self.waiting.removeFirst())
+            let due = MoonlightAudioPacing.due(fires: fires, waiting: self.waiting.count, packetDuration: self.packetDuration)
+            for _ in 0..<due { self.send(self.waiting.removeFirst()) }
         }
         pacer = timer
         timer.resume()
@@ -594,6 +611,20 @@ final class MoonlightAudioSender {
         guard let peer, let packets = packetizer.packets(for: opus) else { return }
         let refused = packets.filter { !socket.send($0, to: peer) }.count
         stats.audio(packets: packets.count, refused: refused)
+    }
+}
+
+/// How many packets of sound the pacer sends each time it fires: one for each packet's time
+/// since it last did, and one more while the line is longer than a piece of captured sound
+/// leaves it (about 21 ms), so a line grown by a late fire or capture's clock running a
+/// little fast drains rather than staying long and losing a packet at each further one.
+enum MoonlightAudioPacing {
+    static let mostWaiting = 8
+
+    static func due(fires: Int, waiting: Int, packetDuration: Int) -> Int {
+        let steady = 25 / packetDuration
+        let count = max(fires, 1)
+        return min(waiting - count > steady ? count + 1 : count, waiting)
     }
 }
 
@@ -839,6 +870,8 @@ final class MoonlightStream {
     private var encoder: MoonlightVideoEncoder?
     private var capture: SharedScreenCapture.Subscription?
     private var lastFrame: (buffer: CVPixelBuffer, time: CMTime, at: UInt64)?
+    /// Whether `lastFrame` was left out while sending was behind, and is still to be encoded.
+    private var lastFrameSkipped = false
     private var repeater: DispatchSourceTimer?
     private var ended = false
     private var inputAllowed: Bool
@@ -1008,6 +1041,15 @@ final class MoonlightStream {
                 self?.video.send(frame)
             }
             video.onFrameTooLarge = { [weak self] in self?.sendKeyFrame(roundTrip: nil) }
+            // The picture left out last, should the screen have gone still since.
+            video.onCaughtUp = { [weak self] in
+                guard let self else { return }
+                self.lock.lock()
+                defer { self.lock.unlock() }
+                guard self.lastFrameSkipped, let last = self.lastFrame, let encoder = self.encoder else { return }
+                self.lastFrameSkipped = false
+                encoder.encode(last.buffer, at: last.time)
+            }
             // What the Mac plays, as it plays it; where it plays is left alone.
             let audio = self.audio
             let key = SharedScreenCapture.Key(displayID: displayID, width: config.width, height: config.height,
@@ -1019,12 +1061,16 @@ final class MoonlightStream {
             guard !stopped else { return }
             let capture = SharedScreenCapture.subscribe(key, frame: { [weak self] buffer, time in
                 guard let self else { return }
+                // Under the lock with `lastFrameSkipped`, so an older picture left out is never
+                // encoded after this one.
                 self.lock.lock()
+                defer { self.lock.unlock() }
                 self.lastFrame = (buffer, time, DispatchTime.now().uptimeNanoseconds)
-                self.lock.unlock()
                 // Encoded while a keyframe is still going out, this frame would only wait
-                // behind it; it is kept as the last picture and left out instead.
-                guard !self.video.isBehind else { return }
+                // behind it; it is kept as the last picture and left out instead, and encoded
+                // once sending has caught up unless another comes first.
+                self.lastFrameSkipped = self.video.isBehind
+                guard !self.lastFrameSkipped else { return }
                 encoder.encode(buffer, at: time)
             }, audio: { sample in
                 audio.queue.async { audio.encode(sample) }

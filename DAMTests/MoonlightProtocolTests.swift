@@ -1,4 +1,5 @@
 import XCTest
+import CoreMedia
 import CryptoKit
 @testable import DAM
 
@@ -637,5 +638,136 @@ final class MoonlightProtocolTests: XCTestCase {
         XCTAssertNoThrow(try MoonlightControlServer(port: ports.control, key: Data(count: 16), connectData: 0))
         XCTAssertNoThrow(try MoonlightUDPSocket(port: ports.video))
         XCTAssertNoThrow(try makeStream(), "every port free again")
+    }
+
+    // MARK: - Pacing
+
+    /// A socket on loopback that reads datagrams with the time the kernel took each in.
+    private final class TimedReceiver {
+        let descriptor = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
+        private(set) var address = sockaddr_in()
+
+        init() {
+            var yes: Int32 = 1
+            setsockopt(descriptor, SOL_SOCKET, SO_TIMESTAMP, &yes, socklen_t(MemoryLayout<Int32>.size))
+            var buffer: Int32 = 4 << 20
+            setsockopt(descriptor, SOL_SOCKET, SO_RCVBUF, &buffer, socklen_t(MemoryLayout<Int32>.size))
+            var timeout = timeval(tv_sec: 3, tv_usec: 0)
+            setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+            address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+            address.sin_family = sa_family_t(AF_INET)
+            address.sin_addr.s_addr = inet_addr("127.0.0.1")
+            var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+            withUnsafeMutablePointer(to: &address) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    _ = Darwin.bind(descriptor, $0, length)
+                    _ = getsockname(descriptor, $0, &length)
+                }
+            }
+        }
+
+        deinit { Darwin.close(descriptor) }
+
+        func send(_ data: Data, to port: UInt16) {
+            var to = address
+            to.sin_port = port.bigEndian
+            _ = data.withUnsafeBytes { bytes in
+                withUnsafePointer(to: &to) {
+                    $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                        sendto(descriptor, bytes.baseAddress, data.count, 0, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+                    }
+                }
+            }
+        }
+
+        /// The next datagram and when it arrived, in microseconds; nil after 3 s without one.
+        func receive() -> (Data, Int64)? {
+            var buffer = [UInt8](repeating: 0, count: 2048)
+            var control = [UInt8](repeating: 0, count: 64)
+            var arrived: Int64 = 0
+            let count = buffer.withUnsafeMutableBytes { data in
+                control.withUnsafeMutableBytes { control -> Int in
+                    var vector = iovec(iov_base: data.baseAddress, iov_len: data.count)
+                    return withUnsafeMutablePointer(to: &vector) { vector in
+                        var message = msghdr(msg_name: nil, msg_namelen: 0, msg_iov: vector, msg_iovlen: 1,
+                                             msg_control: control.baseAddress, msg_controllen: socklen_t(control.count),
+                                             msg_flags: 0)
+                        let count = recvmsg(descriptor, &message, 0)
+                        guard count > 0, message.msg_controllen > 0 else { return count }
+                        let header = control.load(as: cmsghdr.self)
+                        if header.cmsg_level == SOL_SOCKET, header.cmsg_type == SCM_TIMESTAMP {
+                            let time = control.loadUnaligned(fromByteOffset: MemoryLayout<cmsghdr>.size, as: timeval.self)
+                            arrived = Int64(time.tv_sec) * 1_000_000 + Int64(time.tv_usec)
+                        }
+                        return count
+                    }
+                }
+            }
+            guard count > 0 else { return nil }
+            return (Data(buffer[0..<count]), arrived)
+        }
+    }
+
+    /// A frame for the video sender: `data` as an access unit, with an empty sample.
+    private func frame(_ data: Data, keyFrame: Bool = true) throws -> MoonlightVideoEncoder.Frame {
+        var sample: CMSampleBuffer?
+        CMSampleBufferCreate(allocator: nil, dataBuffer: nil, dataReady: true, makeDataReadyCallback: nil, refcon: nil,
+                             formatDescription: nil, sampleCount: 0, sampleTimingEntryCount: 0, sampleTimingArray: nil,
+                             sampleSizeEntryCount: 0, sampleSizeArray: nil, sampleBufferOut: &sample)
+        let now = DispatchTime.now().uptimeNanoseconds
+        return MoonlightVideoEncoder.Frame(data: data, isKeyFrame: keyFrame, units: [data], sample: try XCTUnwrap(sample),
+                                           time: .zero, submitted: now, encoded: now)
+    }
+
+    /// A block's parity goes out at the pace once it is worked out, not at once to make up
+    /// for the time that took; and the sender says when it has caught up.
+    func testVideoParityGoesOutAtThePace() throws {
+        let port = testPorts(4).video
+        // 60 Mbit/s, the slowest pace: 133 ns a byte. 100 data packets and 50 of parity, 544
+        // bytes each: the parity takes 3.6 ms at the pace, and longer to work out unoptimised.
+        let sender = try MoonlightVideoSender(port: port, pingPayload: "0123456789abcdef", client: "127.0.0.1",
+                                              packetSize: 528, minimumParity: 50, bitrateKbps: 1000)
+        let caughtUp = expectation(description: "caught up")
+        sender.onCaughtUp = { caughtUp.fulfill() }
+        sender.startListening()
+        defer { sender.stop() }
+        let receiver = TimedReceiver()
+        receiver.send(Data("0123456789abcdef".utf8) + Data([0, 0, 0, 1]), to: port)
+        let deadline = Date().addingTimeInterval(2)
+        while !sender.hasPeer, Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+        XCTAssertTrue(sender.hasPeer)
+
+        sender.send(try frame(Data(count: 100 * 512 - 8)))
+        var data: [Int64] = [], parity: [Int64] = []
+        while data.count + parity.count < 150, let (packet, arrived) = receiver.receive() {
+            let fec = [UInt8](packet[28..<32]).read(littleEndian: UInt32.self, at: 0)
+            if (fec >> 12) & 0x3FF < fec >> 22 { data.append(arrived) } else { parity.append(arrived) }
+        }
+        XCTAssertEqual(data.count, 100)
+        XCTAssertEqual(parity.count, 50)
+        let paritySpan = Double((parity.last ?? 0) - (parity.first ?? 0)) / 1000
+        XCTAssertGreaterThan(paritySpan, 2.5, "parity paced, less half a millisecond of catching up")
+        let dataSpan = Double((data.last ?? 0) - (data.first ?? 0)) / 1000
+        XCTAssertGreaterThan(dataSpan, 6, "data paced: 7.2 ms")
+        wait(for: [caughtUp], timeout: 2)
+    }
+
+    /// Sound goes one packet a fire, one for each fire missed, and one more while the line is
+    /// longer than a piece of captured sound leaves it.
+    func testSoundIsPacedAndItsLineDrains() {
+        let due = MoonlightAudioPacing.due
+        XCTAssertEqual(due(1, 0, 5), 0)
+        XCTAssertEqual(due(1, 4, 5), 1, "a piece of captured sound goes a packet a fire")
+        XCTAssertEqual(due(1, 6, 5), 1)
+        XCTAssertEqual(due(1, 7, 5), 2, "a line longer than a piece drains")
+        XCTAssertEqual(due(3, 4, 5), 3, "fires missed are made up")
+        XCTAssertEqual(due(3, 2, 5), 2)
+        XCTAssertEqual(due(1, 3, 10), 1)
+        XCTAssertEqual(due(1, 4, 10), 2)
+
+        // A line of eight drains two a fire, down to a piece's length.
+        var waiting = 8
+        for _ in 0..<2 { waiting -= due(1, waiting, 5) }
+        XCTAssertEqual(waiting, 5)
     }
 }
