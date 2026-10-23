@@ -440,17 +440,70 @@ final class SettingsWindowController: NSWindowController {
             }
             when.selectItem(at: entry.onlyWithoutOwnDisplay ? 1 : 0)
             when.setAccessibilityLabel("When to connect \(name)")
+            let mode = ClosurePopup(onSelect: { [weak self] value in
+                guard let mode = value.flatMap(AutoConnectEntry.Mode.init(rawValue:)) else { return }
+                self?.setAutoConnectMode(at: i, mode)
+            })
+            mode.controlSize = .small
+            mode.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+            for option in AutoConnectEntry.modes(for: entry.target) {
+                let item = NSMenuItem(title: Self.autoConnectModeTitle(option), action: nil, keyEquivalent: "")
+                item.representedObject = option.rawValue
+                mode.menu?.addItem(item)
+                if option == entry.mode { mode.select(item) }
+            }
+            mode.setAccessibilityLabel("When \(name) is connected")
+            mode.toolTip = "Always: whenever it comes within reach. At login: only in the window after you sign in. " +
+                           "At startup: from when the Mac starts up, once DAM can work at the login window, and in " +
+                           "the window after the first sign-in."
             let remove = small(ClosureButton(title: "Remove") { [weak self] _ in self?.removeAutoConnect(entry.target) })
             remove.setAccessibilityLabel("Remove \(name)")
-            return [up, down, rowLabel(name), placeholderLabel(kind), when, remove]
+            return [up, down, rowLabel(name), placeholderLabel(kind), mode, when, remove]
         }
         var controls: [NSView] = [rows.isEmpty ? placeholderLabel("No displays yet") : rowGrid(rows)]
         if let add = addAutoConnectMenu(listed: Set(entries.map(\.target))) { controls.append(add) }
-        controls.append(smallNote("Connected best first, at login and whenever they come within reach. Of AirPlay " +
-                                  "displays and iPads, only the first available is connected, and none while one " +
-                                  "already is; every OpenDisplay receiver listed is connected. One disconnected by " +
-                                  "hand stays so until it goes away and comes back."))
+        controls.append(autoConnectWindowRow())
+        controls.append(smallNote("Connected best first. Of AirPlay displays and iPads, only the first available is " +
+                                  "connected, and none while one already is; every OpenDisplay receiver listed is " +
+                                  "connected. One disconnected by hand stays so until it goes away and comes back. " +
+                                  "A display added here is connected at login."))
         return controls
+    }
+
+    private static func autoConnectModeTitle(_ mode: AutoConnectEntry.Mode) -> String {
+        switch mode {
+        case .always:  return "Always"
+        case .login:   return "At login"
+        case .startup: return "At startup"
+        }
+    }
+
+    /// "Window after login: [2 minutes]": how long entries connected at login or startup may be.
+    private func autoConnectWindowRow() -> NSView {
+        let popup = ClosurePopup(onSelect: { value in
+            guard let seconds = value.flatMap(Double.init) else { return }
+            AutoConnectList.window = seconds
+        })
+        popup.controlSize = .small
+        popup.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        var choices = AutoConnectList.windowChoices
+        if !choices.contains(AutoConnectList.window) { choices = (choices + [AutoConnectList.window]).sorted() }
+        for seconds in choices {
+            let text = seconds < 60 ? "\(Int(seconds)) seconds"
+                : seconds == 60 ? "1 minute" : "\(Int(seconds / 60)) minutes"
+            let item = NSMenuItem(title: text, action: nil, keyEquivalent: "")
+            item.representedObject = String(seconds)
+            popup.menu?.addItem(item)
+            if seconds == AutoConnectList.window { popup.select(item) }
+        }
+        popup.setAccessibilityLabel("Window after login")
+        popup.toolTip = "How long after you sign in a display set to connect at login or startup may still be " +
+                        "connected, for one that is slow to come within reach. Applies from the next login."
+        let label = smallLabel("Window after login:")
+        let row = NSStackView(views: [label, popup])
+        row.orientation = .horizontal
+        row.spacing = 6
+        return row
     }
 
     /// An entry's name as the app shows it, and its kind.
@@ -495,12 +548,24 @@ final class SettingsWindowController: NSWindowController {
     }
 
     /// Receivers go through the sender, which dials one added and hangs up on one removed.
+    /// An entry added here is connected at login.
     private func addAutoConnect(_ target: AutoConnectTarget) {
         if case .openDisplay(let key) = target, let openDisplay {
+            var entries = AutoConnectList.settingOpenDisplay(key, on: true, in: AutoConnectList.entries)
+            if let i = entries.firstIndex(where: { $0.target == target }) { entries[i].mode = .login }
+            AutoConnectList.entries = entries
             openDisplay.setOn(true, key: key)
         } else {
-            AutoConnectList.entries.append(AutoConnectEntry(target: target))
+            AutoConnectList.entries.append(AutoConnectEntry(target: target, mode: .login))
         }
+        autoConnectDidChange()
+    }
+
+    private func setAutoConnectMode(at index: Int, _ mode: AutoConnectEntry.Mode) {
+        var entries = AutoConnectList.entries
+        guard entries.indices.contains(index) else { return }
+        entries[index].mode = mode
+        AutoConnectList.entries = entries
         autoConnectDidChange()
     }
 

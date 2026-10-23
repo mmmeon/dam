@@ -92,6 +92,27 @@ its attempts. It then starts at most one connection.
      its own".
    - `autoConnectSingleDisplay` stays a hotkey setting.
 
+## When: always, at login, at startup (2026-10-23)
+
+The user wants designated displays connected only if they are there at sign-in or shortly
+after, not whenever they come within reach. Each entry has a mode:
+
+| Mode | Connected | Kinds |
+|---|---|---|
+| Always | whenever it comes within reach | all |
+| At login | in the window after DAM starts at sign-in | all |
+| At startup | from boot: at the login window (part 1's agent), then in the window after the first sign-in since boot | OpenDisplay only: nothing else can connect before sign-in |
+
+- **The window** is one setting, 2 minutes by default (30 s to 10 min), measured from DAM's
+  start. DAM counts as started at sign-in when it starts within the window of the user's console
+  login (from the login records). Opened by hand later, there is no window.
+- **First sign-in since boot** is when the boot time (`kern.boottime`) differs from the one DAM
+  last started at sign-in under.
+- **Defaults:** entries added in Settings are At login. Entries migrated from the older settings,
+  and receivers turned on from the OpenDisplay page, are Always, which is how they behaved.
+- **Once the window closes** nothing at login or startup is dialled or retried. A connection
+  already made stays.
+
 ## Link to part 1
 
 The login window agent uses the same list, limited to OpenDisplay receivers over USB.

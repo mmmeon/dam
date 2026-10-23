@@ -25,17 +25,43 @@ enum AutoConnectTarget: Hashable {
 }
 
 struct AutoConnectEntry: Hashable {
+    /// When an entry is connected.
+    enum Mode: String, CaseIterable {
+        /// Whenever it comes within reach.
+        case always
+        /// In the window after DAM starts at sign-in.
+        case login
+        /// From boot: at the login window (once its agent exists, root-and-login-window.md),
+        /// then in the window after the first sign-in since boot. OpenDisplay only, as nothing
+        /// else can be connected before sign-in.
+        case startup
+    }
+
     var target: AutoConnectTarget
     /// Connected only while the Mac has no display of its own.
     var onlyWithoutOwnDisplay = false
+    var mode: Mode = .always
 
-    func applies(hasOwnDisplay: Bool) -> Bool { !(onlyWithoutOwnDisplay && hasOwnDisplay) }
+    /// The modes `target` can have.
+    static func modes(for target: AutoConnectTarget) -> [Mode] {
+        if case .openDisplay = target { return Mode.allCases }
+        return [.always, .login]
+    }
+
+    func applies(hasOwnDisplay: Bool, windows: AutoConnectWindows = .always) -> Bool {
+        guard !(onlyWithoutOwnDisplay && hasOwnDisplay) else { return false }
+        switch mode {
+        case .always:  return true
+        case .login:   return windows.login
+        case .startup: return windows.startup
+        }
+    }
 
     // MARK: Storage
 
     /// As stored: a property list, so `defaults read` shows it.
     var dictionary: [String: Any] {
-        var out: [String: Any] = ["onlyWithoutOwnDisplay": onlyWithoutOwnDisplay]
+        var out: [String: Any] = ["onlyWithoutOwnDisplay": onlyWithoutOwnDisplay, "mode": mode.rawValue]
         switch target {
         case .openDisplay(let key): out["kind"] = "openDisplay"; out["id"] = key
         case .airPlay(let name):    out["kind"] = "airPlay"; out["id"] = name
@@ -45,12 +71,14 @@ struct AutoConnectEntry: Hashable {
         return out
     }
 
-    init(target: AutoConnectTarget, onlyWithoutOwnDisplay: Bool = false) {
+    init(target: AutoConnectTarget, onlyWithoutOwnDisplay: Bool = false, mode: Mode = .always) {
         self.target = target
         self.onlyWithoutOwnDisplay = onlyWithoutOwnDisplay
+        self.mode = mode
     }
 
-    /// Nil for a kind this version doesn't know, which is then dropped.
+    /// Nil for a kind this version doesn't know, which is then dropped. An entry stored
+    /// before modes, or with a mode its kind can't have, is connected always.
     init?(dictionary: [String: Any]) {
         let id = dictionary["id"] as? String
         switch (dictionary["kind"] as? String, id) {
@@ -61,6 +89,8 @@ struct AutoConnectEntry: Hashable {
         default:                        return nil
         }
         onlyWithoutOwnDisplay = dictionary["onlyWithoutOwnDisplay"] as? Bool ?? false
+        let mode = (dictionary["mode"] as? String).flatMap(Mode.init(rawValue:)) ?? .always
+        self.mode = Self.modes(for: target).contains(mode) ? mode : .always
     }
 }
 
@@ -87,7 +117,8 @@ enum AutoConnectList {
     static let didChange = Notification.Name("\(AppIdentity.shortID).autoConnect.didChange")
 
     /// The list the older settings stood for: the receivers turned on, in the order they were
-    /// stored (sorted by key), then any iPad on USB while the Mac has no display of its own.
+    /// stored (sorted by key), then any iPad on USB while the Mac has no display of its own;
+    /// all connected always, as they were.
     static func migrated(receivers: [String], sidecarWithoutDisplay: Bool) -> [AutoConnectEntry] {
         var out = receivers.map { AutoConnectEntry(target: .openDisplay(key: $0)) }
         if sidecarWithoutDisplay { out.append(AutoConnectEntry(target: .anyIPadOnUSB, onlyWithoutOwnDisplay: true)) }
@@ -100,12 +131,27 @@ enum AutoConnectList {
         return entries.filter { seen.insert($0.target).inserted }
     }
 
+    // MARK: Window
+
+    private static let windowKey = "\(AppIdentity.shortID).autoConnect.windowSeconds"
+    static let defaultWindow: TimeInterval = 120
+    /// The window lengths Settings offers, in seconds.
+    static let windowChoices: [TimeInterval] = [30, 60, 120, 300, 600]
+
+    /// How long after sign-in (or startup) entries connected at login (or startup) may still be.
+    static var window: TimeInterval {
+        get { (UserDefaults.dam.object(forKey: windowKey) as? Double).map { max(0, $0) } ?? defaultWindow }
+        set { UserDefaults.dam.set(newValue, forKey: windowKey) }
+    }
+
     // MARK: OpenDisplay
 
-    /// The receivers on the list whose condition holds, best first: the ones to dial.
-    static func openDisplayKeys(in entries: [AutoConnectEntry], hasOwnDisplay: Bool) -> [String] {
+    /// The receivers on the list that apply now, best first: the ones to dial.
+    static func openDisplayKeys(in entries: [AutoConnectEntry], hasOwnDisplay: Bool,
+                                windows: AutoConnectWindows = .always) -> [String] {
         entries.compactMap { entry in
-            guard entry.applies(hasOwnDisplay: hasOwnDisplay), case .openDisplay(let key) = entry.target else { return nil }
+            guard entry.applies(hasOwnDisplay: hasOwnDisplay, windows: windows),
+                  case .openDisplay(let key) = entry.target else { return nil }
             return key
         }
     }
@@ -126,6 +172,80 @@ enum AutoConnectList {
             renamed.target = .openDisplay(key: new)
             return renamed
         })
+    }
+}
+
+// MARK: - Windows
+
+/// Whether entries connected at login, or at startup, apply now.
+struct AutoConnectWindows: Equatable {
+    var login = false
+    var startup = false
+
+    /// Outside any window: only entries connected always apply.
+    static let none = AutoConnectWindows()
+    /// For callers that don't care about windows.
+    static let always = AutoConnectWindows(login: true, startup: true)
+
+    /// When the windows of this run of DAM end. DAM started at sign-in when it started within
+    /// `length` of the user's login; then the login window runs `length` from its start, and,
+    /// for the first such start since boot, the startup window too. Opened by hand later, it
+    /// has neither.
+    static func ends(launch: Date, login: Date?, boot: Date, bootSeenBefore: Date?,
+                     length: TimeInterval) -> (login: Date?, startup: Date?) {
+        guard let login, launch >= login - 5, launch.timeIntervalSince(login) <= length else { return (nil, nil) }
+        let end = launch + length
+        let firstSinceBoot = bootSeenBefore.map { abs($0.timeIntervalSince(boot)) > 1 } ?? true
+        return (end, firstSinceBoot ? end : nil)
+    }
+
+    /// The windows open at `now`, from their ends.
+    static func at(_ now: Date, ends: (login: Date?, startup: Date?)) -> AutoConnectWindows {
+        AutoConnectWindows(login: ends.login.map { now < $0 } ?? false,
+                           startup: ends.startup.map { now < $0 } ?? false)
+    }
+}
+
+/// This run's windows, worked out once at launch from the system's boot time and the user's
+/// console login.
+enum AutoConnectSession {
+    private static let bootSeenKey = "\(AppIdentity.shortID).autoConnect.bootSeen"
+
+    static let ends: (login: Date?, startup: Date?) = {
+        let boot = bootTime() ?? .distantPast
+        let seen = (UserDefaults.dam.object(forKey: bootSeenKey) as? Double).map(Date.init(timeIntervalSince1970:))
+        let ends = AutoConnectWindows.ends(launch: Date(), login: consoleLogin(), boot: boot, bootSeenBefore: seen,
+                                           length: AutoConnectList.window)
+        // Only a start at sign-in uses up the startup window; one opened by hand doesn't.
+        if ends.login != nil { UserDefaults.dam.set(boot.timeIntervalSince1970, forKey: bootSeenKey) }
+        acLog.debug("windows: login until \(ends.login?.description ?? "none", privacy: .public), startup until \(ends.startup?.description ?? "none", privacy: .public)")
+        return ends
+    }()
+
+    static var now: AutoConnectWindows { AutoConnectWindows.at(Date(), ends: ends) }
+
+    private static func bootTime() -> Date? {
+        var time = timeval()
+        var size = MemoryLayout<timeval>.size
+        guard sysctlbyname("kern.boottime", &time, &size, nil, 0) == 0 else { return nil }
+        return Date(timeIntervalSince1970: TimeInterval(time.tv_sec) + TimeInterval(time.tv_usec) / 1_000_000)
+    }
+
+    /// When this user last logged in at the console, from the login records.
+    private static func consoleLogin() -> Date? {
+        let user = NSUserName()
+        var latest: Date?
+        setutxent()
+        defer { endutxent() }
+        while let entry = getutxent() {
+            guard entry.pointee.ut_type == USER_PROCESS else { continue }
+            let name = withUnsafeBytes(of: entry.pointee.ut_user) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
+            let line = withUnsafeBytes(of: entry.pointee.ut_line) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
+            guard name == user, line == "console" else { continue }
+            let time = Date(timeIntervalSince1970: TimeInterval(entry.pointee.ut_tv.tv_sec))
+            if latest.map({ time > $0 }) ?? true { latest = time }
+        }
+        return latest
     }
 }
 
@@ -175,6 +295,7 @@ enum AutoConnectPlan {
     /// so one that comes back starts afresh.
     static func plan(entries: [AutoConnectEntry], candidates: [AutoConnectCandidate],
                      attempts: [String: Attempt], hasOwnDisplay: Bool, airPlayReady: Bool,
+                     windows: AutoConnectWindows = .always,
                      now: Date) -> (connect: AutoConnectCandidate?, attempts: [String: Attempt]) {
         var next = attempts.filter { entry in candidates.contains { $0.attemptKey == entry.key } }
         for candidate in candidates {
@@ -182,7 +303,7 @@ enum AutoConnectPlan {
             if candidate.isConnected { next[candidate.attemptKey]?.done = true }
         }
         guard !candidates.contains(where: \.isConnected) else { return (nil, next) }
-        for entry in entries where entry.applies(hasOwnDisplay: hasOwnDisplay) {
+        for entry in entries where entry.applies(hasOwnDisplay: hasOwnDisplay, windows: windows) {
             for candidate in candidates where candidate.matches(entry.target) {
                 guard let attempt = next[candidate.attemptKey], !attempt.done, attempt.count < maxAttempts else { continue }
                 guard attempt.nextTry <= now, candidate.kind != .airPlay || airPlayReady else { return (nil, next) }
@@ -243,7 +364,8 @@ final class AutoConnector {
         }
         let now = Date()
         let plan = AutoConnectPlan.plan(entries: entries, candidates: candidates, attempts: attempts,
-                                        hasOwnDisplay: video.hasOwnDisplay(), airPlayReady: airPlayReady(), now: now)
+                                        hasOwnDisplay: video.hasOwnDisplay(), airPlayReady: airPlayReady(),
+                                        windows: AutoConnectSession.now, now: now)
         attempts = plan.attempts
         guard let candidate = plan.connect else { return }
         let key = candidate.attemptKey

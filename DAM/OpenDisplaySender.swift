@@ -77,9 +77,11 @@ final class OpenDisplaySender {
         }
     }
 
-    /// The receivers to dial now, best first: those turned on whose condition holds.
+    /// The receivers to dial now, best first: those turned on that apply now, by their
+    /// condition and, for those connected at login or startup, the window after it.
     private var toDial: [String] {
-        AutoConnectList.openDisplayKeys(in: AutoConnectList.entries, hasOwnDisplay: hasOwnDisplay())
+        AutoConnectList.openDisplayKeys(in: AutoConnectList.entries, hasOwnDisplay: hasOwnDisplay(),
+                                        windows: AutoConnectSession.now)
     }
 
     /// The names receivers were last seen with, by key, for those not found now.
