@@ -999,6 +999,33 @@ final class SettingsWindowController: NSWindowController {
         return scrollingPage([list, addRow, changes], leftAligned: true, filling: [list, addRow, changes])
     }
 
+    /// Where an app is, for its icon: by bundle ID wherever it was put, else where it is
+    /// usually put, else, for an added app, by its name in /Applications or the app its
+    /// process runs from while it runs.
+    static func sessionAppURL(_ app: String, detection: SessionDetection?) -> URL? {
+        let bundleIDs = ["rustdesk": "com.carriez.rustdesk", "parsec": "tv.parsec.www",
+                         "screensharing": "com.apple.ScreenSharing", "teamviewer": "com.teamviewer.TeamViewer"]
+        if let id = bundleIDs[app], let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) {
+            return url
+        }
+        let paths = ["sunshine": "/Applications/Sunshine.app", "rustdesk": "/Applications/RustDesk.app",
+                     "parsec": "/Applications/Parsec.app",
+                     "screensharing": "/System/Library/CoreServices/Applications/Screen Sharing.app",
+                     "teamviewer": "/Applications/TeamViewer.app", "opendisplay": "/Applications/OpenDisplay.app"]
+        if let path = paths[app] {
+            return FileManager.default.fileExists(atPath: path) ? URL(fileURLWithPath: path) : nil
+        }
+        let byName = URL(fileURLWithPath: "/Applications/\(RemoteSessionApp.name(of: app)).app")
+        if FileManager.default.fileExists(atPath: byName.path) { return byName }
+        let process = detection.map { $0.kind == .process ? $0.processName : $0.kind == .log ? $0.logProcessName : "" } ?? ""
+        guard !process.isEmpty,
+              let path = RunningProcesses.matching([process]).lazy.compactMap({ RunningProcesses.path(of: $0.pid) }).first,
+              // The outermost app, not a helper inside it.
+              let range = path.range(of: ".app/")
+        else { return nil }
+        return URL(fileURLWithPath: String(path[..<range.lowerBound]) + ".app")
+    }
+
     /// What an app's row says of it, and the colour of its dot.
     private func sessionStatus(_ app: String, _ coordinator: RemoteSessionCoordinator) -> (text: String, color: NSColor) {
         let profile = coordinator.profile(for: app)
@@ -1025,12 +1052,8 @@ final class SettingsWindowController: NSWindowController {
 
     /// The app's own icon when it is on this Mac, else a symbol for it.
     private func sessionIcon(_ app: String, _ coordinator: RemoteSessionCoordinator) -> NSImage? {
-        let paths = ["sunshine": "/Applications/Sunshine.app", "rustdesk": "/Applications/RustDesk.app",
-                     "parsec": "/Applications/Parsec.app",
-                     "screensharing": "/System/Library/CoreServices/Applications/Screen Sharing.app",
-                     "teamviewer": "/Applications/TeamViewer.app", "opendisplay": "/Applications/OpenDisplay.app"]
-        if let path = paths[app], FileManager.default.fileExists(atPath: path) {
-            return NSWorkspace.shared.icon(forFile: path)
+        if let url = Self.sessionAppURL(app, detection: coordinator.profile(for: app).detection) {
+            return NSWorkspace.shared.icon(forFile: url.path)
         }
         let symbol: String
         switch coordinator.profile(for: app).detection?.kind {

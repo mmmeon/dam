@@ -1648,4 +1648,17 @@ extension RemoteSessionsTests {
         // The system's own parsecd isn't Parsec's.
         XCTAssertTrue(RunningProcesses.matching(["parsecd"], path: "/Parsec.app/not-here/").isEmpty)
     }
+
+    func testAnAppsIconIsFoundWhereverItIs() {
+        // By bundle ID.
+        XCTAssertEqual(SettingsWindowController.sessionAppURL("screensharing", detection: nil)?.lastPathComponent,
+                       "Screen Sharing.app")
+        // An added app by the process its log names, while it runs: the outermost app.
+        var detection = SessionDetection(kind: .log)
+        detection.logProcessName = "Finder"
+        XCTAssertEqual(SettingsWindowController.sessionAppURL("added-test", detection: detection)?.lastPathComponent,
+                       "Finder.app")
+        detection.logProcessName = "no-such-process"
+        XCTAssertNil(SettingsWindowController.sessionAppURL("added-test", detection: detection))
+    }
 }
