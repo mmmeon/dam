@@ -218,12 +218,12 @@ enum VisibilityPreferences {
     }
 
     /// Whether the app launches at login, as SMAppService has it; UserDefaults is not used.
-    /// Also while the login item waits for the user's approval in System Settings, as it is
-    /// registered and launches once approved.
+    /// Not while the login item waits for approval in System Settings: macOS reports a login
+    /// item the user turned off there the same way, and neither launches.
     static var launchAtLogin: Bool { isLaunchAtLogin(SMAppService.mainApp.status) }
 
     static func isLaunchAtLogin(_ status: SMAppService.Status) -> Bool {
-        status == .enabled || status == .requiresApproval
+        status == .enabled
     }
 
     /// Whether the login item is registered but waits for the user's approval.

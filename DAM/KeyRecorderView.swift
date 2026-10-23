@@ -156,7 +156,7 @@ final class KeyRecorderView: NSView {
     override func isAccessibilityElement() -> Bool { true }
     override func accessibilityRole() -> NSAccessibility.Role? { .button }
     override func accessibilityValue() -> Any? {
-        isRecording ? "Type shortcut" : preference.displayString
+        isRecording ? "Type shortcut" : preference.spokenString
     }
     override func accessibilityHelp() -> String? {
         isRecording ? "Press the new shortcut. Escape cancels." : warningTip ?? "Press to record a new shortcut."
