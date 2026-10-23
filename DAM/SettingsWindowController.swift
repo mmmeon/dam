@@ -454,8 +454,8 @@ final class SettingsWindowController: NSWindowController {
             }
             mode.setAccessibilityLabel("When \(name) is connected")
             mode.toolTip = "Always: whenever it comes within reach. At login: only in the window after you sign in. " +
-                           "At startup: from when the Mac starts up, once DAM can work at the login window, and in " +
-                           "the window after the first sign-in."
+                           "At startup (OpenDisplay, by cable): at the login window as well, before anyone signs in, " +
+                           "then as at login."
             let remove = small(ClosureButton(title: "Remove") { [weak self] _ in self?.removeAutoConnect(entry.target) })
             remove.setAccessibilityLabel("Remove \(name)")
             return [up, down, rowLabel(name), placeholderLabel(kind), mode, when, remove]

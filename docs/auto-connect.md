@@ -101,13 +101,13 @@ after, not whenever they come within reach. Each entry has a mode:
 |---|---|---|
 | Always | whenever it comes within reach | all |
 | At login | in the window after DAM starts at sign-in | all |
-| At startup | from boot: at the login window (part 1's agent), then in the window after the first sign-in since boot | OpenDisplay only: nothing else can connect before sign-in |
+| At startup | at the login window too (part 1's agent, which launchd runs at every login window), then as at login | OpenDisplay only: nothing else can connect before sign-in |
 
 - **The window** is one setting, 2 minutes by default (30 s to 10 min), measured from DAM's
   start. DAM counts as started at sign-in when it starts within the window of the user's console
   login (from the login records). Opened by hand later, there is no window.
-- **First sign-in since boot** is when the boot time (`kern.boottime`) differs from the one DAM
-  last started at sign-in under.
+- **At startup covers every sign-in**, not only the first since boot (changed 2026-10-23): the
+  agent shows the login window after a log-out too, and DAM should take the receiver back after.
 - **Defaults:** entries added in Settings are At login. Entries migrated from the older settings,
   and receivers turned on from the OpenDisplay page, are Always, which is how they behaved.
 - **Once the window closes** nothing at login or startup is dialled or retried. A connection

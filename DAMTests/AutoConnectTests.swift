@@ -154,8 +154,8 @@ final class AutoConnectTests: XCTestCase {
         XCTAssertTrue(always.applies(hasOwnDisplay: false, windows: .none))
         XCTAssertFalse(login.applies(hasOwnDisplay: false, windows: .none))
         XCTAssertTrue(login.applies(hasOwnDisplay: false, windows: AutoConnectWindows(login: true)))
-        XCTAssertFalse(startup.applies(hasOwnDisplay: false, windows: AutoConnectWindows(login: true)))
-        XCTAssertTrue(startup.applies(hasOwnDisplay: false, windows: AutoConnectWindows(login: true, startup: true)))
+        XCTAssertFalse(startup.applies(hasOwnDisplay: false, windows: .none))
+        XCTAssertTrue(startup.applies(hasOwnDisplay: false, windows: AutoConnectWindows(login: true)), "at every sign-in")
     }
 
     func testAnEntryAtLoginIsLeftAloneOutsideTheWindow() {
@@ -172,7 +172,7 @@ final class AutoConnectTests: XCTestCase {
                     AutoConnectEntry(target: .openDisplay(key: "c"))]
         XCTAssertEqual(AutoConnectList.openDisplayKeys(in: list, hasOwnDisplay: false, windows: .none), ["c"])
         XCTAssertEqual(AutoConnectList.openDisplayKeys(in: list, hasOwnDisplay: false, windows: AutoConnectWindows(login: true)),
-                       ["b", "c"])
+                       ["a", "b", "c"])
         XCTAssertEqual(AutoConnectList.openDisplayKeys(in: list, hasOwnDisplay: false), ["a", "b", "c"])
     }
 
@@ -190,24 +190,15 @@ final class AutoConnectTests: XCTestCase {
         XCTAssertTrue(AutoConnectList.migrated(receivers: ["a"], sidecarWithoutDisplay: true).allSatisfy { $0.mode == .always })
     }
 
-    func testWindowsOfAStartAtLogin() {
-        let boot = Date(timeIntervalSince1970: 1_000)
+    func testTheWindowOfAStartAtLogin() {
         let login = Date(timeIntervalSince1970: 2_000)
         let launch = login + 20
-        // The first start at sign-in since boot: both windows, from the start.
-        var ends = AutoConnectWindows.ends(launch: launch, login: login, boot: boot, bootSeenBefore: nil, length: 120)
-        XCTAssertEqual(ends.login, launch + 120)
-        XCTAssertEqual(ends.startup, launch + 120)
-        XCTAssertEqual(AutoConnectWindows.at(launch + 119, ends: ends), AutoConnectWindows(login: true, startup: true))
-        XCTAssertEqual(AutoConnectWindows.at(launch + 121, ends: ends), .none)
-        // A later login, same boot: no startup window.
-        ends = AutoConnectWindows.ends(launch: launch, login: login, boot: boot, bootSeenBefore: boot, length: 120)
-        XCTAssertNotNil(ends.login)
-        XCTAssertNil(ends.startup)
-        // Opened by hand long after login, or with no login known: neither.
-        ends = AutoConnectWindows.ends(launch: login + 600, login: login, boot: boot, bootSeenBefore: nil, length: 120)
-        XCTAssertNil(ends.login)
-        XCTAssertNil(ends.startup)
-        XCTAssertNil(AutoConnectWindows.ends(launch: launch, login: nil, boot: boot, bootSeenBefore: nil, length: 120).login)
+        let end = AutoConnectWindows.end(launch: launch, login: login, length: 120)
+        XCTAssertEqual(end, launch + 120)
+        XCTAssertEqual(AutoConnectWindows.at(launch + 119, end: end), AutoConnectWindows(login: true))
+        XCTAssertEqual(AutoConnectWindows.at(launch + 121, end: end), .none)
+        // Opened by hand long after login, or with no login known: none.
+        XCTAssertNil(AutoConnectWindows.end(launch: login + 600, login: login, length: 120))
+        XCTAssertNil(AutoConnectWindows.end(launch: launch, login: nil, length: 120))
     }
 }

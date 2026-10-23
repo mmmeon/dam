@@ -31,8 +31,8 @@ struct AutoConnectEntry: Hashable {
         case always
         /// In the window after DAM starts at sign-in.
         case login
-        /// From boot: at the login window (once its agent exists, root-and-login-window.md),
-        /// then in the window after the first sign-in since boot. OpenDisplay only, as nothing
+        /// At the login window too, by the login window agent (root-and-login-window.md), which
+        /// launchd runs at every one; after sign-in, as at login. OpenDisplay only, as nothing
         /// else can be connected before sign-in.
         case startup
     }
@@ -51,9 +51,8 @@ struct AutoConnectEntry: Hashable {
     func applies(hasOwnDisplay: Bool, windows: AutoConnectWindows = .always) -> Bool {
         guard !(onlyWithoutOwnDisplay && hasOwnDisplay) else { return false }
         switch mode {
-        case .always:  return true
-        case .login:   return windows.login
-        case .startup: return windows.startup
+        case .always:           return true
+        case .login, .startup:  return windows.login
         }
     }
 
@@ -141,7 +140,7 @@ enum AutoConnectList {
     /// The window lengths Settings offers, in seconds.
     static let windowChoices: [TimeInterval] = [30, 60, 120, 300, 600]
 
-    /// How long after sign-in (or startup) entries connected at login (or startup) may still be.
+    /// How long after sign-in entries connected at login or startup may still be.
     static var window: TimeInterval {
         get { (UserDefaults.dam.object(forKey: windowKey) as? Double).map { max(0, $0) } ?? defaultWindow }
         set { UserDefaults.dam.set(newValue, forKey: windowKey) }
@@ -180,59 +179,38 @@ enum AutoConnectList {
 
 // MARK: - Windows
 
-/// Whether entries connected at login, or at startup, apply now.
+/// Whether entries connected at login or startup apply now.
 struct AutoConnectWindows: Equatable {
     var login = false
-    var startup = false
 
-    /// Outside any window: only entries connected always apply.
+    /// Outside the window: only entries connected always apply.
     static let none = AutoConnectWindows()
     /// For callers that don't care about windows.
-    static let always = AutoConnectWindows(login: true, startup: true)
+    static let always = AutoConnectWindows(login: true)
 
-    /// When the windows of this run of DAM end. DAM started at sign-in when it started within
-    /// `length` of the user's login; then the login window runs `length` from its start, and,
-    /// for the first such start since boot, the startup window too. Opened by hand later, it
-    /// has neither.
-    static func ends(launch: Date, login: Date?, boot: Date, bootSeenBefore: Date?,
-                     length: TimeInterval) -> (login: Date?, startup: Date?) {
-        guard let login, launch >= login - 5, launch.timeIntervalSince(login) <= length else { return (nil, nil) }
-        let end = launch + length
-        let firstSinceBoot = bootSeenBefore.map { abs($0.timeIntervalSince(boot)) > 1 } ?? true
-        return (end, firstSinceBoot ? end : nil)
+    /// When this run of DAM's window ends. DAM started at sign-in when it started within
+    /// `length` of the user's login; then the window runs `length` from its start. Opened by
+    /// hand later, it has none.
+    static func end(launch: Date, login: Date?, length: TimeInterval) -> Date? {
+        guard let login, launch >= login - 5, launch.timeIntervalSince(login) <= length else { return nil }
+        return launch + length
     }
 
-    /// The windows open at `now`, from their ends.
-    static func at(_ now: Date, ends: (login: Date?, startup: Date?)) -> AutoConnectWindows {
-        AutoConnectWindows(login: ends.login.map { now < $0 } ?? false,
-                           startup: ends.startup.map { now < $0 } ?? false)
+    /// The window as it is at `now`, from its end.
+    static func at(_ now: Date, end: Date?) -> AutoConnectWindows {
+        AutoConnectWindows(login: end.map { now < $0 } ?? false)
     }
 }
 
-/// This run's windows, worked out once at launch from the system's boot time and the user's
-/// console login.
+/// This run's window, worked out once at launch from the user's console login.
 enum AutoConnectSession {
-    private static let bootSeenKey = "\(AppIdentity.shortID).autoConnect.bootSeen"
-
-    static let ends: (login: Date?, startup: Date?) = {
-        let boot = bootTime() ?? .distantPast
-        let seen = (UserDefaults.dam.object(forKey: bootSeenKey) as? Double).map(Date.init(timeIntervalSince1970:))
-        let ends = AutoConnectWindows.ends(launch: Date(), login: consoleLogin(), boot: boot, bootSeenBefore: seen,
-                                           length: AutoConnectList.window)
-        // Only a start at sign-in uses up the startup window; one opened by hand doesn't.
-        if ends.login != nil { UserDefaults.dam.set(boot.timeIntervalSince1970, forKey: bootSeenKey) }
-        acLog.debug("windows: login until \(ends.login?.description ?? "none", privacy: .public), startup until \(ends.startup?.description ?? "none", privacy: .public)")
-        return ends
+    static let end: Date? = {
+        let end = AutoConnectWindows.end(launch: Date(), login: consoleLogin(), length: AutoConnectList.window)
+        acLog.debug("window after login until \(end?.description ?? "none", privacy: .public)")
+        return end
     }()
 
-    static var now: AutoConnectWindows { AutoConnectWindows.at(Date(), ends: ends) }
-
-    private static func bootTime() -> Date? {
-        var time = timeval()
-        var size = MemoryLayout<timeval>.size
-        guard sysctlbyname("kern.boottime", &time, &size, nil, 0) == 0 else { return nil }
-        return Date(timeIntervalSince1970: TimeInterval(time.tv_sec) + TimeInterval(time.tv_usec) / 1_000_000)
-    }
+    static var now: AutoConnectWindows { AutoConnectWindows.at(Date(), end: end) }
 
     /// When this user last logged in at the console, from the login records.
     private static func consoleLogin() -> Date? {
