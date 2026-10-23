@@ -270,6 +270,8 @@ enum SessionError: Error, Equatable, CustomStringConvertible {
     case notActive(String)
     /// A link asked to end or join a session that something else started.
     case notFromLink(String)
+    /// A link asked to black out the screens.
+    case blackoutFromLink
 
     var description: String {
         switch self {
@@ -278,6 +280,8 @@ enum SessionError: Error, Equatable, CustomStringConvertible {
         case .notActive(let app): return "No \(RemoteSessionApp.name(of: app)) session is on."
         case .notFromLink(let app):
             return "The \(RemoteSessionApp.name(of: app)) session wasn't started by a link, so a link can't end or join it."
+        case .blackoutFromLink:
+            return "A link can't black out the screens; the command line can."
         }
     }
 }
@@ -450,9 +454,12 @@ final class RemoteSessionCoordinator {
 
     /// Starts a session of `request.app`, or joins the one on; `completion` runs once its
     /// display is placed and its output switched. A link joins only a session links started:
-    /// joining another would leave it on once the app's own end came.
+    /// joining another would leave it on once the app's own end came. Nor does a link black
+    /// out the screens, which would leave whoever is at the Mac in the dark at any page's
+    /// asking: one that asks to is refused, and a profile's blackout is left off for it.
     func begin(_ request: SessionRequest, completion: @escaping (Result<SessionStart, SessionError>) -> Void) {
         let app = request.app
+        if request.origin == .link, request.blackout == true { return completion(.failure(.blackoutFromLink)) }
         if var session = sessions[app] {
             if request.origin == .link, session.fromLinks < session.count {
                 return completion(.failure(.notFromLink(app)))
@@ -468,8 +475,13 @@ final class RemoteSessionCoordinator {
             }
             return
         }
-        let profile = request.applied(to: profile(for: app))
+        var profile = request.applied(to: profile(for: app))
         guard profile.enabled else { return completion(.failure(.disabled(app))) }
+        var first = SessionStart()
+        if request.origin == .link, profile.blackout {
+            profile.blackout = false
+            first.warnings.append("The screens weren't blacked out, as a link can't black them out.")
+        }
         rsLog.debug("\(app): starting for \(request.client ?? "a client")")
         if sessions.isEmpty {
             outputBeforeSessions = displays.outputUID
@@ -488,7 +500,7 @@ final class RemoteSessionCoordinator {
 
         switch profile.display {
         case .none:
-            switchOutput(app, profile: profile, start: SessionStart())
+            switchOutput(app, profile: profile, start: first)
         case .create:
             let mode = profile.mode(clientWidth: request.width, clientHeight: request.height, clientFPS: request.fps)
             // Main in the commit that places it: one commit fewer, each of which can take
@@ -507,14 +519,16 @@ final class RemoteSessionCoordinator {
                 self.sessions[app]?.madeDisplay = true
                 self.sessions[app]?.madeMode = mode
                 self.sessions[app]?.modeAtStart = self.displays.mode(of: displayID) ?? mode
-                self.place(app, displayID, profile: profile, start: SessionStart(displayID: displayID))
+                var start = first
+                start.displayID = displayID
+                self.place(app, displayID, profile: profile, start: start)
             }
         case .adopt:
             let name = profile.adoptName ?? RemoteSessionApp.name(of: app)
             waitForDisplay(named: name, known: request.adoptedDisplayID, attempts: Self.adoptAttempts) { [weak self] displayID in
                 guard let self, self.sessions[app]?.id == id else { return }
+                var start = first
                 guard let displayID else {
-                    var start = SessionStart()
                     start.warnings.append("No display called \(name) came.")
                     // Nothing of the session's to leave lit, so every screen would go black.
                     var profile = profile
@@ -524,7 +538,8 @@ final class RemoteSessionCoordinator {
                     }
                     return self.switchOutput(app, profile: profile, start: start)
                 }
-                self.place(app, displayID, profile: profile, start: SessionStart(displayID: displayID))
+                start.displayID = displayID
+                self.place(app, displayID, profile: profile, start: start)
             }
         }
     }

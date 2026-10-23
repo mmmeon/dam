@@ -1449,6 +1449,31 @@ extension RemoteSessionsTests {
         XCTAssertNil(c.sessions["sunshine"])
     }
 
+    func testALinkCantBlackOutTheScreens() throws {
+        let fake = FakeSessionDisplays()
+        var profile = SessionProfile()
+        profile.blackout = true
+        let c = coordinator(fake, profiles: ["rustdesk": profile])
+        // Asking to is refused, with nothing set up.
+        XCTAssertEqual(start(c, SessionRequest(app: "sunshine", origin: .link, blackout: true)), .failure(.blackoutFromLink))
+        XCTAssertNil(c.sessions["sunshine"])
+        XCTAssertTrue(fake.made.isEmpty)
+        // A profile that blacks out doesn't for a link, which is told.
+        let started = try XCTUnwrap(try start(c, SessionRequest(app: "rustdesk", origin: .link))?.get())
+        XCTAssertEqual(started.displayID, 100)
+        XCTAssertEqual(started.warnings, ["The screens weren't blacked out, as a link can't black them out."])
+        XCTAssertNil(fake.blackoutKeeping)
+        XCTAssertFalse(c.isBlackedOut)
+        c.end(app: "rustdesk", from: .link)
+        // Nor is the profile changed, so the app's own sessions still black out.
+        XCTAssertTrue(c.profile(for: "rustdesk").blackout)
+        XCTAssertNoThrow(try start(c, SessionRequest(app: "rustdesk"))?.get())
+        XCTAssertEqual(fake.blackoutKeeping, [100])
+        // Asking not to is a link's to ask.
+        c.end(app: "rustdesk")
+        XCTAssertNoThrow(try start(c, SessionRequest(app: "sunshine", origin: .link, blackout: false))?.get())
+    }
+
     // MARK: Sessions only DAM sees
 
     func testARequestsAdoptingSessionCanBeEnded() {

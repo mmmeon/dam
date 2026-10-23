@@ -116,7 +116,11 @@ The same requests work as URLs, for example
 `dam://session/start?app=rustdesk&width=1280&height=800&placement=main`. A URL gets no answer.
 Any page or app can open one, so a URL ends and joins only sessions URLs started: it can't end
 a session that DAM saw, or that a script or Sunshine started, and it can't join one either,
-which would keep it on after the app's own end. Such a URL is refused and logged.
+which would keep it on after the app's own end. Such a URL is refused and logged. Nor can a
+URL black out the screens, which would leave whoever is at the Mac in the dark: one with
+`blackout=yes` is refused and logged too, and a session a URL starts leaves the screens lit
+even when the app's profile blacks out, as `--blackout no` would, and leaves the profile as
+it is.
 
 Every session has *End and Put Back* in its menu. One that follows another app's display
 (OpenDisplay, or a profile that adopts, when DAM saw the session start) also says it ends when
