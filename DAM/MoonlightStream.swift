@@ -608,6 +608,9 @@ final class MoonlightControlServer {
     static let termination: UInt16 = 0x0109
     /// "Server terminated, closed", which Moonlight shows as a normal end.
     static let gracefulReason: UInt32 = 0x8003_0023
+    /// The peers the host has room for, and how many of them one address may hold.
+    static let peerCount = 32
+    static let peersPerAddress = 2
 
     private static let initialized: Bool = enet_initialize() == 0
 
@@ -619,6 +622,9 @@ final class MoonlightControlServer {
     private let hdr: MoonlightHDRMetadata?
     private let lock = NSLock()
     private var stopRequested = false
+    /// Whether `start` ran, whose thread then destroys the host; else `deinit` does, as when
+    /// the stream's later ports could not be bound, so the control port is free for the next.
+    private var started = false
     private var peer: UnsafeMutablePointer<ENetPeer>?
     private var sequence: UInt32 = 0
 
@@ -636,15 +642,26 @@ final class MoonlightControlServer {
     init(port: UInt16, key: Data, connectData: UInt32, hdr: MoonlightHDRMetadata? = nil) throws {
         guard Self.initialized else { throw MoonlightStreamError.enet }
         var address = ENetAddress(host: 0, port: port)
-        // Moonlight opens 48 channels; 0 lets it have them all.
-        guard let host = enet_host_create(&address, 4, 0, 0, 0) else { throw MoonlightStreamError.enet }
+        // Moonlight opens 48 channels; 0 lets it have them all. A CONNECT takes a peer until
+        // ENet gives up on it, 5 to 30 s, before `handle` sees it, so there are peers to spare
+        // and each address may hold two: a LAN host sending CONNECTs can't fill them all.
+        guard let host = enet_host_create(&address, Self.peerCount, 0, 0, 0) else { throw MoonlightStreamError.enet }
+        host.pointee.duplicatePeers = Self.peersPerAddress
         self.host = host
         self.key = SymmetricKey(data: key)
         self.connectData = connectData
         self.hdr = hdr
     }
 
+    deinit {
+        if !started { enet_host_destroy(host) }
+    }
+
+    /// Serves the control stream on a thread of its own until `stop`; once only.
     func start() {
+        lock.lock()
+        started = true
+        lock.unlock()
         Thread.detachNewThread { [self] in
             Thread.current.name = "Moonlight control"
             var event = ENetEvent()

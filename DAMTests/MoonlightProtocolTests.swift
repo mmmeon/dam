@@ -544,4 +544,98 @@ final class MoonlightProtocolTests: XCTestCase {
         XCTAssertEqual(try arrivingTOS(.audio) >> 2, 46)
         XCTAssertEqual(try arrivingTOS(nil), 0)
     }
+
+    // MARK: - Control stream
+
+    /// Ports for this file's streams, away from GameStream's and the host tests'.
+    private func testPorts(_ slot: Int) -> MoonlightStream.Ports { MoonlightStream.Ports(slot: 120 + slot) }
+
+    /// The events an ENet client sees in `seconds` of trying to connect to `port` with `token`,
+    /// as Moonlight does; it stops at a disconnect.
+    private func connect(_ client: UnsafeMutablePointer<ENetHost>, to port: UInt16, token: UInt32,
+                         seconds: TimeInterval = 1) throws -> [ENetEventType] {
+        var address = ENetAddress(host: 0, port: port)
+        enet_address_set_host_ip(&address, "127.0.0.1")
+        _ = try XCTUnwrap(enet_host_connect(client, &address, 48, token))
+        var events: [ENetEventType] = []
+        var event = ENetEvent()
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline, !events.contains(ENET_EVENT_TYPE_DISCONNECT) {
+            guard enet_host_service(client, &event, 10) > 0 else { continue }
+            if event.type == ENET_EVENT_TYPE_RECEIVE { enet_packet_destroy(event.packet) }
+            events.append(event.type)
+        }
+        return events
+    }
+
+    /// A wrong token is turned away, the session's is taken, and a second device with it is
+    /// turned away while the first is connected.
+    func testTheControlStreamTakesOneDeviceWithTheSessionsToken() throws {
+        let port = testPorts(1).control
+        let server = try MoonlightControlServer(port: port, key: Data(count: 16), connectData: 0x1234)
+        let lock = NSLock()
+        var connects = 0
+        server.onConnect = { lock.lock(); connects += 1; lock.unlock() }
+        server.start()
+        defer { server.stop() }
+        let clients = try (0..<3).map { _ in try XCTUnwrap(enet_host_create(nil, 1, 48, 0, 0)) }
+        defer { clients.forEach { enet_host_destroy($0) } }
+
+        XCTAssertTrue(try connect(clients[0], to: port, token: 0x9999).contains(ENET_EVENT_TYPE_DISCONNECT),
+                      "a wrong token is disconnected")
+        let first = try connect(clients[1], to: port, token: 0x1234, seconds: 0.5)
+        XCTAssertEqual(first, [ENET_EVENT_TYPE_CONNECT], "the session's token stays connected")
+        XCTAssertTrue(try connect(clients[2], to: port, token: 0x1234).contains(ENET_EVENT_TYPE_DISCONNECT),
+                      "a second device is disconnected")
+        lock.lock(); defer { lock.unlock() }
+        XCTAssertEqual(connects, 1)
+    }
+
+    /// A CONNECT never followed up holds a peer until ENet gives up on it; one address holds
+    /// at most two, so a host sending them can't take the peers a device needs.
+    func testOneAddressHoldsAtMostTwoOfTheControlStreamsPeers() throws {
+        let port = testPorts(2).control
+        let server = try MoonlightControlServer(port: port, key: Data(count: 16), connectData: 0x1234)
+        server.start()
+        defer { server.stop() }
+        let clients = try (0..<3).map { _ in try XCTUnwrap(enet_host_create(nil, 1, 48, 0, 0)) }
+        defer { clients.forEach { enet_host_destroy($0) } }
+        // Two CONNECTs whose replies are never read.
+        var address = ENetAddress(host: 0, port: port)
+        enet_address_set_host_ip(&address, "127.0.0.1")
+        for client in clients.prefix(2) {
+            _ = try XCTUnwrap(enet_host_connect(client, &address, 48, 0x1234))
+            enet_host_flush(client)
+        }
+        XCTAssertFalse(try connect(clients[2], to: port, token: 0x1234).contains(ENET_EVENT_TYPE_CONNECT),
+                       "a third from the same address gets no peer")
+        XCTAssertLessThanOrEqual(MoonlightControlServer.peersPerAddress * 8, MoonlightControlServer.peerCount,
+                                 "room for many addresses")
+    }
+
+    /// A stream whose last port is taken binds none: its control port is free for the next
+    /// ANNOUNCE.
+    func testAStreamThatCannotBindItsPortsLeavesNoneBound() throws {
+        let ports = testPorts(3)
+        let taken = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = ports.audio.bigEndian
+        let bound = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(taken, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+        }
+        XCTAssertEqual(bound, 0)
+        let config = MoonlightStreamConfig(width: 1280, height: 720, fps: 60, packetSize: 1392, bitrateKbps: 10_000,
+                                           videoFormat: 0, encryptionEnabled: 0)
+        func makeStream() throws -> MoonlightStream {
+            try MoonlightStream(config: config, displayID: 1, key: Data(count: 16), keyID: 0, pingPayload: "",
+                                connectData: 0, clientAddress: "127.0.0.1", ports: ports)
+        }
+        XCTAssertThrowsError(try makeStream())
+        Darwin.close(taken)
+        XCTAssertNoThrow(try MoonlightControlServer(port: ports.control, key: Data(count: 16), connectData: 0))
+        XCTAssertNoThrow(try MoonlightUDPSocket(port: ports.video))
+        XCTAssertNoThrow(try makeStream(), "every port free again")
+    }
 }
