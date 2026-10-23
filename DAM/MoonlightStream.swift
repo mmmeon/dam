@@ -686,6 +686,16 @@ final class MoonlightControlServer {
         // and each address may hold two: a LAN host sending CONNECTs can't fill them all.
         guard let host = enet_host_create(&address, Self.peerCount, 0, 0, 0) else { throw MoonlightStreamError.enet }
         host.pointee.duplicatePeers = Self.peersPerAddress
+        // A CONNECT without the session's token is dropped before it takes a peer, so CONNECTs
+        // forged from many addresses can't fill them, nor two forged from the device's own
+        // use up its share.
+        Self.tokensLock.lock()
+        Self.tokens[host] = connectData
+        Self.tokensLock.unlock()
+        host.pointee.intercept = { host, _ in
+            guard let host else { return 0 }
+            return MoonlightControlServer.refusesConnect(to: host) ? 1 : 0
+        }
         self.host = host
         self.key = SymmetricKey(data: key)
         self.connectData = connectData
@@ -693,7 +703,51 @@ final class MoonlightControlServer {
     }
 
     deinit {
-        if !started { enet_host_destroy(host) }
+        if !started { Self.destroy(host) }
+    }
+
+    /// Each host's token, for its `intercept`, which ENet gives nothing else to know it by.
+    private static let tokensLock = NSLock()
+    private static var tokens: [UnsafeMutablePointer<ENetHost>: UInt32] = [:]
+
+    private static func destroy(_ host: UnsafeMutablePointer<ENetHost>) {
+        tokensLock.lock()
+        tokens[host] = nil
+        tokensLock.unlock()
+        enet_host_destroy(host)
+    }
+
+    /// Whether the datagram `host` just took is a CONNECT with another token than the
+    /// session's; on the control thread, from ENet's `intercept`.
+    private static func refusesConnect(to host: UnsafeMutablePointer<ENetHost>) -> Bool {
+        guard let data = host.pointee.receivedData else { return false }
+        let datagram = UnsafeRawBufferPointer(start: data, count: host.pointee.receivedDataLength)
+        guard let token = connectToken(in: datagram) else { return false }
+        tokensLock.lock()
+        let expected = tokens[host]
+        tokensLock.unlock()
+        guard token != expected else { return false }
+        msLog.error("control: refusing a connection with token \(token)")
+        return true
+    }
+
+    /// The token of the CONNECT a datagram opens with, if it is one: to no peer yet, plain
+    /// (this host neither compresses nor checksums, so ENet drops anything else), its first
+    /// command a CONNECT, which ENet then takes a peer for. Anything else is left to ENet.
+    static func connectToken(in datagram: UnsafeRawBufferPointer) -> UInt32? {
+        guard datagram.count >= 2 else { return nil }
+        let peerID = UInt16(datagram[0]) << 8 | UInt16(datagram[1])
+        let flags = peerID & UInt16(ENET_PROTOCOL_HEADER_FLAG_MASK.rawValue)
+        let sessionMask = UInt16(ENET_PROTOCOL_HEADER_SESSION_MASK.rawValue)
+        guard peerID & ~(flags | sessionMask) == UInt16(ENET_PROTOCOL_MAXIMUM_PEER_ID),
+              flags & UInt16(ENET_PROTOCOL_HEADER_FLAG_COMPRESSED.rawValue) == 0 else { return nil }
+        let command = flags & UInt16(ENET_PROTOCOL_HEADER_FLAG_SENT_TIME.rawValue) != 0 ? 4 : 2
+        let size = MemoryLayout<ENetProtocolConnect>.size
+        guard datagram.count >= command + size,
+              datagram[command] & UInt8(ENET_PROTOCOL_COMMAND_MASK.rawValue) == UInt8(ENET_PROTOCOL_COMMAND_CONNECT.rawValue)
+        else { return nil }
+        let token = command + size - 4
+        return (0..<4).reduce(UInt32(0)) { $0 << 8 | UInt32(datagram[token + $1]) }
     }
 
     /// Serves the control stream on a thread of its own until `stop`; once only.
@@ -717,7 +771,7 @@ final class MoonlightControlServer {
                     if event.type == ENET_EVENT_TYPE_DISCONNECT { break }
                 }
             }
-            enet_host_destroy(host)
+            Self.destroy(host)
         }
     }
 
@@ -736,6 +790,7 @@ final class MoonlightControlServer {
     private func handle(_ event: ENetEvent) {
         switch event.type {
         case ENET_EVENT_TYPE_CONNECT:
+            // A wrong token was dropped already (`refusesConnect`); kept here should it get by.
             guard peer == nil, event.data == connectData else {
                 msLog.error("control: refusing a connection with token \(event.data)")
                 return enet_peer_disconnect_now(event.peer, 0)

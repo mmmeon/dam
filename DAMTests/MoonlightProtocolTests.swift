@@ -624,8 +624,8 @@ final class MoonlightProtocolTests: XCTestCase {
         let clients = try (0..<3).map { _ in try XCTUnwrap(enet_host_create(nil, 1, 48, 0, 0)) }
         defer { clients.forEach { enet_host_destroy($0) } }
 
-        XCTAssertTrue(try connect(clients[0], to: port, token: 0x9999).contains(ENET_EVENT_TYPE_DISCONNECT),
-                      "a wrong token is disconnected")
+        XCTAssertFalse(try connect(clients[0], to: port, token: 0x9999, seconds: 0.5).contains(ENET_EVENT_TYPE_CONNECT),
+                       "a wrong token is never answered")
         let first = try connect(clients[1], to: port, token: 0x1234, seconds: 0.5)
         XCTAssertEqual(first, [ENET_EVENT_TYPE_CONNECT], "the session's token stays connected")
         XCTAssertTrue(try connect(clients[2], to: port, token: 0x1234).contains(ENET_EVENT_TYPE_DISCONNECT),
@@ -654,6 +654,56 @@ final class MoonlightProtocolTests: XCTestCase {
                        "a third from the same address gets no peer")
         XCTAssertLessThanOrEqual(MoonlightControlServer.peersPerAddress * 8, MoonlightControlServer.peerCount,
                                  "room for many addresses")
+    }
+
+    /// CONNECTs with a wrong token take no peer: two from the device's own address, never
+    /// followed up, leave it its share.
+    func testAWrongTokenTakesNoPeer() throws {
+        let port = testPorts(5).control
+        let server = try MoonlightControlServer(port: port, key: Data(count: 16), connectData: 0x1234)
+        let lock = NSLock()
+        var connects = 0
+        server.onConnect = { lock.lock(); connects += 1; lock.unlock() }
+        server.start()
+        defer { server.stop(); waitUntilFree(port) }
+        let clients = try (0..<3).map { _ in try XCTUnwrap(enet_host_create(nil, 1, 48, 0, 0)) }
+        defer { clients.forEach { enet_host_destroy($0) } }
+        var address = ENetAddress(host: 0, port: port)
+        enet_address_set_host_ip(&address, "127.0.0.1")
+        for client in clients.prefix(2) {
+            _ = try XCTUnwrap(enet_host_connect(client, &address, 48, 0x9999))
+            enet_host_flush(client)
+        }
+        XCTAssertEqual(try connect(clients[2], to: port, token: 0x1234, seconds: 0.5), [ENET_EVENT_TYPE_CONNECT])
+        lock.lock(); defer { lock.unlock() }
+        XCTAssertEqual(connects, 1)
+    }
+
+    /// A CONNECT's token is read from the datagram as ENet would take it; anything else is
+    /// left to ENet.
+    func testTheTokenIsReadFromARawConnect() {
+        var connect = [UInt8](repeating: 0, count: 4 + 48)
+        connect[0] = 0x8F; connect[1] = 0xFF  // sent time, no peer
+        connect[4] = 0x82                     // CONNECT, acknowledge
+        connect[48...51] = [0x00, 0x00, 0x12, 0x34]
+        func token(_ bytes: [UInt8]) -> UInt32? { bytes.withUnsafeBytes { MoonlightControlServer.connectToken(in: $0) } }
+        XCTAssertEqual(token(connect), 0x1234)
+        var withSession = connect
+        withSession[0] = 0xAF
+        XCTAssertEqual(token(withSession), 0x1234, "whatever the session bits")
+        var noSentTime = Array(connect[0..<2] + connect[4...])
+        noSentTime[0] = 0x0F
+        XCTAssertEqual(token(noSentTime), 0x1234)
+        var toAPeer = connect
+        toAPeer[0] = 0x80; toAPeer[1] = 0x00
+        XCTAssertNil(token(toAPeer), "to a peer: ENet takes no new peer for it")
+        var compressed = connect
+        compressed[0] |= 0x40
+        XCTAssertNil(token(compressed), "compressed: ENet drops it")
+        var ping = connect
+        ping[4] = 0x85
+        XCTAssertNil(token(ping))
+        XCTAssertNil(token(Array(connect.prefix(40))), "cut short")
     }
 
     /// A stream whose last port is taken binds none: its control port is free for the next

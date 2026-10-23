@@ -190,6 +190,9 @@ once (`MoonlightHost.maxSessions`). A fifth gets a 503.
 - Video and audio go wherever the ping with the launch's payload last came from. A bare
   "PING", from clients without the payload, counts only from the launching address.
 - Control runs on UDP 47999 over vendored ENet 1.3.18, with AES-128-GCM messages.
+  A CONNECT without the launch's token is dropped unanswered before ENet gives it a peer
+  (`intercept`), so forged ones can't fill the 32 peers or use up the two one address may
+  hold; a second device with the token is connected and then turned away.
   Keyframe requests, reference-frame invalidation, frame FEC status, input and
   termination are handled; the rest (pings, loss stats) are dropped.
 
