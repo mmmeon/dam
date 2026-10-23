@@ -293,12 +293,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func rebuild() {
+        // Every display, those hidden from the menu bar and Touch Bar too, which hides no more.
         let apps = videoManager.streamingDisplays.filter { $0.standsInFor == nil }.compactMap { streaming in
-            videoManager.connectedDisplays.first { $0.cgDisplayID == streaming.id }
+            videoManager.allConnectedDisplays.first { $0.cgDisplayID == streaming.id }
                 .map { MoonlightApp(id: streaming.index + 1, title: $0.label, displayID: streaming.id) }
         }
         // The Mac's own displays too, when asked for, those showing a desktop of their own.
-        let own = !MoonlightHost.listsOwnDisplays ? [] : videoManager.connectedDisplays
+        let own = !MoonlightHost.listsOwnDisplays ? [] : videoManager.allConnectedDisplays
             .filter { $0.isConnected && $0.cgDisplayID != 0 && !$0.isStreaming && !$0.isMirroring }
             .map { MoonlightApp(id: MoonlightHost.ownDisplayAppID($0.cgDisplayID), title: $0.label, displayID: $0.cgDisplayID) }
         moonlightHost.apps = apps + own
