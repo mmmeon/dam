@@ -17,20 +17,6 @@ import os.log
 
 private let dsLog = Logger(subsystem: AppIdentity.bundleID, category: "DisplayStream")
 
-/// What SharedScreenCapture needs of a capture: ScreenCaptureKit's or CGDisplayStream's.
-protocol ScreenCaptureSource: AnyObject {
-    /// Whether frames show the pointer; set before `start`.
-    var showsCursor: Bool { get set }
-    /// Called with each piece of the Mac's sound, where the capture has sound; set before `start`.
-    var audio: ((CMSampleBuffer) -> Void)? { get set }
-    /// Called when capture stops on its own, as when the display goes away.
-    var onStop: ((Error) -> Void)? { get set }
-    func start(completion: @escaping (Error?) -> Void)
-    func stop()
-}
-
-extension MoonlightScreenCapture: ScreenCaptureSource {}
-
 enum DisplayStreamError: Error {
     /// CGDisplayStream stopped without being asked, as when the display goes away.
     case stopped

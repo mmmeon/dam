@@ -49,3 +49,8 @@ final class RotationPicker {
         }
     }
 }
+
+extension DisplayRotation {
+    /// "Standard", "90°", …; spoken by the picker, so localised with the spoken messages.
+    var label: String { Spoken.rotation(self) }
+}

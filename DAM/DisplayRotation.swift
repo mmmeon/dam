@@ -40,9 +40,6 @@ enum DisplayRotation: Int, CaseIterable, Codable {
     func size(width: Int, height: Int) -> (width: Int, height: Int) {
         swapsAxes ? (height, width) : (width, height)
     }
-
-    /// "Standard", "90°", …; spoken by the picker, so localised with the spoken messages.
-    var label: String { Spoken.rotation(self) }
 }
 
 // MARK: - Physical displays

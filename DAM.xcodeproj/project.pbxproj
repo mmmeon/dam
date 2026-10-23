@@ -46,6 +46,15 @@
 		CC000C302F8D60780090E796 /* ScreenMirroringPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B302F8D60780090E796 /* ScreenMirroringPanel.swift */; };
 		CC000C312F8D60780090E796 /* SidecarManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B312F8D60780090E796 /* SidecarManager.swift */; };
 		AC0A00022F8D60780090E796 /* AutoConnect.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0A00012F8D60780090E796 /* AutoConnect.swift */; };
+		AC0A001C2F8D60780090E796 /* ByteOrder.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0A001B2F8D60780090E796 /* ByteOrder.swift */; };
+		AC0A001A2F8D60780090E796 /* HDRMetadata.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0A00192F8D60780090E796 /* HDRMetadata.swift */; };
+		AC0A00182F8D60780090E796 /* KeyFrameRequests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0A00172F8D60780090E796 /* KeyFrameRequests.swift */; };
+		AC0A00162F8D60780090E796 /* ControlSocketPath.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0A00152F8D60780090E796 /* ControlSocketPath.swift */; };
+		AC0A00142F8D60780090E796 /* OpenDisplayTouches.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0A00132F8D60780090E796 /* OpenDisplayTouches.swift */; };
+		AC0A00122F8D60780090E796 /* StreamingDisplayModes.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0A00112F8D60780090E796 /* StreamingDisplayModes.swift */; };
+		AC0A00102F8D60780090E796 /* SharedScreenCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0A000F2F8D60780090E796 /* SharedScreenCapture.swift */; };
+		AC0A000E2F8D60780090E796 /* DAMDefaults.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0A000D2F8D60780090E796 /* DAMDefaults.swift */; };
+		AC0A000C2F8D60780090E796 /* AutoConnector.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0A000B2F8D60780090E796 /* AutoConnector.swift */; };
 		AC0A00062F8D60780090E796 /* OpenDisplayStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0A00052F8D60780090E796 /* OpenDisplayStore.swift */; };
 		AC0A00082F8D60780090E796 /* DisplayStreamCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0A00072F8D60780090E796 /* DisplayStreamCapture.swift */; };
 		AB300C052F8D60790090E796 /* LocalBlackout.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB300B052F8D60790090E796 /* LocalBlackout.swift */; };
@@ -172,6 +181,15 @@
 		CC000B302F8D60780090E796 /* ScreenMirroringPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenMirroringPanel.swift; sourceTree = "<group>"; };
 		CC000B312F8D60780090E796 /* SidecarManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarManager.swift; sourceTree = "<group>"; };
 		AC0A00012F8D60780090E796 /* AutoConnect.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoConnect.swift; sourceTree = "<group>"; };
+		AC0A001B2F8D60780090E796 /* ByteOrder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ByteOrder.swift; sourceTree = "<group>"; };
+		AC0A00192F8D60780090E796 /* HDRMetadata.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HDRMetadata.swift; sourceTree = "<group>"; };
+		AC0A00172F8D60780090E796 /* KeyFrameRequests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyFrameRequests.swift; sourceTree = "<group>"; };
+		AC0A00152F8D60780090E796 /* ControlSocketPath.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlSocketPath.swift; sourceTree = "<group>"; };
+		AC0A00132F8D60780090E796 /* OpenDisplayTouches.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenDisplayTouches.swift; sourceTree = "<group>"; };
+		AC0A00112F8D60780090E796 /* StreamingDisplayModes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamingDisplayModes.swift; sourceTree = "<group>"; };
+		AC0A000F2F8D60780090E796 /* SharedScreenCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedScreenCapture.swift; sourceTree = "<group>"; };
+		AC0A000D2F8D60780090E796 /* DAMDefaults.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DAMDefaults.swift; sourceTree = "<group>"; };
+		AC0A000B2F8D60780090E796 /* AutoConnector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoConnector.swift; sourceTree = "<group>"; };
 		AC0A00052F8D60780090E796 /* OpenDisplayStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenDisplayStore.swift; sourceTree = "<group>"; };
 		AC0A00072F8D60780090E796 /* DisplayStreamCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayStreamCapture.swift; sourceTree = "<group>"; };
 		AB300B052F8D60790090E796 /* LocalBlackout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalBlackout.swift; sourceTree = "<group>"; };
@@ -332,6 +350,15 @@
 				CC000B302F8D60780090E796 /* ScreenMirroringPanel.swift */,
 				CC000B312F8D60780090E796 /* SidecarManager.swift */,
 				AC0A00012F8D60780090E796 /* AutoConnect.swift */,
+				AC0A001B2F8D60780090E796 /* ByteOrder.swift */,
+				AC0A00192F8D60780090E796 /* HDRMetadata.swift */,
+				AC0A00172F8D60780090E796 /* KeyFrameRequests.swift */,
+				AC0A00152F8D60780090E796 /* ControlSocketPath.swift */,
+				AC0A00132F8D60780090E796 /* OpenDisplayTouches.swift */,
+				AC0A00112F8D60780090E796 /* StreamingDisplayModes.swift */,
+				AC0A000F2F8D60780090E796 /* SharedScreenCapture.swift */,
+				AC0A000D2F8D60780090E796 /* DAMDefaults.swift */,
+				AC0A000B2F8D60780090E796 /* AutoConnector.swift */,
 				AC0A00052F8D60780090E796 /* OpenDisplayStore.swift */,
 				AC0A00072F8D60780090E796 /* DisplayStreamCapture.swift */,
 				AB300B052F8D60790090E796 /* LocalBlackout.swift */,
@@ -574,6 +601,15 @@
 				CC000C302F8D60780090E796 /* ScreenMirroringPanel.swift in Sources */,
 				CC000C312F8D60780090E796 /* SidecarManager.swift in Sources */,
 				AC0A00022F8D60780090E796 /* AutoConnect.swift in Sources */,
+				AC0A001C2F8D60780090E796 /* ByteOrder.swift in Sources */,
+				AC0A001A2F8D60780090E796 /* HDRMetadata.swift in Sources */,
+				AC0A00182F8D60780090E796 /* KeyFrameRequests.swift in Sources */,
+				AC0A00162F8D60780090E796 /* ControlSocketPath.swift in Sources */,
+				AC0A00142F8D60780090E796 /* OpenDisplayTouches.swift in Sources */,
+				AC0A00122F8D60780090E796 /* StreamingDisplayModes.swift in Sources */,
+				AC0A00102F8D60780090E796 /* SharedScreenCapture.swift in Sources */,
+				AC0A000E2F8D60780090E796 /* DAMDefaults.swift in Sources */,
+				AC0A000C2F8D60780090E796 /* AutoConnector.swift in Sources */,
 				AC0A00062F8D60780090E796 /* OpenDisplayStore.swift in Sources */,
 				AC0A00082F8D60780090E796 /* DisplayStreamCapture.swift in Sources */,
 				AB300C052F8D60790090E796 /* LocalBlackout.swift in Sources */,

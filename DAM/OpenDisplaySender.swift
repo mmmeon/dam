@@ -8,7 +8,11 @@
 //  serves one sender at a time and takes the newest, so DAM dials only receivers turned on.
 //
 
+#if LOGIN_AGENT
+import Foundation
+#else
 import AppKit
+#endif
 import CoreMedia
 import Network
 
@@ -70,7 +74,7 @@ final class OpenDisplaySender {
 
     // MARK: Hooks
 
-    var makeDisplay: ((StreamingDisplayModes.Mode, VideoManager.StreamingIdentity,
+    var makeDisplay: ((StreamingDisplayModes.Mode, StreamingDisplayIdentity,
                        @escaping (CGDirectDisplayID?) -> Void) -> Void)?
     var removeDisplay: ((CGDirectDisplayID) -> Void)?
     var resizeDisplay: ((CGDirectDisplayID, StreamingDisplayModes.Mode, @escaping (Bool) -> Void) -> Void)?
@@ -418,9 +422,13 @@ final class OpenDisplaySession {
     private var ended = false
     private var lostAt: Date?
     private var timers: [DispatchSourceTimer] = []
+    #if !LOGIN_AGENT
     private var injector: MoonlightInputInjector?
+    #endif
     private var capture: SharedScreenCapture.Subscription?
+    #if !LOGIN_AGENT
     private var cursor = OpenDisplayCursor()
+    #endif
     /// Where the receiver last touched or hovered, from 0 to 1 across the display.
     private var lastTouch: (x: Double, y: Double)?
     /// The pointer's positions over UDP, while the receiver offers a port (Wi-Fi only).
@@ -581,7 +589,9 @@ final class OpenDisplaySession {
         lock.lock()
         sendLink = nil
         lock.unlock()
+        #if !LOGIN_AGENT
         injector?.releaseAll()
+        #endif
     }
 
     /// Lets go of a link whose hello came from another receiver than this session's; dials
@@ -661,6 +671,11 @@ final class OpenDisplaySession {
                 cursorAcked = true
                 odLog.debug("\(self.name, privacy: .public): pointer over UDP")
             }
+        #if LOGIN_AGENT
+        case .touch, .pencil, .scroll:
+            // No input at the login window (docs/root-and-login-window.md).
+            break
+        #else
         case .touch(_, let x, let y, let t?), .pencil(_, let x, let y, let t?):
             if inputDelays.count < 1000 { inputDelays.append(max(Double(OpenDisplayWire.nowMs()) - t, 0)) }
             lastTouch = (x, y)
@@ -684,6 +699,7 @@ final class OpenDisplaySession {
             // Clamped, since Int32(_:) traps on a delta out of its range.
             func points(_ v: Double) -> Int32 { Int32(min(max((CGFloat(v) * factor).rounded(), CGFloat(Int32.min)), CGFloat(Int32.max))) }
             injector?.scrollPixels(dx: points(turned.dx), dy: points(turned.dy))
+        #endif
         case .sleeping, .closing:
             // It closes the connection next; dialing again at once would find it still there.
             sender?.holdDialing(key, for: 3)
@@ -726,7 +742,7 @@ final class OpenDisplaySession {
             return
         }
         settingUp = true
-        let identity = VideoManager.StreamingIdentity(name: name, seed: "opendisplay:\(key)")
+        let identity = StreamingDisplayIdentity(name: name, seed: "opendisplay:\(key)")
         odLog.debug("\(self.name, privacy: .public): making a display \(wanted.mode.width)×\(wanted.mode.height)\(wanted.mode.hiDPI ? " HiDPI" : "") for a \(wanted.streamWidth)×\(wanted.streamHeight)@\(wanted.fps) stream")
         guard let makeDisplay = sender.makeDisplay else { return fail("no displays") }
         makeDisplay(wanted.mode, identity) { [weak self, weak sender] id in
@@ -766,13 +782,15 @@ final class OpenDisplaySession {
         } catch {
             return fail("the encoder could not start")
         }
+        #if !LOGIN_AGENT
         injector = MoonlightInputInjector(displayID: displayID, streamWidth: desktop.streamWidth,
                                           streamHeight: desktop.streamHeight)
+        #endif
         lock.lock()
         self.encoder = encoder
         lock.unlock()
         let key = SharedScreenCapture.Key(displayID: displayID, width: desktop.streamWidth, height: desktop.streamHeight,
-                                          fps: desktop.fps, showsCursor: false)
+                                          fps: desktop.fps, showsCursor: Self.drawsPointerInFrames)
         capture = SharedScreenCapture.subscribe(key, frame: { [weak self] buffer, time in
             guard let self else { return }
             self.lock.lock()
@@ -793,8 +811,10 @@ final class OpenDisplaySession {
     private func stopMedia() {
         capture?.cancel()
         capture = nil
+        #if !LOGIN_AGENT
         injector?.close()
         injector = nil
+        #endif
         lock.lock()
         earlierEncDrops += encoder?.droppedFrames ?? 0
         encoder = nil
@@ -806,7 +826,9 @@ final class OpenDisplaySession {
     private func startStream() {
         guard let desktop, let link, linkReady else { return }
         send(OpenDisplayReply.streamConfig(width: desktop.streamWidth, height: desktop.streamHeight, fps: desktop.fps))
+        #if !LOGIN_AGENT
         cursor.reset()
+        #endif
         lock.lock()
         sendLink = link
         needsKeyFrame = true
@@ -916,7 +938,16 @@ final class OpenDisplaySession {
         }
     }
 
+    /// Whether the pointer is drawn into the picture rather than by the receiver: in the login
+    /// window agent, which has no AppKit to read the pointer's picture with.
+    #if LOGIN_AGENT
+    static let drawsPointerInFrames = true
+    #else
+    static let drawsPointerInFrames = false
+    #endif
+
     private func followPointer() {
+        #if !LOGIN_AGENT
         guard let displayID, hasLink, let desktop else { return }
         let (image, position) = cursor.update(displayID: displayID, streamWidth: desktop.streamWidth,
                                               streamHeight: desktop.streamHeight)
@@ -937,6 +968,7 @@ final class OpenDisplaySession {
             }
         }
         send(OpenDisplayReply.cursor(at: position, sequence: cursorSequence))
+        #endif
     }
 
     /// How long a receiver has to say a pointer datagram arrived.
@@ -973,6 +1005,7 @@ final class OpenDisplaySession {
 
 // MARK: - The pointer
 
+#if !LOGIN_AGENT
 /// The pointer as the receiver draws it: its place in the stream's picture, when it moves,
 /// and its picture, when that changes; both turned as the display's picture is.
 struct OpenDisplayCursor {
@@ -1044,6 +1077,7 @@ struct OpenDisplayCursor {
         return (png, cursor.image.size, cursor.hotSpot)
     }
 
+
     /// `image` as a PNG at twice its size, small enough to send, turned clockwise by
     /// `rotation` as frames are on their way out.
     static func png(of image: NSImage, turnedBy rotation: DisplayRotation) -> Data? {
@@ -1073,3 +1107,4 @@ struct OpenDisplayCursor {
         return nil
     }
 }
+#endif
