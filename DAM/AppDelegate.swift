@@ -342,9 +342,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// falls back to the menu bar menu, which tracks modally until it closes.
     private func openSwitcher() {
         if Feedback.touchBar {
+            // DAM's Touch Bar doesn't show over another app while a DAM window is on screen.
+            // The switcher stays until closed, so focus stays with DAM, as a click on one of
+            // its windows would leave it.
+            if NSApp.windows.contains(where: { $0.isVisible && $0.styleMask.contains(.titled) }) {
+                _ = activateForHUDTouchBar()
+            }
             controlStrip.openModal()
         } else {
-            statusItem.button?.performClick(nil)
+            // From the run loop, as the PIN prompt is: the menu tracks until it closes, and
+            // inside a main queue block (as a hotkey's action is) it would hold every other one.
+            RunLoop.main.perform(inModes: [.default]) { [weak self] in
+                self?.statusItem.button?.performClick(nil)
+            }
         }
     }
 
