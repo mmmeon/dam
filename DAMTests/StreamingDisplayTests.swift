@@ -86,7 +86,7 @@ final class StreamingDisplayTests: XCTestCase {
     func testAResizeWaitingLeavesTheCountAlone() {
         let mode = StreamingDisplayModes.start
         XCTAssertEqual(VideoManager.StreamingRequest.add(mode, completion: nil).countChange, 1)
-        XCTAssertEqual(VideoManager.StreamingRequest.remove(index: 0).countChange, -1)
+        XCTAssertEqual(VideoManager.StreamingRequest.remove(display: NSObject()).countChange, -1)
         XCTAssertEqual(VideoManager.StreamingRequest.resize(id: 1, mode, completion: { _ in }).countChange, 0)
     }
 

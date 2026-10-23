@@ -241,6 +241,8 @@ final class VideoManager: ObservableObject {
     var displaySetChangedUntil = Date.distantPast
     /// Whether streaming displays WindowServer mirrored are being freed.
     var streamingMirrorReleaseInFlight = false
+    /// Whether the modes from before the screens slept are being put back.
+    var wakeRestoreInFlight = false
     /// Whether a look at them waits for a change in flight to land.
     var streamingMirrorCheckPending = false
 
@@ -250,7 +252,7 @@ final class VideoManager: ObservableObject {
     /// landing brings the next look.
     var displayChangeInFlight: Bool {
         virtualAnchorReassertInFlight || streamingChangeInFlight || streamingReassertInFlight
-            || streamingMainHandBackInFlight || streamingMirrorReleaseInFlight
+            || streamingMainHandBackInFlight || streamingMirrorReleaseInFlight || wakeRestoreInFlight
     }
     /// How many changes the user asked for (mirror, extend, main, positions, resolution) have
     /// been begun, so a step DAM takes later can tell that one came meanwhile.
@@ -312,10 +314,18 @@ final class VideoManager: ObservableObject {
     }
 
     private func restoreModesAfterWake() {
-        guard !modesBeforeSleep.isEmpty, !virtualAnchorReassertInFlight else { return }
+        guard !modesBeforeSleep.isEmpty else { return }
+        // Not over a change of DAM's own, such as a streaming display being added: looked at
+        // again once it has landed.
+        guard !displayChangeInFlight else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.restoreModesAfterWake() }
+            return
+        }
         var current: [CGDirectDisplayID: ModeShape] = [:]
         var available: [CGDirectDisplayID: [ModeShape: CGDisplayMode]] = [:]
-        var skip = Set(virtualAnchorCGIDs.values)
+        // Nor on the streaming displays, which keep the modes they were made in or set to, and
+        // whose IDs can have gone to other displays since the screens slept.
+        var skip = Set(virtualAnchorCGIDs.values).union(streamingDisplayIDs)
         for id in DisplayArrangement.onlineDisplayIDs() {
             current[id] = CGDisplayCopyDisplayMode(id).map(ModeShape.init)
             available[id] = Dictionary(DisplayArrangement.listedModes(of: id).map { (ModeShape($0), $0) }) { first, _ in first }
@@ -325,14 +335,18 @@ final class VideoManager: ObservableObject {
                                           available: available.mapValues { Set($0.keys) }, skip: skip)
         guard !restore.isEmpty else { return }
         displayLog.debug("restoreModesAfterWake: \(restore)")
+        // Streaming requests wait for it (see processStreamingRequests).
+        wakeRestoreInFlight = true
         commitDisplayChange({ cfg in
             for (id, shape) in restore {
                 if let mode = available[id]?[shape] { CGConfigureDisplayWithDisplayMode(cfg, id, mode, nil) }
             }
-        }) { result in
+        }) { [weak self] result in
             if case .failure(let error) = result {
                 displayLog.error("restoreModesAfterWake: \(String(describing: error))")
             }
+            self?.wakeRestoreInFlight = false
+            self?.processStreamingRequests()
         }
     }
 
