@@ -125,6 +125,29 @@ final class MoonlightScreenCaptureTests: XCTestCase {
         XCTAssertEqual(asked, 1)
     }
 
+    /// A capture counts once while it runs, whether it then stops, stops on its own or goes,
+    /// and not again once stopped.
+    func testACaptureCountsOnceAmongTheLiveOnes() {
+        let live = savedLive
+        let before = live()
+        var capture: MoonlightScreenCapture? = MoonlightScreenCapture(displayID: 1, width: 64, height: 64, fps: 30) { _, _ in }
+        capture?.setLive(true)
+        capture?.setLive(true)
+        XCTAssertEqual(live(), before + 1)
+        capture?.stop()
+        XCTAssertEqual(live(), before)
+        capture?.setLive(true)
+        capture?.setLive(false)
+        capture = nil
+        XCTAssertEqual(live(), before, "not counted again once stopped, nor taken off twice")
+
+        capture = MoonlightScreenCapture(displayID: 1, width: 64, height: 64, fps: 30) { _, _ in }
+        capture?.setLive(true)
+        XCTAssertEqual(live(), before + 1)
+        capture = nil
+        XCTAssertEqual(live(), before, "taken off as it goes")
+    }
+
     // MARK: frame rate
 
     func testLoosensTheFrameLimitOnlyWhenTheDisplayIsNoFasterThanTheStream() {
@@ -153,6 +176,63 @@ final class MoonlightScreenCaptureTests: XCTestCase {
         var pacer = FramePacer(fps: 60)
         XCTAssertTrue(pacer.allows(CMTime(value: 10, timescale: 1)))
         XCTAssertTrue(pacer.allows(CMTime(value: 1, timescale: 1)))
+    }
+
+    func testPacerSaysHowLongAFrameTooSoonWaits() throws {
+        var pacer = FramePacer(fps: 60)
+        XCTAssertNil(pacer.wait(for: CMTime(value: 0, timescale: 1000)))
+        let wait = try XCTUnwrap(pacer.wait(for: CMTime(value: 5, timescale: 1000)))
+        XCTAssertEqual(wait, 0.0075, accuracy: 1e-9, "0.75 frame times after the last, less the 5 ms since")
+        pacer.took(CMTime(value: 5, timescale: 1000))
+        XCTAssertNotNil(pacer.wait(for: CMTime(value: 10, timescale: 1000)), "paced from the one held, once it went")
+        XCTAssertNil(pacer.wait(for: CMTime(value: 18, timescale: 1000)))
+    }
+
+    private func pixelBuffer() throws -> CVPixelBuffer {
+        var made: CVPixelBuffer?
+        CVPixelBufferCreate(nil, 64, 64, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, nil, &made)
+        return try XCTUnwrap(made)
+    }
+
+    /// A frame that comes too soon after the one before, as a screen goes still, still goes:
+    /// a frame time after that one, so the picture shown is the last.
+    func testAFrameTooSoonBeforeAStillScreenGoesLater() throws {
+        let lock = NSLock()
+        var handed: [(CVPixelBuffer, Double, Date)] = []
+        let both = expectation(description: "both frames")
+        both.expectedFulfillmentCount = 2
+        let capture = MoonlightScreenCapture(displayID: 1, width: 64, height: 64, fps: 60) { buffer, time in
+            lock.lock(); handed.append((buffer, CMTimeGetSeconds(time), Date())); lock.unlock()
+            both.fulfill()
+        }
+        let first = try pixelBuffer(), last = try pixelBuffer()
+        let start = Date()
+        capture.captured(first, at: CMTime(value: 0, timescale: 1000))
+        capture.captured(last, at: CMTime(value: 5, timescale: 1000))
+        wait(for: [both], timeout: 2)
+        lock.lock(); defer { lock.unlock() }
+        XCTAssertEqual(handed.map(\.1), [0, 0.005])
+        XCTAssertTrue(handed.last?.0 === last)
+        XCTAssertGreaterThan(handed.last?.2.timeIntervalSince(start) ?? 0, 0.006, "held until 0.75 frame times had passed")
+    }
+
+    /// A frame held back is left out once a newer one goes in its place.
+    func testAFrameHeldBackIsLeftOutForANewerOne() throws {
+        let lock = NSLock()
+        var times: [Double] = []
+        let capture = MoonlightScreenCapture(displayID: 1, width: 64, height: 64, fps: 60) { _, time in
+            lock.lock(); times.append(CMTimeGetSeconds(time)); lock.unlock()
+        }
+        let buffer = try pixelBuffer()
+        capture.captured(buffer, at: CMTime(value: 0, timescale: 1000))
+        capture.captured(buffer, at: CMTime(value: 5, timescale: 1000))
+        capture.captured(buffer, at: CMTime(value: 7, timescale: 1000))
+        capture.captured(buffer, at: CMTime(value: 20, timescale: 1000))
+        let settled = expectation(description: "past any wait")
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) { settled.fulfill() }
+        wait(for: [settled], timeout: 1)
+        lock.lock(); defer { lock.unlock() }
+        XCTAssertEqual(times, [0, 0.02])
     }
 
     // MARK: - Shared capture

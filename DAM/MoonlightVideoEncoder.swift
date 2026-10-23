@@ -323,6 +323,9 @@ final class MoonlightVideoEncoder {
         /// HDR10 with this metadata, for HEVC: Main10 in BT.2020 with PQ, frames given in a
         /// 10-bit format tagged so (see MoonlightScreenCapture); nil for SDR.
         var hdr: MoonlightHDRMetadata?
+        /// The most bytes a frame can be sent in, if there is a most (Moonlight's packets);
+        /// the limit over the window is kept below it, the window shortened to keep its rate.
+        var largestFrame: Int?
     }
 
     /// One encoded frame as an Annex B access unit; a keyframe starts with its parameter
@@ -477,12 +480,16 @@ final class MoonlightVideoEncoder {
     /// The average bitrate, and the limit that keeps a keyframe from being many times a
     /// frame's share of it: for Moonlight no more than one and a half times the rate over any
     /// quarter second, so it fits within the packets Moonlight takes with parity and goes out
-    /// in a few frames' time.
-    private static func rateProperties(_ kbps: Int, _ settings: Settings) -> [CFString: Any] {
-        [kVTCompressionPropertyKey_AverageBitRate: kbps * 1000,
-         kVTCompressionPropertyKey_DataRateLimits: [
-            NSNumber(value: Int(Double(kbps * 1000 / 8) * settings.rateLimitMultiple * settings.rateLimitWindow)),
-            NSNumber(value: settings.rateLimitWindow)]]
+    /// in a few frames' time. Above about 120 Mbit/s a quarter second's share is more than a
+    /// frame can be sent in, and each keyframe asked for again would be as large, so the
+    /// window shrinks until its share is 90% of `largestFrame` (the encoder may overshoot a
+    /// little).
+    static func rateProperties(_ kbps: Int, _ settings: Settings) -> [CFString: Any] {
+        let bytes = Double(kbps * 1000 / 8) * settings.rateLimitMultiple * settings.rateLimitWindow
+        let share = settings.largestFrame.map { min(1, 0.9 * Double($0) / bytes) } ?? 1
+        return [kVTCompressionPropertyKey_AverageBitRate: kbps * 1000,
+                kVTCompressionPropertyKey_DataRateLimits: [
+                    NSNumber(value: Int(bytes * share)), NSNumber(value: settings.rateLimitWindow * share)]]
     }
 
     /// Changes the bitrate from the next frame encoded.

@@ -225,6 +225,9 @@ once (`MoonlightHost.maxSessions`). A fifth gets a 503.
 - Video and audio go wherever the ping with the launch's payload last came from. A bare
   "PING", from clients without the payload, counts only from the launching address.
 - Control runs on UDP 47999 over vendored ENet 1.3.18, with AES-128-GCM messages.
+  A CONNECT without the launch's token is dropped unanswered before ENet gives it a peer
+  (`intercept`), so forged ones can't fill the 32 peers or use up the two one address may
+  hold; a second device with the token is connected and then turned away.
   Keyframe requests, reference-frame invalidation, frame FEC status, input and
   termination are handled; the rest (pings, loss stats) are dropped.
 
@@ -279,9 +282,16 @@ them as HID events, one injector per stream:
 `MoonlightFEC` → UDP 47998:
 
 - **Capture:** ScreenCaptureKit captures in 4:2:0 at the stream's size and rate, with a
-  queue depth of 6, shared between streams that want the same.
+  queue depth of 6, shared between streams that want the same. A frame that comes less
+  than 0.75 frame times after the last one handed on (a display faster than the stream)
+  is held, and goes 0.75 frame times after that one unless a newer goes first, so a
+  screen that goes still just after a change still sends the change (`FramePacer`).
 - **Encoding:** VideoToolbox hardware H.264 (High profile, CABAC, real time, no frame
-  reordering, keyframes only on request), or HEVC Main when the client chose it.
+  reordering, keyframes only on request), or HEVC Main when the client chose it. No more
+  than 1.5 times the bitrate goes over any quarter second; where that is more than the
+  packets can carry in one frame (4 × 1023 packets: about 120 Mbit/s at 1392-byte packets,
+  88 at 1024), the window is shortened to keep the frame within 90% of it, so a keyframe
+  asked for again is not made too large again.
 - **Codecs:** what differs between codecs is in `VideoCodec` (MoonlightVideoEncoder.swift):
   the encoder's type and profile, how NAL units name their type, the order of the
   parameter sets (HEVC: VPS, SPS, PPS, which Moonlight requires at each keyframe), and

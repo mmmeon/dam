@@ -219,8 +219,8 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
             configuration.setValue(Self.canonicalHDR, forKey: "captureDynamicRange")
         }
         // The stream holds up to three frames at once (the last picture, the encoder's slot
-        // and the one being encoded); with only that many, ScreenCaptureKit has nothing to
-        // draw into and skips frames.
+        // and the one being encoded), and capture one the pacer held back; with only that
+        // many, ScreenCaptureKit has nothing to draw into and skips frames.
         configuration.queueDepth = 6
         configuration.showsCursor = showsCursor
         if audio != nil {
@@ -234,8 +234,8 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
 
     deinit { setLive(false) }
 
-    /// Counts this capture among `liveCaptures` while it runs, once.
-    private func setLive(_ isLive: Bool) {
+    /// Counts this capture among `liveCaptures` while it runs, once; called by tests too.
+    func setLive(_ isLive: Bool) {
         lock.lock()
         let changed = live != isLive && (!isLive || !stopped)
         if changed { live = isLive }
@@ -298,8 +298,39 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
               let raw = attachments.first?[.status] as? Int,
               SCFrameStatus(rawValue: raw) == .complete,
               let buffer = CMSampleBufferGetImageBuffer(sample) else { return }
-        let time = CMSampleBufferGetPresentationTimeStamp(sample)
-        guard pacer.allows(time) else { return }
+        paced(buffer, CMSampleBufferGetPresentationTimeStamp(sample))
+    }
+
+    /// Hands a frame on, unless it came too soon after the last: then it is held, and goes a
+    /// frame time after that one unless a newer goes first. A screen that goes still just
+    /// after a change sends nothing more, so a frame left out would leave the picture before
+    /// it showing. On `queue`.
+    private func paced(_ buffer: CVPixelBuffer, _ time: CMTime) {
+        guard let wait = pacer.wait(for: time) else {
+            held = nil
+            return handOn(buffer, time)
+        }
+        let scheduled = held != nil
+        held = (buffer, time)
+        // One that waits already goes at the same time, as nothing went since.
+        guard !scheduled else { return }
+        holds += 1
+        let hold = holds
+        queue.asyncAfter(deadline: .now() + wait) { [weak self] in
+            guard let self, self.holds == hold, let held = self.held, !self.isStopped else { return }
+            self.held = nil
+            self.pacer.took(held.time)
+            self.handOn(held.buffer, held.time)
+        }
+    }
+
+    /// Hands `buffer` to the pacer as if ScreenCaptureKit had just captured it; for tests.
+    func captured(_ buffer: CVPixelBuffer, at time: CMTime) {
+        queue.async { self.paced(buffer, time) }
+    }
+
+    /// On `queue`.
+    private func handOn(_ buffer: CVPixelBuffer, _ time: CMTime) {
         if let rotator {
             // A frame captured before the display was turned is the other way up still.
             guard CVPixelBufferGetWidth(buffer) == rotation.inverse.size(width: width, height: height).width,
@@ -329,6 +360,10 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     private lazy var pacer = FramePacer(fps: fps)
+    /// The latest frame the pacer held back, until it goes or a newer one does; and how many
+    /// times one was, so a wait set before a newer frame went does nothing. On `queue`.
+    private var held: (buffer: CVPixelBuffer, time: CMTime)?
+    private var holds = 0
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
         scLog.error("stopped: \(error.localizedDescription, privacy: .public)")
@@ -478,12 +513,20 @@ struct FramePacer {
 
     init(fps: Int) { shortest = 0.75 / Double(fps) }
 
-    mutating func allows(_ time: CMTime) -> Bool {
+    /// Whether the frame captured at `time` may go now; taken to have gone if so.
+    mutating func allows(_ time: CMTime) -> Bool { wait(for: time) == nil }
+
+    /// nil when the frame captured at `time` may go now, taken to have gone then; else the
+    /// seconds until it may, a frame time after the last that went.
+    mutating func wait(for time: CMTime) -> Double? {
         let seconds = CMTimeGetSeconds(time)
-        if let last, seconds - last < shortest, seconds >= last { return false }
+        if let last, seconds - last < shortest, seconds >= last { return last + shortest - seconds }
         last = seconds
-        return true
+        return nil
     }
+
+    /// A frame held back went after all.
+    mutating func took(_ time: CMTime) { last = CMTimeGetSeconds(time) }
 }
 
 /// One capture of a display, picture and sound, shared by every Moonlight stream that asks

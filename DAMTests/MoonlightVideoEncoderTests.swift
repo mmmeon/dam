@@ -1,6 +1,7 @@
 import XCTest
 import CoreMedia
 import CoreVideo
+import VideoToolbox
 @testable import DAM
 
 final class MoonlightVideoEncoderTests: XCTestCase {
@@ -307,6 +308,26 @@ final class MoonlightVideoEncoderTests: XCTestCase {
         // The SPS's general_profile_idc: 2 is Main10.
         let sps = try XCTUnwrap(MoonlightVideoEncoder.parameterSets(frame.sample)?.sets.first { VideoCodec.hevc.nalType($0[0]) == 33 })
         XCTAssertEqual(sps[3] & 0x1F, 2, "Main10")
+    }
+
+    /// Below a frame's most the limit is the rate's share of a quarter second; above it, the
+    /// window shrinks so a keyframe can never be made larger than can be sent, at the same rate.
+    func testTheRateLimitKeepsAFrameSendable() throws {
+        func limits(_ kbps: Int, largestFrame: Int?) throws -> (bytes: Double, seconds: Double) {
+            var settings = MoonlightVideoEncoder.Settings(width: 1920, height: 1080, fps: 60, bitrateKbps: kbps)
+            settings.largestFrame = largestFrame
+            let pair = try XCTUnwrap(MoonlightVideoEncoder.rateProperties(kbps, settings)[kVTCompressionPropertyKey_DataRateLimits]
+                                        as? [NSNumber])
+            return (pair[0].doubleValue, pair[1].doubleValue)
+        }
+        let largest = MoonlightPacketizer.largestFrame(packetSize: 1392)
+        let low = try limits(20_000, largestFrame: largest)
+        XCTAssertEqual(low.bytes, 937_500)
+        XCTAssertEqual(low.seconds, 0.25)
+        let high = try limits(200_000, largestFrame: largest)
+        XCTAssertLessThanOrEqual(high.bytes, 0.9 * Double(largest))
+        XCTAssertEqual(high.bytes / high.seconds, 200_000_000 / 8 * 1.5, accuracy: 100, "the same rate")
+        XCTAssertEqual(try limits(200_000, largestFrame: nil).bytes, 9_375_000, "no most, no cap")
     }
 
     func testCodecsNameNALUnitTypesTheirOwnWay() {

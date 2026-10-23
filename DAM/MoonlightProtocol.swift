@@ -188,6 +188,12 @@ struct MoonlightPacketizer {
 
     private var payloadSize: Int { packetSize - Self.videoHeaderSize }
 
+    /// The largest access unit packets of `packetSize` can carry: four blocks of 1023,
+    /// without parity, less the frame header.
+    static func largestFrame(packetSize: Int) -> Int {
+        maxBlocks * maxPacketsPerBlock * (packetSize - videoHeaderSize) - frameHeaderSize
+    }
+
     /// Every packet for one Annex B access unit, each block's data then its parity, or nil
     /// when it is too large to send.
     mutating func packets(for accessUnit: Data, isKeyFrame: Bool, timestamp: UInt32, latency: UInt16) -> [Data]? {
