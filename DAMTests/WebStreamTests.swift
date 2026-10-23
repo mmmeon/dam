@@ -851,6 +851,120 @@ final class WebStreamTests: XCTestCase {
         XCTAssertEqual(removed, [], "Moonlight's now")
     }
 
+    /// A display Moonlight hands over is the browser stream's: it goes, or back to Moonlight,
+    /// once no viewer here streams it.
+    func testADisplayHandedOverGoesOnceNoViewerStreamsIt() {
+        let server = WebStreamServer(directory: FileManager.default.temporaryDirectory)
+        var removed: [CGDirectDisplayID] = [], handed: [CGDirectDisplayID] = []
+        server.removeDisplay = { removed.append($0) }
+        server.handOverDisplay = { handed.append($0) }
+        XCTAssertFalse(server.streams(display: 45))
+        server.adopt(display: 45)
+        XCTAssertEqual(removed, [45], "no viewer here streams it")
+        server.othersStream = { $0 == 46 }
+        server.adopt(display: 46)
+        XCTAssertEqual(handed, [46], "Moonlight streams it again")
+    }
+
+    /// A device forgotten while a display turns for it lets go of the display, which its
+    /// request no longer streams.
+    func testADisplayTurnedForADeviceForgottenMeanwhileIsLetGo() throws {
+        let main = CGMainDisplayID()
+        let mode = try XCTUnwrap(CGDisplayCopyDisplayMode(main))
+        try XCTSkipIf(mode.pixelWidth == mode.pixelHeight, "a square display can't be turned")
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let server = startedServer(directory: directory)
+        defer { server.stop() }
+        var removed: [CGDirectDisplayID] = []
+        var turned: ((Bool) -> Void)?
+        // The main display stands in for one made, being online; nothing changes it here.
+        server.makeDisplay = { _, _, _, done in done(main) }
+        server.resizeDisplay = { _, _, _, _, done in turned = done }
+        server.removeDisplay = { removed.append($0) }
+        let link = server.addLink(named: "Player")
+        let other = mode.pixelWidth > mode.pixelHeight ? "portrait" : "landscape"
+        let url = URL(string: "http://localhost:\(server.port.rawValue)/stream.mp4?token=\(link.token)&orientation=\(other)")!
+        session.dataTask(with: url).resume()
+        Loopback.spin(until: { turned != nil })
+        XCTAssertEqual(removed, [], "held while it turns")
+        server.forget(link)
+        turned?(true)
+        XCTAssertEqual(removed, [main])
+    }
+
+    /// Which Host headers name the Mac: its addresses and its own names, never a name only
+    /// because it looks local.
+    func testOnlyTheMacsOwnNamesCount() throws {
+        let saved = WebStreamServer.extraHostNames
+        defer { WebStreamServer.extraHostNames = saved }
+        WebStreamServer.extraHostNames = ["mac.home.example.com"]
+        let local = try XCTUnwrap(WebStreamCertificates.localHostName, "no Bonjour name").lowercased()
+        let server = WebStreamServer(directory: FileManager.default.temporaryDirectory)
+        func names(_ host: String) -> Bool {
+            server.namesThisMac(WebStreamServer.Request(path: "/", query: [:], headers: ["host": host],
+                                                        secure: false, peer: nil))
+        }
+        let table: [(String, Bool)] = [
+            ("127.0.0.1:47995", true), ("192.168.1.20", true), ("[::1]:47995", true), ("[fe80::1]", true),
+            ("localhost:47995", true), ("LOCALHOST.", true),
+            ("\(local)", true), ("\(local).local:47995", true), ("\(local.uppercased()).LOCAL.", true),
+            ("\(local).lan", true), ("\(local).home.arpa", true), ("\(local).fritz.box", false),
+            ("mac.home.example.com", true),
+            ("evil.local", false), ("x.\(local).local", false), ("\(local)x.local", false), ("router", false),
+            ("evil.lan", false), ("evil.home.arpa", false), ("evil.localhost", false), ("localhost.evil.example", false),
+            ("evil.example", false), ("", false),
+        ]
+        // Not started, so no certificate's names count here.
+        for (host, expected) in table {
+            XCTAssertEqual(names(host), expected, host)
+        }
+        XCTAssertFalse(server.namesThisMac(WebStreamServer.Request(path: "/", query: [:], headers: [:], secure: false, peer: nil)),
+                       "no Host at all")
+    }
+
+    /// The names the HTTPS certificate is for count as the Mac's, a wildcard by one label.
+    func testTheCertificatesNamesCount() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let certificates = try WebStreamCertificates(directory: directory, names: ["Slab.Fritz.Box", "*.mac.example.com"],
+                                                     addresses: [[127, 0, 0, 1]])
+        XCTAssertTrue(certificates.covers("slab.fritz.box"))
+        XCTAssertTrue(certificates.covers("a.mac.example.com"))
+        XCTAssertFalse(certificates.covers("mac.example.com"))
+        XCTAssertFalse(certificates.covers("b.a.mac.example.com"))
+        XCTAssertFalse(certificates.covers("fritz.box"))
+    }
+
+    /// A browser paired over HTTPS before HTTPS's cookie had a name of its own has a Secure
+    /// cookie by HTTP's name, which keeps HTTP's from being set: it is given HTTPS's name,
+    /// and the old one ends.
+    func testALegacySecureCookieIsRenamed() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let server = startedServer(directory: directory)
+        defer { server.stop() }
+        client.authority = try get("/ca.cer", port: server.port).body
+        let device = server.devices.add(WebStreamDevice(name: "Safari on iPhone", kind: .browser))
+
+        let legacy = try get("/apps.json", port: server.securePort, secure: true, cookie: "dam_watch=\(device.token)")
+        XCTAssertEqual(legacy.status, 200)
+        let renamed = try XCTUnwrap(legacy.headers["Set-Cookie"])
+        XCTAssertTrue(renamed.contains("__Secure-dam_watch=\(device.token); "), renamed)
+        XCTAssertTrue(renamed.contains("dam_watch=; Path=/; Max-Age=0"), renamed)
+
+        let current = try get("/apps.json", port: server.securePort, secure: true,
+                              cookie: "__Secure-dam_watch=\(device.token); dam_watch=\(device.token)")
+        XCTAssertEqual(current.status, 200)
+        XCTAssertNil(current.headers["Set-Cookie"], "HTTPS's own name")
+        let plain = try get("/apps.json", port: server.port, cookie: "dam_watch=\(device.token)")
+        XCTAssertEqual(plain.status, 200)
+        XCTAssertNil(plain.headers["Set-Cookie"], "HTTP's name over HTTP")
+        let linked = try get("/apps.json?token=\(device.token)", port: server.securePort, secure: true,
+                             cookie: "dam_watch=\(device.token)")
+        XCTAssertNil(linked.headers["Set-Cookie"], "a link's token sets nothing")
+    }
+
     /// Out of reach, a connection is closed before it is served, so that it holds none of
     /// the places connections have; in reach, the same address is served.
     func testAnAddressOutOfReachIsTurnedAwayAtOnce() throws {
