@@ -437,6 +437,11 @@ final class VideoManager: ObservableObject {
         vendor == sidecarVendorNumber && model == airPlayModelNumber
     }
 
+    /// Whether a display is one of DAM's virtual anchors, by the vendor and product they carry.
+    static func isAnchorDisplay(vendor: UInt32, model: UInt32) -> Bool {
+        vendor == anchorVendorID && model == anchorProductID
+    }
+
     static func isAirPlayDisplay(_ cgID: CGDirectDisplayID) -> Bool {
         isAirPlayDisplay(vendor: CGDisplayVendorNumber(cgID), model: CGDisplayModelNumber(cgID))
     }
@@ -739,7 +744,14 @@ final class VideoManager: ObservableObject {
                 }
                 self.commitDisplayChange({ cfg in
                     for slave in slaveIDs { CGConfigureDisplayMirrorOfDisplay(cfg, slave, masterID) }
-                }, completion: finish)
+                }) { result in
+                    // Not mirrored after all: the layouts DAM puts back would make the mirror
+                    // later. One that timed out may still land, and is kept as asked.
+                    if case .failure(let error) = result, !error.mayStillLand {
+                        self.keepUserMirror(slaveIDs.filter { CGDisplayMirrorsDisplay($0) != masterID }, on: 0)
+                    }
+                    finish(result)
+                }
             }
         }
     }
@@ -979,9 +991,11 @@ final class VideoManager: ObservableObject {
         guard !toExtend.isEmpty else { return completion(.success(())) }
         mirrorLog.debug("dissolveMirrorSets: extending \(toExtend) first")
         keepUserMirror(Array(toExtend), on: 0)
+        // Mirror changes have taken about the default 10 s on their own; the set is built only
+        // once this one has landed, so it is given longer before it is given up on.
         commitDisplayChange({ cfg in
             for id in toExtend { CGConfigureDisplayMirrorOfDisplay(cfg, id, CGDirectDisplayID(0)) }
-        }, settle: 1.0, completion: completion)
+        }, settle: 1.0, timeout: 30, completion: completion)
     }
 
     /// Runs `configure` in one display configuration transaction. The commit can block for
@@ -1406,6 +1420,9 @@ final class VideoManager: ObservableObject {
         for cgID in onlineIDs {
             guard !airPlayIDs.contains(cgID) else { continue }
             guard !anchorIDs.contains(cgID)  else { continue }   // hide virtual anchors from display list
+            // And one not filed as an anchor: one being released, which stays online until its
+            // teardown has landed, or one not found yet.
+            guard !Self.isAnchorDisplay(vendor: CGDisplayVendorNumber(cgID), model: CGDisplayModelNumber(cgID)) else { continue }
             guard let name = idToName[cgID] else { continue }
             let isBuiltIn   = CGDisplayIsBuiltin(cgID) != 0
             // A mirror slave leaves NSScreen but is still showing a desktop.
