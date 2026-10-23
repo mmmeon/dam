@@ -59,6 +59,8 @@ final class SettingsWindowController: NSWindowController {
     private lazy var openDisplayContent: NSView = buildOpenDisplayTab()
     private var openDisplayShown: [OpenDisplaySender.Receiver] = []
     private var openDisplayRunning = false
+    /// The General tab's launch-at-login box.
+    private weak var launchAtLoginBox: NSButton?
     /// The Streaming tab, holding the Moonlight, Browser Stream and Remote Sessions pages.
     private lazy var streamingContent = StreamingTabView(titles: TabID.streamingPages.map(Self.title)) {
         [weak self] index in self?.selectTab(TabID.streamingPages[index])
@@ -125,6 +127,9 @@ final class SettingsWindowController: NSWindowController {
 
         super.init(window: win)
         buildUI()
+        // Back from System Settings, the login item may have been turned on or off there.
+        NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: win,
+                                               queue: .main) { [weak self] _ in self?.showLaunchAtLogin() }
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -316,16 +321,14 @@ final class SettingsWindowController: NSWindowController {
     }
 
     /// The launch-at-login box, which shows what macOS did with the change rather than what
-    /// was clicked, and says when macOS wants the login item approved.
+    /// was clicked, and says when macOS wants the login item approved. It is read again each
+    /// time the window comes back, as after a change in System Settings.
     private func launchAtLoginCheckbox() -> NSView {
-        weak var box: NSButton?
-        let view = checkbox(title: "Launch at login", isOn: VisibilityPreferences.launchAtLogin,
-                            help: VisibilityPreferences.launchAtLoginNeedsApproval ? Self.loginApprovalHelp : nil) { on in
+        let view = checkbox(title: "Launch at login", isOn: VisibilityPreferences.launchAtLogin) { [weak self] on in
             var failure: Error?
             do { try VisibilityPreferences.setLaunchAtLogin(on) } catch { failure = error }
-            box?.state = VisibilityPreferences.launchAtLogin ? .on : .off
+            self?.showLaunchAtLogin()
             let needsApproval = VisibilityPreferences.launchAtLoginNeedsApproval
-            box?.toolTip = needsApproval ? Self.loginApprovalHelp : nil
             if let failure {
                 let alert = NSAlert()
                 alert.messageText = on ? "\(AppIdentity.name) can't be set to launch at login"
@@ -342,12 +345,19 @@ final class SettingsWindowController: NSWindowController {
                 if alert.runModal() == .alertFirstButtonReturn { SMAppService.openSystemSettingsLoginItems() }
             }
         }
-        box = view as? NSButton
+        launchAtLoginBox = view as? NSButton
+        showLaunchAtLogin()
         return view
     }
 
+    /// Shows the login item as macOS has it now: checked only while it launches at login.
+    private func showLaunchAtLogin() {
+        launchAtLoginBox?.state = VisibilityPreferences.launchAtLogin ? .on : .off
+        launchAtLoginBox?.toolTip = VisibilityPreferences.launchAtLoginNeedsApproval ? Self.loginApprovalHelp : nil
+    }
+
     private static let loginApprovalHelp =
-        "Waiting to be allowed in System Settings, under General, Login Items."
+        "Off in System Settings, or waiting to be allowed there, under General, Login Items."
 
     @objc private func openControlCenterSettings() {
         ScreenMirroringPanel.openControlCenterSettings()
@@ -447,6 +457,7 @@ final class SettingsWindowController: NSWindowController {
         let field = NicknameField(kind: kind, deviceName: name) { [weak self] in self?.onRebuild?() }
         field.stringValue = VisibilityPreferences.nickname(kind, for: name) ?? ""
         field.placeholderString = "Nickname"
+        field.setAccessibilityLabel("Nickname for \(name)")
         field.controlSize = .small
         field.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         field.widthAnchor.constraint(equalToConstant: 130).isActive = true
@@ -1627,6 +1638,9 @@ final class SettingsWindowController: NSWindowController {
     private func hotkeyRow(_ action: HotkeyAction) -> NSView {
         let recorder = recorders[action]!   // there is one for every action
         let resetBtn = small(ClosureButton(title: "Reset") { [weak self] _ in self?.reset(action) })
+        // Read on its own, the button says which shortcut it puts back.
+        resetBtn.setAccessibilityLabel("Reset \(action.title)")
+        resetBtn.toolTip = "Puts back \(action.defaultShortcut.displayString)."
         let row = NSStackView(views: [recorder, resetBtn])
         row.orientation = .horizontal
         row.spacing     = 8

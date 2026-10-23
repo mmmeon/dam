@@ -292,13 +292,24 @@ final class HotkeyPreferenceTests: XCTestCase {
 
     func testKeyString_namesKeysThatTypeNothingVisible() {
         let names: [Int: String] = [
-            kVK_F1: "F1", kVK_F5: "F5", kVK_F12: "F12", kVK_F19: "F19", kVK_F20: "F20",
+            kVK_F1: "F1", kVK_F5: "F5", kVK_F12: "F12", kVK_F13: "F13", kVK_F19: "F19", kVK_F20: "F20",
             kVK_LeftArrow: "←", kVK_RightArrow: "→", kVK_UpArrow: "↑", kVK_DownArrow: "↓",
             kVK_Space: "Space", kVK_Return: "↩", kVK_Tab: "⇥", kVK_Delete: "⌫", kVK_Escape: "⎋",
         ]
         for (key, name) in names {
             XCTAssertEqual(HotkeyPreference(keyCode: UInt32(key), modifiers: UInt32(cmdKey)).keyString, name, "\(key)")
         }
+    }
+
+    /// For VoiceOver the shortcut is in words, not symbols.
+    func testSpokenString_inWords() {
+        XCTAssertEqual(HotkeyAction.switcher.defaultShortcut.spokenString, "Control Option Command B")
+        XCTAssertEqual(HotkeyPreference(keyCode: UInt32(kVK_LeftArrow), modifiers: UInt32(shiftKey | cmdKey)).spokenString,
+                       "Shift Command Left Arrow")
+        XCTAssertEqual(HotkeyPreference(keyCode: UInt32(kVK_F13), modifiers: UInt32(controlKey)).spokenString,
+                       "Control F13")
+        XCTAssertEqual(HotkeyPreference(keyCode: UInt32(kVK_Return), modifiers: UInt32(optionKey)).spokenString,
+                       "Option Return")
     }
 
     func testKeyString_everyCharacterKeyHasAName() {
@@ -374,7 +385,7 @@ final class KeyRecorderViewTests: XCTestCase {
         XCTAssertEqual(recorder.accessibilityValue() as? String, "Type shortcut")
         recorder.keyDown(with: key(kVK_Escape, [], "\u{1b}"))
         XCTAssertEqual(recorder.preference, start)
-        XCTAssertEqual(recorder.accessibilityValue() as? String, start.displayString)
+        XCTAssertEqual(recorder.accessibilityValue() as? String, start.spokenString)
     }
 
     func testRecording_pausesTheAppsHotkeys() {
@@ -392,11 +403,11 @@ final class KeyRecorderViewTests: XCTestCase {
         XCTAssertTrue(recorder.isAccessibilityElement())
         XCTAssertEqual(recorder.accessibilityRole(), .button)
         XCTAssertEqual(recorder.accessibilityLabel(), "Switcher")
-        XCTAssertEqual(recorder.accessibilityValue() as? String, start.displayString)
+        XCTAssertEqual(recorder.accessibilityValue() as? String, start.spokenString)
         // Pressed as VoiceOver presses it, it starts recording; pressed again, it cancels.
         XCTAssertTrue(recorder.accessibilityPerformPress())
         XCTAssertEqual(recorder.accessibilityValue() as? String, "Type shortcut")
         XCTAssertTrue(recorder.accessibilityPerformPress())
-        XCTAssertEqual(recorder.accessibilityValue() as? String, start.displayString)
+        XCTAssertEqual(recorder.accessibilityValue() as? String, start.spokenString)
     }
 }

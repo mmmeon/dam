@@ -80,6 +80,15 @@ enum VisibilityPreferences {
         set { setNames(newValue, audioSeenKey) }
     }
 
+    private static let audioOldRuleKey = "\(AppIdentity.shortID).hidden.audio.oldVirtualRule"
+
+    /// The audio devices still to be checked for having been hidden by the old virtual rule
+    /// (see `AudioManager.undoOldVirtualRule`), or nil before the list was first made.
+    static var audioHiddenByOldRule: Set<String>? {
+        get { UserDefaults.dam.stringArray(forKey: audioOldRuleKey).map(Set.init) }
+        set { UserDefaults.dam.set(newValue.map(Array.init), forKey: audioOldRuleKey) }
+    }
+
     static func isVisible(audioDevice name: String) -> Bool {
         !hiddenAudioDevices.contains(name)
     }
@@ -218,12 +227,12 @@ enum VisibilityPreferences {
     }
 
     /// Whether the app launches at login, as SMAppService has it; UserDefaults is not used.
-    /// Also while the login item waits for the user's approval in System Settings, as it is
-    /// registered and launches once approved.
+    /// Not while the login item waits for approval in System Settings: macOS reports a login
+    /// item the user turned off there the same way, and neither launches.
     static var launchAtLogin: Bool { isLaunchAtLogin(SMAppService.mainApp.status) }
 
     static func isLaunchAtLogin(_ status: SMAppService.Status) -> Bool {
-        status == .enabled || status == .requiresApproval
+        status == .enabled
     }
 
     /// Whether the login item is registered but waits for the user's approval.

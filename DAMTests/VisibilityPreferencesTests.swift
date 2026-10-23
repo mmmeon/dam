@@ -71,6 +71,15 @@ final class VisibilityPreferencesTests: XCTestCase {
         XCTAssertTrue(ChoicePicker.pausePicksStart(current: 1))
     }
 
+    /// Opened on the first with none current, the pause doesn't pick it, and the first press
+    /// lands on it rather than skipping to the second; presses after that move on.
+    func testCursorAdvancing_noneCurrent_firstPressLandsOnTheFirst() {
+        XCTAssertEqual(ChoicePicker.cursor(advancingFrom: 0, count: 3, pausePicks: false), 0)
+        XCTAssertEqual(ChoicePicker.cursor(advancingFrom: 0, count: 3, pausePicks: true), 1)
+        XCTAssertEqual(ChoicePicker.cursor(advancingFrom: 2, count: 3, pausePicks: true), 0, "wraps round")
+        XCTAssertEqual(ChoicePicker.cursor(advancingFrom: 0, count: 0, pausePicks: true), 0)
+    }
+
     func testPickDelay_defaultsToTwoSeconds() {
         XCTAssertEqual(VisibilityPreferences.pickDelay, 2)
     }
@@ -277,9 +286,11 @@ final class VisibilityPreferencesTests: XCTestCase {
 
     // MARK: - Launch at login
 
-    func testLaunchAtLogin_includesWaitingForApproval() {
+    /// Only an enabled login item launches. One waiting for approval, which is also how macOS
+    /// reports one the user turned off in System Settings, shows unchecked.
+    func testLaunchAtLogin_onlyWhenEnabled() {
         XCTAssertTrue(VisibilityPreferences.isLaunchAtLogin(.enabled))
-        XCTAssertTrue(VisibilityPreferences.isLaunchAtLogin(.requiresApproval))
+        XCTAssertFalse(VisibilityPreferences.isLaunchAtLogin(.requiresApproval))
         XCTAssertFalse(VisibilityPreferences.isLaunchAtLogin(.notRegistered))
         XCTAssertFalse(VisibilityPreferences.isLaunchAtLogin(.notFound))
     }

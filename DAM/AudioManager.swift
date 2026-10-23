@@ -75,6 +75,7 @@ final class AudioManager: ObservableObject {
 
     func refresh() {
         let fetched = fetchOutputDevices()
+        Self.undoOldVirtualRule(fetched, transport: transportType)
         autoHideNewVirtualDevices(in: fetched)
         if allOutputDevices != fetched { allOutputDevices = fetched }
         applyVisibility()
@@ -100,6 +101,41 @@ final class AudioManager: ObservableObject {
             seen.insert(device.name)
         }
         VisibilityPreferences.seenAudioDevices = seen
+    }
+
+    /// Shows again, once, the devices that the old virtual rule hid on first sight and the
+    /// current one doesn't: PCI, AVB, unknown and other transports that aren't virtual.
+    ///
+    /// Which hidden device the rule hid and which the user hid isn't stored. So the devices
+    /// checked are those hidden and seen when this first runs, while hiding new virtual
+    /// devices is on (with it off, the rule hid nothing): any hidden later is the user's.
+    /// Each is checked, by its transport, the first time it is connected after that; one the
+    /// old rule wouldn't have hidden stays hidden. One the user hid by hand that the rule had
+    /// already hidden shows again; unchecking it in Settings hides it for good.
+    static func undoOldVirtualRule(_ devices: [AudioDevice], transport: (AudioDeviceID) -> UInt32?) {
+        var pending = VisibilityPreferences.audioHiddenByOldRule
+            ?? (VisibilityPreferences.autoHideVirtualAudio
+                ? VisibilityPreferences.hiddenAudioDevices.intersection(VisibilityPreferences.seenAudioDevices)
+                : [])
+        for device in devices where pending.contains(device.name) {
+            let t = transport(device.id)
+            if oldRuleHid(transport: t) && !isVirtual(transport: t) {
+                VisibilityPreferences.setVisible(true, audioDevice: device.name)
+            }
+            pending.remove(device.name)
+        }
+        VisibilityPreferences.audioHiddenByOldRule = pending
+    }
+
+    /// Whether the virtual rule before 2026-10-23 hid a device of `transport` on first sight:
+    /// every transport it could read but the hardware ones it listed.
+    static func oldRuleHid(transport: UInt32?) -> Bool {
+        guard let transport else { return false }
+        return ![kAudioDeviceTransportTypeBuiltIn, kAudioDeviceTransportTypeUSB,
+                 kAudioDeviceTransportTypeFireWire, kAudioDeviceTransportTypeBluetooth,
+                 kAudioDeviceTransportTypeBluetoothLE, kAudioDeviceTransportTypeHDMI,
+                 kAudioDeviceTransportTypeDisplayPort, kAudioDeviceTransportTypeAirPlay,
+                 kAudioDeviceTransportTypeThunderbolt].contains(transport)
     }
 
     /// Re-applies the current visibility preferences without re-querying CoreAudio.
