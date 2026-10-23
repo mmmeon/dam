@@ -588,13 +588,21 @@ final class SharedScreenCapture {
         return running.count
     }
 
+    /// Whether captures use CGDisplayStream rather than ScreenCaptureKit: in the login window
+    /// agent, where ScreenCaptureKit can't run, or when DAM's debug setting asks for it.
+    static var usesDisplayStream = UserDefaults.dam.bool(forKey: "\(AppIdentity.shortID).capture.displayStream")
+
     /// Makes the capture behind a subscription; replaced by tests.
-    static var makeCapture: (Key, @escaping (CVPixelBuffer, CMTime) -> Void) -> MoonlightScreenCapture = { key, frame in
-        MoonlightScreenCapture(displayID: key.displayID, width: key.width, height: key.height, fps: key.fps,
-                               hdr: key.hdr, frame: frame)
+    static var makeCapture: (Key, @escaping (CVPixelBuffer, CMTime) -> Void) -> ScreenCaptureSource = { key, frame in
+        if usesDisplayStream {
+            return DisplayStreamCapture(displayID: key.displayID, width: key.width, height: key.height, fps: key.fps,
+                                        frame: frame)
+        }
+        return MoonlightScreenCapture(displayID: key.displayID, width: key.width, height: key.height, fps: key.fps,
+                                      hdr: key.hdr, frame: frame)
     }
     /// Starts it; replaced by tests.
-    static var startCapture: (MoonlightScreenCapture, @escaping (Error?) -> Void) -> Void = { $0.start(completion: $1) }
+    static var startCapture: (ScreenCaptureSource, @escaping (Error?) -> Void) -> Void = { $0.start(completion: $1) }
 
     /// Joins the capture for `key`, starting it if none runs. `frame` is called on the capture
     /// thread, `audio` on a queue of the capture's own; `started` once, with whether capture
@@ -624,7 +632,7 @@ final class SharedScreenCapture {
     }
 
     let key: Key
-    private var capture: MoonlightScreenCapture?
+    private var capture: ScreenCaptureSource?
     private let lock = NSLock()
     private var subscriptions: [Subscription] = []
     private var last: (buffer: CVPixelBuffer, time: CMTime)?

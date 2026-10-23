@@ -47,6 +47,7 @@
 		CC000C312F8D60780090E796 /* SidecarManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC000B312F8D60780090E796 /* SidecarManager.swift */; };
 		AC0A00022F8D60780090E796 /* AutoConnect.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0A00012F8D60780090E796 /* AutoConnect.swift */; };
 		AC0A00062F8D60780090E796 /* OpenDisplayStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0A00052F8D60780090E796 /* OpenDisplayStore.swift */; };
+		AC0A00082F8D60780090E796 /* DisplayStreamCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0A00072F8D60780090E796 /* DisplayStreamCapture.swift */; };
 		AB300C052F8D60790090E796 /* LocalBlackout.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB300B052F8D60790090E796 /* LocalBlackout.swift */; };
 		AB300C042F8D60790090E796 /* SessionDetectors.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB300B042F8D60790090E796 /* SessionDetectors.swift */; };
 		AB300C022F8D60790090E796 /* ControlSocket.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB300B022F8D60790090E796 /* ControlSocket.swift */; };
@@ -104,6 +105,7 @@
 		2127EBAB29D0AC27EB2E9065 /* H264OneReferenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA4BC78E149D0277EAA6B7E7 /* H264OneReferenceTests.swift */; };
 		DD100B0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD100A0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift */; };
 		AC0A00042F8D607C0090E7A1 /* AutoConnectTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0A00032F8D607C0090E7A1 /* AutoConnectTests.swift */; };
+		AC0A000A2F8D607C0090E7A1 /* DisplayStreamCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0A00092F8D607C0090E7A1 /* DisplayStreamCaptureTests.swift */; };
 		EE200B012F8D60780090E796 /* MenuBarIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE200A012F8D60780090E796 /* MenuBarIcon.swift */; };
 		EE200B022F8D607C0090E796 /* MenuBarIconTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE200A022F8D607C0090E796 /* MenuBarIconTests.swift */; };
 		66F9582C81ED74C1C1531F5A /* MP4Fragmenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE0CD9E5791F871CE7094055 /* MP4Fragmenter.swift */; };
@@ -171,6 +173,7 @@
 		CC000B312F8D60780090E796 /* SidecarManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarManager.swift; sourceTree = "<group>"; };
 		AC0A00012F8D60780090E796 /* AutoConnect.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoConnect.swift; sourceTree = "<group>"; };
 		AC0A00052F8D60780090E796 /* OpenDisplayStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenDisplayStore.swift; sourceTree = "<group>"; };
+		AC0A00072F8D60780090E796 /* DisplayStreamCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayStreamCapture.swift; sourceTree = "<group>"; };
 		AB300B052F8D60790090E796 /* LocalBlackout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalBlackout.swift; sourceTree = "<group>"; };
 		AB300B042F8D60790090E796 /* SessionDetectors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionDetectors.swift; sourceTree = "<group>"; };
 		AB300B022F8D60790090E796 /* ControlSocket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlSocket.swift; sourceTree = "<group>"; };
@@ -228,6 +231,7 @@
 		FA4BC78E149D0277EAA6B7E7 /* H264OneReferenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = H264OneReferenceTests.swift; sourceTree = "<group>"; };
 		DD100A0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidecarDisplayTests.swift; sourceTree = "<group>"; };
 		AC0A00032F8D607C0090E7A1 /* AutoConnectTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoConnectTests.swift; sourceTree = "<group>"; };
+		AC0A00092F8D607C0090E7A1 /* DisplayStreamCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayStreamCaptureTests.swift; sourceTree = "<group>"; };
 		EE200A012F8D60780090E796 /* MenuBarIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarIcon.swift; sourceTree = "<group>"; };
 		EE200A022F8D607C0090E796 /* MenuBarIconTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarIconTests.swift; sourceTree = "<group>"; };
 		EE0CD9E5791F871CE7094055 /* MP4Fragmenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MP4Fragmenter.swift; sourceTree = "<group>"; };
@@ -329,6 +333,7 @@
 				CC000B312F8D60780090E796 /* SidecarManager.swift */,
 				AC0A00012F8D60780090E796 /* AutoConnect.swift */,
 				AC0A00052F8D60780090E796 /* OpenDisplayStore.swift */,
+				AC0A00072F8D60780090E796 /* DisplayStreamCapture.swift */,
 				AB300B052F8D60790090E796 /* LocalBlackout.swift */,
 				AB300B042F8D60790090E796 /* SessionDetectors.swift */,
 				AB300B022F8D60790090E796 /* ControlSocket.swift */,
@@ -396,6 +401,7 @@
 				DD100A0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift */,
 				DD100A0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift */,
 				AC0A00032F8D607C0090E7A1 /* AutoConnectTests.swift */,
+				AC0A00092F8D607C0090E7A1 /* DisplayStreamCaptureTests.swift */,
 				DD100A1B2F8D607C0090E7A1 /* StreamingDisplayTests.swift */,
 				AB300B032F8D60790090E796 /* RemoteSessionsTests.swift */,
 				63988274234B083F5858F28E /* OpenDisplayTests.swift */,
@@ -569,6 +575,7 @@
 				CC000C312F8D60780090E796 /* SidecarManager.swift in Sources */,
 				AC0A00022F8D60780090E796 /* AutoConnect.swift in Sources */,
 				AC0A00062F8D60780090E796 /* OpenDisplayStore.swift in Sources */,
+				AC0A00082F8D60780090E796 /* DisplayStreamCapture.swift in Sources */,
 				AB300C052F8D60790090E796 /* LocalBlackout.swift in Sources */,
 				AB300C042F8D60790090E796 /* SessionDetectors.swift in Sources */,
 				AB300C022F8D60790090E796 /* ControlSocket.swift in Sources */,
@@ -632,6 +639,7 @@
 				DD100B0A2F8D607C0090E7A0 /* DisplayNicknameTests.swift in Sources */,
 				DD100B0B2F8D607C0090E7A1 /* SidecarDisplayTests.swift in Sources */,
 				AC0A00042F8D607C0090E7A1 /* AutoConnectTests.swift in Sources */,
+				AC0A000A2F8D607C0090E7A1 /* DisplayStreamCaptureTests.swift in Sources */,
 				DD100B1B2F8D607C0090E7A1 /* StreamingDisplayTests.swift in Sources */,
 				AB300C032F8D60790090E796 /* RemoteSessionsTests.swift in Sources */,
 				EB94268BD6DA23691BCF4FD9 /* OpenDisplayTests.swift in Sources */,
