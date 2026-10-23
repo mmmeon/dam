@@ -28,9 +28,6 @@ final class OpenDisplaySender {
 
     private static let enabledKey = "\(AppIdentity.shortID).opendisplay.enabled"
     static let receiversKey = "\(AppIdentity.shortID).opendisplay.receivers"
-    private static let namesKey = "\(AppIdentity.shortID).opendisplay.names"
-    private static let usbIDsKey = "\(AppIdentity.shortID).opendisplay.usbIDs"
-    private static let bonjourIDsKey = "\(AppIdentity.shortID).opendisplay.bonjourIDs"
     private static let bitrateKey = "\(AppIdentity.shortID).opendisplay.bitrateKbps"
     private static let pointerUDPKey = "\(AppIdentity.shortID).opendisplay.pointerUDP"
 
@@ -54,7 +51,7 @@ final class OpenDisplaySender {
 
     /// Sets the bitrate, for the streams under way too.
     func setBitrate(kbps: Int) {
-        Self.bitrateKbps = kbps
+        store.bitrateKbps = kbps
         for session in sessions.values { session.bitrateChanged() }
     }
 
@@ -64,43 +61,11 @@ final class OpenDisplaySender {
         UserDefaults.dam.object(forKey: pointerUDPKey) as? Bool ?? true
     }
 
-    /// The receivers turned on, by key: those on the Connect Automatically list. One turned on
-    /// goes to the end of the list; the list keeps the order (AutoConnect.swift). The older
-    /// setting under `receiversKey` is read once, when the list is first made.
-    private var turnedOn: Set<String> {
-        get { Set(AutoConnectList.openDisplayKeys(in: AutoConnectList.entries, hasOwnDisplay: false)) }
-        set {
-            var entries = AutoConnectList.entries
-            for key in turnedOn.subtracting(newValue) { entries = AutoConnectList.settingOpenDisplay(key, on: false, in: entries) }
-            for key in newValue.subtracting(turnedOn).sorted() { entries = AutoConnectList.settingOpenDisplay(key, on: true, in: entries) }
-            AutoConnectList.entries = entries
-        }
-    }
+    /// What it keeps and reads as it sends (OpenDisplayStore.swift).
+    let store: OpenDisplayStore
 
-    /// The receivers to dial now, best first: those turned on that apply now, by their
-    /// condition and, for those connected at login or startup, the window after it.
-    private var toDial: [String] {
-        AutoConnectList.openDisplayKeys(in: AutoConnectList.entries, hasOwnDisplay: hasOwnDisplay(),
-                                        windows: AutoConnectSession.now)
-    }
-
-    /// The names receivers were last seen with, by key, for those not found now.
-    private var names: [String: String] {
-        get { UserDefaults.dam.dictionary(forKey: Self.namesKey) as? [String: String] ?? [:] }
-        set { UserDefaults.dam.set(newValue, forKey: Self.namesKey) }
-    }
-
-    /// Receivers' IDs by the UDID of the device they run on, learned from their hellos.
-    private var usbIDs: [String: String] {
-        get { UserDefaults.dam.dictionary(forKey: Self.usbIDsKey) as? [String: String] ?? [:] }
-        set { UserDefaults.dam.set(newValue, forKey: Self.usbIDsKey) }
-    }
-
-    /// Receivers' IDs by their Bonjour name, from TXT records and hellos, for when a
-    /// result comes without its TXT record.
-    private var bonjourIDs: [String: String] {
-        get { UserDefaults.dam.dictionary(forKey: Self.bonjourIDsKey) as? [String: String] ?? [:] }
-        set { UserDefaults.dam.set(newValue, forKey: Self.bonjourIDsKey) }
+    init(store: OpenDisplayStore = DefaultsOpenDisplayStore()) {
+        self.store = store
     }
 
     // MARK: Hooks
@@ -178,7 +143,7 @@ final class OpenDisplaySender {
 
     /// Every receiver found now or turned on, by name.
     var receivers: [Receiver] {
-        let on = turnedOn
+        let on = store.turnedOn
         var keys = on.union(wifi.keys)
         for device in usbDevices { keys.insert(key(for: device)) }
         return keys.map { key in
@@ -191,9 +156,9 @@ final class OpenDisplaySender {
     }
 
     func setOn(_ on: Bool, key: String) {
-        var set = turnedOn
+        var set = store.turnedOn
         if on { set.insert(key) } else { set.remove(key) }
-        turnedOn = set
+        store.turnedOn = set
         if on {
             retryAt[key] = nil
             failures[key] = nil
@@ -207,18 +172,18 @@ final class OpenDisplaySender {
     /// Forgets a receiver turned off and not found, so it leaves the list.
     func forget(key: String) {
         setOn(false, key: key)
-        names[key] = nil
-        usbIDs = usbIDs.filter { $0.value != key }
+        store.names[key] = nil
+        store.usbIDs = store.usbIDs.filter { $0.value != key }
         onChange?()
     }
 
     // MARK: Finding
 
-    private func key(for device: Usbmuxd.Device) -> String { usbIDs[device.serial] ?? "usb:\(device.serial)" }
+    private func key(for device: Usbmuxd.Device) -> String { store.usbIDs[device.serial] ?? "usb:\(device.serial)" }
 
     private func name(of key: String) -> String {
         if let found = wifi[key]?.name { return found }
-        if let name = names[key] { return name }
+        if let name = store.names[key] { return name }
         return key.hasPrefix("usb:") ? "iPhone or iPad on USB" : "Receiver"
     }
 
@@ -231,7 +196,7 @@ final class OpenDisplaySender {
 
     private func found(_ results: Set<NWBrowser.Result>) {
         var found: [String: (name: String, endpoint: NWEndpoint)] = [:]
-        var known = bonjourIDs
+        var known = store.bonjourIDs
         // A receiver can be found once for each network it is on, not each with its TXT record.
         var byName: [String: (id: String?, endpoint: NWEndpoint)] = [:]
         for result in results {
@@ -245,8 +210,8 @@ final class OpenDisplaySender {
             // One with no ID (before pv 2) is known by its name until a hello gives one.
             found[result.id ?? known[name] ?? "bonjour:\(name)"] = (name, result.endpoint)
         }
-        if known != bonjourIDs {
-            bonjourIDs = known
+        if known != store.bonjourIDs {
+            store.bonjourIDs = known
             for (name, id) in known {
                 // A receiver known by its name is the same one by its ID.
                 rekey(from: "bonjour:\(name)", to: id)
@@ -267,9 +232,9 @@ final class OpenDisplaySender {
             return
         }
         wifi = found
-        var saved = names
+        var saved = store.names
         for (key, value) in found { saved[key] = value.name }
-        names = saved
+        store.names = saved
         odLog.debug("found: \(found.map { "\($0.value.name) (\($0.key))" }, privacy: .public)")
         dialWhatIsOn()
         onChange?()
@@ -281,9 +246,9 @@ final class OpenDisplaySender {
     /// has one, as a cable is the better path and the receiver keeps the newest; in the
     /// list's order. One whose condition stops holding isn't hung up, only not dialled again.
     private func dialWhatIsOn() {
-        guard isRunning, Self.isEnabled else { return }
+        guard isRunning, store.isEnabled else { return }
         let now = Date()
-        for key in toDial {
+        for key in store.toDial(hasOwnDisplay: hasOwnDisplay()) {
             if let at = retryAt[key], at > now { continue }
             let device = usbDevices.first { self.key(for: $0) == key }
             let cable = device != nil && (preferWiFiUntil[key] ?? .distantPast) < now
@@ -354,24 +319,24 @@ final class OpenDisplaySender {
 
     /// What a receiver's hello says of it: a USB device's receiver ID, which then keys it.
     fileprivate func session(_ session: OpenDisplaySession, saidID id: String?, device: String?) {
-        if names[session.key] == nil, let device { names[session.key] = device }
+        if store.names[session.key] == nil, let device { store.names[session.key] = device }
         guard let id, session.key != id else { return }
         if session.key.hasPrefix("usb:") {
-            var ids = usbIDs
+            var ids = store.usbIDs
             ids[String(session.key.dropFirst(4))] = id
-            usbIDs = ids
+            store.usbIDs = ids
         } else if session.key.hasPrefix("bonjour:") {
-            var ids = bonjourIDs
+            var ids = store.bonjourIDs
             ids[String(session.key.dropFirst(8))] = id
-            bonjourIDs = ids
+            store.bonjourIDs = ids
             if let found = wifi.removeValue(forKey: session.key) { wifi[id] = found }
-        } else if session.transport == .usb, let serial = usbIDs.first(where: { $0.value == session.key })?.key {
+        } else if session.transport == .usb, let serial = store.usbIDs.first(where: { $0.value == session.key })?.key {
             // Over a cable the device is known by its UDID, whatever the receiver says: one
             // installed again gives a new ID, which keys it from now on.
             odLog.debug("\(session.name, privacy: .public): the receiver on the cable has a new ID")
-            var ids = usbIDs
+            var ids = store.usbIDs
             ids[serial] = id
-            usbIDs = ids
+            store.usbIDs = ids
         } else {
             // Another receiver than the one turned on, as when the address it was last reached
             // at is another device's after a network change: it mustn't get the screen and
@@ -395,13 +360,11 @@ final class OpenDisplaySender {
     /// the caller's to move.
     private func rekey(from old: String, to new: String) {
         // In place: the receiver keeps its rank on the list.
-        if turnedOn.contains(old) {
-            AutoConnectList.entries = AutoConnectList.renamingOpenDisplay(old, to: new, in: AutoConnectList.entries)
-        }
-        var saved = names
+        if store.turnedOn.contains(old) { store.rename(old, to: new) }
+        var saved = store.names
         if saved[new] == nil { saved[new] = wifi[new]?.name ?? saved[old] }
         saved[old] = nil
-        if saved != names { names = saved }
+        if saved != store.names { store.names = saved }
         func move<Value>(_ values: inout [String: Value]) {
             if let value = values.removeValue(forKey: old) { values[new] = value }
         }
@@ -433,6 +396,8 @@ final class OpenDisplaySession {
     private(set) var key: String
     private(set) var name: String
     private weak var sender: OpenDisplaySender?
+    /// The sender's, for the bitrate and pointer setting read while streaming.
+    private let store: OpenDisplayStore
 
     /// How long the display waits for a lost connection to come back.
     static let grace: TimeInterval = 10
@@ -485,6 +450,7 @@ final class OpenDisplaySession {
         self.key = key
         self.name = name
         self.sender = sender
+        store = sender.store
     }
 
     var hasLink: Bool { link != nil && linkReady }
@@ -794,7 +760,7 @@ final class OpenDisplaySession {
         let encoder: MoonlightVideoEncoder
         do {
             encoder = try MoonlightVideoEncoder(settings: .init(width: desktop.streamWidth, height: desktop.streamHeight,
-                                                                fps: desktop.fps, bitrateKbps: OpenDisplaySender.bitrateKbps)) {
+                                                                fps: desktop.fps, bitrateKbps: store.bitrateKbps)) {
                 [weak self] frame in self?.took(frame)
             }
         } catch {
@@ -871,7 +837,7 @@ final class OpenDisplaySession {
             return
         }
         // About half a second of video at the stream's rate.
-        let backlog = max(OpenDisplaySender.bitrateKbps * 1000 / 8 / 2, 1_000_000)
+        let backlog = max(store.bitrateKbps * 1000 / 8 / 2, 1_000_000)
         if link.pendingBytes > backlog {
             netDrops += 1
             needsKeyFrame = true
@@ -891,7 +857,7 @@ final class OpenDisplaySession {
         lock.lock()
         let encoder = self.encoder
         lock.unlock()
-        encoder?.setBitrate(kbps: OpenDisplaySender.bitrateKbps)
+        encoder?.setBitrate(kbps: store.bitrateKbps)
     }
 
     private func requestKeyFrameWhenDrained() {
@@ -980,7 +946,7 @@ final class OpenDisplaySession {
     /// stops with nil; a cable can't carry UDP, and a port that never acknowledged isn't
     /// tried again on the same connection.
     private func offerCursorUDP(_ port: UInt16?) {
-        guard let port, OpenDisplaySender.pointerOverUDP, let tcp = link as? OpenDisplayTCPChannel,
+        guard let port, store.pointerOverUDP, let tcp = link as? OpenDisplayTCPChannel,
               case let .hostPort(host, _)? = tcp.reachedAddress else { return closeCursorUDP() }
         guard port != cursorUDPPort else { return }
         closeCursorUDP()
