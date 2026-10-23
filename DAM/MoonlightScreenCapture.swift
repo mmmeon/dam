@@ -234,8 +234,8 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
 
     deinit { setLive(false) }
 
-    /// Counts this capture among `liveCaptures` while it runs, once.
-    private func setLive(_ isLive: Bool) {
+    /// Counts this capture among `liveCaptures` while it runs, once; called by tests too.
+    func setLive(_ isLive: Bool) {
         lock.lock()
         let changed = live != isLive && (!isLive || !stopped)
         if changed { live = isLive }

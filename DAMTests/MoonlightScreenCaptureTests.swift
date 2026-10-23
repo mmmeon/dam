@@ -125,6 +125,29 @@ final class MoonlightScreenCaptureTests: XCTestCase {
         XCTAssertEqual(asked, 1)
     }
 
+    /// A capture counts once while it runs, whether it then stops, stops on its own or goes,
+    /// and not again once stopped.
+    func testACaptureCountsOnceAmongTheLiveOnes() {
+        let live = savedLive
+        let before = live()
+        var capture: MoonlightScreenCapture? = MoonlightScreenCapture(displayID: 1, width: 64, height: 64, fps: 30) { _, _ in }
+        capture?.setLive(true)
+        capture?.setLive(true)
+        XCTAssertEqual(live(), before + 1)
+        capture?.stop()
+        XCTAssertEqual(live(), before)
+        capture?.setLive(true)
+        capture?.setLive(false)
+        capture = nil
+        XCTAssertEqual(live(), before, "not counted again once stopped, nor taken off twice")
+
+        capture = MoonlightScreenCapture(displayID: 1, width: 64, height: 64, fps: 30) { _, _ in }
+        capture?.setLive(true)
+        XCTAssertEqual(live(), before + 1)
+        capture = nil
+        XCTAssertEqual(live(), before, "taken off as it goes")
+    }
+
     // MARK: frame rate
 
     func testLoosensTheFrameLimitOnlyWhenTheDisplayIsNoFasterThanTheStream() {
