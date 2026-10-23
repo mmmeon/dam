@@ -9,19 +9,34 @@
 //
 //    loginprobe <folder> [--delay seconds]
 //    loginprobe <folder> --stream port [--delay seconds]   (MJPEG over HTTP, below)
+//    loginprobe <folder> --devices [--delay seconds]       (Sidecar and AirPlay, below)
+//    loginprobe <folder> --checks [--delay seconds]        (encoder, usbmuxd, virtual-only, below)
 //
 
 import AppKit
+import AVFoundation
 import CoreImage
 import CoreMedia
+import Network
 import ScreenCaptureKit
 import SystemConfiguration
+import VideoToolbox
 
 var arguments = Array(CommandLine.arguments.dropFirst())
 var delay: Double = 0
 if let i = arguments.firstIndex(of: "--delay"), i + 1 < arguments.count {
     delay = Double(arguments[i + 1]) ?? 0
     arguments.removeSubrange(i...(i + 1))
+}
+var runChecks = false
+if let i = arguments.firstIndex(of: "--checks") {
+    runChecks = true
+    arguments.remove(at: i)
+}
+var listDevices = false
+if let i = arguments.firstIndex(of: "--devices") {
+    listDevices = true
+    arguments.remove(at: i)
 }
 var streamPort: UInt16?
 if let i = arguments.firstIndex(of: "--stream"), i + 1 < arguments.count {
@@ -248,6 +263,34 @@ func pointer() {
     note("pointer: making a HID system state source")
     let source = CGEventSource(stateID: .hidSystemState)
     move("HID tap, HID system state source", 70, event(source, .cghidEventTap))
+}
+
+if runChecks {
+    note("loginprobe --checks, macOS \(ProcessInfo.processInfo.operatingSystemVersionString)")
+    DispatchQueue.global().asyncAfter(deadline: .now() + delay + 120) {
+        note("timed out after \(Int(delay) + 120) s: the step above never finished")
+        exit(1)
+    }
+    DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
+        session()
+        listDisplays()
+        encoderCheck()
+        usbmuxdCheck()
+        virtualOnlyCheck()
+        note("done")
+        exit(0)
+    }
+    dispatchMain()
+}
+
+if listDevices {
+    note("loginprobe --devices, macOS \(ProcessInfo.processInfo.operatingSystemVersionString)")
+    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+        session()
+        devices()
+    }
+    // A run loop, not dispatchMain: SidecarCore and AVRouteDetector report on it.
+    RunLoop.main.run()
 }
 
 if let streamPort {
@@ -479,4 +522,251 @@ final class LoginStream {
         }
         return result.isEmpty ? ["<this Mac>"] : result
     }
+}
+
+// MARK: --devices
+
+// Whether what DAM uses to connect AirPlay displays and iPads is there at all: SidecarCore's
+// iPads (found through the signed-in user's Continuity services), AVRouteDetector's AirPlay
+// routes, and AirPlay receivers on the network by Bonjour. 20 s, since all three fill in as
+// they discover; then exits.
+
+func devices() {
+    let path = "/System/Library/PrivateFrameworks/SidecarCore.framework/SidecarCore"
+    var sidecar: NSObject?
+    if dlopen(path, RTLD_NOW) == nil {
+        note("Sidecar: SidecarCore did not load")
+    } else if let cls = NSClassFromString("SidecarDisplayManager") as? NSObject.Type,
+              cls.responds(to: NSSelectorFromString("sharedManager")) {
+        let sel = NSSelectorFromString("isSupported")
+        let supported = cls.responds(to: sel)
+            && unsafeBitCast(cls.method(for: sel), to: (@convention(c) (AnyObject, Selector) -> Bool).self)(cls, sel)
+        sidecar = cls.perform(NSSelectorFromString("sharedManager"))?.takeUnretainedValue() as? NSObject
+        note("Sidecar: isSupported \(supported), manager \(sidecar == nil ? "nil" : "made")")
+    } else {
+        note("Sidecar: no SidecarDisplayManager")
+    }
+
+    let detector = AVRouteDetector()
+    detector.isRouteDetectionEnabled = true
+
+    let browser = NWBrowser(for: .bonjour(type: "_airplay._tcp", domain: nil), using: .tcp)
+    browser.stateUpdateHandler = { state in
+        if case .failed(let error) = state { note("AirPlay Bonjour: failed \(error)") }
+    }
+    // Locals, not globals: main.swift's globals below the run loop line are never initialized.
+    var airPlayReceivers: Set<String> = []
+    browser.browseResultsChangedHandler = { results, _ in
+        for result in results {
+            if case .service(let name, _, _, _) = result.endpoint { airPlayReceivers.insert(name) }
+        }
+    }
+    browser.start(queue: .main)
+
+    func report(_ when: String) {
+        if let sidecar {
+            let found = (sidecar.value(forKey: "devices") as? [NSObject] ?? [])
+                .map { "\($0.value(forKey: "name") ?? "?")" }
+            let connected = (sidecar.value(forKey: "connectedDevices") as? [NSObject] ?? []).count
+            note("Sidecar \(when): \(found.count) devices \(found), \(connected) connected")
+        }
+        note("AVRouteDetector \(when): multipleRoutesDetected \(detector.multipleRoutesDetected)")
+        note("AirPlay Bonjour \(when): \(airPlayReceivers.count) receivers \(airPlayReceivers.sorted())")
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 5) { report("after 5 s") }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 20) {
+        report("after 20 s")
+        browser.cancel()
+        note("done")
+        exit(0)
+    }
+}
+
+// MARK: --checks
+
+// What a login window agent for DAM would rely on that the other modes don't show: hardware
+// H.264 encoding as root, reaching an iPad's OpenDisplay receiver through usbmuxd, and where
+// the login window draws when a virtual display is the main or the only display.
+
+/// The main display, once, as the encoder's input.
+func mainDisplayBuffer() -> CVPixelBuffer? {
+    guard let image = CGDisplayCreateImage(CGMainDisplayID()) else { return nil }
+    var buffer: CVPixelBuffer?
+    let attributes = [kCVPixelBufferIOSurfacePropertiesKey: [:]] as CFDictionary
+    CVPixelBufferCreate(nil, image.width, image.height, kCVPixelFormatType_32BGRA, attributes, &buffer)
+    guard let buffer else { return nil }
+    ciContext.render(CIImage(cgImage: image), to: buffer)
+    return buffer
+}
+
+func encoderCheck() {
+    guard let buffer = mainDisplayBuffer() else { return note("encoder: no picture of the main display to encode") }
+    let width = Int32(CVPixelBufferGetWidth(buffer)), height = Int32(CVPixelBufferGetHeight(buffer))
+    let lock = NSLock()
+    var out = 0, keyframes = 0, bytes = 0, failures = 0
+    var session: VTCompressionSession?
+    let specification = [kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder: true] as CFDictionary
+    let status = VTCompressionSessionCreate(allocator: nil, width: width, height: height, codecType: kCMVideoCodecType_H264,
+                                            encoderSpecification: specification, imageBufferAttributes: nil,
+                                            compressedDataAllocator: nil, outputCallback: nil, refcon: nil,
+                                            compressionSessionOut: &session)
+    guard status == noErr, let session else { return note("encoder: no hardware H.264 session (\(status))") }
+    VTSessionSetProperty(session, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)
+    VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: 30 as CFNumber)
+    var hardware: CFTypeRef?
+    VTSessionCopyProperty(session, key: kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder,
+                          allocator: nil, valueOut: &hardware)
+    note("encoder: H.264 \(width)×\(height), hardware \(hardware.map { "\($0)" } ?? "unknown")")
+    let started = ProcessInfo.processInfo.systemUptime
+    for frame in 0..<90 {
+        let time = CMTime(value: CMTimeValue(frame), timescale: 30)
+        VTCompressionSessionEncodeFrame(session, imageBuffer: buffer, presentationTimeStamp: time, duration: .invalid,
+                                        frameProperties: nil, infoFlagsOut: nil) { status, _, sample in
+            lock.lock(); defer { lock.unlock() }
+            guard status == noErr, let sample else { failures += 1; return }
+            out += 1
+            bytes += CMSampleBufferGetTotalSampleSize(sample)
+            let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: false) as? [[CFString: Any]]
+            if attachments?.first?[kCMSampleAttachmentKey_NotSync] as? Bool != true { keyframes += 1 }
+        }
+    }
+    VTCompressionSessionCompleteFrames(session, untilPresentationTimeStamp: .invalid)
+    let seconds = ProcessInfo.processInfo.systemUptime - started
+    VTCompressionSessionInvalidate(session)
+    lock.lock(); defer { lock.unlock() }
+    note(String(format: "encoder: 90 frames in %.2f s (%.0f fps), %d out, %d keyframes, %d failed, %ld KB in all",
+                seconds, 90 / seconds, out, keyframes, failures, bytes / 1024))
+}
+
+func usbmuxdCheck() {
+    func open() -> Int32? {
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        _ = withUnsafeMutableBytes(of: &address.sun_path) { raw in
+            "/var/run/usbmuxd".utf8CString.withUnsafeBytes { raw.copyMemory(from: $0) }
+        }
+        let connected = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+        }
+        guard fd >= 0, connected == 0 else {
+            note("usbmuxd: could not connect: \(String(cString: strerror(errno)))")
+            if fd >= 0 { close(fd) }
+            return nil
+        }
+        var timeout = timeval(tv_sec: 5, tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        var on: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+        return fd
+    }
+    func exchange(_ fd: Int32, _ body: [String: Any]) -> [String: Any]? {
+        var object = body
+        object["ProgName"] = "loginprobe"
+        guard let plist = try? PropertyListSerialization.data(fromPropertyList: object, format: .xml, options: 0) else { return nil }
+        var message = Data()
+        for value in [UInt32(16 + plist.count), 1, 8, 1] { withUnsafeBytes(of: value.littleEndian) { message.append(contentsOf: $0) } }
+        message.append(plist)
+        guard message.withUnsafeBytes({ write(fd, $0.baseAddress!, $0.count) }) == message.count else { return nil }
+        func read(_ count: Int) -> Data? {
+            var data = Data(count: count), at = 0
+            while at < count {
+                let n = data.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress! + at, count - at) }
+                guard n > 0 else { return nil }
+                at += n
+            }
+            return data
+        }
+        guard let header = read(16) else { return nil }
+        let length = header.prefix(4).enumerated().reduce(0) { $0 | Int($1.element) << (8 * $1.offset) }
+        guard length >= 16, length < 1 << 24, let reply = read(length - 16) else { return nil }
+        return (try? PropertyListSerialization.propertyList(from: reply, format: nil)) as? [String: Any]
+    }
+
+    guard let fd = open() else { return }
+    let list = exchange(fd, ["MessageType": "ListDevices"])
+    close(fd)
+    let devices = (list?["DeviceList"] as? [[String: Any]] ?? []).compactMap { entry -> (Int, String)? in
+        guard let properties = entry["Properties"] as? [String: Any],
+              properties["ConnectionType"] as? String == "USB",
+              let id = (entry["DeviceID"] as? NSNumber)?.intValue else { return nil }
+        return (id, properties["SerialNumber"] as? String ?? "?")
+    }
+    note("usbmuxd: \(list == nil ? "no answer to ListDevices" : "\(devices.count) on USB")")
+    for (id, serial) in devices {
+        guard let fd = open() else { continue }
+        let port = UInt16(9000)
+        let reply = exchange(fd, ["MessageType": "Connect", "DeviceID": id, "PortNumber": Int(port.bigEndian)])
+        close(fd)
+        let number = (reply?["Number"] as? NSNumber)?.intValue
+        let meaning = number == 0 ? "connected: the receiver is listening" : number == 3 ? "refused: nothing listening (receiver app not open?)" : "result \(number.map(String.init) ?? "none")"
+        note("usbmuxd: device \(id) (\(serial.prefix(8))…) port 9000 → \(meaning)")
+    }
+}
+
+/// Whether the login window follows the main display onto a virtual one, and where it draws
+/// when the virtual display is the only one: what a Mac without a screen of its own would show.
+func virtualOnlyCheck() {
+    // Signed in, turning the display off would disturb the user and the DAM reacting to it.
+    var uid: uid_t = 0
+    guard SCDynamicStoreCopyConsoleUser(nil, &uid, nil) as String? == "loginwindow" else {
+        return note("virtual-only: skipped, someone is signed in")
+    }
+    let physical = CGMainDisplayID()
+    let descriptor = CGVirtualDisplayDescriptor()
+    descriptor.setDispatchQueue(DispatchQueue(label: "virtualonly"))
+    descriptor.name = "DAM Login Probe"
+    descriptor.sizeInMillimeters = CGSize(width: 600, height: 340)
+    descriptor.maxPixelsWide = 1920
+    descriptor.maxPixelsHigh = 1080
+    descriptor.vendorID = 0x3456
+    descriptor.productID = 0x1234
+    descriptor.serialNum = 0x100A
+    var vd: CGVirtualDisplay? = CGVirtualDisplay(descriptor: descriptor)
+    let settings = CGVirtualDisplaySettings()
+    settings.hiDPI = 0
+    settings.modes = [CGVirtualDisplayMode(width: 1920, height: 1080, refreshRate: 60)]
+    guard let id = vd.flatMap({ $0.apply(settings) ? $0.displayID : nil }) else {
+        return note("virtual-only: CGVirtualDisplay could not be made")
+    }
+    for _ in 0..<50 where !displays().contains(id) { usleep(100_000) }
+    sleep(2)
+    note("virtual-only: made \(id)")
+
+    // Main: the display at the origin.
+    var config: CGDisplayConfigRef?
+    CGBeginDisplayConfiguration(&config)
+    CGConfigureDisplayOrigin(config, id, 0, 0)
+    CGConfigureDisplayOrigin(config, physical, 1920, 0)
+    let moved = CGCompleteDisplayConfiguration(config, .forAppOnly)
+    sleep(3)
+    note("virtual-only: virtual made main → \(moved.rawValue); main now \(CGMainDisplayID())")
+    listDisplays()
+    displayImage(id, "virtual-main")
+    displayImage(physical, "physical-not-main")
+
+    // Only: the physical display turned off, as an unplug would, for this process only, so
+    // it comes back when the probe exits whatever happens.
+    typealias Enable = @convention(c) (CGDisplayConfigRef?, CGDirectDisplayID, Bool) -> CGError
+    if let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGSConfigureDisplayEnabled") {
+        let enable = unsafeBitCast(symbol, to: Enable.self)
+        CGBeginDisplayConfiguration(&config)
+        let off = enable(config, physical, false)
+        let done = CGCompleteDisplayConfiguration(config, .forAppOnly)
+        sleep(4)
+        note("virtual-only: physical display off → \(off.rawValue)/\(done.rawValue); online now \(displays())")
+        listDisplays()
+        displayImage(id, "virtual-only")
+        CGBeginDisplayConfiguration(&config)
+        _ = enable(config, physical, true)
+        let back = CGCompleteDisplayConfiguration(config, .forAppOnly)
+        sleep(3)
+        note("virtual-only: physical display on again → \(back.rawValue); online \(displays())")
+    } else {
+        note("virtual-only: no CGSConfigureDisplayEnabled")
+    }
+    vd = nil
+    sleep(2)
+    note("virtual-only: released; displays \(displays())")
+    listDisplays()
 }

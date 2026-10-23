@@ -12,6 +12,10 @@
 #    tools/loginprobe/loginprobe install      the LaunchAgent (asks for the admin password)
 #    tools/loginprobe/loginprobe install stream   instead streams the login window as MJPEG on
 #                                                 port 8090 until sign-in
+#    tools/loginprobe/loginprobe install devices  instead lists Sidecar's iPads and AirPlay
+#                                                 receivers there
+#    tools/loginprobe/loginprobe install checks   instead tries hardware H.264, an iPad's receiver
+#                                                 through usbmuxd, and a virtual display alone
 #    tools/loginprobe/loginprobe results      every report so far, newest last
 #    tools/loginprobe/loginprobe uninstall    the LaunchAgent and its binary; keeps results
 #
@@ -79,7 +83,9 @@ cmd_install() {
     case ${1:-} in
         "") ;;
         stream) mode=stream extra=" --stream 8090" ;;
-        *) die "install takes nothing or stream" ;;
+        devices) mode=devices extra=" --devices" ;;
+        checks) mode=checks extra=" --checks" ;;
+        *) die "install takes nothing, stream, devices or checks" ;;
     esac
     # A wrapper names each run's folder by the time it starts.
     cat > $cache/start <<EOF
@@ -143,5 +149,5 @@ case ${1:-} in
     install) cmd_install ${2:-} ;;
     results) cmd_results ;;
     uninstall) cmd_uninstall ;;
-    *) sed -n '3,25p' $0 | sed -E 's/^# ?//'; exit 2 ;;
+    *) sed -n '3,29p' $0 | sed -E 's/^# ?//'; exit 2 ;;
 esac
