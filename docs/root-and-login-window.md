@@ -141,8 +141,8 @@ worked.
   Apple ID nearby).
 - **Hardware H.264 works as root** (`install checks`): 90 frames of 1920×1080 in 0.54 s
   (165 fps), hardware encoder confirmed.
-- **usbmuxd answers root**: it listed the iPad on USB; dialing port 9000 got "nothing
-  listening", as the receiver app wasn't open, so a receiver connection is still unseen.
+- **usbmuxd reaches the receiver**: it lists the iPad on USB, and with the OpenDisplay app open
+  on it, dialing port 9000 as root at the login window connected (second run, 2026-10-23).
 - **The login window follows the main display**: with a virtual display made main
   (`CGConfigureDisplayOrigin` to 0,0) the user list moved onto it and the physical display
   showed only wallpaper. With the physical display turned off (`CGSConfigureDisplayEnabled`,
