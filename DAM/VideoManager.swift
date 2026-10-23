@@ -148,6 +148,8 @@ final class VideoManager: ObservableObject {
     /// Caches IOKit-derived display names by cgID. Valid for the lifetime of a
     /// cgID — IDs are reassigned on disconnect, so stale entries are never accessed.
     private var ioKitNameCache: [CGDirectDisplayID: String] = [:]
+    /// The names monitors were told apart by at the last merge (see `distinctNames`).
+    private var monitorNameCache: [CGDirectDisplayID: String] = [:]
     /// The iPad name last paired with each Sidecar display. SidecarCore can list no connected
     /// iPad for a moment while displays reconfigure; renaming the display then would orphan
     /// its anchor, which is keyed by name.
@@ -448,9 +450,16 @@ final class VideoManager: ObservableObject {
         vendor == sidecarVendorNumber && model == airPlayModelNumber
     }
 
-    /// Whether a display is one of DAM's virtual anchors, by the vendor and product they carry.
-    static func isAnchorDisplay(vendor: UInt32, model: UInt32) -> Bool {
-        vendor == anchorVendorID && model == anchorProductID
+    /// Whether display `cgID`, of `vendor`, is one of DAM's own virtual displays (anchors, the
+    /// bootstrap stand-in, streaming displays all carry DAM's vendor) but none of `streaming`:
+    /// one being released or removed, or not found yet. It is no display of the Mac's.
+    static func isDAMDisplayGoing(_ cgID: CGDirectDisplayID, vendor: UInt32,
+                                  streaming: Set<CGDirectDisplayID>) -> Bool {
+        vendor == anchorVendorID && !streaming.contains(cgID)
+    }
+
+    func isDAMDisplayGoing(_ cgID: CGDirectDisplayID) -> Bool {
+        Self.isDAMDisplayGoing(cgID, vendor: CGDisplayVendorNumber(cgID), streaming: streamingDisplayIDs)
     }
 
     static func isAirPlayDisplay(_ cgID: CGDirectDisplayID) -> Bool {
@@ -1336,20 +1345,47 @@ final class VideoManager: ObservableObject {
     // MARK: - Private
 
     /// `names` with those more than one display has told apart, as macOS names identical
-    /// monitors: the first in `rank`'s order (serial number, then unit number) keeps the
-    /// name, so what was saved under it stays its own, and each other gets " (2)", " (3)"…
+    /// monitors: one keeps the name, each other gets " (2)", " (3)"… What a display was
+    /// given stays its own while it stays connected, so that what was saved under it does:
+    /// a display keeps the name `kept` gives it (the last merge's), one that came takes the
+    /// name `remembered` gives it (the one it had when last seen) if it is free, and the
+    /// rest, in `rank`'s order (serial number, then unit number), take the plain name if it
+    /// is free, else the next free " (n)". A name another display really has is never given.
     static func distinctNames(_ names: [CGDirectDisplayID: String],
+                              kept: [CGDirectDisplayID: String] = [:],
+                              remembered: (CGDirectDisplayID) -> String? = { _ in nil },
                               rank: (CGDirectDisplayID) -> (UInt32, UInt32, UInt32)) -> [CGDirectDisplayID: String] {
-        var result = names
-        var taken = Set(names.values)
-        for (name, ids) in Dictionary(grouping: names.keys, by: { names[$0]! }) where ids.count > 1 {
+        let reserved = Set(names.values)
+        // Its own name, or that name told apart, if no other display really has it.
+        let fits = { (id: CGDirectDisplayID, name: String) -> Bool in
+            guard let base = names[id] else { return false }
+            if name == base { return true }
+            guard !reserved.contains(name), name.hasPrefix(base + " ("), name.hasSuffix(")"),
+                  let n = Int(name.dropFirst(base.count + 2).dropLast()) else { return false }
+            return n >= 2
+        }
+        let order = names.keys.sorted { rank($0) < rank($1) }
+        var result: [CGDirectDisplayID: String] = [:]
+        var taken = Set<String>()
+        let choose = { (choice: (CGDirectDisplayID) -> String?) in
+            for id in order where result[id] == nil {
+                guard let name = choice(id), fits(id, name), !taken.contains(name) else { continue }
+                result[id] = name
+                taken.insert(name)
+            }
+        }
+        choose { kept[$0] }
+        choose(remembered)
+        for id in order where result[id] == nil {
+            let base = names[id]!
+            var name = base
             var n = 2
-            for cgID in ids.sorted(by: { rank($0) < rank($1) }).dropFirst() {
-                while taken.contains("\(name) (\(n))") { n += 1 }
-                result[cgID] = "\(name) (\(n))"
-                taken.insert("\(name) (\(n))")
+            while taken.contains(name) || (name != base && reserved.contains(name)) {
+                name = "\(base) (\(n))"
                 n += 1
             }
+            result[id] = name
+            taken.insert(name)
         }
         return result
     }
@@ -1471,11 +1507,28 @@ final class VideoManager: ObservableObject {
         if bootstrapDisplayID != 0 { anchorIDs.insert(bootstrapDisplayID) }
 
         let streamingIDs = streamingDisplayIDs
-        // Two monitors of one model have one name; each is told apart by its own.
+        // Two monitors of one model have one name; each is told apart by its own, which it
+        // keeps while connected and gets again when it comes back.
+        let monitorKey = { (cgID: CGDirectDisplayID) -> String? in
+            // Not DAM's streaming displays, named as they are made.
+            guard CGDisplayVendorNumber(cgID) != Self.anchorVendorID else { return nil }
+            return VisibilityPreferences.monitorKey(vendor: CGDisplayVendorNumber(cgID), model: CGDisplayModelNumber(cgID),
+                                                    serial: CGDisplaySerialNumber(cgID))
+        }
+        let rememberedNames = VisibilityPreferences.monitorNames
         let externalNames = Self.distinctNames(idToName.filter { cgID, _ in
             onlineSet.contains(cgID) && !airPlayIDs.contains(cgID) && !anchorIDs.contains(cgID)
                 && CGDisplayIsBuiltin(cgID) == 0 && !sidecarIDs.contains(cgID)
-        }) { (CGDisplaySerialNumber($0), CGDisplayUnitNumber($0), $0) }
+                && !isDAMDisplayGoing(cgID)
+        }, kept: monitorNameCache, remembered: { monitorKey($0).flatMap { rememberedNames[$0] } }) {
+            (CGDisplaySerialNumber($0), CGDisplayUnitNumber($0), $0)
+        }
+        monitorNameCache = externalNames
+        var monitorNames = rememberedNames
+        for (cgID, name) in externalNames {
+            if let key = monitorKey(cgID) { monitorNames[key] = name }
+        }
+        if monitorNames != rememberedNames { VisibilityPreferences.monitorNames = monitorNames }
         for (cgID, name) in externalNames where name != idToName[cgID] {
             if let base = idToName[cgID] { VisibilityPreferences.inheritDisplaySettings(from: base, to: name) }
         }
@@ -1483,9 +1536,10 @@ final class VideoManager: ObservableObject {
         for cgID in onlineIDs {
             guard !airPlayIDs.contains(cgID) else { continue }
             guard !anchorIDs.contains(cgID)  else { continue }   // hide virtual anchors from display list
-            // And one not filed as an anchor: one being released, which stays online until its
-            // teardown has landed, or one not found yet.
-            guard !Self.isAnchorDisplay(vendor: CGDisplayVendorNumber(cgID), model: CGDisplayModelNumber(cgID)) else { continue }
+            // And none of DAM's own not filed as what it is: an anchor or the bootstrap stand-in
+            // being released, which stays online until its teardown has landed, a streaming
+            // display removed or not found yet, or an anchor not found yet.
+            guard !isDAMDisplayGoing(cgID) else { continue }
             guard let name = externalNames[cgID] ?? idToName[cgID] else { continue }
             let isBuiltIn   = CGDisplayIsBuiltin(cgID) != 0
             // A mirror slave leaves NSScreen but is still showing a desktop.
