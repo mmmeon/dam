@@ -54,6 +54,9 @@ final class ArrangeTouchBar: NSObject {
 
     private override init() {}
 
+    /// Whether a page of the flow shows on the Touch Bar.
+    var isShowing: Bool { bar?.isVisible == true }
+
     // MARK: - Flow
 
     /// Reads the arrangement and presents the first page. `back` re-presents the bar the

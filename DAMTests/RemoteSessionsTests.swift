@@ -16,13 +16,15 @@ private final class FakeSessionDisplays: SessionDisplays {
     var placeSucceeds = true
     /// Displays asked for and not yet made; nil makes them at once.
     var pendingMakes: [() -> Void]?
+    /// The mode displays come in, when not the one asked for.
+    var madeAs: StreamingDisplayModes.Mode?
 
     func makeDisplay(_ mode: StreamingDisplayModes.Mode, identity: VideoManager.StreamingIdentity, main: Bool,
                      completion: @escaping (CGDirectDisplayID?) -> Void) {
         made.append((mode, identity))
         if main { madeMain.append(identity) }
         let id = nextID
-        if let id { modes[id] = mode }
+        if let id { modes[id] = madeAs ?? mode }
         if pendingMakes != nil { pendingMakes?.append { completion(id) } } else { completion(id) }
     }
 
@@ -326,6 +328,11 @@ final class RemoteSessionsTests: XCTestCase {
         XCTAssertEqual(try start.get().displayID, 100)
         XCTAssertEqual(try start.get().warnings.count, 2)
         XCTAssertEqual(fake.outputUID, "speakers")
+        // Neither failure is kept as a choice.
+        XCTAssertNoThrow(try c.end(app: "sunshine").get())
+        XCTAssertTrue(c.sessions.isEmpty)
+        XCTAssertEqual(fake.removed, [100])
+        XCTAssertEqual(c.profile(for: "sunshine"), SessionProfile())
     }
 
     func testOutputGoesBackOnlyOnceNoSessionWantsItsOwn() {
@@ -1254,9 +1261,68 @@ final class RemoteSessionsTests: XCTestCase {
         detection.opened = "in"
         detection.closed = "out"
         profile.detection = detection
+        detection.logProcessName = "minehost"
+        profile.detection = detection
         let decoded = try JSONDecoder().decode(SessionProfile.self, from: JSONEncoder().encode(profile))
         XCTAssertEqual(decoded, profile)
         XCTAssertNil(try JSONDecoder().decode(SessionProfile.self, from: Data("{}".utf8)).detection)
+        // Saved before it had a process.
+        let older = try JSONDecoder().decode(SessionDetection.self, from: Data(#"{"kind":"log","logPath":"~/x.log"}"#.utf8))
+        XCTAssertEqual(older.logProcessName, "")
+        XCTAssertEqual(older.logPath, "~/x.log")
+    }
+
+    func testAnAddedAppsLogCountsOnlyWhileItsProcessRuns() throws {
+        func detector(process: String) throws -> LogSessionDetector {
+            var detection = SessionDetection()
+            detection.logPath = "/nonexistent/x.log"
+            detection.opened = "client joined"
+            detection.closed = "client left"
+            detection.logProcessName = process
+            return try XCTUnwrap(SessionDetectors.make(added: "mine", detection, adoptName: nil) as? LogSessionDetector)
+        }
+        var events: [SessionEvent] = []
+        let gone = try detector(process: "minehost_not_running_here")
+        gone.onEvent = { events.append($0) }
+        gone.handle("a client joined")
+        XCTAssertTrue(events.isEmpty)
+        let running = try detector(process: "launchd")
+        running.onEvent = { events.append($0) }
+        running.handle("a client joined")
+        XCTAssertEqual(events, [.opened(key: "", client: nil)])
+        // Without one, as before.
+        let none = try detector(process: "")
+        none.onEvent = { events.append($0) }
+        none.handle("a client joined")
+        XCTAssertEqual(events.count, 2)
+    }
+
+    func testALogCountingOnlyWhileTheAppRunsEndsWhenItQuits() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("x.log")
+        try "a client joined\n".write(to: url, atomically: false, encoding: .utf8)
+        let parse = try XCTUnwrap(SessionLogLines.custom(opened: "client joined", closed: "client left"))
+        var running = true
+        var events: [SessionEvent] = []
+        let detector = LogSessionDetector(app: "mine", url: url, parse: parse, isRunning: { running },
+                                          takesUpOpen: false, opensWhileRunning: true)
+        detector.onEvent = { events.append($0) }
+        detector.start()
+        defer { detector.stop() }
+        // What the log shows open isn't taken up.
+        XCTAssertTrue(events.isEmpty)
+        running = false
+        detector.checkRunning()
+        detector.handle("a client joined")
+        XCTAssertTrue(events.isEmpty)
+        // Quits before the next look: the open saw it running, so the quit still ends it.
+        running = true
+        detector.handle("a client joined")
+        running = false
+        detector.checkRunning()
+        XCTAssertEqual(events, [.opened(key: "", client: nil), .closed(key: "")])
     }
 
     func testWatcherRemakesAnAddedAppsDetector() {
@@ -1304,5 +1370,295 @@ final class RemoteSessionsTests: XCTestCase {
         watcher.update()
         XCTAssertEqual(made[2].running, false)
         XCTAssertNil(watcher.detectors[app])
+    }
+}
+
+// MARK: - What failed isn't learned
+
+extension RemoteSessionsTests {
+    func testAFailedPlacementIsntKept() {
+        let fake = FakeSessionDisplays()
+        fake.placeSucceeds = false
+        var profile = SessionProfile()
+        profile.placement = .main
+        let c = coordinator(fake, profiles: ["rustdesk": profile])
+        _ = start(c, SessionRequest(app: "rustdesk"))
+        c.end(app: "rustdesk")
+        XCTAssertEqual(c.profile(for: "rustdesk"), profile)
+    }
+
+    func testAPlacementChangedAfterAFailedOneIsKept() {
+        let fake = FakeSessionDisplays()
+        fake.placeSucceeds = false
+        var profile = SessionProfile()
+        profile.placement = .main
+        let c = coordinator(fake, profiles: ["rustdesk": profile])
+        _ = start(c, SessionRequest(app: "rustdesk"))
+        fake.placements[100] = .mirror
+        c.end(app: "rustdesk")
+        XCTAssertEqual(c.profile(for: "rustdesk").placement, .mirror)
+    }
+
+    func testAnOutputThatWasntConnectedIsntKept() {
+        let fake = FakeSessionDisplays()
+        var profile = SessionProfile()
+        profile.audioOutputUID = "gone"
+        let c = coordinator(fake, profiles: ["sunshine": profile])
+        _ = start(c, SessionRequest(app: "sunshine"))
+        XCTAssertEqual(fake.outputUID, "speakers")
+        c.end(app: "sunshine")
+        XCTAssertEqual(c.profile(for: "sunshine"), profile)
+    }
+
+    func testAFailedOutputAskedForIsntKept() {
+        let fake = FakeSessionDisplays()
+        let c = coordinator(fake)
+        _ = start(c, SessionRequest(app: "sunshine", audioOutputUID: "gone"))
+        c.end(app: "sunshine")
+        XCTAssertNil(c.profile(for: "sunshine").audioOutputUID)
+    }
+
+    func testASizeTheDisplayCouldntTakeIsntKept() {
+        let fake = FakeSessionDisplays()
+        fake.madeAs = StreamingDisplayModes.Mode(width: 1920, height: 1080, refreshRate: 60)
+        let c = coordinator(fake)
+        _ = start(c, SessionRequest(app: "sunshine", width: 1280, height: 800, fps: 60))
+        c.end(app: "sunshine")
+        XCTAssertNil(c.profile(for: "sunshine").width)
+
+        // Changed from there, it is.
+        _ = start(c, SessionRequest(app: "sunshine", width: 1280, height: 800, fps: 60))
+        fake.modes[100] = StreamingDisplayModes.Mode(width: 1600, height: 900, refreshRate: 60)
+        c.end(app: "sunshine")
+        XCTAssertEqual(c.profile(for: "sunshine").width, 1600)
+    }
+
+    func testAnotherSessionsRestoreIsntKept() {
+        let fake = FakeSessionDisplays()
+        var switching = SessionProfile()
+        switching.audioOutputUID = "blackhole"
+        let c = coordinator(fake, profiles: ["sunshine": switching, "rustdesk": SessionProfile()])
+        _ = start(c, SessionRequest(app: "sunshine"))
+        fake.nextID = 101
+        // Starts with Sunshine's output on.
+        _ = start(c, SessionRequest(app: "rustdesk"))
+        c.end(app: "sunshine")
+        XCTAssertEqual(fake.outputUID, "speakers")
+        c.end(app: "rustdesk")
+        XCTAssertNil(c.profile(for: "rustdesk").audioOutputUID)
+    }
+
+    // MARK: Quitting while starting
+
+    func testQuittingWhileStartingLeavesNothingForTheNextLaunch() {
+        let fake = FakeSessionDisplays()
+        fake.pendingMakes = []
+        var profile = SessionProfile()
+        profile.audioOutputUID = "blackhole"
+        let c = coordinator(fake, profiles: ["sunshine": profile])
+        var result: Result<SessionStart, SessionError>?
+        c.begin(SessionRequest(app: "sunshine")) { result = $0 }
+        c.endAll()
+        XCTAssertTrue(c.sessions.isEmpty)
+        XCTAssertFalse(fake.holdsLayout)
+        guard case .failure(.notActive("sunshine")) = result else { return XCTFail("not given up on") }
+        // The display comes after all, and goes; nothing is switched.
+        fake.pendingMakes?.forEach { $0() }
+        XCTAssertEqual(fake.removed, [100])
+        XCTAssertEqual(fake.outputUID, "speakers")
+        // Changed since, which the next launch leaves.
+        fake.outputUID = "blackhole"
+        _ = coordinator(fake)
+        XCTAssertEqual(fake.outputUID, "blackhole")
+    }
+
+    // MARK: Links
+
+    private func refusedAsNotFromLink(_ result: Result<Void, SessionError>) -> Bool {
+        if case .failure(.notFromLink) = result { return true }
+        return false
+    }
+
+    func testALinkCantEndOrJoinASessionItDidntStart() {
+        let fake = FakeSessionDisplays()
+        let c = coordinator(fake)
+        _ = start(c, SessionRequest(app: "rustdesk"))
+        XCTAssertTrue(refusedAsNotFromLink(c.end(app: "rustdesk", all: true, from: .link)))
+        guard case .failure(.notFromLink("rustdesk")) = start(c, SessionRequest(app: "rustdesk", origin: .link)) else {
+            return XCTFail("joined")
+        }
+        XCTAssertEqual(c.sessions["rustdesk"]?.count, 1)
+        // So the app's own end ends it.
+        c.end(app: "rustdesk")
+        XCTAssertNil(c.sessions["rustdesk"])
+        XCTAssertEqual(fake.removed, [100])
+    }
+
+    func testALinkEndsOnlyWhatLinksStarted() {
+        let fake = FakeSessionDisplays()
+        let c = coordinator(fake)
+        _ = start(c, SessionRequest(app: "sunshine", origin: .link))
+        XCTAssertNoThrow(try start(c, SessionRequest(app: "sunshine", origin: .link))?.get())
+        _ = start(c, SessionRequest(app: "sunshine"))
+        XCTAssertEqual(c.sessions["sunshine"]?.count, 3)
+        XCTAssertNoThrow(try c.end(app: "sunshine", all: true, from: .link).get())
+        XCTAssertEqual(c.sessions["sunshine"]?.count, 1)
+        XCTAssertTrue(refusedAsNotFromLink(c.end(app: "sunshine", from: .link)))
+        c.end(app: "sunshine")
+        XCTAssertNil(c.sessions["sunshine"])
+    }
+
+    func testALinkCantBlackOutTheScreens() throws {
+        let fake = FakeSessionDisplays()
+        var profile = SessionProfile()
+        profile.blackout = true
+        let c = coordinator(fake, profiles: ["rustdesk": profile])
+        // Asking to is refused, with nothing set up.
+        XCTAssertEqual(start(c, SessionRequest(app: "sunshine", origin: .link, blackout: true)), .failure(.blackoutFromLink))
+        XCTAssertNil(c.sessions["sunshine"])
+        XCTAssertTrue(fake.made.isEmpty)
+        // A profile that blacks out doesn't for a link, which is told.
+        let started = try XCTUnwrap(try start(c, SessionRequest(app: "rustdesk", origin: .link))?.get())
+        XCTAssertEqual(started.displayID, 100)
+        XCTAssertEqual(started.warnings, ["The screens weren't blacked out, as a link can't black them out."])
+        XCTAssertNil(fake.blackoutKeeping)
+        XCTAssertFalse(c.isBlackedOut)
+        c.end(app: "rustdesk", from: .link)
+        // Nor is the profile changed, so the app's own sessions still black out.
+        XCTAssertTrue(c.profile(for: "rustdesk").blackout)
+        XCTAssertNoThrow(try start(c, SessionRequest(app: "rustdesk"))?.get())
+        XCTAssertEqual(fake.blackoutKeeping, [100])
+        // Asking not to is a link's to ask.
+        c.end(app: "rustdesk")
+        XCTAssertNoThrow(try start(c, SessionRequest(app: "sunshine", origin: .link, blackout: false))?.get())
+    }
+
+    // MARK: Sessions only DAM sees
+
+    func testARequestsAdoptingSessionCanBeEnded() {
+        let fake = FakeSessionDisplays()
+        fake.others = ["Foo Display": 7]
+        let c = coordinator(fake)
+        _ = start(c, SessionRequest(app: "foo", display: .adopt, placement: .mirror))
+        // No detector would see the app's end, so it is ended as any other.
+        XCTAssertEqual(c.sessions["foo"]?.followsApp, false)
+        XCTAssertNoThrow(try c.end(app: "foo", all: true).get())
+        XCTAssertTrue(fake.removed.isEmpty)
+
+        _ = start(c, SessionRequest(app: "foo", origin: .detector, display: .adopt))
+        XCTAssertEqual(c.sessions["foo"]?.followsApp, true)
+    }
+
+    func testNoDisplayToAdoptLeavesTheScreensLit() throws {
+        let fake = FakeSessionDisplays()
+        let c = coordinator(fake)
+        c.adoptInterval = 0.001
+        var result: Result<SessionStart, SessionError>?
+        c.begin(SessionRequest(app: "foo", display: .adopt, blackout: true)) { result = $0 }
+        let done = expectation(description: "gave up looking")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { done.fulfill() }
+        wait(for: [done], timeout: 2)
+        let start = try XCTUnwrap(try result?.get())
+        XCTAssertNil(start.displayID)
+        XCTAssertEqual(start.warnings.count, 2)
+        XCTAssertNil(fake.blackoutKeeping)
+        XCTAssertFalse(c.isBlackedOut)
+    }
+
+    // MARK: Detectors
+
+    func testOpenDisplayLineTimes() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let now = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 23, hour: 1)))
+        let today = try XCTUnwrap(SessionLogLines.openDisplayTime(of: "[00:30:00.250] capture ended: session x", now: now, calendar: calendar))
+        XCTAssertEqual(today.timeIntervalSince(now), -1800 + 0.25, accuracy: 0.001)
+        // Later in the day than now: yesterday's.
+        let yesterday = SessionLogLines.openDisplayTime(of: "[23:59:00.000] capture ended: session x", now: now, calendar: calendar)
+        XCTAssertEqual(yesterday, now - 3600 - 60)
+        XCTAssertNil(SessionLogLines.openDisplayTime(of: "capture ended: session x", now: now, calendar: calendar))
+        XCTAssertNil(SessionLogLines.openDisplayTime(of: "[1] capture ended: session x", now: now, calendar: calendar))
+    }
+
+    /// The time of a test line's `[seconds]`.
+    private static func secondsTime(_ line: String) -> Date? {
+        SessionLogLines.captures(#"^\[(\d+)\]"#, in: line).flatMap { Double($0[0]) }.map { Date(timeIntervalSince1970: $0) }
+    }
+
+    func testLinesFromBeforeTheAppStartedAreLeftOut() {
+        let lines = ["[1] a", "no time", "[5] b", "more", "[9] c"]
+        XCTAssertEqual(LogSessionDetector.lines(lines, since: Date(timeIntervalSince1970: 5.5), time: Self.secondsTime),
+                       ["[5] b", "more", "[9] c"])
+        XCTAssertEqual(LogSessionDetector.lines(lines, since: Date(timeIntervalSince1970: 20), time: Self.secondsTime), [])
+    }
+
+    func testOpenDisplayIsntRevivedFromAnEarlierRun() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("opendisplay.log")
+        // A session a crash left open, then one since the app started again.
+        try """
+        [100] capture started: 1x1 display 5 generation 1 mode extend localCursor=true session wifi:old
+        [200] started
+        [300] capture started: 1x1 display 6 generation 1 mode extend localCursor=true session wifi:new
+
+        """.write(to: url, atomically: false, encoding: .utf8)
+        var launched = Date(timeIntervalSince1970: 200)
+        var events: [SessionEvent] = []
+        let detector = LogSessionDetector(app: "opendisplay", url: url, parse: SessionLogLines.openDisplay, isRunning: { true },
+                                          launched: { launched }, lineTime: Self.secondsTime)
+        detector.onEvent = { events.append($0) }
+        detector.start()
+        XCTAssertEqual(events, [.opened(key: "wifi:new", client: "new", display: .own(6))])
+        // Started again between looks: what was open went with it.
+        launched = Date(timeIntervalSince1970: 400)
+        detector.checkRunning()
+        XCTAssertEqual(events.last, .closed(key: "wifi:new"))
+        detector.stop()
+        XCTAssertEqual(events.count, 2)
+    }
+
+    func testALogNotTakenUpStillEndsWhenTheAppQuits() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("log.txt")
+        try "guest#1 connected.\n".write(to: url, atomically: false, encoding: .utf8)
+        var running = true
+        var events: [SessionEvent] = []
+        let detector = LogSessionDetector(app: "parsec", url: url, parse: SessionLogLines.parsec, isRunning: { running },
+                                          takesUpOpen: false)
+        detector.onEvent = { events.append($0) }
+        detector.start()
+        defer { detector.stop() }
+        XCTAssertTrue(events.isEmpty)
+        detector.handle("guest#2 connected.")
+        running = false
+        detector.checkRunning()
+        XCTAssertEqual(events, [.opened(key: "guest#2", client: "guest"), .closed(key: "guest#2")])
+    }
+
+    func testProcessesAreFoundByPath() {
+        XCTAssertFalse(RunningProcesses.matching(["launchd"]).isEmpty)
+        XCTAssertNotNil(RunningProcesses.started(["launchd"]))
+        let me = RunningProcesses.all().first { $0.pid == getpid() }
+        XCTAssertNotNil(me)
+        XCTAssertNotNil(RunningProcesses.path(of: getpid()))
+        // The system's own parsecd isn't Parsec's.
+        XCTAssertTrue(RunningProcesses.matching(["parsecd"], path: "/Parsec.app/not-here/").isEmpty)
+    }
+
+    func testAnAppsIconIsFoundWhereverItIs() {
+        // By bundle ID.
+        XCTAssertEqual(SettingsWindowController.sessionAppURL("screensharing", detection: nil)?.lastPathComponent,
+                       "Screen Sharing.app")
+        // An added app by the process its log names, while it runs: the outermost app.
+        var detection = SessionDetection(kind: .log)
+        detection.logProcessName = "Finder"
+        XCTAssertEqual(SettingsWindowController.sessionAppURL("added-test", detection: detection)?.lastPathComponent,
+                       "Finder.app")
+        detection.logProcessName = "no-such-process"
+        XCTAssertNil(SettingsWindowController.sessionAppURL("added-test", detection: detection))
     }
 }

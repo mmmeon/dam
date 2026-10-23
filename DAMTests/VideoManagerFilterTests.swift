@@ -40,6 +40,33 @@ final class VideoManagerFilterTests: XCTestCase {
                     pixelWidth: w, pixelHeight: h, refreshRate: hz, isHiDPI: false)
     }
 
+    // MARK: - VideoManager.distinctNames
+
+    /// Ranks by a serial number per display, as CGDisplaySerialNumber gives.
+    private func ranked(_ serials: [CGDirectDisplayID: UInt32]) -> (CGDirectDisplayID) -> (UInt32, UInt32, UInt32) {
+        { (serials[$0] ?? 0, 0, $0) }
+    }
+
+    func testDistinctNames_differentModels_unchanged() {
+        let names: [CGDirectDisplayID: String] = [2: "DELL U2720Q", 3: "LG UltraFine"]
+        XCTAssertEqual(VideoManager.distinctNames(names, rank: ranked([:])), names)
+    }
+
+    func testDistinctNames_oneModelTwice_secondNumbered() {
+        // The lower serial keeps the name, whichever display ID each has this time.
+        let names: [CGDirectDisplayID: String] = [2: "DELL U2720Q", 3: "DELL U2720Q", 4: "LG UltraFine"]
+        XCTAssertEqual(VideoManager.distinctNames(names, rank: ranked([2: 900, 3: 100])),
+                       [3: "DELL U2720Q", 2: "DELL U2720Q (2)", 4: "LG UltraFine"])
+        XCTAssertEqual(VideoManager.distinctNames(names, rank: ranked([2: 100, 3: 900])),
+                       [2: "DELL U2720Q", 3: "DELL U2720Q (2)", 4: "LG UltraFine"])
+    }
+
+    func testDistinctNames_threeOfAModel_andANameAlreadyNumbered() {
+        let names: [CGDirectDisplayID: String] = [2: "Dell", 3: "Dell", 4: "Dell", 5: "Dell (2)"]
+        XCTAssertEqual(VideoManager.distinctNames(names, rank: ranked([:])),
+                       [2: "Dell", 3: "Dell (3)", 4: "Dell (4)", 5: "Dell (2)"])
+    }
+
     // MARK: - VideoManager.filter(airPlayDevices:hidden:)
 
     func testFilterAirPlay_emptyList_returnsEmpty() {

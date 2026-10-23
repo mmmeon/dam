@@ -43,8 +43,7 @@ final class RotationPicker {
         }
         let rotations = DisplayRotation.allCases
         let currentIndex = rotations.firstIndex(of: current) ?? 0
-        picker.open(choices: rotations.map(\.label),
-                    cursor: ChoicePicker.startCursor(current: currentIndex, count: rotations.count)) { [weak self] i in
+        picker.open(choices: rotations.map(\.label), current: currentIndex) { [weak self] i in
             guard i != currentIndex else { return }
             self?.select?(rotations[i], display)
         }

@@ -167,6 +167,19 @@ enum SessionLogLines {
         return nil
     }
 
+    /// When an OpenDisplay line was written, by its `[15:26:04.995]`: the time of day only, so
+    /// the last such time up to `now`, or nil for a line without one.
+    static func openDisplayTime(of line: String, now: Date = Date(), calendar: Calendar = .current) -> Date? {
+        guard let m = captures(#"^\[(\d\d):(\d\d):(\d\d)(?:\.(\d+))?\]"#, in: line),
+              let h = Int(m[0]), let min = Int(m[1]), let sec = Int(m[2]), h < 24, min < 60, sec < 60 else { return nil }
+        let fraction = m[3].isEmpty ? 0 : (Double("0.\(m[3])") ?? 0)
+        guard var time = calendar.date(bySettingHour: h, minute: min, second: sec, of: now) else { return nil }
+        time += fraction
+        // Written before midnight; a moment's leeway for clocks read a little apart.
+        if time > now + 60 { time = calendar.date(byAdding: .day, value: -1, to: time) ?? time }
+        return time
+    }
+
     /// An added app's lines, by the regular expressions `opened` and `closed`, or nil when
     /// either isn't one. A group named `id` in both pairs a close with its open, so
     /// connections can overlap; without, a session lasts from the first line matching `opened`
@@ -312,26 +325,44 @@ final class LogSessionDetector: SessionDetector {
     private let isRunning: (() -> Bool)?
     /// Whether a line says the app started again, which ends every connection open.
     private let restarted: ((String) -> Bool)?
+    /// Whether the connections the log's end shows open count when watching starts, while
+    /// the app runs; not for an app whose log may hold an earlier run's.
+    private let takesUpOpen: Bool
+    /// Whether a line opening a connection counts only while the app runs: one written while
+    /// it doesn't, as by hand, would start a session that its quit never ends.
+    private let opensWhileRunning: Bool
+    /// When the app running now started, and when a line was written: lines from before it
+    /// started are an earlier run's, whose connections went with it, as after a crash.
+    private let launched: (() -> Date?)?
+    private let lineTime: ((String) -> Date?)?
     private var follower: LogFollower?
     private var timer: Timer?
     private var wasRunning = false
+    private var lastLaunch: Date?
     /// The connections open, so a close of one opened before DAM looked is ignored.
     private(set) var open: Set<String> = []
 
     init(app: String, url: URL, parse: @escaping (String) -> SessionEvent?, isRunning: (() -> Bool)? = nil,
-         restarted: ((String) -> Bool)? = nil) {
+         restarted: ((String) -> Bool)? = nil, takesUpOpen: Bool = true, opensWhileRunning: Bool = false,
+         launched: (() -> Date?)? = nil, lineTime: ((String) -> Date?)? = nil) {
         self.app = app
         self.url = url
         self.parse = parse
         self.isRunning = isRunning
         self.restarted = restarted
+        self.takesUpOpen = takesUpOpen
+        self.opensWhileRunning = opensWhileRunning
+        self.launched = launched
+        self.lineTime = lineTime
     }
 
     func start() {
         guard follower == nil else { return }
         detLog.debug("\(self.app): following \(self.url.path)")
-        if let isRunning, isRunning() {
-            for event in Self.stillOpen(in: Self.lastLines(of: url), parse: parse, restarted: restarted) { report(event) }
+        if takesUpOpen, let isRunning, isRunning() {
+            var lines = Self.lastLines(of: url)
+            if let lineTime, let since = launched?() { lines = Self.lines(lines, since: since, time: lineTime) }
+            for event in Self.stillOpen(in: lines, parse: parse, restarted: restarted) { report(event) }
         }
         let follower = LogFollower(url: url) { [weak self] in self?.handle($0) }
         follower.start()
@@ -361,6 +392,14 @@ final class LogSessionDetector: SessionDetector {
     func checkRunning() {
         guard let isRunning else { return }
         if isRunning() {
+            // Started again since the last look, as after a crash: what was open went with it.
+            if let launched, let now = launched() {
+                if let last = lastLaunch, now != last, !open.isEmpty {
+                    detLog.debug("\(self.app): started again")
+                    closeAll()
+                }
+                lastLaunch = now
+            }
             wasRunning = true
         } else if wasRunning {
             wasRunning = false
@@ -376,6 +415,14 @@ final class LogSessionDetector: SessionDetector {
             _ = parse(line)
             closeAll()
         } else if let event = parse(line) {
+            if case .opened = event, opensWhileRunning, let isRunning {
+                guard isRunning() else {
+                    detLog.debug("\(self.app): an open while it isn't running, ignored")
+                    return
+                }
+                // So a quit before the next look still ends it.
+                wasRunning = true
+            }
             report(event)
         }
     }
@@ -408,6 +455,15 @@ extension LogSessionDetector {
             }
         }
         return open.map(\.event)
+    }
+
+    /// `lines` from the first written at `since` or after, by `time`; a line with no time
+    /// goes with the one before it.
+    static func lines(_ lines: [String], since: Date, time: (String) -> Date?) -> [String] {
+        // A second's leeway: the log's times can be cut to the millisecond, the start's not.
+        let since = since - 1
+        guard let first = lines.firstIndex(where: { time($0).map { $0 >= since } ?? false }) else { return [] }
+        return Array(lines[first...])
     }
 
     /// The whole lines in the last `bytes` of the file at `url`.
@@ -526,9 +582,15 @@ final class DisplaySessionDetector: SessionDetector {
 
 /// The processes running, by name.
 enum RunningProcesses {
-    /// Every user's processes, root's among them, as `ps` lists them. Names are cut to 16
-    /// characters (MAXCOMLEN).
-    static func names() -> Set<String> {
+    struct Process {
+        let pid: pid_t
+        /// Cut to 16 characters (MAXCOMLEN).
+        let name: String
+        let started: Date
+    }
+
+    /// Every user's processes, root's among them, as `ps` lists them.
+    static func all() -> [Process] {
         var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL]
         var size = 0
         guard sysctl(&mib, 3, nil, &size, nil, 0) == 0 else { return [] }
@@ -536,12 +598,39 @@ enum RunningProcesses {
         var procs = [kinfo_proc](repeating: kinfo_proc(), count: size / MemoryLayout<kinfo_proc>.stride + 16)
         size = procs.count * MemoryLayout<kinfo_proc>.stride
         guard sysctl(&mib, 3, &procs, &size, nil, 0) == 0 else { return [] }
-        return Set(procs.prefix(size / MemoryLayout<kinfo_proc>.stride).map { proc in
-            withUnsafeBytes(of: proc.kp_proc.p_comm) { String(cString: $0.bindMemory(to: CChar.self).baseAddress!) }
-        })
+        return procs.prefix(size / MemoryLayout<kinfo_proc>.stride).map { proc in
+            let name = withUnsafeBytes(of: proc.kp_proc.p_comm) { String(cString: $0.bindMemory(to: CChar.self).baseAddress!) }
+            let start = proc.kp_proc.p_un.__p_starttime
+            return Process(pid: proc.kp_proc.p_pid, name: name,
+                           started: Date(timeIntervalSince1970: Double(start.tv_sec) + Double(start.tv_usec) / 1_000_000))
+        }
     }
 
+    static func names() -> Set<String> { Set(all().map(\.name)) }
+
     static func isRunning(_ name: String) -> Bool { names().contains(String(name.prefix(Int(MAXCOMLEN)))) }
+
+    /// Those named one of `names` whose executable's path contains `path`, when given: a
+    /// name alone can be another's, as the system's own `parsecd` (CoreParsec) is Parsec's.
+    static func matching(_ names: [String], path: String? = nil) -> [Process] {
+        let cut = Set(names.map { String($0.prefix(Int(MAXCOMLEN))) })
+        return all().filter { process in
+            cut.contains(process.name) && (path.map { Self.path(of: process.pid)?.contains($0) ?? false } ?? true)
+        }
+    }
+
+    /// When the newest of those `matching` started, or nil when none runs.
+    static func started(_ names: [String], path: String? = nil) -> Date? {
+        matching(names, path: path).map(\.started).max()
+    }
+
+    /// The path of process `pid`'s executable, or nil when it can't be read.
+    static func path(of pid: pid_t) -> String? {
+        // PROC_PIDPATHINFO_MAXSIZE, a macro Swift doesn't see.
+        var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+        guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return nil }
+        return String(cString: buffer)
+    }
 }
 
 /// The detectors DAM has, by app.
@@ -580,12 +669,18 @@ enum SessionDetectors {
                                       restarted: SessionLogLines.rustDeskRestarted)
         case "parsec":
             let url = logURL(for: app, standard: home.appendingPathComponent(".parsec/log.txt"))
-            return LogSessionDetector(app: app, url: url, parse: SessionLogLines.parsec)
+            // A quit or crash ends connections without logging their closes. Its log isn't
+            // known to mark a start, so what its end shows open isn't taken up.
+            return LogSessionDetector(app: app, url: url, parse: SessionLogLines.parsec,
+                                      isRunning: { !RunningProcesses.matching(["parsecd"], path: "/Parsec.app/").isEmpty },
+                                      takesUpOpen: false)
         case "screensharing":
             return ProcessSessionDetector(app: app, processName: "screensharingd")
         case "chromeremotedesktop":
             let url = logURL(for: app, standard: URL(fileURLWithPath: "/var/log/org.chromium.chromoting.log"))
-            return LogSessionDetector(app: app, url: url, parse: SessionLogLines.chromeRemoteDesktop)
+            // As Parsec's.
+            return LogSessionDetector(app: app, url: url, parse: SessionLogLines.chromeRemoteDesktop,
+                                      isRunning: { RunningProcesses.isRunning("remoting_me2me_host") }, takesUpOpen: false)
         case "teamviewer":
             // Started for each incoming connection.
             return ProcessSessionDetector(app: app, processName: "TeamViewer_Desktop")
@@ -593,8 +688,12 @@ enum SessionDetectors {
             // The Debug build logs to a folder of its own.
             let logs = home.appendingPathComponent("Library/Logs")
             let standard = newest(openDisplayNames.map { logs.appendingPathComponent("\($0)/opendisplay.log") })
+            // What its log shows open counts only if written since it started: a crash leaves
+            // its last session open there.
             return LogSessionDetector(app: app, url: logURL(for: app, standard: standard), parse: SessionLogLines.openDisplay,
-                                      isRunning: { !RunningProcesses.names().isDisjoint(with: openDisplayNames) })
+                                      isRunning: { !RunningProcesses.names().isDisjoint(with: openDisplayNames) },
+                                      launched: { RunningProcesses.started(openDisplayNames) },
+                                      lineTime: { SessionLogLines.openDisplayTime(of: $0) })
         case "display":
             return DisplaySessionDetector(app: app, name: adoptName, displays: displayNames)
         default:
@@ -608,7 +707,12 @@ enum SessionDetectors {
         switch detection.kind {
         case .log:
             guard let parse = SessionLogLines.custom(opened: detection.opened, closed: detection.closed) else { return nil }
-            return LogSessionDetector(app: app, url: logURL(for: app, standard: detection.logURL), parse: parse)
+            // With its process, a quit ends connections as Parsec's does, and what the log
+            // shows open isn't taken up, as it may be an earlier run's.
+            let name = detection.logProcessName
+            return LogSessionDetector(app: app, url: logURL(for: app, standard: detection.logURL), parse: parse,
+                                      isRunning: name.isEmpty ? nil : { RunningProcesses.isRunning(name) },
+                                      takesUpOpen: false, opensWhileRunning: true)
         case .process:
             return ProcessSessionDetector(app: app, processName: detection.processName)
         case .display:
@@ -714,7 +818,7 @@ final class SessionWatcher {
         switch event {
         case .opened(let key, let client, let display):
             let first = coordinator.sessions[app] == nil
-            var request = SessionRequest(app: app, client: client)
+            var request = SessionRequest(app: app, origin: .detector, client: client)
             switch display {
             case .unknown: break
             case .own(let id): request.adoptedDisplayID = id

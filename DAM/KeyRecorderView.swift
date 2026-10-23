@@ -11,7 +11,9 @@ import Carbon.HIToolbox
 
 final class KeyRecorderView: NSView {
 
-    var preference: HotkeyPreference { didSet { needsDisplay = true } }
+    var preference: HotkeyPreference {
+        didSet { needsDisplay = true; NSAccessibility.post(element: self, notification: .valueChanged) }
+    }
     var onChanged: ((HotkeyPreference) -> Void)?
     /// What else of the app's has the same shortcut, which then shows in red; nil when nothing does.
     var clash: String? {
@@ -32,6 +34,7 @@ final class KeyRecorderView: NSView {
     private var isRecording = false {
         didSet {
             needsDisplay = true
+            NSAccessibility.post(element: self, notification: .valueChanged)
             toolTip = isRecording ? "Press the new shortcut. Esc cancels." : warningTip
             isRecording ? installOutsideClickMonitor() : removeOutsideClickMonitor()
             // The app's shortcuts are off while recording, so their keys can be recorded
@@ -66,9 +69,15 @@ final class KeyRecorderView: NSView {
     override func mouseDown(with event: NSEvent) {
         if isRecording {
             cancel()   // the ⓧ, or a second click on the field
-        } else if window?.makeFirstResponder(self) == true {
-            isRecording = true
+        } else {
+            startRecording()
         }
+    }
+
+    /// Takes the keys and waits for the new shortcut, as a click on the field does.
+    func startRecording() {
+        guard !isRecording, window?.makeFirstResponder(self) == true else { return }
+        isRecording = true
     }
 
     override func resignFirstResponder() -> Bool {
@@ -117,6 +126,14 @@ final class KeyRecorderView: NSView {
         outsideClickMonitor = nil
     }
 
+    /// While recording, a key with ⌘ (⌘Q, ⌘W, ⌘H, ⌥⌘H…) is recorded here, before the menus
+    /// and the window act on it.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard isRecording, window?.firstResponder === self else { return super.performKeyEquivalent(with: event) }
+        keyDown(with: event)
+        return true
+    }
+
     override func keyDown(with event: NSEvent) {
         guard isRecording else { super.keyDown(with: event); return }
 
@@ -131,6 +148,22 @@ final class KeyRecorderView: NSView {
         preference = HotkeyPreference(keyCode: UInt32(event.keyCode), modifiers: mods)
         isRecording = false
         onChanged?(preference)
+    }
+
+    // MARK: - Accessibility
+
+    // A button whose value is the shortcut; the owner sets its label to what the shortcut does.
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .button }
+    override func accessibilityValue() -> Any? {
+        isRecording ? "Type shortcut" : preference.displayString
+    }
+    override func accessibilityHelp() -> String? {
+        isRecording ? "Press the new shortcut. Escape cancels." : warningTip ?? "Press to record a new shortcut."
+    }
+    override func accessibilityPerformPress() -> Bool {
+        isRecording ? cancel() : startRecording()
+        return true
     }
 
     // MARK: - Drawing

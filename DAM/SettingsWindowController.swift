@@ -4,6 +4,7 @@
 
 import AppKit
 import CoreImage
+import ServiceManagement
 import UniformTypeIdentifiers
 
 final class SettingsWindowController: NSWindowController {
@@ -101,7 +102,9 @@ final class SettingsWindowController: NSWindowController {
          openDisplay: OpenDisplaySender? = nil,
          sessionCoordinator: RemoteSessionCoordinator? = nil) {
         recorders = Dictionary(uniqueKeysWithValues: HotkeyAction.allCases.map {
-            ($0, KeyRecorderView(preference: $0.shortcut))
+            let recorder = KeyRecorderView(preference: $0.shortcut)
+            recorder.setAccessibilityLabel($0.title)
+            return ($0, recorder)
         })
         self.audioManager     = audioManager
         self.videoManager     = videoManager
@@ -306,13 +309,45 @@ final class SettingsWindowController: NSWindowController {
                          action: { VisibilityPreferences.followNewDisplayAudio = $0 }),
             ]),
             ("Startup:", [
-                checkbox(title: "Launch at login",
-                         isOn: VisibilityPreferences.launchAtLogin,
-                         action: { VisibilityPreferences.launchAtLogin = $0 }),
+                launchAtLoginCheckbox(),
             ]),
             ("Screen Mirroring:", [extraRow]),
         ])
     }
+
+    /// The launch-at-login box, which shows what macOS did with the change rather than what
+    /// was clicked, and says when macOS wants the login item approved.
+    private func launchAtLoginCheckbox() -> NSView {
+        weak var box: NSButton?
+        let view = checkbox(title: "Launch at login", isOn: VisibilityPreferences.launchAtLogin,
+                            help: VisibilityPreferences.launchAtLoginNeedsApproval ? Self.loginApprovalHelp : nil) { on in
+            var failure: Error?
+            do { try VisibilityPreferences.setLaunchAtLogin(on) } catch { failure = error }
+            box?.state = VisibilityPreferences.launchAtLogin ? .on : .off
+            let needsApproval = VisibilityPreferences.launchAtLoginNeedsApproval
+            box?.toolTip = needsApproval ? Self.loginApprovalHelp : nil
+            if let failure {
+                let alert = NSAlert()
+                alert.messageText = on ? "\(AppIdentity.name) can't be set to launch at login"
+                                       : "\(AppIdentity.name) still launches at login"
+                alert.informativeText = failure.localizedDescription
+                alert.runModal()
+            } else if on && needsApproval {
+                let alert = NSAlert()
+                alert.messageText = "Allow \(AppIdentity.name) in Login Items"
+                alert.informativeText = "macOS launches \(AppIdentity.name) at login once it is allowed in " +
+                                        "System Settings, under General, Login Items."
+                alert.addButton(withTitle: "Open Login Items")
+                alert.addButton(withTitle: "Later")
+                if alert.runModal() == .alertFirstButtonReturn { SMAppService.openSystemSettingsLoginItems() }
+            }
+        }
+        box = view as? NSButton
+        return view
+    }
+
+    private static let loginApprovalHelp =
+        "Waiting to be allowed in System Settings, under General, Login Items."
 
     @objc private func openControlCenterSettings() {
         ScreenMirroringPanel.openControlCenterSettings()
@@ -390,10 +425,19 @@ final class SettingsWindowController: NSWindowController {
             generalContent = buildGeneralTab()
             if selectedTab == TabID.general { selectTab(TabID.general) }
         }
-        if devicesState() != devicesShown {
+        // Not while a nickname is being typed, which a rebuild would throw away; its end
+        // calls here again.
+        if devicesState() != devicesShown && !isEditingNickname {
             devicesContent = buildDevicesTab()
             if selectedTab == TabID.devices { selectTab(TabID.devices) }
         }
+    }
+
+    /// Whether a nickname field of the Devices tab holds typing not yet saved.
+    private var isEditingNickname: Bool {
+        guard let editor = window?.firstResponder as? NSTextView, editor.isFieldEditor,
+              let field = editor.delegate.map({ $0 as AnyObject }) as? NicknameField else { return false }
+        return field.isDescendant(of: devicesContent) && field.hasUnsavedText
     }
 
     /// A device's visibility checkbox with a field beside it for its nickname, which the
@@ -572,13 +616,31 @@ final class SettingsWindowController: NSWindowController {
         }
         reach.toolTip = "Where browsers and players may watch from, paired or not."
 
+        let qr = ClosureButton(title: "Pair with a QR Code…") { [weak self] _ in self?.showPairingQRCode() }
+        // A QR code pairs only while new browsers may.
+        qr.isEnabled = WebStreamServer.allowsPairing
         let allowPairing = checkbox(title: "Allow new browsers to pair", isOn: WebStreamServer.allowsPairing,
                                     help: "A browser that opens the address shows a code; typed on this Mac, it lets " +
                                           "that browser watch from then on. Unchecked, only paired browsers and links work.",
-                                    action: { WebStreamServer.allowsPairing = $0 })
-        let qr = ClosureButton(title: "Pair with a QR Code…") { [weak self] _ in self?.showPairingQRCode() }
+                                    action: { [weak qr] in
+                                        WebStreamServer.allowsPairing = $0
+                                        qr?.isEnabled = $0
+                                    })
         qr.bezelStyle = .rounded
         qr.toolTip = "Shows a QR code a phone or tablet scans to pair, with nothing to type. It works once, for five minutes."
+
+        // Shown as kept, so a name typed with a port or in capitals reads as it is matched.
+        weak var namesField: NSTextField?
+        let names = ClosureTextField(text: WebStreamServer.extraHostNames.joined(separator: ", "),
+                                     placeholder: "mac.home.example.com") { text in
+            WebStreamServer.extraHostNames = text.split(whereSeparator: { $0 == "," || $0.isWhitespace }).map(String.init)
+            namesField?.stringValue = WebStreamServer.extraHostNames.joined(separator: ", ")
+        }
+        namesField = names
+        names.widthAnchor.constraint(equalToConstant: 260).isActive = true
+        names.toolTip = "Names of your own that lead to this Mac, such as a subdomain of your domain, separated by " +
+                        "commas. Browsers pair and stay paired only on the Mac's names and addresses, its local " +
+                        "network's names, an imported certificate's, and these, each exactly as written."
 
         let devices: [[NSView]] = server.devices.all.map { device in
             let name = rowLabel(device.name)
@@ -651,6 +713,7 @@ final class SettingsWindowController: NSWindowController {
             ("Serving:", serving),
             ("Reach:", [reach]),
             ("Pairing:", [allowPairing, qr]),
+            ("Also Reachable As:", [names]),
             ("Devices:", [devices.isEmpty ? placeholderLabel("None yet") : deviceGrid, newLink]),
             ("Streams:", [pointer]),
             ("Profile:", [profile]),
@@ -936,6 +999,33 @@ final class SettingsWindowController: NSWindowController {
         return scrollingPage([list, addRow, changes], leftAligned: true, filling: [list, addRow, changes])
     }
 
+    /// Where an app is, for its icon: by bundle ID wherever it was put, else where it is
+    /// usually put, else, for an added app, by its name in /Applications or the app its
+    /// process runs from while it runs.
+    static func sessionAppURL(_ app: String, detection: SessionDetection?) -> URL? {
+        let bundleIDs = ["rustdesk": "com.carriez.rustdesk", "parsec": "tv.parsec.www",
+                         "screensharing": "com.apple.ScreenSharing", "teamviewer": "com.teamviewer.TeamViewer"]
+        if let id = bundleIDs[app], let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) {
+            return url
+        }
+        let paths = ["sunshine": "/Applications/Sunshine.app", "rustdesk": "/Applications/RustDesk.app",
+                     "parsec": "/Applications/Parsec.app",
+                     "screensharing": "/System/Library/CoreServices/Applications/Screen Sharing.app",
+                     "teamviewer": "/Applications/TeamViewer.app", "opendisplay": "/Applications/OpenDisplay.app"]
+        if let path = paths[app] {
+            return FileManager.default.fileExists(atPath: path) ? URL(fileURLWithPath: path) : nil
+        }
+        let byName = URL(fileURLWithPath: "/Applications/\(RemoteSessionApp.name(of: app)).app")
+        if FileManager.default.fileExists(atPath: byName.path) { return byName }
+        let process = detection.map { $0.kind == .process ? $0.processName : $0.kind == .log ? $0.logProcessName : "" } ?? ""
+        guard !process.isEmpty,
+              let path = RunningProcesses.matching([process]).lazy.compactMap({ RunningProcesses.path(of: $0.pid) }).first,
+              // The outermost app, not a helper inside it.
+              let range = path.range(of: ".app/")
+        else { return nil }
+        return URL(fileURLWithPath: String(path[..<range.lowerBound]) + ".app")
+    }
+
     /// What an app's row says of it, and the colour of its dot.
     private func sessionStatus(_ app: String, _ coordinator: RemoteSessionCoordinator) -> (text: String, color: NSColor) {
         let profile = coordinator.profile(for: app)
@@ -962,12 +1052,8 @@ final class SettingsWindowController: NSWindowController {
 
     /// The app's own icon when it is on this Mac, else a symbol for it.
     private func sessionIcon(_ app: String, _ coordinator: RemoteSessionCoordinator) -> NSImage? {
-        let paths = ["sunshine": "/Applications/Sunshine.app", "rustdesk": "/Applications/RustDesk.app",
-                     "parsec": "/Applications/Parsec.app",
-                     "screensharing": "/System/Library/CoreServices/Applications/Screen Sharing.app",
-                     "teamviewer": "/Applications/TeamViewer.app", "opendisplay": "/Applications/OpenDisplay.app"]
-        if let path = paths[app], FileManager.default.fileExists(atPath: path) {
-            return NSWorkspace.shared.icon(forFile: path)
+        if let url = Self.sessionAppURL(app, detection: coordinator.profile(for: app).detection) {
+            return NSWorkspace.shared.icon(forFile: url.path)
         }
         let symbol: String
         switch coordinator.profile(for: app).detection?.kind {
@@ -1285,6 +1371,14 @@ final class SettingsWindowController: NSWindowController {
                 "Regular expressions, matched anywhere in a line. A line matching Opened starts a connection, one " +
                 "matching Closed ends it. Name a group id in both, as (?<id>\\d+), for connections that overlap, " +
                 "and one client in Opened to name the display after the client.")]))
+            let process = ClosureTextField(text: detection.logProcessName, placeholder: "Optional, e.g. jumpd") { text in
+                store { $0.logProcessName = text }
+            }
+            process.widthAnchor.constraint(equalToConstant: 200).isActive = true
+            groups.append(("Process:", [process, smallNote(
+                "The app's process, as Activity Monitor shows it. With it, a session ends when the process quits, " +
+                "even if the log doesn't say, and a line that opens a connection counts only while it runs. " +
+                "Names are matched to their first 16 characters.")]))
             groups.append(("Try a Line:", [tryField, tried]))
         case .process:
             let process = ClosureTextField(text: detection.processName, placeholder: "e.g. screensharingd") { text in
@@ -1571,6 +1665,8 @@ final class SettingsWindowController: NSWindowController {
                     self?.onRebuild?()
                 }
                 box = view as? NSButton
+                // The box has no title of its own; the row and column say what it is.
+                box?.setAccessibilityLabel("\(entry.name) \(rate) Hz")
                 row.append(view)
             }
             rows.append(row)
@@ -2323,6 +2419,12 @@ private final class NicknameField: RoundedTextField, NSTextFieldDelegate {
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    /// Whether the text being typed differs from the nickname saved.
+    var hasUnsavedText: Bool {
+        guard let editor = currentEditor() else { return false }
+        return editor.string != (VisibilityPreferences.nickname(kind, for: deviceName) ?? "")
+    }
 
     func controlTextDidEndEditing(_ obj: Notification) {
         VisibilityPreferences.setNickname(stringValue, kind, for: deviceName)

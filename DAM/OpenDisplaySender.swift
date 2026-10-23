@@ -285,9 +285,8 @@ final class OpenDisplaySender {
                     }
                 }
             } else if let endpoint = wifi[key]?.endpoint {
-                // Every other dial after one fails goes to the address it was reached at last.
-                let address = (failures[key] ?? 0) % 2 == 1 ? lastAddress[key] : nil
-                channel = OpenDisplayTCPChannel(endpoint: address ?? endpoint)
+                channel = OpenDisplayTCPChannel(endpoint: Self.wifiEndpoint(found: endpoint, lastReached: lastAddress[key],
+                                                                            failures: failures[key] ?? 0))
             } else {
                 continue
             }
@@ -295,6 +294,12 @@ final class OpenDisplaySender {
             odLog.debug("dialing \(self.name(of: key), privacy: .public) over \(channel.transport.rawValue, privacy: .public)\((channel as? OpenDisplayTCPChannel)?.endpointDescription ?? "", privacy: .public)")
             if takeOver { session.takeOver(with: channel) } else { session.attach(channel) }
         }
+    }
+
+    /// Where to dial a receiver found at `found` over Wi-Fi: every other dial after one fails
+    /// goes to the address it was reached at last, for a Bonjour name that doesn't resolve.
+    static func wifiEndpoint(found: NWEndpoint, lastReached: NWEndpoint?, failures: Int) -> NWEndpoint {
+        failures % 2 == 1 ? lastReached ?? found : found
     }
 
     private func makeSession(key: String) -> OpenDisplaySession {
@@ -344,6 +349,13 @@ final class OpenDisplaySender {
             bonjourIDs = ids
             if let found = wifi.removeValue(forKey: session.key) { wifi[id] = found }
         } else {
+            // Another receiver than the one turned on, as when the address it was last reached
+            // at is another device's after a network change: it mustn't get the screen and
+            // the pointer. The link goes, and the display waits for the right one as for a
+            // link lost; that address isn't dialed again.
+            odLog.error("\(session.name, privacy: .public): a receiver with another ID answered")
+            lastAddress[session.key] = nil
+            session.wrongReceiver()
             return
         }
         rekey(from: session.key, to: id)
@@ -583,6 +595,14 @@ final class OpenDisplaySession {
         injector?.releaseAll()
     }
 
+    /// Lets go of a link whose hello came from another receiver than this session's; dials
+    /// wait a while, so one that reaches it again doesn't connect every second.
+    fileprivate func wrongReceiver() {
+        guard let link else { return }
+        lose(link, "another receiver answered")
+        sender?.holdDialing(key, for: 5)
+    }
+
     fileprivate func displayGone() {
         // Gone already: nothing to remove, nor an ID to keep, which another display may take.
         displayID = nil
@@ -624,8 +644,11 @@ final class OpenDisplaySession {
             // Its version isn't checked here: the welcome gives the oldest DAM takes, and
             // the receiver goes by that.
             odLog.debug("\(self.name, privacy: .public): hello, protocol \(hello.pv)\(hello.device.map { " from \($0)" } ?? "", privacy: .public)")
-            send(OpenDisplayReply.welcome())
+            let link = self.link
             sender?.session(self, saidID: hello.id, device: hello.device)
+            // Another receiver's, whose link is gone now.
+            guard self.link === link, !ended else { return }
+            send(OpenDisplayReply.welcome())
             offerCursorUDP(hello.cursorPort)
             guard let wanted = hello.desktop() else {
                 odLog.error("\(self.name, privacy: .public): a hello with no size")

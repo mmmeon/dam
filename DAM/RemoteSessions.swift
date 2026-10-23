@@ -64,6 +64,9 @@ struct SessionDetection: Codable, Equatable {
     var opened = ""
     var closed = ""
     var processName = ""
+    /// For `.log`: the process the app runs, if given. Its connections end when it quits, and
+    /// a line opening one counts only while it runs.
+    var logProcessName = ""
 
     init(kind: Kind = .log) { self.kind = kind }
 
@@ -74,6 +77,7 @@ struct SessionDetection: Codable, Equatable {
         opened = try c.decodeIfPresent(String.self, forKey: .opened) ?? ""
         closed = try c.decodeIfPresent(String.self, forKey: .closed) ?? ""
         processName = try c.decodeIfPresent(String.self, forKey: .processName) ?? ""
+        logProcessName = try c.decodeIfPresent(String.self, forKey: .logProcessName) ?? ""
     }
 
     /// The log's file, with `~` for the home folder.
@@ -215,7 +219,18 @@ enum SessionProfiles {
 
 /// A session asked for: whose it is, and what its client wants when the app says.
 struct SessionRequest: Equatable {
+    /// What asked for a session, or for its end.
+    enum Origin: Equatable {
+        /// The command line or the control socket, both this user's own.
+        case command
+        /// A `dam://` link, which any page or app can open.
+        case link
+        /// A detector DAM runs (SessionDetectors.swift), which ends what it started.
+        case detector
+    }
+
     var app: String
+    var origin: Origin = .command
     /// The client's name, shown in the display's name.
     var client: String?
     /// Something that stays the same for the client, such as its certificate's UUID, which
@@ -257,12 +272,20 @@ enum SessionError: Error, Equatable, CustomStringConvertible {
     case noDisplay
     /// No session of the app is on.
     case notActive(String)
+    /// A link asked to end or join a session that something else started.
+    case notFromLink(String)
+    /// A link asked to black out the screens.
+    case blackoutFromLink
 
     var description: String {
         switch self {
         case .disabled(let app): return "Sessions of \(RemoteSessionApp.name(of: app)) are turned off in \(AppIdentity.name)."
         case .noDisplay: return "No display could be made for the session."
         case .notActive(let app): return "No \(RemoteSessionApp.name(of: app)) session is on."
+        case .notFromLink(let app):
+            return "The \(RemoteSessionApp.name(of: app)) session wasn't started by a link, so a link can't end or join it."
+        case .blackoutFromLink:
+            return "A link can't black out the screens; the command line can."
         }
     }
 }
@@ -313,18 +336,27 @@ final class RemoteSessionCoordinator {
         var outputAtStart: String?
         /// How many times it was started and not yet ended.
         var count = 1
+        /// How many of those were by `dam://` links: a link ends only these.
+        var fromLinks = 0
         /// The display made for it, or the app's own it was given, once it is placed.
         var displayID: CGDirectDisplayID?
         /// Whether DAM made the display, and removes it at the end.
         var madeDisplay = false
         /// The mode DAM made it in.
         var madeMode: StreamingDisplayModes.Mode?
+        /// What setting up came to, which may not be what was asked: the display's mode
+        /// once made, its placement once placed, and the output once switched, or as another
+        /// session's end put it back. Only what is neither this nor what was asked is learned.
+        var modeAtStart: StreamingDisplayModes.Mode?
+        var placementAtStart: SessionProfile.Placement?
+        var outputAfterStart: String?
         /// Whether it has its own sound output, switched to or already on.
         var ownsOutput = false
         /// Whether it blacks out the Mac's screens.
         var blacksOut = false
         /// Whether it lasts as long as the app's own display or stream, which DAM can't end:
-        /// ending it would leave the app streaming.
+        /// ending it would leave the app streaming. Only for one a detector started, which
+        /// ends it too.
         var followsApp = false
         /// Whether it is still being set up.
         var starting = true
@@ -425,11 +457,19 @@ final class RemoteSessionCoordinator {
     }
 
     /// Starts a session of `request.app`, or joins the one on; `completion` runs once its
-    /// display is placed and its output switched.
+    /// display is placed and its output switched. A link joins only a session links started:
+    /// joining another would leave it on once the app's own end came. Nor does a link black
+    /// out the screens, which would leave whoever is at the Mac in the dark at any page's
+    /// asking: one that asks to is refused, and a profile's blackout is left off for it.
     func begin(_ request: SessionRequest, completion: @escaping (Result<SessionStart, SessionError>) -> Void) {
         let app = request.app
+        if request.origin == .link, request.blackout == true { return completion(.failure(.blackoutFromLink)) }
         if var session = sessions[app] {
+            if request.origin == .link, session.fromLinks < session.count {
+                return completion(.failure(.notFromLink(app)))
+            }
             session.count += 1
+            if request.origin == .link { session.fromLinks += 1 }
             sessions[app] = session
             rsLog.debug("\(app): joined, \(session.count) on")
             if session.starting {
@@ -439,46 +479,71 @@ final class RemoteSessionCoordinator {
             }
             return
         }
-        let profile = request.applied(to: profile(for: app))
+        var profile = request.applied(to: profile(for: app))
         guard profile.enabled else { return completion(.failure(.disabled(app))) }
+        var first = SessionStart()
+        if request.origin == .link, profile.blackout {
+            profile.blackout = false
+            first.warnings.append("The screens weren't blacked out, as a link can't black them out.")
+        }
         rsLog.debug("\(app): starting for \(request.client ?? "a client")")
         if sessions.isEmpty {
             outputBeforeSessions = displays.outputUID
             displays.holdLayout(true)
         }
-        sessions[app] = Session(app: app, client: request.client, profile: profile, outputAtStart: displays.outputUID)
-        // Mirroring, OpenDisplay asks for no display, but its profile still adopts.
-        sessions[app]?.followsApp = profile.display == .adopt || self.profile(for: app).display == .adopt
+        var session = Session(app: app, client: request.client, profile: profile, outputAtStart: displays.outputUID)
+        session.fromLinks = request.origin == .link ? 1 : 0
+        // Mirroring, OpenDisplay asks for no display, but its profile still adopts. Only a
+        // detector's session: nothing else would see the app's end.
+        session.followsApp = request.origin == .detector
+            && (profile.display == .adopt || self.profile(for: app).display == .adopt)
+        let id = session.id
+        sessions[app] = session
         waiting[app] = [completion]
         onChange?()
 
         switch profile.display {
         case .none:
-            switchOutput(app, profile: profile, start: SessionStart())
+            switchOutput(app, profile: profile, start: first)
         case .create:
             let mode = profile.mode(clientWidth: request.width, clientHeight: request.height, clientFPS: request.fps)
             // Main in the commit that places it: one commit fewer, each of which can take
             // seconds while the app is already capturing the main display.
-            displays.makeDisplay(mode, identity: request.identity, main: profile.placement == .main) { [weak self] id in
+            displays.makeDisplay(mode, identity: request.identity, main: profile.placement == .main) { [weak self] displayID in
                 guard let self else { return }
-                guard let id else {
+                // Given up on meanwhile, as when DAM quits: nothing else would remove it.
+                guard self.sessions[app]?.id == id else {
+                    if let displayID { self.displays.removeDisplay(displayID) }
+                    return
+                }
+                guard let displayID else {
                     rsLog.error("\(app): no display")
                     return self.finish(app, .failure(.noDisplay))
                 }
                 self.sessions[app]?.madeDisplay = true
                 self.sessions[app]?.madeMode = mode
-                self.place(app, id, profile: profile, start: SessionStart(displayID: id))
+                self.sessions[app]?.modeAtStart = self.displays.mode(of: displayID) ?? mode
+                var start = first
+                start.displayID = displayID
+                self.place(app, displayID, profile: profile, start: start)
             }
         case .adopt:
             let name = profile.adoptName ?? RemoteSessionApp.name(of: app)
-            waitForDisplay(named: name, known: request.adoptedDisplayID, attempts: Self.adoptAttempts) { [weak self] id in
-                guard let self else { return }
-                guard let id else {
-                    var start = SessionStart()
+            waitForDisplay(named: name, known: request.adoptedDisplayID, attempts: Self.adoptAttempts) { [weak self] displayID in
+                guard let self, self.sessions[app]?.id == id else { return }
+                var start = first
+                guard let displayID else {
                     start.warnings.append("No display called \(name) came.")
+                    // Nothing of the session's to leave lit, so every screen would go black.
+                    var profile = profile
+                    if profile.blackout {
+                        profile.blackout = false
+                        start.warnings.append("The screens weren't blacked out, as the session has no display to leave lit.")
+                    }
                     return self.switchOutput(app, profile: profile, start: start)
                 }
-                self.place(app, id, profile: profile, start: SessionStart(displayID: id))
+                start.displayID = displayID
+                self.place(app, displayID, profile: profile, start: start)
             }
         }
     }
@@ -504,11 +569,17 @@ final class RemoteSessionCoordinator {
     /// Places `app`'s display `id` as its profile says, then switches the output.
     private func place(_ app: String, _ id: CGDirectDisplayID, profile: SessionProfile, start: SessionStart) {
         sessions[app]?.displayID = id
-        guard profile.placement != .extend else { return switchOutput(app, profile: profile, start: start) }
+        guard profile.placement != .extend else {
+            sessions[app]?.placementAtStart = displays.placement(of: id)
+            return switchOutput(app, profile: profile, start: start)
+        }
+        let session = sessions[app]?.id
         displays.place(id, profile.placement) { [weak self] placed in
+            guard let self, session != nil, self.sessions[app]?.id == session else { return }
             var start = start
             if !placed { start.warnings.append("The display couldn't be made \(profile.placement.rawValue).") }
-            self?.switchOutput(app, profile: profile, start: start)
+            self.sessions[app]?.placementAtStart = self.displays.placement(of: id)
+            self.switchOutput(app, profile: profile, start: start)
         }
     }
 
@@ -532,6 +603,7 @@ final class RemoteSessionCoordinator {
                 start.warnings.append("The sound output for the session couldn't be switched to: it isn't connected, or can't be the output.")
             }
         }
+        sessions[app]?.outputAfterStart = displays.outputUID
         finish(app, .success(start))
     }
 
@@ -556,11 +628,20 @@ final class RemoteSessionCoordinator {
     }
 
     /// Ends one start of `app`'s session, or every one with `all`; the last puts back what
-    /// the session changed.
+    /// the session changed. A link ends only what links started, so a page can't end a
+    /// session that the app, a script or a detector started.
     @discardableResult
-    func end(app: String, all: Bool = false) -> Result<Void, SessionError> {
+    func end(app: String, all: Bool = false, from origin: SessionRequest.Origin = .command) -> Result<Void, SessionError> {
         guard var session = sessions[app] else { return .failure(.notActive(app)) }
-        session.count = all ? 0 : session.count - 1
+        if origin == .link {
+            guard session.fromLinks > 0 else { return .failure(.notFromLink(app)) }
+            let ending = all ? session.fromLinks : 1
+            session.fromLinks -= ending
+            session.count -= ending
+        } else {
+            session.count = all ? 0 : session.count - 1
+            session.fromLinks = min(session.fromLinks, max(session.count, 0))
+        }
         guard session.count <= 0 else {
             sessions[app] = session
             rsLog.debug("\(app): left, \(session.count) on")
@@ -580,21 +661,28 @@ final class RemoteSessionCoordinator {
         if session.ownsOutput, !sessions.values.contains(where: \.ownsOutput), let uid = outputToRestore {
             if !displays.setOutput(uid: uid) { rsLog.error("\(app): the output from before isn't connected") }
             outputToRestore = nil
+            // Put back for the others, not changed by them: theirs to compare with, not learn.
+            for other in sessions.keys { sessions[other]?.outputAfterStart = displays.outputUID }
         }
-        if sessions.isEmpty {
-            // Changed during the sessions without one of them asking.
-            if let uid = outputBeforeSessions, displays.outputUID != uid, !displays.setOutput(uid: uid) {
-                rsLog.error("\(app): the output from before isn't connected")
-            }
-            outputBeforeSessions = nil
-            displays.holdLayout(false)
-        }
+        if sessions.isEmpty { putBackAfterSessions(app) }
         onChange?()
         return .success(())
     }
 
+    /// Once the last session has gone: the output from before them, and the layout let go.
+    private func putBackAfterSessions(_ app: String) {
+        // Changed during the sessions without one of them asking.
+        if let uid = outputBeforeSessions, displays.outputUID != uid, !displays.setOutput(uid: uid) {
+            rsLog.error("\(app): the output from before isn't connected")
+        }
+        outputBeforeSessions = nil
+        displays.holdLayout(false)
+    }
+
     /// Keeps in the app's profile what was changed through DAM during `session`, which has
-    /// just ended, for the next one; but not in the settings locked in Settings.
+    /// just ended, for the next one; but not in the settings locked in Settings. A change is
+    /// what is neither what was asked nor what setting up came to: a placement, size or
+    /// output that failed is no choice of the user's.
     private func learn(from session: Session) {
         let asked = session.profile
         // An app removed while its session was starting: nothing of it to keep.
@@ -603,19 +691,24 @@ final class RemoteSessionCoordinator {
         var next = saved
         // An app's own display can be gone already, ending the session.
         if let id = session.displayID, !saved.locked.contains(.placement),
-           let now = displays.placement(of: id), now != asked.placement {
+           let now = displays.placement(of: id), now != asked.placement, now != session.placementAtStart {
             next.placement = now
+        }
+        func same(_ a: StreamingDisplayModes.Mode, _ b: StreamingDisplayModes.Mode?) -> Bool {
+            guard let b else { return false }
+            return (a.pixelWidth, a.pixelHeight, a.refreshRate) == (b.pixelWidth, b.pixelHeight, b.refreshRate)
         }
         if session.madeDisplay, let id = session.displayID, let made = session.madeMode,
            !saved.locked.contains(.size), let now = displays.mode(of: id),
-           (now.pixelWidth, now.pixelHeight, now.refreshRate) != (made.pixelWidth, made.pixelHeight, made.refreshRate) {
+           !same(now, made), !same(now, session.modeAtStart) {
             next.width = now.pixelWidth
             next.height = now.pixelHeight
             next.refreshRate = now.refreshRate
         }
         // Not when another session switched it.
         if !saved.locked.contains(.audio), !sessions.values.contains(where: \.ownsOutput),
-           let now = displays.outputUID, now != asked.audioOutputUID ?? session.outputAtStart {
+           let now = displays.outputUID, now != asked.audioOutputUID ?? session.outputAtStart,
+           now != session.outputAfterStart {
             next.audioOutputUID = now
         }
         guard next != saved else { return }
@@ -652,6 +745,20 @@ final class RemoteSessionCoordinator {
     /// Ends every session, as when DAM quits.
     func endAll() {
         for app in sessions.keys { end(app: app, all: true) }
+        // Those still being set up wait to end once they are (see finish), which a quit
+        // doesn't: they are given up on now. Nothing of theirs is switched yet, only their
+        // display may be made, so what was kept from before them mustn't be put back by the
+        // next launch.
+        let starting = sessions.filter(\.value.starting)
+        for (app, session) in starting {
+            rsLog.debug("\(app): given up on while starting")
+            sessions[app] = nil
+            if let id = session.displayID, session.madeDisplay { displays.removeDisplay(id) }
+            for completion in waiting.removeValue(forKey: app) ?? [] { completion(.failure(.notActive(app))) }
+        }
+        guard !starting.isEmpty else { return }
+        if sessions.isEmpty { putBackAfterSessions("sessions") }
+        onChange?()
     }
 }
 

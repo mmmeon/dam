@@ -1,4 +1,5 @@
 import XCTest
+import CoreMedia
 import CryptoKit
 @testable import DAM
 
@@ -161,9 +162,13 @@ final class MoonlightProtocolTests: XCTestCase {
         XCTAssertEqual(le32(packets[750], 28) >> 12 & 0x3FF, 0)
     }
 
-    func testRefusesAFrameTooLargeForFourBlocks() {
+    func testRefusesAFrameTooLargeForFourBlocks() throws {
         var packetizer = MoonlightPacketizer(packetSize: 1024)
         XCTAssertNil(packetizer.packets(for: Data(count: 4093 * 1008), isKeyFrame: true, timestamp: 0, latency: 0))
+        // Its index is passed over, so Moonlight sees a frame lost and asks for a keyframe.
+        let next = try XCTUnwrap(packetizer.packets(for: Data(count: 100), isKeyFrame: false, timestamp: 0, latency: 0))
+        XCTAssertEqual(le32(next[0], 20), 2)
+        XCTAssertEqual(be16(next[0], 2), 0, "no packet was sent for it")
     }
 
     // MARK: - Control messages
@@ -278,6 +283,14 @@ final class MoonlightProtocolTests: XCTestCase {
         XCTAssertEqual(requests.request(at: 0, roundTrip: 40 * ms), .now)
         XCTAssertEqual(requests.request(at: 900 * ms, roundTrip: 40 * ms), .covered)
         XCTAssertEqual(requests.request(at: 1000 * ms, roundTrip: 40 * ms), .now)
+    }
+
+    func testAKeyFrameTooLargeToSendIsAskedForAgain() {
+        var requests = MoonlightKeyFrameRequests()
+        XCTAssertEqual(requests.request(at: 0, roundTrip: 40 * ms), .now)
+        requests.keyFrameDropped()
+        XCTAssertEqual(requests.request(at: 30 * ms, roundTrip: nil), .later(220 * ms), "not covered")
+        XCTAssertEqual(requests.retry(at: 250 * ms, roundTrip: nil), .now)
     }
 
     func testARequestHeldForLaterIsDroppedOnceAKeyFrameWentOut() {
@@ -543,5 +556,249 @@ final class MoonlightProtocolTests: XCTestCase {
         XCTAssertEqual(try arrivingTOS(.video) >> 2, 34)
         XCTAssertEqual(try arrivingTOS(.audio) >> 2, 46)
         XCTAssertEqual(try arrivingTOS(nil), 0)
+    }
+
+    // MARK: - Control stream
+
+    /// Ports for this file's streams, away from GameStream's and the host tests'.
+    private func testPorts(_ slot: Int) -> MoonlightStream.Ports { MoonlightStream.Ports(slot: 120 + slot) }
+
+    /// Waits up to 2 s for UDP `port` to be free again, as a stopped stream's threads let go
+    /// of theirs a moment later, so a test run again finds it free.
+    private func waitUntilFree(_ port: UInt16) {
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline {
+            let probe = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
+            var address = sockaddr_in()
+            address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+            address.sin_family = sa_family_t(AF_INET)
+            address.sin_port = port.bigEndian
+            let bound = withUnsafePointer(to: &address) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(probe, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+            }
+            Darwin.close(probe)
+            if bound == 0 { return }
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+    }
+
+    /// The events an ENet client sees in `seconds` of trying to connect to `port` with `token`,
+    /// as Moonlight does; it stops at a disconnect.
+    private func connect(_ client: UnsafeMutablePointer<ENetHost>, to port: UInt16, token: UInt32,
+                         seconds: TimeInterval = 1) throws -> [ENetEventType] {
+        var address = ENetAddress(host: 0, port: port)
+        enet_address_set_host_ip(&address, "127.0.0.1")
+        _ = try XCTUnwrap(enet_host_connect(client, &address, 48, token))
+        var events: [ENetEventType] = []
+        var event = ENetEvent()
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline, !events.contains(ENET_EVENT_TYPE_DISCONNECT) {
+            guard enet_host_service(client, &event, 10) > 0 else { continue }
+            if event.type == ENET_EVENT_TYPE_RECEIVE { enet_packet_destroy(event.packet) }
+            events.append(event.type)
+        }
+        return events
+    }
+
+    /// A wrong token is turned away, the session's is taken, and a second device with it is
+    /// turned away while the first is connected.
+    func testTheControlStreamTakesOneDeviceWithTheSessionsToken() throws {
+        let port = testPorts(1).control
+        let server = try MoonlightControlServer(port: port, key: Data(count: 16), connectData: 0x1234)
+        let lock = NSLock()
+        var connects = 0
+        server.onConnect = { lock.lock(); connects += 1; lock.unlock() }
+        server.start()
+        defer { server.stop(); waitUntilFree(port) }
+        let clients = try (0..<3).map { _ in try XCTUnwrap(enet_host_create(nil, 1, 48, 0, 0)) }
+        defer { clients.forEach { enet_host_destroy($0) } }
+
+        XCTAssertTrue(try connect(clients[0], to: port, token: 0x9999).contains(ENET_EVENT_TYPE_DISCONNECT),
+                      "a wrong token is disconnected")
+        let first = try connect(clients[1], to: port, token: 0x1234, seconds: 0.5)
+        XCTAssertEqual(first, [ENET_EVENT_TYPE_CONNECT], "the session's token stays connected")
+        XCTAssertTrue(try connect(clients[2], to: port, token: 0x1234).contains(ENET_EVENT_TYPE_DISCONNECT),
+                      "a second device is disconnected")
+        lock.lock(); defer { lock.unlock() }
+        XCTAssertEqual(connects, 1)
+    }
+
+    /// A CONNECT never followed up holds a peer until ENet gives up on it; one address holds
+    /// at most two, so a host sending them can't take the peers a device needs.
+    func testOneAddressHoldsAtMostTwoOfTheControlStreamsPeers() throws {
+        let port = testPorts(2).control
+        let server = try MoonlightControlServer(port: port, key: Data(count: 16), connectData: 0x1234)
+        server.start()
+        defer { server.stop(); waitUntilFree(port) }
+        let clients = try (0..<3).map { _ in try XCTUnwrap(enet_host_create(nil, 1, 48, 0, 0)) }
+        defer { clients.forEach { enet_host_destroy($0) } }
+        // Two CONNECTs whose replies are never read.
+        var address = ENetAddress(host: 0, port: port)
+        enet_address_set_host_ip(&address, "127.0.0.1")
+        for client in clients.prefix(2) {
+            _ = try XCTUnwrap(enet_host_connect(client, &address, 48, 0x1234))
+            enet_host_flush(client)
+        }
+        XCTAssertFalse(try connect(clients[2], to: port, token: 0x1234).contains(ENET_EVENT_TYPE_CONNECT),
+                       "a third from the same address gets no peer")
+        XCTAssertLessThanOrEqual(MoonlightControlServer.peersPerAddress * 8, MoonlightControlServer.peerCount,
+                                 "room for many addresses")
+    }
+
+    /// A stream whose last port is taken binds none: its control port is free for the next
+    /// ANNOUNCE.
+    func testAStreamThatCannotBindItsPortsLeavesNoneBound() throws {
+        let ports = testPorts(3)
+        let taken = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = ports.audio.bigEndian
+        let bound = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(taken, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+        }
+        XCTAssertEqual(bound, 0)
+        let config = MoonlightStreamConfig(width: 1280, height: 720, fps: 60, packetSize: 1392, bitrateKbps: 10_000,
+                                           videoFormat: 0, encryptionEnabled: 0)
+        func makeStream() throws -> MoonlightStream {
+            try MoonlightStream(config: config, displayID: 1, key: Data(count: 16), keyID: 0, pingPayload: "",
+                                connectData: 0, clientAddress: "127.0.0.1", ports: ports)
+        }
+        XCTAssertThrowsError(try makeStream())
+        Darwin.close(taken)
+        XCTAssertNoThrow(try MoonlightControlServer(port: ports.control, key: Data(count: 16), connectData: 0))
+        XCTAssertNoThrow(try MoonlightUDPSocket(port: ports.video))
+        XCTAssertNoThrow(try makeStream(), "every port free again")
+    }
+
+    // MARK: - Pacing
+
+    /// A socket on loopback that reads datagrams with the time the kernel took each in.
+    private final class TimedReceiver {
+        let descriptor = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
+        private(set) var address = sockaddr_in()
+
+        init() {
+            var yes: Int32 = 1
+            setsockopt(descriptor, SOL_SOCKET, SO_TIMESTAMP, &yes, socklen_t(MemoryLayout<Int32>.size))
+            var buffer: Int32 = 4 << 20
+            setsockopt(descriptor, SOL_SOCKET, SO_RCVBUF, &buffer, socklen_t(MemoryLayout<Int32>.size))
+            var timeout = timeval(tv_sec: 3, tv_usec: 0)
+            setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+            address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+            address.sin_family = sa_family_t(AF_INET)
+            address.sin_addr.s_addr = inet_addr("127.0.0.1")
+            var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+            withUnsafeMutablePointer(to: &address) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    _ = Darwin.bind(descriptor, $0, length)
+                    _ = getsockname(descriptor, $0, &length)
+                }
+            }
+        }
+
+        deinit { Darwin.close(descriptor) }
+
+        func send(_ data: Data, to port: UInt16) {
+            var to = address
+            to.sin_port = port.bigEndian
+            _ = data.withUnsafeBytes { bytes in
+                withUnsafePointer(to: &to) {
+                    $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                        sendto(descriptor, bytes.baseAddress, data.count, 0, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+                    }
+                }
+            }
+        }
+
+        /// The next datagram and when it arrived, in microseconds; nil after 3 s without one.
+        func receive() -> (Data, Int64)? {
+            var buffer = [UInt8](repeating: 0, count: 2048)
+            var control = [UInt8](repeating: 0, count: 64)
+            var arrived: Int64 = 0
+            let count = buffer.withUnsafeMutableBytes { data in
+                control.withUnsafeMutableBytes { control -> Int in
+                    var vector = iovec(iov_base: data.baseAddress, iov_len: data.count)
+                    return withUnsafeMutablePointer(to: &vector) { vector in
+                        var message = msghdr(msg_name: nil, msg_namelen: 0, msg_iov: vector, msg_iovlen: 1,
+                                             msg_control: control.baseAddress, msg_controllen: socklen_t(control.count),
+                                             msg_flags: 0)
+                        let count = recvmsg(descriptor, &message, 0)
+                        guard count > 0, message.msg_controllen > 0 else { return count }
+                        let header = control.load(as: cmsghdr.self)
+                        if header.cmsg_level == SOL_SOCKET, header.cmsg_type == SCM_TIMESTAMP {
+                            let time = control.loadUnaligned(fromByteOffset: MemoryLayout<cmsghdr>.size, as: timeval.self)
+                            arrived = Int64(time.tv_sec) * 1_000_000 + Int64(time.tv_usec)
+                        }
+                        return count
+                    }
+                }
+            }
+            guard count > 0 else { return nil }
+            return (Data(buffer[0..<count]), arrived)
+        }
+    }
+
+    /// A frame for the video sender: `data` as an access unit, with an empty sample.
+    private func frame(_ data: Data, keyFrame: Bool = true) throws -> MoonlightVideoEncoder.Frame {
+        var sample: CMSampleBuffer?
+        CMSampleBufferCreate(allocator: nil, dataBuffer: nil, dataReady: true, makeDataReadyCallback: nil, refcon: nil,
+                             formatDescription: nil, sampleCount: 0, sampleTimingEntryCount: 0, sampleTimingArray: nil,
+                             sampleSizeEntryCount: 0, sampleSizeArray: nil, sampleBufferOut: &sample)
+        let now = DispatchTime.now().uptimeNanoseconds
+        return MoonlightVideoEncoder.Frame(data: data, isKeyFrame: keyFrame, units: [data], sample: try XCTUnwrap(sample),
+                                           time: .zero, submitted: now, encoded: now)
+    }
+
+    /// A block's parity goes out at the pace once it is worked out, not at once to make up
+    /// for the time that took; and the sender says when it has caught up.
+    func testVideoParityGoesOutAtThePace() throws {
+        let port = testPorts(4).video
+        // 60 Mbit/s, the slowest pace: 133 ns a byte. 100 data packets and 50 of parity, 544
+        // bytes each: the parity takes 3.6 ms at the pace, and longer to work out unoptimised.
+        let sender = try MoonlightVideoSender(port: port, pingPayload: "0123456789abcdef", client: "127.0.0.1",
+                                              packetSize: 528, minimumParity: 50, bitrateKbps: 1000)
+        let caughtUp = expectation(description: "caught up")
+        sender.onCaughtUp = { caughtUp.fulfill() }
+        sender.startListening()
+        defer { sender.stop(); waitUntilFree(port) }
+        let receiver = TimedReceiver()
+        receiver.send(Data("0123456789abcdef".utf8) + Data([0, 0, 0, 1]), to: port)
+        let deadline = Date().addingTimeInterval(2)
+        while !sender.hasPeer, Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+        XCTAssertTrue(sender.hasPeer)
+
+        sender.send(try frame(Data(count: 100 * 512 - 8)))
+        var data: [Int64] = [], parity: [Int64] = []
+        while data.count + parity.count < 150, let (packet, arrived) = receiver.receive() {
+            let fec = [UInt8](packet[28..<32]).read(littleEndian: UInt32.self, at: 0)
+            if (fec >> 12) & 0x3FF < fec >> 22 { data.append(arrived) } else { parity.append(arrived) }
+        }
+        XCTAssertEqual(data.count, 100)
+        XCTAssertEqual(parity.count, 50)
+        let paritySpan = Double((parity.last ?? 0) - (parity.first ?? 0)) / 1000
+        XCTAssertGreaterThan(paritySpan, 2.5, "parity paced, less half a millisecond of catching up")
+        let dataSpan = Double((data.last ?? 0) - (data.first ?? 0)) / 1000
+        XCTAssertGreaterThan(dataSpan, 6, "data paced: 7.2 ms")
+        wait(for: [caughtUp], timeout: 2)
+    }
+
+    /// Sound goes one packet a fire, one for each fire missed, and one more while the line is
+    /// longer than a piece of captured sound leaves it.
+    func testSoundIsPacedAndItsLineDrains() {
+        let due = MoonlightAudioPacing.due
+        XCTAssertEqual(due(1, 0, 5), 0)
+        XCTAssertEqual(due(1, 4, 5), 1, "a piece of captured sound goes a packet a fire")
+        XCTAssertEqual(due(1, 6, 5), 1)
+        XCTAssertEqual(due(1, 7, 5), 2, "a line longer than a piece drains")
+        XCTAssertEqual(due(3, 4, 5), 3, "fires missed are made up")
+        XCTAssertEqual(due(3, 2, 5), 2)
+        XCTAssertEqual(due(1, 3, 10), 1)
+        XCTAssertEqual(due(1, 4, 10), 2)
+
+        // A line of eight drains two a fire, down to a piece's length.
+        var waiting = 8
+        for _ in 0..<2 { waiting -= due(1, waiting, 5) }
+        XCTAssertEqual(waiting, 5)
     }
 }

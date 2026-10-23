@@ -222,6 +222,11 @@ final class WebStreamServer {
     var removeDisplay: ((CGDirectDisplayID) -> Void)?
     var resizeDisplay: ((_ id: CGDirectDisplayID, _ width: Int, _ height: Int, _ fps: Int,
                          _ done: @escaping (Bool) -> Void) -> Void)?
+    /// Whether another device streams a display too, as Moonlight may one made here, which
+    /// lists it: such a display is neither turned for a viewer nor removed here.
+    var othersStream: (CGDirectDisplayID) -> Bool = { _ in false }
+    /// Hands a display made here, that no viewer needs now, to the other device streaming it.
+    var handOverDisplay: ((CGDirectDisplayID) -> Void)?
     var preferredProfile: () -> StreamProfile = { .preferred }
     /// The number watching changed, or the server started or stopped; on the main queue.
     var onChange: (() -> Void)?
@@ -270,8 +275,10 @@ final class WebStreamServer {
     }
 
     /// Asks the user to type the code a browser at `address` shows; `answer` is nil when
-    /// they decline. On the main queue.
-    var requestCode: ((_ address: String, _ name: String, _ answer: @escaping (String?) -> Void) -> Void)?
+    /// they decline. `isCurrent` says whether the request still waits for its code, for a
+    /// prompt shown later to check. On the main queue.
+    var requestCode: ((_ address: String, _ name: String, _ isCurrent: @escaping () -> Bool,
+                       _ answer: @escaping (String?) -> Void) -> Void)?
 
     private static let allowsPairingKey = "\(AppIdentity.shortID).browser.allowsPairing"
 
@@ -378,11 +385,18 @@ final class WebStreamServer {
     }()
 
     private func accept(_ connection: NWConnection, secure: Bool) {
+        // Turned away before it takes a place among the connections, which those out of
+        // reach could otherwise keep full.
+        guard WebStreamReach.current.allows(connection.endpoint) else {
+            wsLog.debug("refused \(MoonlightHost.address(connection.endpoint), privacy: .public): out of reach")
+            return connection.cancel()
+        }
         http.accept(connection, secure: secure)
     }
 
-    /// One GET request: its path, query and headers, and where it came from.
+    /// One GET or POST request: its path, query and headers, and where it came from.
     struct Request {
+        var method = "GET"
         let path: String
         let query: [String: String]
         /// Header names in lower case.
@@ -404,8 +418,77 @@ final class WebStreamServer {
 
         static func parse(_ head: String, secure: Bool, peer: NWEndpoint?) -> Request? {
             guard let parsed = MoonlightHTTPConnections.parse(head) else { return nil }
-            return Request(path: parsed.path, query: parsed.query, headers: parsed.headers, secure: secure, peer: peer)
+            return Request(method: parsed.method, path: parsed.path, query: parsed.query, headers: parsed.headers,
+                           secure: secure, peer: peer)
         }
+
+        /// The Host header's name or address, in lower case and without its port; nil without one.
+        var host: String? { headers["host"].flatMap(WebStreamServer.hostName) }
+
+        /// Whether a browser's page sent it from its own origin: the Origin header, when there
+        /// is one, is this server's as the Host header names it, and Sec-Fetch-Site, when sent,
+        /// says same-origin. A page elsewhere, or an image or form on one, is neither.
+        var isSameOrigin: Bool {
+            if let site = headers["sec-fetch-site"], site != "same-origin" { return false }
+            guard let origin = headers["origin"] else { return true }
+            guard let host = headers["host"] else { return false }
+            return origin.lowercased() == (secure ? "https://" : "http://") + host.lowercased()
+        }
+    }
+
+    /// The name or address in `value`, as a Host header or the user gives it: in lower case,
+    /// without whitespace, its port or a trailing dot; nil if nothing is left.
+    static func hostName(_ value: String) -> String? {
+        var host = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if host.hasPrefix("[") {
+            guard let end = host.firstIndex(of: "]") else { return nil }
+            host = String(host[host.index(after: host.startIndex)..<end])
+        } else if IPv6Address(host) == nil, let colon = host.lastIndex(of: ":") {
+            host = String(host[..<colon])
+        }
+        if host.hasSuffix(".") { host.removeLast() }
+        return host.isEmpty ? nil : host
+    }
+
+    private static let extraHostNamesKey = "\(AppIdentity.shortID).browser.extraHostNames"
+
+    /// Names of the user's own that lead to the Mac, such as a subdomain of a domain of
+    /// theirs: a Host that is exactly one of them pairs and uses the cookie as the Mac's own
+    /// names do. Kept as `hostName` gives them, without repeats.
+    static var extraHostNames: [String] {
+        get { UserDefaults.dam.stringArray(forKey: extraHostNamesKey) ?? [] }
+        set {
+            var names: [String] = []
+            for name in newValue.compactMap(hostName) where !names.contains(name) { names.append(name) }
+            UserDefaults.dam.set(names, forKey: extraHostNamesKey)
+        }
+    }
+
+    /// Names only a local network gives out, as a router's DNS does: no page on the internet
+    /// can have one.
+    private static let localSuffixes = [".local", ".lan", ".home", ".home.arpa", ".internal", ".localdomain", ".localhost"]
+
+    /// Whether `request` was sent to one of the Mac's names or to an address, not to a name
+    /// of someone else's that leads here (DNS rebinding), whose page would otherwise pair as
+    /// its own origin and hold the cookie. Any name of the local network's counts, the names
+    /// of an imported server certificate, and those the user added (`extraHostNames`).
+    func namesThisMac(_ request: Request) -> Bool {
+        guard let host = request.host else { return false }
+        if IPv4Address(host) != nil || IPv6Address(host) != nil { return true }
+        if !host.contains(".") || Self.localSuffixes.contains(where: { host.hasSuffix($0) }) { return true }
+        if Self.extraHostNames.contains(host) { return true }
+        var names = WebStreamCertificates.hostNames().map { $0.lowercased() }
+        if let local = WebStreamCertificates.localHostName?.lowercased() { names.append(local) }
+        if case .importedServer(let covered, _)? = certificates?.source {
+            for name in covered.map({ $0.lowercased() }) {
+                if name.hasPrefix("*.") {
+                    if host.split(separator: ".", maxSplits: 1).last.map({ "*." + $0 }) == name { return true }
+                } else {
+                    names.append(name)
+                }
+            }
+        }
+        return names.contains(host)
     }
 
     // MARK: Addresses
@@ -466,12 +549,20 @@ final class WebStreamServer {
     /// Requests waiting for the display being made.
     private var waitingForDisplay: [(WebStreamRequest, NWConnection)] = []
     private var makingDisplay = false
+    /// Requests about to stream the display made: those it was made for, and those turning it.
+    private var holds = 0
     /// Counts `stopAll`s, so a request that waited on a display through one is let go.
     private var generation = 0
 
     var viewerCount: Int { sessions.values.reduce(0) { $0 + $1.viewerCount } }
 
     static let cookieName = "dam_watch"
+    /// The cookie's name over HTTPS: a browser keeps a Secure cookie apart from one set over
+    /// HTTP only when their names differ, and with the same name would refuse HTTP's.
+    static let secureCookieName = "__Secure-dam_watch"
+    /// The most streams with settings of their own at once, each a capture and an encoder;
+    /// viewers of one stream share it.
+    static let maxSessions = 4
 
     /// Answers `request`. On the main queue.
     func handle(_ request: Request, on connection: NWConnection) {
@@ -480,9 +571,17 @@ final class WebStreamServer {
             return send(status: "403 Forbidden", body: Data("\(AppIdentity.name) does not stream to \(request.address).\n".utf8),
                         to: connection)
         }
+        // Only pairing begins with a POST; anything else asked that way is no request of the page's.
+        guard (request.method == "POST") == (request.path == "/pair/begin") else {
+            return send(status: "405 Method Not Allowed", body: Data(), to: connection)
+        }
         switch request.path {
         case "/", "/watch":
             if let key = request.query["pair"] {
+                guard Self.allowsPairing else {
+                    return send(status: "403 Forbidden", body: Data("\(AppIdentity.name) is not taking new browsers.\n".utf8),
+                                to: connection)
+                }
                 guard pairing.use(key: key) else {
                     return send(status: "403 Forbidden", body: Data("This QR code was used already, or is too old.\n".utf8),
                                 to: connection)
@@ -507,17 +606,20 @@ final class WebStreamServer {
         case "/pair/begin":
             beginPairing(request, on: connection)
         case "/pair/wait":
+            guard namesThisMac(request) else { return refuseHost(request, on: connection) }
             guard let id = request.query["id"], let pending = pairing.request(id: id) else {
                 return sendJSON(["state": "expired"], to: connection)
             }
             if let device = pending.device {
+                pairing.collected(id: id)
                 return sendJSON(["state": "paired"], headers: [cookie(for: device, secure: request.secure)], to: connection)
             }
             sendJSON(["state": pending.declined ? "declined" : "waiting"], to: connection)
         case "/apps.json", "/stream.mp4":
-            guard let device = devices.device(token: request.query["token"])
-                               ?? devices.device(token: request.cookie(Self.cookieName))
-            else {
+            // A link's token is the device's own; a cookie counts only on one of the Mac's names.
+            let cookie = !namesThisMac(request) ? nil
+                : (request.secure ? request.cookie(Self.secureCookieName) : nil) ?? request.cookie(Self.cookieName)
+            guard let device = devices.device(token: request.query["token"]) ?? devices.device(token: cookie) else {
                 return send(status: "401 Unauthorized", body: Data("Pair this browser, or use a link from \(AppIdentity.name).\n".utf8),
                             to: connection)
             }
@@ -534,18 +636,30 @@ final class WebStreamServer {
     }
 
     private func beginPairing(_ request: Request, on connection: NWConnection) {
+        guard namesThisMac(request) else { return refuseHost(request, on: connection) }
+        guard request.isSameOrigin else {
+            wsLog.debug("pairing refused: \(request.address, privacy: .public) asked from another page")
+            return send(status: "403 Forbidden", body: Data(), to: connection)
+        }
         guard Self.allowsPairing else {
             return sendJSON(["state": "refused", "message": "\(AppIdentity.name) is not taking new browsers."], to: connection)
         }
         let name = WebStreamPairing.name(userAgent: request.headers["user-agent"], address: request.address)
-        guard let pending = pairing.begin(address: request.address, name: name) else {
+        let pending: WebStreamPairing.Request
+        switch pairing.begin(address: request.address, name: name) {
+        case .success(let begun):
+            pending = begun
+        case .failure(.busy):
             return sendJSON(["state": "busy", "message": "Another browser is pairing. Try again in a few minutes."],
                             to: connection)
+        case .failure(.wait(let seconds)):
+            wsLog.debug("pairing refused: \(request.address, privacy: .public) asked again too soon")
+            return sendJSON(["state": "busy", "message": "Try again in \(Int(seconds)) seconds."], to: connection)
         }
         wsLog.debug("pairing requested by \(name, privacy: .public)")
         sendJSON(["state": "waiting", "id": pending.id, "code": pending.code], to: connection)
         guard let requestCode else { return }
-        requestCode(request.address, name) { [weak self] code in
+        requestCode(request.address, name, { [weak self] in self?.pairing.isWaiting(id: pending.id) == true }) { [weak self] code in
             guard let self else { return }
             let paired = self.pairing.answer(id: pending.id, code: code) { self.devices.add($0) }
             wsLog.debug("pairing \(name, privacy: .public): \(paired ? "paired" : "refused", privacy: .public)")
@@ -555,8 +669,13 @@ final class WebStreamServer {
 
     /// The header that gives a browser its device's token, for a year.
     private func cookie(for device: WebStreamDevice, secure: Bool) -> String {
-        "Set-Cookie: \(Self.cookieName)=\(device.token); Path=/; Max-Age=31536000; HttpOnly; SameSite=Strict"
-            + (secure ? "; Secure" : "")
+        "Set-Cookie: \(secure ? Self.secureCookieName : Self.cookieName)=\(device.token); Path=/; Max-Age=31536000; "
+            + "HttpOnly; SameSite=Strict" + (secure ? "; Secure" : "")
+    }
+
+    private func refuseHost(_ request: Request, on connection: NWConnection) {
+        wsLog.debug("refused \(request.address, privacy: .public): asked for \(request.host ?? "no host", privacy: .public)")
+        send(status: "403 Forbidden", body: Data("Open this page by the Mac's name or address.\n".utf8), to: connection)
     }
 
     private func sendJSON(_ object: [String: String], headers: [String] = [], to connection: NWConnection) {
@@ -578,9 +697,31 @@ final class WebStreamServer {
         sessions = [:]
         for (_, connection) in waitingForDisplay { connection.cancel() }
         waitingForDisplay = []
-        if let ownedDisplay {
-            removeDisplay?(ownedDisplay)
-            self.ownedDisplay = nil
+        holds = 0
+        if let ownedDisplay { letGo(of: ownedDisplay) }
+    }
+
+    /// The streaming display `id` is gone, however it went: one made here is no longer, and its
+    /// ID, which another display may take, is not to be removed later.
+    func displayGone(_ id: CGDirectDisplayID) {
+        if ownedDisplay == id { ownedDisplay = nil }
+    }
+
+    /// Lets go of the display made for streams once nothing here needs it: no session streams
+    /// it, and no request is about to.
+    private func releaseOwnedDisplayIfUnused() {
+        guard holds == 0, let ownedDisplay, !sessions.keys.contains(where: { $0.displayID == ownedDisplay }) else { return }
+        letGo(of: ownedDisplay)
+    }
+
+    /// The display made for streams goes, or to another device streaming it, which has it next.
+    private func letGo(of id: CGDirectDisplayID) {
+        if ownedDisplay == id { ownedDisplay = nil }
+        if othersStream(id) {
+            wsLog.debug("handing display \(id) over to its other stream")
+            handOverDisplay?(id)
+        } else {
+            removeDisplay?(id)
         }
     }
 
@@ -635,27 +776,36 @@ final class WebStreamServer {
                     self.removeDisplay?(id)
                     return
                 }
-                if let old = self.ownedDisplay, old != id { self.removeDisplay?(old) }
+                if let old = self.ownedDisplay, old != id { self.letGo(of: old) }
                 self.ownedDisplay = id
+                // Kept through them all, and let go after if none of them streams it.
+                self.holds += 1
                 for (request, connection) in waiting { self.serve(request, on: connection) }
+                self.holds -= 1
+                self.releaseOwnedDisplayIfUnused()
             }
             return
         }
         // A display made for the stream follows the viewer's screen when it is turned; the
-        // page asks again when it is.
-        if displayID == ownedDisplay, let resizeDisplay, let wanted = Self.turnedSize(of: displayID, for: request) {
+        // page asks again when it is. Not one another device streams, which keeps its size.
+        if displayID == ownedDisplay, !othersStream(displayID), let resizeDisplay,
+           let wanted = Self.turnedSize(of: displayID, for: request) {
             wsLog.debug("turning display \(displayID) to \(wanted.width)×\(wanted.height) for the viewer")
             let generation = self.generation
+            // Kept while it turns, however long, though the session before it ends meanwhile.
+            holds += 1
             return resizeDisplay(displayID, wanted.width, wanted.height, wanted.fps) { [weak self] _ in
                 // Stopped meanwhile: the request goes with everything else.
                 guard let self, self.generation == generation else { return connection.cancel() }
+                self.holds -= 1
                 var request = request
                 request.portrait = nil
                 self.serve(request, on: connection)
             }
         }
         guard let size = Self.pictureSize(of: displayID, request: request) else {
-            return send(status: "503 Service Unavailable", body: Data("The display is not on\n".utf8), to: connection)
+            send(status: "503 Service Unavailable", body: Data("The display is not on\n".utf8), to: connection)
+            return releaseOwnedDisplayIfUnused()
         }
         let key = WebStreamSession.Key(displayID: displayID, profile: request.profile, bitrateKbps: request.bitrateKbps,
                                        fps: size.fps, width: size.width, height: size.height,
@@ -665,12 +815,20 @@ final class WebStreamServer {
                                      audio: request.audio, device: request.device)
         // A session that has just ended, and is still to be let go here, takes no one.
         if let running = sessions[key], running.add(viewer) { return }
+        guard sessions.count < Self.maxSessions else {
+            wsLog.debug("stream refused: \(Self.maxSessions) streams running")
+            send(status: "503 Service Unavailable",
+                 body: Data("\(AppIdentity.name) is already making \(Self.maxSessions) streams. Watch one of them as it is.\n".utf8),
+                 to: connection)
+            return releaseOwnedDisplayIfUnused()
+        }
         let session: WebStreamSession
         do {
             session = try WebStreamSession(key: key)
         } catch {
             wsLog.error("session: \(String(describing: error), privacy: .public)")
-            return send(status: "503 Service Unavailable", body: Data("The encoder could not start\n".utf8), to: connection)
+            send(status: "503 Service Unavailable", body: Data("The encoder could not start\n".utf8), to: connection)
+            return releaseOwnedDisplayIfUnused()
         }
         session.onEnd = { [weak self] ended in self?.ended(ended) }
         session.onChange = { [weak self] in self?.onChange?() }
@@ -717,10 +875,7 @@ final class WebStreamServer {
     private func ended(_ session: WebStreamSession) {
         guard sessions[session.key] === session else { return }
         sessions[session.key] = nil
-        if let ownedDisplay, !sessions.keys.contains(where: { $0.displayID == ownedDisplay }) {
-            removeDisplay?(ownedDisplay)
-            self.ownedDisplay = nil
-        }
+        releaseOwnedDisplayIfUnused()
         onChange?()
     }
 
@@ -1930,7 +2085,8 @@ enum WebStreamPage {
       // and gets a cookie of its own once it is right.
       function pair() {
         $('msg').hidden = false; $('msg').textContent = 'Asking the Mac…';
-        fetch('/pair/begin', { cache: 'no-store' }).then(r => r.json()).then(j => {
+        fetch('/pair/begin', { method: 'POST', cache: 'no-store' })
+          .then(r => r.ok ? r.json() : r.text().then(t => ({ state: 'refused', message: t.trim() }))).then(j => {
           if (j.state !== 'waiting') { $('msg').textContent = j.message || 'This browser cannot pair now.'; return; }
           $('msg').textContent = '';
           const box = document.createElement('div');

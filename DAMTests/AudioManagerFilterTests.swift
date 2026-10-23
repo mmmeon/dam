@@ -127,6 +127,61 @@ final class AudioManagerFilterTests: XCTestCase {
         XCTAssertEqual(VisibilityPreferences.seenAudioDevices, ["Device A", "Device B", "Device C"])
     }
 
+    // MARK: - AudioManager.isVirtual(transport:)
+
+    func testIsVirtual_onlyVirtualAndAggregateTransports() {
+        for transport in [kAudioDeviceTransportTypeVirtual, kAudioDeviceTransportTypeAggregate,
+                          kAudioDeviceTransportTypeAutoAggregate] {
+            XCTAssertTrue(AudioManager.isVirtual(transport: transport), "\(transport)")
+        }
+        // A device's own, those the list once left out (PCI, AVB, unknown) among them.
+        for transport in [kAudioDeviceTransportTypeBuiltIn, kAudioDeviceTransportTypeUSB,
+                          kAudioDeviceTransportTypeHDMI, kAudioDeviceTransportTypeAirPlay,
+                          kAudioDeviceTransportTypePCI, kAudioDeviceTransportTypeAVB,
+                          kAudioDeviceTransportTypeUnknown] {
+            XCTAssertFalse(AudioManager.isVirtual(transport: transport), "\(transport)")
+        }
+        XCTAssertFalse(AudioManager.isVirtual(transport: nil))
+    }
+
+    // MARK: - AudioManager.undoesSwitch
+    //
+    // Device 1 played before; device 5 is a display's audio that has just appeared.
+
+    private let display: (AudioDeviceID) -> Bool = { $0 == 5 }
+
+    private func undoes(to current: AudioDeviceID = 5, from previous: AudioDeviceID = 1,
+                        devices: Set<AudioDeviceID> = [1, 5], added: [AudioDeviceID] = [5],
+                        follows: Bool = false) -> Bool {
+        AudioManager.undoesSwitch(to: current, from: previous, devices: devices,
+                                  recentlyAdded: Dictionary(uniqueKeysWithValues: added.map { ($0, Date()) }),
+                                  follows: follows, isDisplay: display)
+    }
+
+    func testUndoesSwitch_toANewDisplaysAudio() {
+        XCTAssertTrue(undoes())
+    }
+
+    func testUndoesSwitch_notWhenFollowingTheDisplay() {
+        XCTAssertFalse(undoes(follows: true))
+    }
+
+    func testUndoesSwitch_notToADeviceThatWasAlreadyThere() {
+        XCTAssertFalse(undoes(added: []))
+    }
+
+    func testUndoesSwitch_notToAnotherKindOfDevice() {
+        XCTAssertFalse(undoes(to: 6, devices: [1, 6], added: [6]))
+    }
+
+    func testUndoesSwitch_notWhenThePreviousOutputHasGone() {
+        XCTAssertFalse(undoes(devices: [5]))
+    }
+
+    func testUndoesSwitch_notWhenNothingSwitched() {
+        XCTAssertFalse(undoes(to: 5, from: 5))
+    }
+
     // MARK: - AudioManager.uid(of:) / deviceID(forUID:)
     // These read live CoreAudio state (tests run inside the app process).
 

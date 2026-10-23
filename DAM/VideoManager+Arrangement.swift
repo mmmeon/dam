@@ -75,8 +75,8 @@ extension VideoManager {
 
     /// Applies `layout`: every placement gets its origin, shifted so that `main` (or the
     /// current main display) is at the origin, in one transaction. Mirror slaves follow
-    /// their master. The arrangement each virtual anchor will restore on release is updated
-    /// too, so the change outlives the anchor.
+    /// their master. Every layout DAM puts back is updated too (see `keepUserOrigins`), so
+    /// none undoes the change and it outlives the anchors.
     func arrange(_ layout: DisplayLayout, main: CGDirectDisplayID? = nil,
                  completion: ((Result<Void, MirrorError>) -> Void)? = nil) {
         var origins = layout.origins(makingMain: main)
@@ -89,28 +89,22 @@ extension VideoManager {
         }
         let summary = origins.map { "\($0.key)@\(Int($0.value.x)),\(Int($0.value.y))" }.sorted().joined(separator: " ")
         arrangeLog.debug("arrange: \(summary, privacy: .public)")
-        var captured: [CGDirectDisplayID: CGPoint] = [:]
+        var captured = origins
         for placement in layout.placements {
             for member in placement.memberIDs { captured[member] = origins[placement.id] }
         }
         // Set before the commit: the change it causes is checked before it reports back.
         if let main, !streamingDisplays.isEmpty { streamingDisplayIsMainByChoice = streamingDisplayIDs.contains(main) }
+        let undoKeep = keepUserOrigins(captured)
         commitDisplayChange({ cfg in
             for (id, origin) in origins {
                 CGConfigureDisplayOrigin(cfg, id, Int32(origin.x), Int32(origin.y))
             }
-        }) { [weak self] result in
-            switch result {
-            case .failure(let error):
+        }) { result in
+            if case .failure(let error) = result {
                 arrangeLog.error("arrange: \(String(describing: error))")
-            case .success:
-                guard let self else { break }
-                for (name, arrangement) in self.virtualAnchorArrangements {
-                    self.virtualAnchorArrangements[name] = arrangement.replacingOrigins(captured)
-                }
-                if !self.holdsStreamingArrangement {
-                    self.streamingArrangement = self.streamingArrangement?.replacingOrigins(captured)
-                }
+                // One that timed out may still land, and is kept.
+                if !error.mayStillLand { undoKeep() }
             }
             completion?(result)
         }

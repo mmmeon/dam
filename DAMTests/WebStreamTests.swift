@@ -427,11 +427,14 @@ final class WebStreamTests: XCTestCase {
     private let client = Client()
     private lazy var session = URLSession(configuration: .ephemeral, delegate: client, delegateQueue: nil)
 
-    private func get(_ path: String, port: NWEndpoint.Port, secure: Bool = false, cookie: String? = nil)
+    private func get(_ path: String, port: NWEndpoint.Port, secure: Bool = false, cookie: String? = nil,
+                     method: String = "GET", headers: [String: String] = [:], host: String = "localhost")
         throws -> (status: Int, body: Data, headers: [String: String]) {
-        var request = URLRequest(url: URL(string: "\(secure ? "https" : "http")://localhost:\(port.rawValue)\(path)")!)
+        var request = URLRequest(url: URL(string: "\(secure ? "https" : "http")://\(host):\(port.rawValue)\(path)")!)
+        request.httpMethod = method
         request.httpShouldHandleCookies = false
         if let cookie { request.setValue(cookie, forHTTPHeaderField: "Cookie") }
+        for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
         let done = expectation(description: path)
         var result: (Int, Data, [String: String])?
         session.dataTask(with: request) { data, response, _ in
@@ -446,6 +449,31 @@ final class WebStreamTests: XCTestCase {
 
     private func json(_ data: Data) throws -> [String: String] {
         try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: String])
+    }
+
+    /// The status line of the answer to `request`, sent as it is, as a page on another name
+    /// would have its browser send it; empty if the connection closed without one.
+    private func raw(_ request: String, port: NWEndpoint.Port) -> String {
+        rawAnswer(request, port: port).components(separatedBy: "\r\n").first ?? ""
+    }
+
+    /// The whole answer to `request`, sent as it is.
+    private func rawAnswer(_ request: String, port: NWEndpoint.Port) -> String {
+        let connection = NWConnection(host: "127.0.0.1", port: port, using: .tcp)
+        defer { connection.cancel() }
+        let done = expectation(description: "answer")
+        var response = Data()
+        func read() {
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { data, _, isComplete, error in
+                if let data { response.append(data) }
+                if isComplete || error != nil { done.fulfill() } else { read() }
+            }
+        }
+        connection.start(queue: .global())
+        connection.send(content: Data(request.utf8), completion: .idempotent)
+        read()
+        wait(for: [done], timeout: 10)
+        return String(decoding: response, as: UTF8.self)
     }
 
     /// Started again at once, as for a new certificate, the server is running from the start
@@ -494,15 +522,16 @@ final class WebStreamTests: XCTestCase {
         server.apps = { [MoonlightApp(id: 1, title: "Streaming Display 1", displayID: 7)] }
         // The prompt on the Mac, answered once the test has read the code, as the user would.
         var prompt: ((String?) -> Void)?
-        server.requestCode = { _, _, answer in prompt = answer }
+        server.requestCode = { _, _, _, answer in prompt = answer }
         server.start()
         let deadline = Date().addingTimeInterval(5)
         while !server.isListening, server.lastError == nil, Date() < deadline {
             RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         }
         XCTAssertTrue(server.isListening, server.lastError ?? "")
-        func get(_ path: String, cookie: String? = nil) throws -> (status: Int, body: Data, headers: [String: String]) {
-            try self.get(path, port: port, cookie: cookie)
+        func get(_ path: String, cookie: String? = nil, method: String = "GET",
+                 headers: [String: String] = [:]) throws -> (status: Int, body: Data, headers: [String: String]) {
+            try self.get(path, port: port, cookie: cookie, method: method, headers: headers)
         }
 
         // The page is for anyone in reach; the displays and the stream only for devices it knows.
@@ -536,29 +565,56 @@ final class WebStreamTests: XCTestCase {
         XCTAssertEqual(server.localWatchURL.query, "token=\(server.devices.thisMac.token)")
 
         // A browser pairs with a code typed on the Mac, and has a cookie of its own from then.
-        var begun = try json(try get("/pair/begin").body)
+        func begin() throws -> [String: String] { try json(try get("/pair/begin", method: "POST").body) }
+        var begun = try begin()
         XCTAssertEqual(begun["state"], "waiting")
         XCTAssertEqual(try json(try get("/pair/wait?id=\(begun["id"]!)").body)["state"], "waiting")
         prompt?(begun["code"] == "0000" ? "1111" : "0000")
         XCTAssertEqual(try json(try get("/pair/wait?id=\(begun["id"]!)").body)["state"], "declined")
-        begun = try json(try get("/pair/begin").body)
+        // Declined, it waits before the Mac is asked again.
+        begun = try begin()
+        XCTAssertEqual(begun["state"], "busy")
+        XCTAssertTrue(begun["message"]?.hasPrefix("Try again in") == true, begun["message"] ?? "")
+        server.pairing.limits = PairingPromptLimits()
+        begun = try begin()
         prompt?(begun["code"])
         let waited = try get("/pair/wait?id=\(begun["id"]!)")
         XCTAssertEqual(try json(waited.body)["state"], "paired")
         let setCookie = try XCTUnwrap(waited.headers["Set-Cookie"])
+        XCTAssertTrue(setCookie.hasPrefix("dam_watch="))
         XCTAssertTrue(setCookie.contains("HttpOnly"))
         XCTAssertFalse(setCookie.contains("Secure"), "paired over HTTP")
         let cookie = try XCTUnwrap(setCookie.components(separatedBy: ";").first)
         XCTAssertEqual(try get("/apps.json", cookie: cookie).status, 200)
         let browser = try XCTUnwrap(server.devices.all.first { $0.kind == .browser })
 
-        // A QR code pairs once.
+        // Only the page itself, on one of the Mac's names, may ask to pair, or use the cookie.
+        XCTAssertEqual(try get("/pair/begin").status, 405, "not by a GET, as an image would")
+        XCTAssertEqual(try get("/pair/begin", method: "POST", headers: ["Origin": "http://evil.example"]).status, 403)
+        XCTAssertEqual(try get("/pair/begin", method: "POST", headers: ["Sec-Fetch-Site": "cross-site"]).status, 403)
+        XCTAssertEqual(try get("/watch", method: "POST").status, 405)
+        let rebound = "Host: evil.example:\(port.rawValue)\r\nOrigin: http://evil.example:\(port.rawValue)\r\n"
+        XCTAssertEqual(raw("POST /pair/begin HTTP/1.1\r\n\(rebound)\r\n", port: port), "HTTP/1.1 403 Forbidden",
+                       "a name of someone else's leading here")
+        XCTAssertEqual(raw("GET /apps.json HTTP/1.1\r\n\(rebound)Cookie: \(cookie)\r\n\r\n", port: port),
+                       "HTTP/1.1 401 Unauthorized")
+        XCTAssertEqual(raw("GET /apps.json HTTP/1.1\r\nHost: 127.0.0.1:\(port.rawValue)\r\nCookie: \(cookie)\r\n\r\n",
+                           port: port), "HTTP/1.1 200 OK", "by the Mac's address")
+        XCTAssertEqual(raw("GET /apps.json?token=\(server.devices.thisMac.token) HTTP/1.1\r\n\(rebound)\r\n", port: port),
+                       "HTTP/1.1 200 OK", "a link's token is its own")
+
+        // A QR code pairs once, and only while new browsers may pair.
         let qr = try XCTUnwrap(URLComponents(url: server.makeQRLink(), resolvingAgainstBaseURL: false))
-        let scanned = try get("/watch?\(qr.query!)")
+        let allowed = WebStreamServer.allowsPairing
+        WebStreamServer.allowsPairing = false
+        XCTAssertEqual(try get("/watch?\(qr.query!)").status, 403, "pairing off")
+        WebStreamServer.allowsPairing = allowed
+        let fresh = try XCTUnwrap(URLComponents(url: server.makeQRLink(), resolvingAgainstBaseURL: false))
+        let scanned = try get("/watch?\(fresh.query!)")
         XCTAssertEqual(scanned.status, 303)
         XCTAssertEqual(scanned.headers["Location"], "/watch")
         XCTAssertNotNil(scanned.headers["Set-Cookie"])
-        XCTAssertEqual(try get("/watch?\(qr.query!)").status, 403, "once")
+        XCTAssertEqual(try get("/watch?\(fresh.query!)").status, 403, "once")
 
         // Forgotten, a device is turned away.
         server.forget(browser)
@@ -567,9 +623,8 @@ final class WebStreamTests: XCTestCase {
         XCTAssertEqual(try get("/apps.json?token=\(link.token)").status, 401)
 
         // Pairing off: a browser is told so.
-        let allowed = WebStreamServer.allowsPairing
         WebStreamServer.allowsPairing = false
-        XCTAssertEqual(try json(try get("/pair/begin").body)["state"], "refused")
+        XCTAssertEqual(try begin()["state"], "refused")
         WebStreamServer.allowsPairing = allowed
 
         // HTTPS, trusting DAM's authority, which /ca.cer hands out.
@@ -580,9 +635,89 @@ final class WebStreamTests: XCTestCase {
         let secure = try self.get("/apps.json?token=\(server.devices.thisMac.token)", port: server.securePort, secure: true)
         XCTAssertEqual(secure.status, 200)
 
+        // Paired over HTTPS, a browser's cookie has a name of its own, which a Secure cookie
+        // needs for the browser to take HTTP's as well.
+        begun = try json(try self.get("/pair/begin", port: server.securePort, secure: true, method: "POST").body)
+        prompt?(begun["code"])
+        let securely = try self.get("/pair/wait?id=\(begun["id"]!)", port: server.securePort, secure: true)
+        let secureCookie = try XCTUnwrap(securely.headers["Set-Cookie"])
+        XCTAssertTrue(secureCookie.hasPrefix("__Secure-dam_watch="), secureCookie)
+        XCTAssertTrue(secureCookie.contains("; Secure"))
+        let sent = try XCTUnwrap(secureCookie.components(separatedBy: ";").first)
+        XCTAssertEqual(try self.get("/apps.json", port: server.securePort, secure: true, cookie: sent).status, 200)
+        XCTAssertEqual(try get("/apps.json", cookie: sent).status, 401, "not over HTTP")
+
         // Stopped, it answers nothing.
         server.stop()
         XCTAssertEqual(try get("/watch").status, 0)
+    }
+
+    /// Names the user adds are kept as a Host header gives them, and only one of them exactly
+    /// counts as the Mac's.
+    func testNamesTheUserAddsAreKeptAsHostsGiveThem() {
+        let saved = WebStreamServer.extraHostNames
+        defer { WebStreamServer.extraHostNames = saved }
+        WebStreamServer.extraHostNames = [" Mac.Home.Example.com. ", "mac.home.example.com:47995", "", "  ",
+                                          "[fd00::1]:47995", "nas.example.org"]
+        XCTAssertEqual(WebStreamServer.extraHostNames, ["mac.home.example.com", "fd00::1", "nas.example.org"])
+        XCTAssertEqual(WebStreamServer.hostName("::1"), "::1", "an IPv6 address has no port without brackets")
+
+        let server = WebStreamServer(directory: FileManager.default.temporaryDirectory)
+        func names(_ host: String) -> Bool {
+            server.namesThisMac(WebStreamServer.Request(path: "/", query: [:], headers: ["host": host],
+                                                        secure: false, peer: nil))
+        }
+        XCTAssertTrue(names("mac.home.example.com:47995"))
+        XCTAssertTrue(names("MAC.home.example.com."))
+        XCTAssertFalse(names("evil.example"), "a name not listed")
+        XCTAssertFalse(names("home.example.com"), "no more than the name")
+        XCTAssertFalse(names("x.mac.home.example.com"), "nor anything under it")
+        WebStreamServer.extraHostNames = []
+        XCTAssertFalse(names("mac.home.example.com"))
+    }
+
+    /// A browser on a name the user added pairs and uses its cookie there, as on the Mac's own.
+    func testANameTheUserAddedPairsAndUsesTheCookie() throws {
+        let saved = WebStreamServer.extraHostNames
+        defer { WebStreamServer.extraHostNames = saved }
+        WebStreamServer.extraHostNames = ["mac.home.example.com"]
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let server = startedServer(directory: directory)
+        defer { server.stop() }
+        var prompt: ((String?) -> Void)?
+        server.requestCode = { _, _, _, answer in prompt = answer }
+        let port = server.port
+
+        /// The answer to `method path` from a page on `host`: its status line, JSON body and cookie.
+        func answer(_ method: String, _ path: String, host: String, cookie: String? = nil)
+            -> (status: String, body: [String: String], cookie: String?) {
+            var request = "\(method) \(path) HTTP/1.1\r\nHost: \(host):\(port.rawValue)\r\n" +
+                          "Origin: http://\(host):\(port.rawValue)\r\n"
+            if let cookie { request += "Cookie: \(cookie)\r\n" }
+            let parts = rawAnswer(request + "\r\n", port: port).components(separatedBy: "\r\n\r\n")
+            let lines = parts[0].components(separatedBy: "\r\n")
+            let set = lines.first { $0.lowercased().hasPrefix("set-cookie:") }
+                .flatMap { $0.dropFirst("set-cookie:".count).trimmingCharacters(in: .whitespaces)
+                    .components(separatedBy: ";").first }
+            let body = parts.count > 1
+                ? (try? JSONSerialization.jsonObject(with: Data(parts[1].utf8))) as? [String: String] ?? [:] : [:]
+            return (lines[0], body, set)
+        }
+
+        XCTAssertEqual(answer("POST", "/pair/begin", host: "evil.example").status, "HTTP/1.1 403 Forbidden",
+                       "a name not listed")
+        let begun = answer("POST", "/pair/begin", host: "mac.home.example.com")
+        XCTAssertEqual(begun.status, "HTTP/1.1 200 OK")
+        XCTAssertEqual(begun.body["state"], "waiting")
+        prompt?(begun.body["code"])
+        let waited = answer("GET", "/pair/wait?id=\(begun.body["id"] ?? "")", host: "mac.home.example.com")
+        XCTAssertEqual(waited.body["state"], "paired")
+        let cookie = try XCTUnwrap(waited.cookie)
+        XCTAssertEqual(answer("GET", "/apps.json", host: "mac.home.example.com", cookie: cookie).status,
+                       "HTTP/1.1 200 OK")
+        XCTAssertEqual(answer("GET", "/apps.json", host: "evil.example", cookie: cookie).status,
+                       "HTTP/1.1 401 Unauthorized", "the cookie only on a name of the Mac's")
     }
 
     /// A server on ports of its own, listening.
@@ -682,9 +817,57 @@ final class WebStreamTests: XCTestCase {
         spin(0.3)
         XCTAssertEqual(made.count, 2)
         made[1](43)
-        XCTAssertEqual(removed, [42], "the request after the stop has it")
+        // It isn't on (it is no real display), so it can't be streamed, and goes at once.
+        Loopback.spin(until: { removed.count == 2 })
+        XCTAssertEqual(removed, [42, 43], "the request after the stop had it, and let it go")
         server.stop()
         XCTAssertEqual(removed, [42, 43])
+    }
+
+    /// A display made for a browser that Moonlight streams too is handed to Moonlight, not
+    /// removed under it; one gone is forgotten, and its ID, which another may take, left alone.
+    func testADisplayMoonlightAlsoStreamsIsHandedOverAndOneGoneIsLeftAlone() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let server = startedServer(directory: directory)
+        defer { server.stop() }
+        var made: [(CGDirectDisplayID?) -> Void] = []
+        var removed: [CGDirectDisplayID] = [], handed: [CGDirectDisplayID] = []
+        var moonlight: Set<CGDirectDisplayID> = []
+        server.makeDisplay = { _, _, _, done in made.append(done) }
+        server.removeDisplay = { removed.append($0) }
+        server.othersStream = { moonlight.contains($0) }
+        server.handOverDisplay = { handed.append($0) }
+        let url = URL(string: "http://localhost:\(server.port.rawValue)/stream.mp4?token=\(server.devices.thisMac.token)")!
+
+        session.dataTask(with: url).resume()
+        Loopback.spin(until: { made.count == 1 })
+        moonlight = [44]
+        made[0](44)
+        Loopback.spin(until: { !handed.isEmpty })
+        XCTAssertEqual(handed, [44])
+        XCTAssertEqual(removed, [])
+        server.stop()
+        XCTAssertEqual(removed, [], "Moonlight's now")
+    }
+
+    /// Out of reach, a connection is closed before it is served, so that it holds none of
+    /// the places connections have; in reach, the same address is served.
+    func testAnAddressOutOfReachIsTurnedAwayAtOnce() throws {
+        let address = try XCTUnwrap(LocalNetwork.interfaceSubnets().map(\.address)
+            .first { $0.count == 4 && $0[0] != 127 }.map { $0.map(String.init).joined(separator: ".") },
+            "no network address on this Mac")
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let server = startedServer(directory: directory)
+        defer { server.stop() }
+        let saved = WebStreamReach.current
+        defer { WebStreamReach.current = saved }
+        WebStreamReach.current = .thisNetwork
+        XCTAssertEqual(try get("/watch", port: server.port, host: address).status, 200)
+        WebStreamReach.current = .thisMac
+        XCTAssertEqual(try get("/watch", port: server.port, host: address).status, 0, "closed without an answer")
+        XCTAssertEqual(try get("/watch", port: server.port).status, 200, "from this Mac")
     }
 
     /// Moonlight's HTTP port no longer serves the stream.

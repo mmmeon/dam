@@ -74,12 +74,16 @@ extension NSTouchBar {
                                    for itemID: NSTouchBarItem.Identifier) {
         let sel = NSSelectorFromString("presentSystemModalTouchBar:systemTrayItemIdentifier:")
         msgSend_present(NSTouchBar.self, sel, bar, itemID.rawValue as NSString)
+        // Set before presenting only, the close box shows once another app comes to the
+        // front; set again after, it shows at once.
+        DFRSystemModalShowsCloseBoxWhenFrontMost(true)
     }
 
     /// Present without anchoring to a control-strip item.
     static func presentSystemModal(_ bar: NSTouchBar) {
         let sel = NSSelectorFromString("presentSystemModalTouchBar:systemTrayItemIdentifier:")
         msgSend_present(NSTouchBar.self, sel, bar, nil)
+        DFRSystemModalShowsCloseBoxWhenFrontMost(true)
     }
 
     static func dismissSystemModal(_ bar: NSTouchBar) {
@@ -99,6 +103,9 @@ final class ControlStripPresenter: NSObject {
     private static let speechStatusID = NSTouchBarItem.Identifier("\(AppIdentity.bundleID).speechStatus")
     private static let modalArrangeID = NSTouchBarItem.Identifier("\(AppIdentity.bundleID).modal.arrange")
     private static let audioBackID    = NSTouchBarItem.Identifier("\(AppIdentity.bundleID).audio.back")
+    /// The switcher's own close button, in place of the system's close box, which isn't shown
+    /// while DAM is the active app.
+    private static let modalCloseID   = NSTouchBarItem.Identifier("\(AppIdentity.bundleID).modal.close")
     private static let audioSegID     = NSTouchBarItem.Identifier("\(AppIdentity.bundleID).audio.outputs")
 
     // Prefixes for per-display dynamic identifiers.
@@ -131,6 +138,14 @@ final class ControlStripPresenter: NSObject {
     private var resolutionBar: NSTouchBar?
     /// The audio outputs page, while it is presented.
     private var audioBar: NSTouchBar?
+
+    /// Called once the switcher opened with `openModal` has closed, however it closed: its
+    /// close box, or a pick that took its last bar away. Never where the system doesn't say
+    /// whether its bars show.
+    var onModalClose: (() -> Void)?
+    /// Checks whether the switcher still shows, while it may.
+    private var closeWatch: Timer?
+    private var visibility = SwitcherVisibility()
 
     init(audioManager: AudioManager, videoManager: VideoManager, sidecarManager: SidecarManager? = nil) {
         self.audioManager = audioManager
@@ -198,6 +213,15 @@ final class ControlStripPresenter: NSObject {
         NSTouchBar.presentSystemModal(bar, for: Self.stripID)
         NSTouchBar.dismissSystemModal(bar)
         modalBar = nil
+
+        // The close button comes and goes as DAM becomes the active app and stops being it.
+        for name in [NSApplication.didBecomeActiveNotification, NSApplication.didResignActiveNotification] {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                guard let self else { return }
+                if let bar = self.modalBar { self.updateModalBar(bar) }
+                if let bar = self.audioBar { bar.defaultItemIdentifiers = self.audioItemIdentifiers() }
+            }
+        }
     }
 
     /// Call whenever manager state changes.
@@ -317,7 +341,7 @@ final class ControlStripPresenter: NSObject {
     /// desktops), the audio outputs page and the AirPlay picker on the left, then a button
     /// per connected AirPlay and physical display that opens its resolutions.
     private func modalItemIdentifiers() -> [NSTouchBarItem.Identifier] {
-        var ids: [NSTouchBarItem.Identifier] = []
+        var ids: [NSTouchBarItem.Identifier] = NSApp.isActive ? [Self.modalCloseID] : []
         if (videoManager?.currentLayout().placements.count ?? 0) >= 2 { ids.append(Self.modalArrangeID) }
         ids += [Self.modalAudioID, .fixedSpaceSmall, Self.modalVideoID]
         let connectedAirPlay = (videoManager?.airPlayDevices ?? [])
@@ -668,6 +692,24 @@ final class ControlStripPresenter: NSObject {
         modalBar = bar
         DFRSystemModalShowsCloseBoxWhenFrontMost(true)
         NSTouchBar.presentSystemModal(bar, for: Self.stripID)
+        watchForClose()
+    }
+
+    /// Checks now and then whether any of the switcher's bars shows, its pages and the arrange
+    /// flow's included, until it has closed: the system tells nothing of its close box.
+    private func watchForClose() {
+        guard closeWatch == nil else { return }
+        visibility = SwitcherVisibility()
+        closeWatch = Timer.scheduledTimer(withTimeInterval: SwitcherVisibility.interval, repeats: true) { [weak self] timer in
+            guard let self else { return timer.invalidate() }
+            let showing = [self.modalBar, self.audioBar, self.resolutionBar].contains { $0?.isVisible == true }
+                || ArrangeTouchBar.shared.isShowing
+            let state = self.visibility.check(showing: showing)
+            guard state != .open else { return }
+            timer.invalidate()
+            self.closeWatch = nil
+            if state == .closed { self.onModalClose?() }
+        }
     }
 
     /// Opens the arrange flow in place of the modal bar; it comes back here when done.
@@ -682,13 +724,28 @@ final class ControlStripPresenter: NSObject {
         if let existing = audioBar { NSTouchBar.dismissSystemModal(existing) }
         let bar = NSTouchBar()
         bar.delegate = self
-        bar.defaultItemIdentifiers = [Self.audioBackID, .flexibleSpace, Self.audioSegID]
+        bar.defaultItemIdentifiers = audioItemIdentifiers()
         audioBar = bar
         NSTouchBar.presentSystemModal(bar, for: Self.stripID)
     }
 
     @objc private func audioBackTapped() {
         openModal()
+    }
+
+    private func audioItemIdentifiers() -> [NSTouchBarItem.Identifier] {
+        (NSApp.isActive ? [Self.modalCloseID] : []) + [Self.audioBackID, .flexibleSpace, Self.audioSegID]
+    }
+
+    /// Closes the switcher, its pages included, as its close box would.
+    @objc private func modalCloseTapped() {
+        closeResolutionBar()
+        for bar in [audioBar, modalBar].compactMap({ $0 }) { NSTouchBar.dismissSystemModal(bar) }
+        audioBar = nil
+        modalBar = nil
+        closeWatch?.invalidate()
+        closeWatch = nil
+        onModalClose?()
     }
 
     /// Picks the output, then returns to the modal bar.
@@ -868,6 +925,36 @@ final class ControlStripPresenter: NSObject {
     }
 }
 
+// MARK: - Switcher visibility
+
+/// Whether the switcher is still open, from whether any of its bars showed at each check. It
+/// has closed once a bar was seen showing and none has for `hiddenChecks` checks running, as
+/// a page replacing another may show none for a moment. Where no bar is ever seen showing
+/// (the system not saying), it gives up rather than taking the switcher for closed.
+struct SwitcherVisibility {
+    enum State { case open, closed, unknown }
+
+    static let interval: TimeInterval = 0.25
+    static let hiddenChecks = 2
+    /// Five seconds' checks without a bar seen.
+    static let unseenChecks = 20
+
+    private var seen = false
+    /// Checks running with no bar showing.
+    private var hidden = 0
+
+    mutating func check(showing: Bool) -> State {
+        if showing {
+            seen = true
+            hidden = 0
+            return .open
+        }
+        hidden += 1
+        if seen { return hidden >= Self.hiddenChecks ? .closed : .open }
+        return hidden >= Self.unseenChecks ? .unknown : .open
+    }
+}
+
 // MARK: - NSTouchBarDelegate
 
 extension ControlStripPresenter: NSTouchBarDelegate {
@@ -892,6 +979,14 @@ extension ControlStripPresenter: NSTouchBarDelegate {
                 btn.image = img
                 btn.imagePosition = .imageLeading
             }
+            item.view = btn
+            return item
+
+        case Self.modalCloseID:
+            let item = NSCustomTouchBarItem(identifier: id)
+            let btn = NSButton(image: NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: "Close")!,
+                               target: self, action: #selector(modalCloseTapped))
+            btn.isBordered = false
             item.view = btn
             return item
 

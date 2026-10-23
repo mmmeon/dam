@@ -100,7 +100,7 @@ final class MoonlightHost {
     /// 165), holds each frame two frames' time, and has no low-latency rate control.
     static func codecs(lowLatency: Bool, offer: MoonlightHEVCOffer = MoonlightHost.hevcOffer,
                        support: [VideoCodec: VideoCodec.Support] = VideoCodec.support,
-                       performance: @autoclosure () -> [VideoCodec: VideoCodec.Performance] = VideoCodec.performance)
+                       performance: @autoclosure () -> [VideoCodec: VideoCodec.Performance] = MoonlightHost.measuredPerformance)
         -> [VideoCodec] {
         guard support[.hevc]?.hardware == true else { return [.h264] }
         switch offer {
@@ -154,8 +154,24 @@ final class MoonlightHost {
     /// where Automatic needs it, and then only once for the Mac (see VideoCodec.performance).
     static func measureEncoders() {
         DispatchQueue.global(qos: .utility).async {
-            if VideoCodec.support[.hevc]?.hardware == true, hevcOffer == .automatic { _ = VideoCodec.performance }
+            guard VideoCodec.support[.hevc]?.hardware == true, hevcOffer == .automatic else { return }
+            _ = VideoCodec.performance
+            measured.lock()
+            isMeasured = true
+            measured.unlock()
         }
+    }
+
+    private static let measured = NSLock()
+    private static var isMeasured = false
+
+    /// The encoders' performance once `measureEncoders` has it, and none before: read on the
+    /// main queue while the first measurement runs (about a second, after a macOS update), it
+    /// would hold the queue until done. A device asking meanwhile is offered H.264 alone.
+    static var measuredPerformance: [VideoCodec: VideoCodec.Performance] {
+        measured.lock()
+        defer { measured.unlock() }
+        return isMeasured ? VideoCodec.performance : [:]
     }
 
     private static let enabledKey = "\(AppIdentity.shortID).moonlight.enabled"
@@ -228,8 +244,10 @@ final class MoonlightHost {
                          _ done: @escaping (Bool) -> Void) -> Void)?
 
     /// Asks the user for the PIN Moonlight shows on the device at `address`. The answer is
-    /// nil when they decline. Called on the main queue.
-    var requestPIN: ((_ address: String, _ answer: @escaping (String?) -> Void) -> Void)?
+    /// nil when they decline. `isCurrent` says whether the request still waits for its PIN, for
+    /// a prompt shown later to check. Called on the main queue.
+    var requestPIN: ((_ address: String, _ isCurrent: @escaping () -> Bool,
+                      _ answer: @escaping (String?) -> Void) -> Void)?
     /// The device asking to pair gave up before the PIN was typed.
     var pairingAbandoned: (() -> Void)?
     /// Something the menu shows changed.
@@ -273,6 +291,8 @@ final class MoonlightHost {
     private let http: MoonlightHTTPConnections
     private var pairing: MoonlightPairing?
     private var pairingAddress = ""
+    /// How often the PIN prompt may come up.
+    let promptLimits = PairingPromptLimits()
     /// The first pairing request, answered once the user has typed the PIN.
     private var waitingForPIN: NWConnection?
     /// One handshake server per session, each on a port of its own: RTSP carries no token
@@ -477,7 +497,9 @@ final class MoonlightHost {
 
     /// Answers a request's head.
     private func answer(_ head: String, on connection: NWConnection, secure: Bool) {
-        guard let parsed = MoonlightHTTPConnections.parse(head) else { return send(status: "400 Bad Request", to: connection) }
+        guard let parsed = MoonlightHTTPConnections.parse(head), parsed.method == "GET" else {
+            return send(status: "400 Bad Request", to: connection)
+        }
         let certificate = secure ? Self.peerCertificate(of: connection) : nil
         handle(Request(path: parsed.path, query: parsed.query), on: connection, secure: secure, certificate: certificate)
     }
@@ -584,6 +606,13 @@ final class MoonlightHost {
         guard let key = request.query["rikey"].flatMap(MoonlightCrypto.data(hex:)), key.count == 16 else {
             return reply(Self.xml(status: 400, message: "Missing key"), to: connection)
         }
+        // The stream's sockets are IPv4 only: refused now, rather than ending ten seconds in
+        // with Moonlight never having asked for video.
+        guard !Self.address(connection.currentPath?.localEndpoint).contains(":") else {
+            mlLog.debug("launch refused: reached over IPv6")
+            return reply(Self.xml(status: 503, message: "\(AppIdentity.name) streams over IPv4 only. " +
+                                                       "Add this Mac to Moonlight by its IPv4 address."), to: connection)
+        }
         guard session(for: certificate) != nil || sessions.count < Self.maxSessions else {
             mlLog.debug("launch refused: \(Self.maxSessions) devices streaming")
             return reply(Self.xml(status: 503, message: "\(AppIdentity.name) is already streaming to \(Self.maxSessions) devices."),
@@ -688,6 +717,18 @@ final class MoonlightHost {
         }
     }
 
+    /// Whether a device's launch streams display `id`.
+    func streams(display id: CGDirectDisplayID) -> Bool {
+        sessions.contains { $0.launch.displayID == id }
+    }
+
+    /// Takes display `id`, made elsewhere for a stream (the browser's) and no longer needed
+    /// there, as made for the first device streaming it: it goes once no device streams it.
+    func adopt(display id: CGDirectDisplayID) {
+        guard !sessions.contains(where: { $0.launch.displayID == id && $0.launch.ownsDisplay }) else { return }
+        sessions.first { $0.launch.displayID == id }?.launch.ownsDisplay = true
+    }
+
     /// Ends a device's launch: its stream, and the display made for it, unless another
     /// device streams that display too, which then has it.
     func endLaunch(of certificate: Data) {
@@ -757,23 +798,30 @@ final class MoonlightHost {
             return reply(Self.xml(status: 403, message: "\(AppIdentity.name) is not accepting new devices",
                                   fields: ["paired": "0"]), to: connection)
         }
+        let address = Self.address(connection.endpoint)
+        if let wait = promptLimits.wait(for: address) {
+            mlLog.debug("pairing refused: \(address, privacy: .public) asked again too soon")
+            return reply(Self.xml(status: 503, message: "Try pairing again in \(Int(wait)) seconds",
+                                  fields: ["paired": "0"]), to: connection)
+        }
         guard let salt = query["salt"].flatMap({ MoonlightCrypto.data(hex: String($0.prefix(32))) }),
               let pem = query["clientcert"].flatMap(MoonlightCrypto.data(hex:)) else {
             throw MoonlightPairing.Failure.badParameter
         }
         let session = try MoonlightPairing(clientCertificatePEM: String(decoding: pem, as: UTF8.self), salt: salt,
                                            serverCertificate: identity.certificate, serverKey: identity.key)
-        let address = Self.address(connection.endpoint)
         pairing = session
         pairingAddress = address
         waitingForPIN = connection
         watchForHangUp(connection)
         mlLog.debug("pairing requested from \(address, privacy: .public)")
-        requestPIN?(address) { [weak self] pin in
+        requestPIN?(address, { [weak self] in self?.waitingForPIN === connection }) { [weak self] pin in
             guard let self, self.waitingForPIN === connection else { return }
             self.waitingForPIN = nil
             let digits = pin?.trimmingCharacters(in: .whitespaces) ?? ""
-            guard digits.count == 4, digits.allSatisfy(\.isASCII), digits.allSatisfy(\.isNumber) else {
+            let typed = digits.count == 4 && digits.allSatisfy(\.isASCII) && digits.allSatisfy(\.isNumber)
+            self.promptLimits.ended(address, declined: !typed)
+            guard typed else {
                 self.pairing = nil
                 return self.reply(Self.xml(["paired": "0"]), to: connection)
             }
@@ -799,6 +847,7 @@ final class MoonlightHost {
 
     private func abandonPairing() {
         mlLog.debug("pairing abandoned by \(self.pairingAddress, privacy: .public)")
+        promptLimits.ended(pairingAddress, declined: true)
         waitingForPIN?.cancel()
         waitingForPIN = nil
         pairing = nil
@@ -1030,12 +1079,14 @@ final class MoonlightHTTPConnections {
         }
     }
 
-    /// A GET request's path, its query (the first value of each name) and its headers (by
-    /// name in lower case); nil for anything else.
-    static func parse(_ head: String) -> (path: String, query: [String: String], headers: [String: String])? {
+    /// A GET or POST request's method, path, query (the first value of each name) and headers
+    /// (by name in lower case); nil for anything else. A POST's body is not read.
+    static func parse(_ head: String)
+        -> (method: String, path: String, query: [String: String], headers: [String: String])? {
         var lines = head.components(separatedBy: "\r\n")
         let parts = lines.removeFirst().split(separator: " ")
-        guard parts.count >= 2, parts[0] == "GET", let url = URLComponents(string: String(parts[1])) else { return nil }
+        guard parts.count >= 2, parts[0] == "GET" || parts[0] == "POST",
+              let url = URLComponents(string: String(parts[1])) else { return nil }
         var query: [String: String] = [:]
         for item in url.queryItems ?? [] where query[item.name] == nil { query[item.name] = item.value ?? "" }
         var headers: [String: String] = [:]
@@ -1043,7 +1094,7 @@ final class MoonlightHTTPConnections {
             guard let colon = line.firstIndex(of: ":") else { continue }
             headers[line[..<colon].lowercased()] = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
         }
-        return (url.path, query, headers)
+        return (String(parts[0]), url.path, query, headers)
     }
 
     /// Answers `connection` and closes it once the answer is out; `headers` are whole lines
@@ -1103,6 +1154,48 @@ final class MoonlightConnectionLimits {
     func closed(_ connection: NWConnection) {
         open[ObjectIdentifier(connection)] = nil
         waiting.remove(ObjectIdentifier(connection))
+    }
+}
+
+/// How often both of DAM's servers, the host's and the browser stream's, put a pairing prompt
+/// on the Mac's screen, so that no one in reach can bring it back after every Cancel: after a
+/// prompt from an address came to nothing (declined, or given up by the device), none from it
+/// for `firstWait`, doubling with each more up to `longestWait`; and at most `maxUnpairedPerMinute`
+/// prompts a minute that came to nothing, from any address. A prompt answered counts against
+/// neither. Used on the main queue.
+final class PairingPromptLimits {
+    static let firstWait: TimeInterval = 30
+    static let longestWait: TimeInterval = 600
+    static let maxUnpairedPerMinute = 3
+
+    /// When prompts came to nothing, over the last minute.
+    private var unpaired: [Date] = []
+    /// Each address's prompts that came to nothing in a row, and when the last did.
+    private var declines: [String: (count: Int, last: Date)] = [:]
+
+    /// Seconds until a prompt for `address` may be shown; nil when it may be now.
+    func wait(for address: String, now: Date = Date()) -> TimeInterval? {
+        unpaired.removeAll { now.timeIntervalSince($0) >= 60 }
+        declines = declines.filter { now.timeIntervalSince($0.value.last) < 2 * Self.longestWait }
+        var wait: TimeInterval = 0
+        if unpaired.count >= Self.maxUnpairedPerMinute, let first = unpaired.first {
+            wait = 60 - now.timeIntervalSince(first)
+        }
+        if let declined = declines[address] {
+            let backOff = min(Self.firstWait * pow(2, Double(declined.count - 1)), Self.longestWait)
+            wait = max(wait, backOff - now.timeIntervalSince(declined.last))
+        }
+        return wait > 0 ? wait.rounded(.up) : nil
+    }
+
+    /// A prompt for `address` ended: answered, or come to nothing.
+    func ended(_ address: String, declined: Bool, now: Date = Date()) {
+        guard declined else {
+            declines[address] = nil
+            return
+        }
+        unpaired.append(now)
+        declines[address] = ((declines[address]?.count ?? 0) + 1, now)
     }
 }
 

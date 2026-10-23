@@ -32,35 +32,83 @@ final class WebStreamAccessTests: XCTestCase {
 
     // MARK: - Pairing
 
+    private func refusal(_ begun: Result<WebStreamPairing.Request, WebStreamPairing.Refusal>) -> WebStreamPairing.Refusal? {
+        if case .failure(let refusal) = begun { return refusal }
+        return nil
+    }
+
     func testACodeTypedRightPairsTheBrowser() throws {
         let pairing = WebStreamPairing()
-        let request = try XCTUnwrap(pairing.begin(address: "10.0.0.5", name: "Safari on iPhone (10.0.0.5)"))
+        let request = try pairing.begin(address: "10.0.0.5", name: "Safari on iPhone (10.0.0.5)").get()
         XCTAssertEqual(request.code.count, 4)
-        XCTAssertNil(pairing.begin(address: "10.0.0.6", name: "other"), "one at a time")
+        XCTAssertTrue(pairing.isWaiting(id: request.id))
+        XCTAssertEqual(refusal(pairing.begin(address: "10.0.0.6", name: "other")), .busy, "one at a time")
         var added: [WebStreamDevice] = []
         XCTAssertTrue(pairing.answer(id: request.id, code: " \(request.code) ") { added.append($0) })
+        XCTAssertFalse(pairing.isWaiting(id: request.id))
         XCTAssertEqual(added.map(\.name), ["Safari on iPhone (10.0.0.5)"])
         XCTAssertEqual(added.first?.kind, .browser)
         XCTAssertEqual(pairing.request(id: request.id)?.device, added.first)
-        XCTAssertNotNil(pairing.begin(address: "10.0.0.6", name: "other"), "free again")
+        XCTAssertEqual(refusal(pairing.begin(address: "10.0.0.6", name: "other")), .busy,
+                       "not until the browser has its cookie")
+        pairing.collected(id: request.id)
+        XCTAssertNoThrow(try pairing.begin(address: "10.0.0.6", name: "other").get(), "free again")
     }
 
     func testAWrongCodeOrNoneDeclinesAndTheCodeRunsOut() throws {
         let pairing = WebStreamPairing()
         let start = Date()
-        var request = try XCTUnwrap(pairing.begin(address: "a", name: "a", now: start))
+        var request = try pairing.begin(address: "a", name: "a", now: start).get()
         let wrong = request.code == "0000" ? "1111" : "0000"
-        XCTAssertFalse(pairing.answer(id: request.id, code: wrong) { _ in XCTFail() })
+        XCTAssertFalse(pairing.answer(id: request.id, code: wrong, now: start) { _ in XCTFail() })
         XCTAssertEqual(pairing.request(id: request.id)?.declined, true)
-        XCTAssertFalse(pairing.answer(id: request.id, code: request.code) { _ in XCTFail() }, "no second try")
+        XCTAssertFalse(pairing.isWaiting(id: request.id))
+        XCTAssertFalse(pairing.answer(id: request.id, code: request.code, now: start) { _ in XCTFail() }, "no second try")
 
-        request = try XCTUnwrap(pairing.begin(address: "b", name: "b", now: start))
-        XCTAssertFalse(pairing.answer(id: request.id, code: nil) { _ in XCTFail() }, "the user said no")
-        request = try XCTUnwrap(pairing.begin(address: "c", name: "c", now: start))
+        request = try pairing.begin(address: "b", name: "b", now: start).get()
+        XCTAssertFalse(pairing.answer(id: request.id, code: nil, now: start) { _ in XCTFail() }, "the user said no")
+        request = try pairing.begin(address: "c", name: "c", now: start).get()
         let late = start.addingTimeInterval(WebStreamPairing.lifetime + 1)
         XCTAssertNil(pairing.request(id: request.id, now: late))
+        XCTAssertFalse(pairing.isWaiting(id: request.id, now: late))
         XCTAssertFalse(pairing.answer(id: request.id, code: request.code, now: late) { _ in XCTFail() })
-        XCTAssertNotNil(pairing.begin(address: "d", name: "d", now: late), "an old request holds nothing up")
+        XCTAssertNoThrow(try pairing.begin(address: "d", name: "d", now: late).get(), "an old request holds nothing up")
+    }
+
+    /// A browser declined waits before its prompt may come up again, longer each time; and
+    /// prompts that come to nothing come up only so often, from wherever they are asked.
+    func testDeclinedPromptsAreHeldBack() throws {
+        let pairing = WebStreamPairing()
+        let start = Date()
+        var request = try pairing.begin(address: "a", name: "a", now: start).get()
+        XCTAssertFalse(pairing.answer(id: request.id, code: nil, now: start) { _ in XCTFail() })
+        XCTAssertEqual(refusal(pairing.begin(address: "a", name: "a", now: start.addingTimeInterval(1))),
+                       .wait(PairingPromptLimits.firstWait - 1))
+        request = try pairing.begin(address: "a", name: "a", now: start.addingTimeInterval(31)).get()
+        XCTAssertFalse(pairing.answer(id: request.id, code: nil, now: start.addingTimeInterval(31)) { _ in XCTFail() })
+        XCTAssertEqual(refusal(pairing.begin(address: "a", name: "a", now: start.addingTimeInterval(32))),
+                       .wait(2 * PairingPromptLimits.firstWait - 1), "twice as long")
+        // Typed right, the address is let off.
+        request = try pairing.begin(address: "a", name: "a", now: start.addingTimeInterval(92)).get()
+        XCTAssertTrue(pairing.answer(id: request.id, code: request.code, now: start.addingTimeInterval(92)) { _ in })
+        pairing.collected(id: request.id)
+        XCTAssertNoThrow(try pairing.begin(address: "a", name: "a", now: start.addingTimeInterval(93)).get())
+    }
+
+    func testPromptsComingToNothingAreCappedAMinute() {
+        let limits = PairingPromptLimits()
+        let start = Date()
+        for (i, address) in ["a", "b", "c"].enumerated() {
+            XCTAssertNil(limits.wait(for: address, now: start.addingTimeInterval(Double(i))))
+            limits.ended(address, declined: true, now: start.addingTimeInterval(Double(i)))
+        }
+        XCTAssertEqual(limits.wait(for: "d", now: start.addingTimeInterval(10)), 50, "until the first is a minute old")
+        XCTAssertNil(limits.wait(for: "d", now: start.addingTimeInterval(61)))
+        // Those answered count for nothing.
+        let other = PairingPromptLimits()
+        for _ in 1...5 { other.ended("e", declined: false, now: start) }
+        XCTAssertNil(other.wait(for: "e", now: start))
+        XCTAssertNil(other.wait(for: "f", now: start))
     }
 
     func testAQRKeyWorksOnceAndNotForLong() {

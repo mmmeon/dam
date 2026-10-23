@@ -27,10 +27,10 @@ final class MainDisplayPicker {
         self.videoManager = videoManager
     }
 
-    /// The picker's entries for `candidates` and the one that is main now (the first when
-    /// none is marked).
-    static func choices(from candidates: [DisplayInfo]) -> (names: [String], current: Int) {
-        (candidates.map(\.label), candidates.firstIndex(where: \.isMain) ?? 0)
+    /// The picker's entries for `candidates` and the one that is main now, nil when none is
+    /// marked.
+    static func choices(from candidates: [DisplayInfo]) -> (names: [String], current: Int?) {
+        (candidates.map(\.label), candidates.firstIndex(where: \.isMain))
     }
 
     /// Opens the picker on the current main display (or the next one, as set), or moves to
@@ -45,8 +45,7 @@ final class MainDisplayPicker {
             return
         }
         let (names, current) = Self.choices(from: candidates)
-        picker.open(choices: names,
-                    cursor: ChoicePicker.startCursor(current: current, count: names.count)) { [weak self] i in
+        picker.open(choices: names, current: current) { [weak self] i in
             guard i != current else { return }
             self?.videoManager?.setMainDisplay(candidates[i]) { result in
                 if case .failure(let error) = result {

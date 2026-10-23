@@ -217,16 +217,25 @@ enum VisibilityPreferences {
         set { UserDefaults.dam.set(newValue, forKey: followNewDisplayAudioKey) }
     }
 
-    /// Launch the app at login. Backed by SMAppService; UserDefaults is not used.
-    static var launchAtLogin: Bool {
-        get { SMAppService.mainApp.status == .enabled }
-        set {
-            do {
-                if newValue { try SMAppService.mainApp.register() }
-                else        { try SMAppService.mainApp.unregister() }
-            } catch {
-                NSLog("\(AppIdentity.name): launch-at-login toggle failed: \(error)")
-            }
+    /// Whether the app launches at login, as SMAppService has it; UserDefaults is not used.
+    /// Also while the login item waits for the user's approval in System Settings, as it is
+    /// registered and launches once approved.
+    static var launchAtLogin: Bool { isLaunchAtLogin(SMAppService.mainApp.status) }
+
+    static func isLaunchAtLogin(_ status: SMAppService.Status) -> Bool {
+        status == .enabled || status == .requiresApproval
+    }
+
+    /// Whether the login item is registered but waits for the user's approval.
+    static var launchAtLoginNeedsApproval: Bool { SMAppService.mainApp.status == .requiresApproval }
+
+    /// Registers or unregisters the app as a login item, throwing what SMAppService throws.
+    static func setLaunchAtLogin(_ on: Bool) throws {
+        do {
+            if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+        } catch {
+            NSLog("\(AppIdentity.name): launch-at-login toggle failed: \(error)")
+            throw error
         }
     }
 
@@ -348,5 +357,18 @@ enum VisibilityPreferences {
 
     static func setVisible(_ visible: Bool, display name: String) {
         setVisible(visible, name, hiddenKey: displayKey)
+    }
+
+    private static let splitDisplaysKey = "\(AppIdentity.shortID).split.displays"
+
+    /// Gives `name`, a monitor told apart from another of its model, whether it is hidden as
+    /// `base` was while both went by it. Not the nickname, which names the one monitor that
+    /// keeps `base`. Once per name, so what is changed for it afterwards stays.
+    static func inheritDisplaySettings(from base: String, to name: String) {
+        var split = names(splitDisplaysKey)
+        guard !split.contains(name) else { return }
+        split.insert(name)
+        setNames(split, splitDisplaysKey)
+        if !isVisible(display: base) { setVisible(false, display: name) }
     }
 }
