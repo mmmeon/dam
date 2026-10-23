@@ -132,6 +132,14 @@ final class ControlStripPresenter: NSObject {
     /// The audio outputs page, while it is presented.
     private var audioBar: NSTouchBar?
 
+    /// Called once the switcher opened with `openModal` has closed, however it closed: its
+    /// close box, or a pick that took its last bar away. Never where the system doesn't say
+    /// whether its bars show.
+    var onModalClose: (() -> Void)?
+    /// Checks whether the switcher still shows, while it may.
+    private var closeWatch: Timer?
+    private var visibility = SwitcherVisibility()
+
     init(audioManager: AudioManager, videoManager: VideoManager, sidecarManager: SidecarManager? = nil) {
         self.audioManager = audioManager
         self.videoManager = videoManager
@@ -668,6 +676,24 @@ final class ControlStripPresenter: NSObject {
         modalBar = bar
         DFRSystemModalShowsCloseBoxWhenFrontMost(true)
         NSTouchBar.presentSystemModal(bar, for: Self.stripID)
+        watchForClose()
+    }
+
+    /// Checks now and then whether any of the switcher's bars shows, its pages and the arrange
+    /// flow's included, until it has closed: the system tells nothing of its close box.
+    private func watchForClose() {
+        guard closeWatch == nil else { return }
+        visibility = SwitcherVisibility()
+        closeWatch = Timer.scheduledTimer(withTimeInterval: SwitcherVisibility.interval, repeats: true) { [weak self] timer in
+            guard let self else { return timer.invalidate() }
+            let showing = [self.modalBar, self.audioBar, self.resolutionBar].contains { $0?.isVisible == true }
+                || ArrangeTouchBar.shared.isShowing
+            let state = self.visibility.check(showing: showing)
+            guard state != .open else { return }
+            timer.invalidate()
+            self.closeWatch = nil
+            if state == .closed { self.onModalClose?() }
+        }
     }
 
     /// Opens the arrange flow in place of the modal bar; it comes back here when done.
@@ -865,6 +891,36 @@ final class ControlStripPresenter: NSObject {
         guard items.count > limit else { return items[...] }
         let start = min(max((current ?? 0) - limit / 2, 0), items.count - limit)
         return items[start..<start + limit]
+    }
+}
+
+// MARK: - Switcher visibility
+
+/// Whether the switcher is still open, from whether any of its bars showed at each check. It
+/// has closed once a bar was seen showing and none has for `hiddenChecks` checks running, as
+/// a page replacing another may show none for a moment. Where no bar is ever seen showing
+/// (the system not saying), it gives up rather than taking the switcher for closed.
+struct SwitcherVisibility {
+    enum State { case open, closed, unknown }
+
+    static let interval: TimeInterval = 0.25
+    static let hiddenChecks = 2
+    /// Five seconds' checks without a bar seen.
+    static let unseenChecks = 20
+
+    private var seen = false
+    /// Checks running with no bar showing.
+    private var hidden = 0
+
+    mutating func check(showing: Bool) -> State {
+        if showing {
+            seen = true
+            hidden = 0
+            return .open
+        }
+        hidden += 1
+        if seen { return hidden >= Self.hiddenChecks ? .closed : .open }
+        return hidden >= Self.unseenChecks ? .unknown : .open
     }
 }
 

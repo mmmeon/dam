@@ -20,6 +20,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var moonlightPINAlert: NSAlert?
     private var sidecarAutoConnector: SidecarAutoConnector?
     private var controlStrip: ControlStripPresenter!
+    /// The app the Touch Bar switcher took focus from, handed back when it closes.
+    private var switcherPreviousApp: NSRunningApplication?
     private var hotkeys: [HotkeyAction: GlobalHotkey] = [:]
     private var settingsWindow: SettingsWindowController?
     private var aboutWindow: NSWindow?
@@ -57,6 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             videoManager: videoManager,
             sidecarManager: sidecarManager
         )
+        controlStrip.onModalClose = { [weak self] in self?.switcherClosed() }
         setupStatusItem()
         // Name Sidecar displays after their iPad, re-reading SidecarCore on each display merge
         // so a connection made from Control Center is recognised too; before the first merge.
@@ -352,11 +355,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// falls back to the menu bar menu, which tracks modally until it closes.
     private func openSwitcher() {
         if Feedback.touchBar {
-            // DAM's Touch Bar doesn't show over another app while a DAM window is on screen.
-            // The switcher stays until closed, so focus stays with DAM, as a click on one of
-            // its windows would leave it.
+            // DAM's Touch Bar doesn't show over another app while a DAM window is on screen,
+            // so DAM comes forward while the switcher is open, and hands focus back when it
+            // closes. Opened again while open, DAM is active already and the app is kept.
             if NSApp.windows.contains(where: { $0.isVisible && $0.styleMask.contains(.titled) }) {
-                _ = activateForHUDTouchBar()
+                switcherPreviousApp = activateForHUDTouchBar() ?? switcherPreviousApp
             }
             controlStrip.openModal()
         } else {
@@ -366,6 +369,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.statusItem.button?.performClick(nil)
             }
         }
+    }
+
+    /// Hands focus back to the app the switcher took it from, unless an alert of DAM's came
+    /// up meanwhile (a pairing prompt, say), which keeps it. No pick opens a window or alert.
+    private func switcherClosed() {
+        defer { switcherPreviousApp = nil }
+        guard NSApp.modalWindow == nil else { return }
+        restoreFocus(to: switcherPreviousApp)
     }
 
     /// SwiftUI's `Settings` scene owns ⌘, and the app menu's "Settings…" item, and opens
