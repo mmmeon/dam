@@ -1,6 +1,6 @@
 # Connecting trusted displays automatically
 
-*Design, 2026-10-23. Part 2 of the login window work: what happens once the user signs in.
+*Design, 2026-10-23; decisions made the same day. Part 2 of the login window work: what happens once the user signs in.
 Part 1, the login window itself, is in `root-and-login-window.md`.*
 
 ## Goal
@@ -74,26 +74,20 @@ its attempts. It then starts at most one connection.
 6. **Announcements.** "Connecting to …" as the hotkey does today. Nothing when an attempt fails
    quietly and will be retried.
 
-## Decisions for the user
+## Decisions (2026-10-23)
 
-1. **First available, or all available.**
-   - First available: one display. Stop at the first that connects, so an iPad on the list
-     isn't connected when the TV already is.
-   - All available: every listed display in reach, within rule 2.
-   - Recommended: all for OpenDisplay (today's behaviour), first available across AirPlay and
-     Sidecar.
-2. **Switching up.** When a higher entry appears while a lower one of the same exclusive kind
-   is connected: switch, or leave it.
-   - Recommended: leave it. Switching would tear down a screen the user is working on.
-3. **AirPlay at sign-in.** Driving the panel moves on-screen UI for a moment right after
-   sign-in, which the user may be typing into.
-   - Recommended: allowed, but only after Control Center's panel has answered once, and never
-     while a key is held down.
+1. **All OpenDisplay receivers, first available across AirPlay and Sidecar.** Every listed
+   receiver in reach is dialled, as today. Of AirPlay and Sidecar, DAM stops at the first that
+   connects, so an iPad on the list isn't connected when the TV already is.
+2. **No switching up.** When a higher entry appears while a lower one of the same exclusive
+   kind is connected, the lower one stays: switching would tear down a screen in use.
+3. **AirPlay at sign-in is allowed**, but only after Control Center's panel has answered once,
+   and never while a key is held down, since the user may be typing.
 4. **Migration.**
-   - Recommended: today's receivers turned on become OpenDisplay entries in their current
-     order (as stored: sorted by key).
-   - Recommended: `autoConnectsSidecarWithoutDisplay` becomes "any iPad on USB, only without a
-     display of its own".
+   - Today's receivers turned on become OpenDisplay entries in their current order (as
+     stored: sorted by key).
+   - `autoConnectsSidecarWithoutDisplay` becomes "any iPad on USB, only without a display of
+     its own".
    - `autoConnectSingleDisplay` stays a hotkey setting.
 
 ## Link to part 1
