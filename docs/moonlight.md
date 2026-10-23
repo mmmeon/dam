@@ -348,8 +348,10 @@ them as HID events, one injector per stream:
   56 ms. A browser stream asks for it with `lowlatency=1`, and the Viewing profile
   ignores it.
 - **Sending:** a separate thread paces packets at 6× the bitrate, between 60 and
-  400 Mbit/s. Encoded frames are never dropped. When the sender falls behind, capture
-  skips a frame before encoding it.
+  400 Mbit/s. Time spent off the pace, as working out a block's parity, is made up by at
+  most 0.5 ms, so the packets due meanwhile don't go out in one burst. Encoded frames are
+  never dropped. When the sender falls behind, capture skips a frame before encoding it;
+  the last one skipped is encoded once the sender has caught up, unless a newer came.
 - **Marking:** video packets carry DSCP AF41 and the interactive-video service type,
   sound EF and interactive voice, as Sunshine marks them. The service type picks the
   Wi-Fi queue the Mac sends from; the DSCP lets an access point queue them the same way on
@@ -388,7 +390,10 @@ UDP 48000. System audio at 48 kHz stereo, without DAM's own sounds.
 - It is encoded to constant-bitrate Opus in 5 ms packets, at 512 or 96 kbit/s depending
   on the client.
 - Packets can be encrypted, with parity after every fourth packet. They are paced from a
-  queue of at most 40 ms, and silence fills the gaps.
+  queue of at most eight packets (40 ms, or 80 at 10 ms packets), and silence fills the
+  gaps. A fire of the pacer the queue was too busy for is made up, and while more than
+  25 ms waits, one extra packet goes each fire, so a queue grown by a late fire or capture's
+  clock drains rather than dropping a packet at each further one.
 
 ### Streaming displays
 

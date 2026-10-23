@@ -44,6 +44,8 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     private var rotation: DisplayRotation = .standard
     private var rotator: FrameRotator?
     private var rotationObserver: NSObjectProtocol?
+    /// Whether this capture counts among `liveCaptures`; under `lock`.
+    private var live = false
 
     /// How long ScreenCaptureKit has to list the displays before replayd is taken to be stuck.
     /// replayd can lose track of an app replaced while it ran (a new build, say) and then
@@ -53,6 +55,19 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     static var fetchContent: (@escaping (SCShareableContent?, Error?) -> Void) -> Void = {
         SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: false, completionHandler: $0)
     }
+    /// How long a lookup is waited for, past `answerTimeout`, while another capture runs:
+    /// replayd answers that one, so it is slow rather than stuck, and killing it would end
+    /// every stream (Moonlight's, the browser's, OpenDisplay's) to start this one. As long
+    /// as a restart and the second lookup take, so streams wait no longer to hear.
+    static var busyAnswerTimeout: TimeInterval = 3
+    private static let liveLock = NSLock()
+    private static var liveCount = 0
+    /// How many captures of DAM's are running, as far as ScreenCaptureKit said; replaced by tests.
+    static var liveCaptures: () -> Int = {
+        liveLock.lock(); defer { liveLock.unlock() }
+        return liveCount
+    }
+
     /// Restarts replayd. It ignores SIGTERM and SIP keeps launchctl from restarting it, but
     /// it runs as the user, so DAM may kill it. Replaced by tests.
     static var restartService: () -> Void = {
@@ -116,7 +131,8 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         fetchContent(restarted: false, completion: completion)
     }
 
-    /// Asks ScreenCaptureKit for the display, restarting replayd once if it does not answer.
+    /// Asks ScreenCaptureKit for the display, restarting replayd once if it does not answer,
+    /// unless another capture is running, when it is waited for longer instead.
     private func fetchContent(restarted: Bool, completion: @escaping (Error?) -> Void) {
         let answerLock = NSLock()
         var answered = false
@@ -131,9 +147,10 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
             guard firstToAnswer(), let self, !self.isStopped else { return }
             self.startStream(content: content, error: error, completion: completion)
         }
-        queue.asyncAfter(deadline: .now() + Self.answerTimeout) { [weak self] in
+        let busy = !restarted && Self.liveCaptures() > 0
+        queue.asyncAfter(deadline: .now() + Self.answerTimeout + (busy ? Self.busyAnswerTimeout : 0)) { [weak self] in
             guard firstToAnswer(), let self, !self.isStopped else { return }
-            guard !restarted else { return completion(MoonlightCaptureError.serviceNotAnswering) }
+            guard !restarted, !busy else { return completion(MoonlightCaptureError.serviceNotAnswering) }
             scLog.error("ScreenCaptureKit did not answer; restarting replayd")
             Self.restartService()
             // launchd starts replayd again when it is next asked for.
@@ -185,6 +202,7 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
             if let error { scLog.error("start: \(error.localizedDescription, privacy: .public)") }
             // Stopped while it started: stopping it then may not have taken.
             if error == nil, self?.isStopped ?? true { stream.stopCapture { _ in } }
+            if error == nil { self?.setLive(true) }
             completion(error)
         }
     }
@@ -214,6 +232,20 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         return configuration
     }
 
+    deinit { setLive(false) }
+
+    /// Counts this capture among `liveCaptures` while it runs, once.
+    private func setLive(_ isLive: Bool) {
+        lock.lock()
+        let changed = live != isLive && (!isLive || !stopped)
+        if changed { live = isLive }
+        lock.unlock()
+        guard changed else { return }
+        Self.liveLock.lock()
+        Self.liveCount += isLive ? 1 : -1
+        Self.liveLock.unlock()
+    }
+
     func stop() {
         lock.lock()
         stopped = true
@@ -222,6 +254,8 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         let rotationObserver = self.rotationObserver
         self.rotationObserver = nil
         lock.unlock()
+        // After `stopped`, so a start finishing meanwhile doesn't count it again.
+        setLive(false)
         stream?.stopCapture { _ in }
         if let rotationObserver { NotificationCenter.default.removeObserver(rotationObserver) }
     }
@@ -298,6 +332,7 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
         scLog.error("stopped: \(error.localizedDescription, privacy: .public)")
+        setLive(false)
         if !isStopped { onStop?(error) }
     }
 }
@@ -377,12 +412,13 @@ final class HDR10Converter {
         guard let pool else { return nil }
         var made: CVPixelBuffer?
         guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &made) == kCVReturnSuccess, let out = made else { return nil }
-        let picture = CIImage(cvPixelBuffer: buffer)
-        let image = gain == 0 ? picture : picture.applyingFilter("CIExposureAdjust", parameters: [kCIInputEVKey: gain])
-        context.render(image, to: out, bounds: image.extent, colorSpace: pq)
+        // Tagged first: Core Image writes YCbCr with the matrix the buffer is tagged with.
         CVBufferSetAttachment(out, kCVImageBufferColorPrimariesKey, kCVImageBufferColorPrimaries_ITU_R_2020, .shouldPropagate)
         CVBufferSetAttachment(out, kCVImageBufferTransferFunctionKey, kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ, .shouldPropagate)
         CVBufferSetAttachment(out, kCVImageBufferYCbCrMatrixKey, kCVImageBufferYCbCrMatrix_ITU_R_2020, .shouldPropagate)
+        let picture = CIImage(cvPixelBuffer: buffer)
+        let image = gain == 0 ? picture : picture.applyingFilter("CIExposureAdjust", parameters: [kCIInputEVKey: gain])
+        context.render(image, to: out, bounds: image.extent, colorSpace: pq)
         return out
     }
 }
@@ -471,6 +507,9 @@ final class SharedScreenCapture {
         fileprivate let frame: (CVPixelBuffer, CMTime) -> Void
         fileprivate let audio: (CMSampleBuffer) -> Void
         fileprivate let stopped: (Error) -> Void
+        /// Frames are handed over under it, one at a time, with `hasFrame`.
+        private let delivery = NSLock()
+        private var hasFrame = false
 
         fileprivate init(frame: @escaping (CVPixelBuffer, CMTime) -> Void, audio: @escaping (CMSampleBuffer) -> Void,
                          stopped: @escaping (Error) -> Void) {
@@ -480,6 +519,21 @@ final class SharedScreenCapture {
         }
 
         func cancel() { capture?.remove(self) }
+
+        /// Hands over a frame as it is captured.
+        fileprivate func deliver(_ buffer: CVPixelBuffer, _ time: CMTime) {
+            delivery.lock(); defer { delivery.unlock() }
+            hasFrame = true
+            frame(buffer, time)
+        }
+
+        /// Hands over the capture's last picture on joining, unless a newer came first.
+        fileprivate func deliverLast(_ buffer: CVPixelBuffer, _ time: CMTime) {
+            delivery.lock(); defer { delivery.unlock() }
+            guard !hasFrame else { return }
+            hasFrame = true
+            frame(buffer, time)
+        }
     }
 
     private static let registryLock = NSLock()
@@ -572,7 +626,7 @@ final class SharedScreenCapture {
         DispatchQueue.global(qos: .userInteractive).async {
             if case .failure(let error) = outcome { return started(error) }
             started(nil)
-            if let last { subscription.frame(last.buffer, last.time) }
+            if let last { subscription.deliverLast(last.buffer, last.time) }
         }
     }
 
@@ -592,7 +646,7 @@ final class SharedScreenCapture {
         last = (buffer, time)
         let subscriptions = self.subscriptions
         lock.unlock()
-        for subscription in subscriptions { subscription.frame(buffer, time) }
+        for subscription in subscriptions { subscription.deliver(buffer, time) }
     }
 
     private func took(_ sample: CMSampleBuffer) {
