@@ -134,6 +134,21 @@ worked.
   window: ~9 fps captured and sent while the pointer moved (capture is capped at 15 fps and
   only delivers on change), 21 ms per 1920×1080 JPEG, 64–90 KB a frame. launchd stops it at
   sign-in. No authentication: a test, not something to leave installed.
+- **AirPlay and Sidecar can't be started there** (`install devices`): Bonjour finds AirPlay
+  receivers and `AVRouteDetector` sees routes, but Control Center, `SidecarRelay`,
+  `rapportd-user` and `sharingd` are Aqua-only agents, so there is nothing to drive and
+  SidecarCore lists no iPads (it listed none in the user session either: no iPad on that
+  Apple ID nearby).
+- **Hardware H.264 works as root** (`install checks`): 90 frames of 1920×1080 in 0.54 s
+  (165 fps), hardware encoder confirmed.
+- **usbmuxd answers root**: it listed the iPad on USB; dialing port 9000 got "nothing
+  listening", as the receiver app wasn't open, so a receiver connection is still unseen.
+- **The login window follows the main display**: with a virtual display made main
+  (`CGConfigureDisplayOrigin` to 0,0) the user list moved onto it and the physical display
+  showed only wallpaper. With the physical display turned off (`CGSConfigureDisplayEnabled`,
+  for the probe only) the virtual display alone carried the login window. So an agent can
+  put the login window on the display it streams, and a Mac without a screen of its own can
+  show it on a virtual one.
 - Clicks and keys not tried: remote input at the login window is out of scope (decided
   2026-10-23). The password field holds secure input (`kCGSSessionSecureInputPID`) anyway.
 
