@@ -257,4 +257,27 @@ final class ControlStripPresenterTests: XCTestCase {
         XCTAssertFalse(ConnectTarget.airPlay(tv).isSame(as: .sidecar(pad)), "An iPad is never an AirPlay display")
         XCTAssertTrue(ConnectTarget.sidecar(pad).isSame(as: .sidecar(SidecarDevice(id: "tv", name: "tv", isConnected: true))))
     }
+
+    // MARK: - Switcher visibility
+
+    /// The switcher has closed once a bar was seen and none has shown for two checks; a
+    /// moment between pages doesn't close it.
+    func testSwitcherClosesOnceNoBarShowsForTwoChecks() {
+        var visibility = SwitcherVisibility()
+        XCTAssertEqual(visibility.check(showing: false), .open, "not up yet")
+        XCTAssertEqual(visibility.check(showing: true), .open)
+        XCTAssertEqual(visibility.check(showing: false), .open, "between pages")
+        XCTAssertEqual(visibility.check(showing: true), .open)
+        XCTAssertEqual(visibility.check(showing: false), .open)
+        XCTAssertEqual(visibility.check(showing: false), .closed)
+    }
+
+    /// Where no bar is ever seen showing, the switcher isn't taken for closed: focus stays.
+    func testSwitcherNeverSeenShowingIsNotTakenForClosed() {
+        var visibility = SwitcherVisibility()
+        for _ in 1..<SwitcherVisibility.unseenChecks {
+            XCTAssertEqual(visibility.check(showing: false), .open)
+        }
+        XCTAssertEqual(visibility.check(showing: false), .unknown)
+    }
 }

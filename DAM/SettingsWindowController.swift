@@ -629,6 +629,19 @@ final class SettingsWindowController: NSWindowController {
         qr.bezelStyle = .rounded
         qr.toolTip = "Shows a QR code a phone or tablet scans to pair, with nothing to type. It works once, for five minutes."
 
+        // Shown as kept, so a name typed with a port or in capitals reads as it is matched.
+        weak var namesField: NSTextField?
+        let names = ClosureTextField(text: WebStreamServer.extraHostNames.joined(separator: ", "),
+                                     placeholder: "mac.home.example.com") { text in
+            WebStreamServer.extraHostNames = text.split(whereSeparator: { $0 == "," || $0.isWhitespace }).map(String.init)
+            namesField?.stringValue = WebStreamServer.extraHostNames.joined(separator: ", ")
+        }
+        namesField = names
+        names.widthAnchor.constraint(equalToConstant: 260).isActive = true
+        names.toolTip = "Names of your own that lead to this Mac, such as a subdomain of your domain, separated by " +
+                        "commas. Browsers pair and stay paired only on the Mac's names and addresses, its local " +
+                        "network's names, an imported certificate's, and these, each exactly as written."
+
         let devices: [[NSView]] = server.devices.all.map { device in
             let name = rowLabel(device.name)
             name.toolTip = "\(device.kind == .link ? "Link" : "Paired") \(device.added.formatted(date: .abbreviated, time: .shortened))"
@@ -700,6 +713,7 @@ final class SettingsWindowController: NSWindowController {
             ("Serving:", serving),
             ("Reach:", [reach]),
             ("Pairing:", [allowPairing, qr]),
+            ("Also Reachable As:", [names]),
             ("Devices:", [devices.isEmpty ? placeholderLabel("None yet") : deviceGrid, newLink]),
             ("Streams:", [pointer]),
             ("Profile:", [profile]),

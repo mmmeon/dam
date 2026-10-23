@@ -74,6 +74,12 @@ Who may watch (`WebStreamAccess`):
   each; a wrong code ends it. Pair with a QR Code… shows a code a phone scans instead:
   a key in the address that works once, for five minutes. "Allow new browsers to pair"
   turns both off.
+- **Host check.** Against DNS rebinding, pairing and the cookie work only when the Host
+  header names the Mac: an address, the Mac's own names, a single-label name or one under
+  a local network's suffix (`.local`, `.lan`, `.home.arpa`…), an imported certificate's
+  names, or one listed under Settings › Browser Stream › Also Reachable As (a subdomain
+  of the user's own domain, say; matched exactly, no wildcards). Anything else gets a 403
+  for pairing and a 401 for the cookie. A link's token works by any name.
 - **Reach.** This Mac Only, This Mac's Networks (the default: loopback, link-local, or a
   subnet of the Mac's interfaces), or Anywhere. Out of reach gets a 403 for everything.
 - **HTTPS.** DAM makes a certificate authority of its own (20 years) and a server
