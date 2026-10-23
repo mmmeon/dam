@@ -64,6 +64,9 @@ struct SessionDetection: Codable, Equatable {
     var opened = ""
     var closed = ""
     var processName = ""
+    /// For `.log`: the process the app runs, if given. Its connections end when it quits, and
+    /// a line opening one counts only while it runs.
+    var logProcessName = ""
 
     init(kind: Kind = .log) { self.kind = kind }
 
@@ -74,6 +77,7 @@ struct SessionDetection: Codable, Equatable {
         opened = try c.decodeIfPresent(String.self, forKey: .opened) ?? ""
         closed = try c.decodeIfPresent(String.self, forKey: .closed) ?? ""
         processName = try c.decodeIfPresent(String.self, forKey: .processName) ?? ""
+        logProcessName = try c.decodeIfPresent(String.self, forKey: .logProcessName) ?? ""
     }
 
     /// The log's file, with `~` for the home folder.

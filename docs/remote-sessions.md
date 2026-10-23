@@ -139,6 +139,7 @@ doesn't black out the screens, as nothing would be left lit.
 | TeamViewer | `TeamViewer_Desktop` running | No (not installed) |
 | OpenDisplay | `capture started: … display ID … mode extend\|mirror … session ID` / `capture ended: session ID` in `~/Library/Logs/OpenDisplay/opendisplay.log` (`OpenDisplay Dev/` for the Debug build, whichever changed last). Ends too when OpenDisplay quits or starts again, and a session already on when DAM starts is taken up while OpenDisplay runs, if its line was written since OpenDisplay started (by the line's time of day), so a crash's leftover isn't. Extending, the session adopts that display; mirroring, it leaves the displays alone. | Yes, with an iPad over WiFi: extend, mirror, switching between them, and DAM relaunched mid-session |
 | Another app's display | A display whose name contains the given text is online | Yes, with a stand-in virtual display |
+| An app added in Settings | Its log's lines matching the Opened and Closed patterns; a process running; or a display it makes, as above. A log's app can be given its process too: then its sessions end when that process quits, a line opening a connection counts only while it runs, and what the log shows open when DAM starts watching isn't taken up, as with Parsec | In unit tests only |
 
 Follow the logs from their end, through rotation and truncation. A close for a connection
 opened before DAM started watching is ignored. Processes are listed with `sysctl`, which sees
