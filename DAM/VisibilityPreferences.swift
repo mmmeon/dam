@@ -80,6 +80,15 @@ enum VisibilityPreferences {
         set { setNames(newValue, audioSeenKey) }
     }
 
+    private static let audioOldRuleKey = "\(AppIdentity.shortID).hidden.audio.oldVirtualRule"
+
+    /// The audio devices still to be checked for having been hidden by the old virtual rule
+    /// (see `AudioManager.undoOldVirtualRule`), or nil before the list was first made.
+    static var audioHiddenByOldRule: Set<String>? {
+        get { UserDefaults.dam.stringArray(forKey: audioOldRuleKey).map(Set.init) }
+        set { UserDefaults.dam.set(newValue.map(Array.init), forKey: audioOldRuleKey) }
+    }
+
     static func isVisible(audioDevice name: String) -> Bool {
         !hiddenAudioDevices.contains(name)
     }
