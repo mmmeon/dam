@@ -40,13 +40,18 @@ are kept instead, in the app's profile, for its next session:
   as when an app removes its own display and so ends the session.
 - **Size:** a resolution or refresh rate picked for the display DAM made.
 - **Sound:** another output picked while the session was on. An output another session
-  switched to doesn't count.
+  switched to, or put back when it ended, doesn't count.
 - **Blackout:** lifting it from the menu turns it off for the next sessions.
 
 A setting picked in Settings › Remote Sessions is locked, and the lock beside it closes.
 Changes made during sessions leave a locked setting as it is. Clicking the lock opens it, so
 the setting follows those changes again. A change that a request asked for (`--placement`,
 `--audio`, `--blackout`) applies to that session only, and isn't kept.
+
+What failed isn't kept either: a change counts only when the end state is neither what was
+asked for nor what setting up came to. A display that couldn't be made main stays Main in the
+profile; an output that wasn't connected isn't replaced by the one left on; a display that
+came at another size than asked keeps the profile's size.
 
 While a session is on, choosing a main display or arranging the displays through DAM no longer
 moves the layout that is put back afterwards. Outside remote sessions it still does: a
@@ -109,17 +114,26 @@ The exit status is:
 
 The same requests work as URLs, for example
 `dam://session/start?app=rustdesk&width=1280&height=800&placement=main`. A URL gets no answer.
+Any page or app can open one, so a URL ends and joins only sessions URLs started: it can't end
+a session that DAM saw, or that a script or Sunshine started, and it can't join one either,
+which would keep it on after the app's own end. Such a URL is refused and logged.
+
+Every session has *End and Put Back* in its menu. One that follows another app's display
+(OpenDisplay, or a profile that adopts, when DAM saw the session start) also says it ends when
+the app stops; ending it by hand puts the output back and lights the screens, and leaves the
+app's display and stream as they are. A session asked to adopt a display that never comes
+doesn't black out the screens, as nothing would be left lit.
 
 ## Watching for sessions
 
 | App | Signal | Seen working |
 |---|---|---|
 | RustDesk | `#N Connection opened from IP:port.` / `#N Connection closed` in `~/Library/Logs/RustDesk/RustDesk_rCURRENT.log` | Seen live 2026-10-19 and 2026-10-20 |
-| Parsec | `user#id connected.` / `disconnected.` in `~/.parsec/log.txt` | Yes, 2026-10-19: display made 2 s after `connected.`, removed in the same ms as `disconnected.` |
+| Parsec | `user#id connected.` / `disconnected.` in `~/.parsec/log.txt`; ends too when Parsec's `parsecd` (in Parsec.app, not the system's CoreParsec one) quits | Yes, 2026-10-19: display made 2 s after `connected.`, removed in the same ms as `disconnected.` |
 | Screen Sharing | `screensharingd` running; it runs only while someone is connected. The session ends 5 s after it exits. | No (Screen Sharing is off here) |
-| Chrome Remote Desktop | `Client connected:` / `Client disconnected:` in `/var/log/org.chromium.chromoting.log` | No (not installed) |
+| Chrome Remote Desktop | `Client connected:` / `Client disconnected:` in `/var/log/org.chromium.chromoting.log`; ends too when `remoting_me2me_host` quits | No (not installed) |
 | TeamViewer | `TeamViewer_Desktop` running | No (not installed) |
-| OpenDisplay | `capture started: … display ID … mode extend\|mirror … session ID` / `capture ended: session ID` in `~/Library/Logs/OpenDisplay/opendisplay.log` (`OpenDisplay Dev/` for the Debug build, whichever changed last). Ends too when OpenDisplay quits, and a session already on when DAM starts is taken up while OpenDisplay runs. Extending, the session adopts that display; mirroring, it leaves the displays alone. | Yes, with an iPad over WiFi: extend, mirror, switching between them, and DAM relaunched mid-session |
+| OpenDisplay | `capture started: … display ID … mode extend\|mirror … session ID` / `capture ended: session ID` in `~/Library/Logs/OpenDisplay/opendisplay.log` (`OpenDisplay Dev/` for the Debug build, whichever changed last). Ends too when OpenDisplay quits or starts again, and a session already on when DAM starts is taken up while OpenDisplay runs, if its line was written since OpenDisplay started (by the line's time of day), so a crash's leftover isn't. Extending, the session adopts that display; mirroring, it leaves the displays alone. | Yes, with an iPad over WiFi: extend, mirror, switching between them, and DAM relaunched mid-session |
 | Another app's display | A display whose name contains the given text is online | Yes, with a stand-in virtual display |
 
 Follow the logs from their end, through rotation and truncation. A close for a connection

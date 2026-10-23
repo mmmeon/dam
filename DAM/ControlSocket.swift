@@ -493,7 +493,10 @@ final class ControlHandler {
         self.sessionDisplays = sessionDisplays
     }
 
-    func handle(_ request: ControlRequest, reply: @escaping (ControlResponse) -> Void) {
+    /// Answers `request`, which came from `origin`: the socket's are this user's own, while
+    /// any page or app can open a link, so a link ends and joins only sessions links started.
+    func handle(_ request: ControlRequest, from origin: SessionRequest.Origin = .command,
+                reply: @escaping (ControlResponse) -> Void) {
         if let problem = request.problem { return reply(.failure(problem)) }
         switch request.command {
         case "session.start":
@@ -505,7 +508,7 @@ final class ControlHandler {
                 }
                 audioUID = uid
             }
-            let session = SessionRequest(app: app, client: request.client, clientID: request.clientID,
+            let session = SessionRequest(app: app, origin: origin, client: request.client, clientID: request.clientID,
                                          width: request.width, height: request.height, fps: request.fps,
                                          display: request.display.flatMap(SessionProfile.DisplayChoice.init(rawValue:)),
                                          placement: request.placement.flatMap(SessionProfile.Placement.init(rawValue:)),
@@ -522,7 +525,7 @@ final class ControlHandler {
             }
         case "session.end":
             guard let app = request.app?.lowercased(), !app.isEmpty else { return reply(.failure("No app given.")) }
-            switch coordinator.end(app: app, all: request.all ?? false) {
+            switch coordinator.end(app: app, all: request.all ?? false, from: origin) {
             case .success: reply(ControlResponse(ok: true, message: "\(RemoteSessionApp.name(of: app)) session ended."))
             case .failure(let error): reply(.failure(error.description))
             }
