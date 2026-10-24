@@ -432,6 +432,31 @@ final class OpenDisplayTests: XCTestCase {
         XCTAssertEqual(sender.receivers.filter(\.isOn).map(\.key), ["A-2"])
     }
 
+    func testRemovingADisplayNoSessionHasTurnsNothingOff() {
+        let store = MemoryOpenDisplayStore()
+        let sender = OpenDisplaySender(store: store)
+        sender.setOn(true, key: "k")
+        XCTAssertFalse(sender.turnOff(displayID: 0))
+        XCTAssertFalse(sender.turnOff(displayID: 4128835))
+        XCTAssertEqual(store.turnedOn, ["k"])
+    }
+
+    func testTwoNamesClaimingOneIDGiveOnlyTheKnownOne() {
+        var ambiguous: [String] = []
+        let lone = OpenDisplaySender.receivers(["iPad": (id: "A", endpoint: 1)], known: [:], names: [:])
+        XCTAssertEqual(lone.mapValues(\.name), ["A": "iPad"])
+        let renamed = OpenDisplaySender.receivers(["New iPad": (id: "A", endpoint: 1)], known: [:], names: ["A": "iPad"])
+        XCTAssertEqual(renamed.mapValues(\.name), ["A": "New iPad"], "a lone claimant may be the receiver renamed")
+        let two = OpenDisplaySender.receivers(["iPad": (id: "A", endpoint: 1), "Copy": (id: "A", endpoint: 2),
+                                               "Old": (id: nil, endpoint: 3)],
+                                              known: [:], names: ["A": "iPad"])
+        XCTAssertEqual(two.mapValues(\.endpoint), ["A": 1, "bonjour:Old": 3])
+        let unknown = OpenDisplaySender.receivers(["One": (id: "A", endpoint: 1), "Two": (id: nil, endpoint: 2)],
+                                                  known: ["Two": "A"], names: [:]) { key, _ in ambiguous.append(key) }
+        XCTAssertTrue(unknown.isEmpty)
+        XCTAssertEqual(ambiguous, ["A"])
+    }
+
     func testWiFiDialsAlternateWithTheAddressReachedLast() {
         let found = NWEndpoint.service(name: "iPad", type: OpenDisplayWire.serviceType, domain: "local.", interface: nil)
         let last = NWEndpoint.hostPort(host: "192.168.1.20", port: 9000)

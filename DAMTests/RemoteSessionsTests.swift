@@ -1201,6 +1201,22 @@ final class RemoteSessionsTests: XCTestCase {
         XCTAssertNil(fake.blackoutKeeping)
     }
 
+    func testADisplayGoneIsForgottenAndTheSessionGoesOn() {
+        let fake = FakeSessionDisplays()
+        var profile = SessionProfile()
+        profile.blackout = true
+        let c = coordinator(fake, profiles: ["rustdesk": profile])
+        _ = start(c, SessionRequest(app: "rustdesk"))
+        XCTAssertEqual(fake.blackoutKeeping, [100])
+        c.displayGone(100)
+        XCTAssertNil(c.sessions["rustdesk"]?.displayID)
+        // Still blacked out, keeping nothing lit, and nothing of its own is removed at the end.
+        XCTAssertEqual(fake.blackoutKeeping, [])
+        c.end(app: "rustdesk")
+        XCTAssertTrue(fake.removed.isEmpty)
+        XCTAssertNil(fake.blackoutKeeping)
+    }
+
     func testLiftingTheBlackoutKeepsTheSession() {
         let fake = FakeSessionDisplays()
         let c = coordinator(fake)

@@ -204,7 +204,6 @@ final class OpenDisplaySender {
     }
 
     private func found(_ results: Set<NWBrowser.Result>) {
-        var found: [String: (name: String, endpoint: NWEndpoint)] = [:]
         var known = store.bonjourIDs
         // A receiver can be found once for each network it is on, not each with its TXT record.
         var byName: [String: (id: String?, endpoint: NWEndpoint)] = [:]
@@ -214,10 +213,9 @@ final class OpenDisplaySender {
             if case let .bonjour(txt) = result.metadata { id = txt["id"].flatMap { $0.isEmpty ? nil : $0 } }
             if byName[name]?.id == nil || id != nil { byName[name] = (id ?? byName[name]?.id, result.endpoint) }
         }
-        for (name, result) in byName {
-            if let id = result.id { known[name] = id }
-            // One with no ID (before pv 2) is known by its name until a hello gives one.
-            found[result.id ?? known[name] ?? "bonjour:\(name)"] = (name, result.endpoint)
+        for (name, result) in byName { if let id = result.id { known[name] = id } }
+        let found = Self.receivers(byName, known: known, names: store.names) { key, names in
+            odLog.error("\(names.sorted(), privacy: .public) all say they are \(key, privacy: .public); none dialed")
         }
         if known != store.bonjourIDs {
             store.bonjourIDs = known
@@ -327,6 +325,32 @@ final class OpenDisplaySender {
     }
 
     /// What a receiver's hello says of it: a USB device's receiver ID, which then keys it.
+    /// The receivers found, by key, from the services found, by name. One with no ID (before
+    /// pv 2) is known by its name until a hello gives one. OpenDisplay has no authentication,
+    /// and an ID is in its receiver's Bonjour record, so another device can say it too: when
+    /// several names claim one ID, only the name known for it is taken, and none when it
+    /// isn't among them. A lone claimant is taken, as a receiver may have been renamed.
+    static func receivers<Endpoint>(_ byName: [String: (id: String?, endpoint: Endpoint)], known: [String: String],
+                                    names: [String: String],
+                                    ambiguous: (String, [String]) -> Void = { _, _ in })
+        -> [String: (name: String, endpoint: Endpoint)] {
+        var claims: [String: [(name: String, endpoint: Endpoint)]] = [:]
+        for (name, result) in byName {
+            claims[result.id ?? known[name] ?? "bonjour:\(name)", default: []].append((name, result.endpoint))
+        }
+        var found: [String: (name: String, endpoint: Endpoint)] = [:]
+        for (key, claimants) in claims {
+            if claimants.count == 1 {
+                found[key] = claimants[0]
+            } else if let known = claimants.first(where: { $0.name == names[key] }) {
+                found[key] = known
+            } else {
+                ambiguous(key, claimants.map(\.name))
+            }
+        }
+        return found
+    }
+
     fileprivate func session(_ session: OpenDisplaySession, saidID id: String?, device: String?) {
         if store.names[session.key] == nil, let device { store.names[session.key] = device }
         guard let id, session.key != id else { return }
@@ -382,6 +406,14 @@ final class OpenDisplaySender {
         move(&lastErrors)
         move(&lastAddress)
         move(&preferWiFiUntil)
+    }
+
+    /// Turns off the receiver streaming display `id`, ending its session, which removes the
+    /// display; false when no session has it.
+    func turnOff(displayID id: CGDirectDisplayID) -> Bool {
+        guard id != 0, let key = sessions.first(where: { $0.value.displayID == id })?.key else { return false }
+        setOn(false, key: key)
+        return true
     }
 
     /// Ends the session whose display `id` went without it asking, as when removed from the

@@ -143,6 +143,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.openDisplay.displayGone(id)
                 self?.webStream.displayGone(id)
                 self?.moonlightHost.displayGone(id)
+                self?.sessionCoordinator?.displayGone(id)
             }
         }
         openDisplay.resizeDisplay = { [weak self] id, mode, done in
@@ -760,7 +761,9 @@ extension AppDelegate: NSMenuDelegate {
     @objc func removeStreamingDisplay(_ sender: NSMenuItem) {
         guard let display = sender.representedObject as? DisplayInfo else { return }
         SpeechSynthesizer.shared.announce(Spoken.removing(display.label))
-        videoManager.removeStreamingDisplay(display)
+        // An OpenDisplay receiver still on would be dialed again and bring it back: its
+        // display removed by the user turns it off, which removes the display.
+        if !openDisplay.turnOff(displayID: display.cgDisplayID) { videoManager.removeStreamingDisplay(display) }
         rebuild()
     }
 
