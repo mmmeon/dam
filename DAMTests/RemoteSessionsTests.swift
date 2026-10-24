@@ -261,6 +261,21 @@ final class RemoteSessionsTests: XCTestCase {
         XCTAssertTrue(c.sessions.isEmpty)
     }
 
+    func testStartedAgainAfterAnEndWhileStartingKeepsItsOneDisplay() {
+        let fake = FakeSessionDisplays()
+        fake.pendingMakes = []
+        let c = coordinator(fake)
+        var second: Result<SessionStart, SessionError>?
+        c.begin(SessionRequest(app: "sunshine")) { _ in }
+        XCTAssertNoThrow(try c.end(app: "sunshine").get())
+        c.begin(SessionRequest(app: "sunshine")) { second = $0 }
+        fake.pendingMakes?.forEach { $0() }
+        XCTAssertEqual(try second?.get().displayID, 100)
+        XCTAssertEqual(fake.made.count, 1)
+        XCTAssertTrue(fake.removed.isEmpty)
+        XCTAssertEqual(c.sessions["sunshine"]?.count, 1)
+    }
+
     func testAnAppRemovedWhileStartingLeavesNoProfile() {
         let fake = FakeSessionDisplays()
         fake.pendingMakes = []
@@ -1700,6 +1715,23 @@ extension RemoteSessionsTests {
         fake.unplaced = []
         fake.placements[7] = .main
         _ = start(c, SessionRequest(app: "foo", display: .adopt, placement: .main))
+        c.end(app: "foo")
+        XCTAssertTrue(fake.unplaced.isEmpty)
+    }
+
+    func testAnAdoptedDisplayTheUserPlacedIsLeftAsTheyPlacedIt() {
+        let fake = FakeSessionDisplays()
+        fake.others = ["Foo Display": 7]
+        let c = coordinator(fake)
+        // Extended, as the profile asks; mirrored by the user during the session.
+        _ = start(c, SessionRequest(app: "foo", display: .adopt, placement: .extend))
+        fake.placements[7] = .mirror
+        c.end(app: "foo")
+        XCTAssertTrue(fake.unplaced.isEmpty)
+        // Made main by DAM, then mirrored by the user.
+        fake.placements[7] = .extend
+        _ = start(c, SessionRequest(app: "foo", display: .adopt, placement: .main))
+        fake.placements[7] = .mirror
         c.end(app: "foo")
         XCTAssertTrue(fake.unplaced.isEmpty)
     }

@@ -113,7 +113,10 @@ final class AudioManager: ObservableObject {
     /// old rule wouldn't have hidden stays hidden. One the user hid by hand that the rule had
     /// already hidden shows again; unchecking it in Settings hides it for good.
     static func undoOldVirtualRule(_ devices: [AudioDevice], transport: (AudioDeviceID) -> UInt32?) {
-        var pending = VisibilityPreferences.audioHiddenByOldRule
+        let stored = VisibilityPreferences.audioHiddenByOldRule
+        // Done once every device it hid has been seen again.
+        if stored?.isEmpty == true { return }
+        var pending = stored
             ?? (VisibilityPreferences.autoHideVirtualAudio
                 ? VisibilityPreferences.hiddenAudioDevices.intersection(VisibilityPreferences.seenAudioDevices)
                 : [])
@@ -124,7 +127,7 @@ final class AudioManager: ObservableObject {
             }
             pending.remove(device.name)
         }
-        VisibilityPreferences.audioHiddenByOldRule = pending
+        if pending != stored { VisibilityPreferences.audioHiddenByOldRule = pending }
     }
 
     /// Whether the virtual rule before 2026-10-23 hid a device of `transport` on first sight:

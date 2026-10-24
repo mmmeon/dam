@@ -72,6 +72,24 @@ private func msgSend_dismiss(_ recv: AnyObject, _ sel: Selector, _ bar: NSTouchB
 extension NSTouchBar {
     /// The system-modal bars DAM has presented and not dismissed.
     private static let presentedSystemModals = NSHashTable<NSTouchBar>.weakObjects()
+    /// When each of them was presented, in the order they were.
+    private static let presentedOrder = NSMapTable<NSTouchBar, NSNumber>.weakToStrongObjects()
+    private static var presentedCount = 0
+
+    /// Whether a system-modal bar of DAM's presented after `bar` shows, and so hides it
+    /// without its being closed.
+    static func isCoveredBySystemModal(_ bar: NSTouchBar) -> Bool {
+        guard let order = presentedOrder.object(forKey: bar)?.intValue else { return false }
+        return presentedSystemModals.allObjects.contains {
+            $0 !== bar && $0.isVisible && (presentedOrder.object(forKey: $0)?.intValue ?? 0) > order
+        }
+    }
+
+    private static func noteSystemModal(_ bar: NSTouchBar) {
+        presentedSystemModals.add(bar)
+        presentedCount += 1
+        presentedOrder.setObject(NSNumber(value: presentedCount), forKey: bar)
+    }
 
     /// Whether any system-modal bar of DAM's shows: the switcher's, a picker's, or another.
     static var anySystemModalShowing: Bool {
@@ -85,7 +103,7 @@ extension NSTouchBar {
                                    for itemID: NSTouchBarItem.Identifier) {
         let sel = NSSelectorFromString("presentSystemModalTouchBar:systemTrayItemIdentifier:")
         msgSend_present(NSTouchBar.self, sel, bar, itemID.rawValue as NSString)
-        presentedSystemModals.add(bar)
+        noteSystemModal(bar)
         // Set before presenting only, the close box shows once another app comes to the
         // front; set again after, it shows at once.
         DFRSystemModalShowsCloseBoxWhenFrontMost(true)
@@ -95,7 +113,7 @@ extension NSTouchBar {
     static func presentSystemModal(_ bar: NSTouchBar) {
         let sel = NSSelectorFromString("presentSystemModalTouchBar:systemTrayItemIdentifier:")
         msgSend_present(NSTouchBar.self, sel, bar, nil)
-        presentedSystemModals.add(bar)
+        noteSystemModal(bar)
         DFRSystemModalShowsCloseBoxWhenFrontMost(true)
     }
 
@@ -103,6 +121,7 @@ extension NSTouchBar {
         let sel = NSSelectorFromString("dismissSystemModalTouchBar:")
         msgSend_dismiss(NSTouchBar.self, sel, bar)
         presentedSystemModals.remove(bar)
+        presentedOrder.removeObject(forKey: bar)
     }
 }
 

@@ -239,7 +239,11 @@ final class ChoicePicker: NSObject {
         bar.defaultItemIdentifiers = choices.indices.map { choiceID($0) } + [.flexibleSpace, cancelID]
         touchBar = bar
         NSTouchBar.presentSystemModal(bar, for: ControlStripPresenter.stripID)
-        barWatch.start(showing: { [weak self] in self?.touchBar?.isVisible == true }) { [weak self] state in
+        // Another of DAM's bars over it hides it too, which isn't its being closed.
+        barWatch.start(showing: { [weak self] in
+            guard let bar = self?.touchBar else { return false }
+            return bar.isVisible || NSTouchBar.isCoveredBySystemModal(bar)
+        }) { [weak self] state in
             if state == .closed { self?.close() }
         }
     }
