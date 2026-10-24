@@ -159,6 +159,15 @@ final class WebStreamAccessTests: XCTestCase {
         XCTAssertEqual(PairingPromptLimits.key("2001:db8:1:2::5"), PairingPromptLimits.key("2001:0db8:0001:0002:ffff::1"))
     }
 
+    func testLinkLocalDevicesAreHeldBackApart() {
+        let limits = PairingPromptLimits()
+        let now = Date()
+        limits.ended("fe80::1c51:8318:861d:f82b", declined: true, now: now)
+        XCTAssertNotNil(limits.wait(for: "fe80::1c51:8318:861d:f82b", now: now))
+        XCTAssertNil(limits.wait(for: "fe80::e023:31ff:fe72:1e9a", now: now))
+        XCTAssertEqual(PairingPromptLimits.key("fe80::1"), PairingPromptLimits.key("fe80:0:0:0:0:0:0:1"))
+    }
+
     func testAQRKeyWorksOnceAndNotForLong() {
         let pairing = WebStreamPairing()
         let start = Date()

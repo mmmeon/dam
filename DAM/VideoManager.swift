@@ -234,7 +234,9 @@ final class VideoManager: ObservableObject {
     /// The layout the addition or resize under way puts the displays back to: the one from
     /// before it, then the one it places. Kept here rather than in the change, so one made
     /// through DAM meanwhile reaches it too (see `keepUserMode`), and dropped as it ends.
-    var streamingChangeLayout: DisplayArrangement?
+    var streamingChangeLayout: DisplayArrangement? { didSet { streamingChangeLayoutWrites += 1 } }
+    /// How many times that layout was written, so an undo leaves one written since alone.
+    private(set) var streamingChangeLayoutWrites = 0
     /// How many such changes have begun, so an undo leaves a later one's layout alone.
     var streamingChangesBegun = 0
     /// The displays DAM didn't make online at the last re-read, to tell when one joins or leaves.
@@ -963,6 +965,7 @@ final class VideoManager: ObservableObject {
         // Set before the commit: the change it causes is checked before it reports back.
         let wasByChoice = streamingDisplayIsMainByChoice
         choose()
+        let writesAfterChoosing = streamingChangeLayoutWrites
         commitDisplayChange({ cfg in
             for (id, origin) in origins {
                 CGConfigureDisplayOrigin(cfg, id, Int32(origin.x), Int32(origin.y))
@@ -973,7 +976,10 @@ final class VideoManager: ObservableObject {
                 // Not made main after all; the layout kept is put back unless replaced meanwhile.
                 self?.streamingDisplayIsMainByChoice = wasByChoice
                 if self?.streamingSettle?.until == settleBefore?.until { self?.streamingSettle = settleBefore }
-                if self?.streamingChangesBegun == change { self?.streamingChangeLayout = changeLayoutBefore }
+                // Only while nothing has written it since, as placing the display does.
+                if self?.streamingChangesBegun == change, self?.streamingChangeLayoutWrites == writesAfterChoosing {
+                    self?.streamingChangeLayout = changeLayoutBefore
+                }
             } else {
                 rebase()
             }
@@ -1519,7 +1525,7 @@ final class VideoManager: ObservableObject {
         let externalNames = Self.distinctNames(idToName.filter { cgID, _ in
             onlineSet.contains(cgID) && !airPlayIDs.contains(cgID) && !anchorIDs.contains(cgID)
                 && CGDisplayIsBuiltin(cgID) == 0 && !sidecarIDs.contains(cgID)
-                && !isDAMDisplayGoing(cgID)
+                && !Self.isDAMDisplayGoing(cgID, vendor: CGDisplayVendorNumber(cgID), streaming: streamingIDs)
         }, kept: monitorNameCache, remembered: { monitorKey($0).flatMap { rememberedNames[$0] } }) {
             (CGDisplaySerialNumber($0), CGDisplayUnitNumber($0), $0)
         }
@@ -1539,7 +1545,7 @@ final class VideoManager: ObservableObject {
             // And none of DAM's own not filed as what it is: an anchor or the bootstrap stand-in
             // being released, which stays online until its teardown has landed, a streaming
             // display removed or not found yet, or an anchor not found yet.
-            guard !isDAMDisplayGoing(cgID) else { continue }
+            guard !Self.isDAMDisplayGoing(cgID, vendor: CGDisplayVendorNumber(cgID), streaming: streamingIDs) else { continue }
             guard let name = externalNames[cgID] ?? idToName[cgID] else { continue }
             let isBuiltIn   = CGDisplayIsBuiltin(cgID) != 0
             // A mirror slave leaves NSScreen but is still showing a desktop.

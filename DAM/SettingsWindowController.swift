@@ -342,7 +342,16 @@ final class SettingsWindowController: NSWindowController {
                                         "System Settings, under General, Login Items."
                 alert.addButton(withTitle: "Open Login Items")
                 alert.addButton(withTitle: "Later")
-                if alert.runModal() == .alertFirstButtonReturn { SMAppService.openSystemSettingsLoginItems() }
+                // The box shows unchecked while approval waits, so a click on it registers; this
+                // is the way to take the login item away instead.
+                alert.addButton(withTitle: "Don't Launch at Login")
+                switch alert.runModal() {
+                case .alertFirstButtonReturn: SMAppService.openSystemSettingsLoginItems()
+                case .alertThirdButtonReturn:
+                    try? VisibilityPreferences.setLaunchAtLogin(false)
+                    self?.showLaunchAtLogin()
+                default: break
+                }
             }
         }
         launchAtLoginBox = view as? NSButton

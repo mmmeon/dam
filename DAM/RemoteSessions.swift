@@ -482,7 +482,9 @@ final class RemoteSessionCoordinator {
             if request.origin == .link, session.fromLinks < session.count {
                 return completion(.failure(.notFromLink(app)))
             }
-            if request.origin != .link, session.fromLinks >= session.count {
+            // Links' alone: set up again as the app's own. One ended while starting, with no
+            // link's, is the same session taken up again.
+            if request.origin != .link, session.fromLinks > 0, session.fromLinks >= session.count {
                 guard request.applied(to: profile(for: app)).enabled else { return completion(.failure(.disabled(app))) }
                 return setUpAgain(session, for: request, completion: completion)
             }
@@ -708,9 +710,10 @@ final class RemoteSessionCoordinator {
         learn(from: session)
         // Removing the display puts the other displays back as they were before it came.
         if let id = session.displayID, session.madeDisplay { displays.removeDisplay(id) }
-        // An app's display stays: what DAM made of it is put back, main or mirroring.
+        // An app's display stays: what DAM made of it is put back, main or mirroring, unless
+        // it was changed since, which is the user's.
         if let id = session.displayID, !session.madeDisplay, let now = displays.placement(of: id),
-           now != .extend, now != session.placementBefore {
+           now != .extend, now != session.placementBefore, now == session.placementAtStart {
             displays.unplace(id, now, main: session.mainBefore)
         }
         if session.blacksOut { updateBlackout() }

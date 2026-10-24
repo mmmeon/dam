@@ -349,7 +349,11 @@ final class AirPlayQuickConnect: NSObject {
     /// Cancels once the bar goes without being dismissed here, as by the system's close box,
     /// so a display isn't connected after the user closed it.
     private func watchTouchBar() {
-        barWatch.start(showing: { [weak self] in self?.touchBar?.isVisible == true }) { [weak self] state in
+        // Another of DAM's bars over it hides it too, which isn't its being closed.
+        barWatch.start(showing: { [weak self] in
+            guard let bar = self?.touchBar else { return false }
+            return bar.isVisible || NSTouchBar.isCoveredBySystemModal(bar)
+        }) { [weak self] state in
             if state == .closed { self?.cancel() }
         }
     }

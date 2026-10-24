@@ -1259,7 +1259,8 @@ final class MoonlightConnectionLimits {
 /// pairing prompt on the Mac's screen, so that no one in reach can bring it back after every
 /// Cancel. After a prompt from an address came to nothing (declined, or given up by the
 /// device), none from it for `firstWait`, doubling with each more up to `longestWait`; an
-/// IPv6 address counts as its whole /64, which one host can move around in. And from any
+/// IPv6 address counts as its whole /64, which one host can move around in, but a link-local
+/// one as itself, as every device on the link shares fe80::/64. And from any
 /// address, at most `maxUnpairedPerMinute` prompts that came to nothing a minute: once that
 /// many have, none until the first of them is a minute old, and each time it happens again
 /// before things have been quiet for `2 × longestWait`, twice as long, up to `longestWait`.
@@ -1318,6 +1319,9 @@ final class PairingPromptLimits {
     /// What an address is kept by: itself, or an IPv6 address's /64.
     static func key(_ address: String) -> String {
         guard !address.contains("."), let v6 = IPv6Address(address) else { return address }
+        // Every link-local address shares fe80::/64: there, each device is its own address.
+        let bytes = v6.rawValue
+        if bytes[0] == 0xFE, bytes[1] & 0xC0 == 0x80 { return bytes.map { String(format: "%02x", $0) }.joined() }
         return v6.rawValue.prefix(8).map { String(format: "%02x", $0) }.joined() + "/64"
     }
 }
