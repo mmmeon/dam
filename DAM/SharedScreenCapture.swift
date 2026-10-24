@@ -92,6 +92,26 @@ final class SharedScreenCapture {
     /// agent, where ScreenCaptureKit can't run, or when DAM's debug setting asks for it.
     static var usesDisplayStream = UserDefaults.dam.bool(forKey: "\(AppIdentity.shortID).capture.displayStream")
 
+    /// The HDR10 metadata of what capture makes; SDR in the login window agent, whose
+    /// CGDisplayStream capture is SDR only.
+    static var hdrMetadata: MoonlightHDRMetadata {
+        #if LOGIN_AGENT
+        return .sdr
+        #else
+        return MoonlightScreenCapture.hdrMetadata
+        #endif
+    }
+
+    /// How long capture may wait for macOS's capture service to answer before it starts;
+    /// CGDisplayStream, the agent's, waits for none.
+    static var answerTimeout: TimeInterval {
+        #if LOGIN_AGENT
+        return 0
+        #else
+        return MoonlightScreenCapture.answerTimeout
+        #endif
+    }
+
     /// Makes the capture behind a subscription; replaced by tests.
     static var makeCapture: (Key, @escaping (CVPixelBuffer, CMTime) -> Void) -> ScreenCaptureSource = { key, frame in
         #if LOGIN_AGENT

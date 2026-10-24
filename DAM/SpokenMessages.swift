@@ -188,6 +188,7 @@ enum Spoken {
 
     // MARK: - Arrange
 
+    #if !LOGIN_AGENT
     /// The arrange preview's sentence, e.g. "<moving> left of <other>", where both are
     /// display names: "tv left of LEN T24i-20".
     static func placed(_ moving: String, _ side: PlacementSide, _ other: String) -> String {
@@ -198,6 +199,7 @@ enum Spoken {
         case .below: return String(localized: "\(moving) below \(other)", comment: "Arrange preview: the first value is the display being moved, the second the display it is placed next to")
         }
     }
+    #endif
 
     // MARK: - Debug
 

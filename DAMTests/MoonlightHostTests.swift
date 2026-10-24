@@ -377,6 +377,46 @@ final class MoonlightHostTests: XCTestCase {
         XCTAssertTrue(host.clients.isEmpty)
     }
 
+    func testTheLoginWindowAgentsHostNeverPairs() throws {
+        host.pairs = false
+        var asked = false
+        host.requestPIN = { _, _, answer in asked = true; answer("4821") }
+        startHost()
+        XCTAssertFalse(try pair(try Client.make(), pin: "4821"))
+        XCTAssertFalse(asked)
+        XCTAssertTrue(host.clients.isEmpty)
+    }
+
+    func testServesOnlyTheConnectionsItAdmits() throws {
+        var seen: [NWEndpoint] = []
+        host.admits = { seen.append($0); return false }
+        startHost()
+        let connection = open("/serverinfo", secure: false, identity: nil, address: "127.0.0.1")
+        let done = expectation(description: "closed")
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { data, _, _, _ in
+            XCTAssertNil(data, "nothing is answered")
+            done.fulfill()
+        }
+        wait(for: [done], timeout: 10)
+        connection.cancel()
+        XCTAssertFalse(seen.isEmpty)
+    }
+
+    func testDevicesSavedBeforeTheLoginWindowMayNotStreamIt() throws {
+        let old = #"[{"name":"iPad","certificate":"AAEC","paired":0,"allowsInput":true}]"#
+        let clients = try JSONDecoder().decode([MoonlightClient].self, from: Data(old.utf8))
+        XCTAssertEqual(clients.map(\.showsLoginWindow), [false])
+    }
+
+    func testWhetherADeviceMayStreamTheLoginWindowIsKept() throws {
+        host.requestPIN = { _, _, answer in answer("1234") }
+        startHost()
+        XCTAssertTrue(try pair(try Client.make(), pin: "1234"))
+        host.setShowsLoginWindow(true, for: try XCTUnwrap(host.clients.first))
+        let saved = try Data(contentsOf: directory.appendingPathComponent(MoonlightHost.clientsFile))
+        XCTAssertEqual(try JSONDecoder().decode([MoonlightClient].self, from: saved).map(\.showsLoginWindow), [true])
+    }
+
     func testTurnsAwayUnpairedDevicesOverHTTPS() throws {
         startHost()
         let xml = try get("/serverinfo", secure: true, identity: try Client.make().identity)

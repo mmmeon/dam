@@ -48,6 +48,7 @@
 		AC0A00022F8D60780090E796 /* AutoConnect.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0A00012F8D60780090E796 /* AutoConnect.swift */; };
 		AC0A00252F8D60780090E796 /* LoginAgentInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0A00242F8D60780090E796 /* LoginAgentInstaller.swift */; };
 		AC0A00212F8D60780090E796 /* LoginAgentSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0A00202F8D60780090E796 /* LoginAgentSettings.swift */; };
+		AC0A00312F8D60780090E796 /* CableLinks.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0A00302F8D60780090E796 /* CableLinks.swift */; };
 		AC0A001C2F8D60780090E796 /* ByteOrder.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0A001B2F8D60780090E796 /* ByteOrder.swift */; };
 		AC0A001A2F8D60780090E796 /* HDRMetadata.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0A00192F8D60780090E796 /* HDRMetadata.swift */; };
 		AC0A00182F8D60780090E796 /* KeyFrameRequests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0A00172F8D60780090E796 /* KeyFrameRequests.swift */; };
@@ -118,6 +119,7 @@
 		AC0A00042F8D607C0090E7A1 /* AutoConnectTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0A00032F8D607C0090E7A1 /* AutoConnectTests.swift */; };
 		AC0A00272F8D607C0090E7A1 /* LoginAgentInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0A00262F8D607C0090E7A1 /* LoginAgentInstallerTests.swift */; };
 		AC0A00232F8D607C0090E7A1 /* LoginAgentSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0A00222F8D607C0090E7A1 /* LoginAgentSettingsTests.swift */; };
+		AC0A00332F8D607C0090E7A1 /* CableLinksTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0A00322F8D607C0090E7A1 /* CableLinksTests.swift */; };
 		AC0A000A2F8D607C0090E7A1 /* DisplayStreamCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0A00092F8D607C0090E7A1 /* DisplayStreamCaptureTests.swift */; };
 		EE200B012F8D60780090E796 /* MenuBarIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE200A012F8D60780090E796 /* MenuBarIcon.swift */; };
 		EE200B022F8D607C0090E796 /* MenuBarIconTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE200A022F8D607C0090E796 /* MenuBarIconTests.swift */; };
@@ -187,6 +189,7 @@
 		AC0A00012F8D60780090E796 /* AutoConnect.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoConnect.swift; sourceTree = "<group>"; };
 		AC0A00242F8D60780090E796 /* LoginAgentInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginAgentInstaller.swift; sourceTree = "<group>"; };
 		AC0A00202F8D60780090E796 /* LoginAgentSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginAgentSettings.swift; sourceTree = "<group>"; };
+		AC0A00302F8D60780090E796 /* CableLinks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CableLinks.swift; sourceTree = "<group>"; };
 		AC0A001B2F8D60780090E796 /* ByteOrder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ByteOrder.swift; sourceTree = "<group>"; };
 		AC0A00192F8D60780090E796 /* HDRMetadata.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HDRMetadata.swift; sourceTree = "<group>"; };
 		AC0A00172F8D60780090E796 /* KeyFrameRequests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyFrameRequests.swift; sourceTree = "<group>"; };
@@ -257,6 +260,7 @@
 		AC0A00032F8D607C0090E7A1 /* AutoConnectTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoConnectTests.swift; sourceTree = "<group>"; };
 		AC0A00262F8D607C0090E7A1 /* LoginAgentInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginAgentInstallerTests.swift; sourceTree = "<group>"; };
 		AC0A00222F8D607C0090E7A1 /* LoginAgentSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginAgentSettingsTests.swift; sourceTree = "<group>"; };
+		AC0A00322F8D607C0090E7A1 /* CableLinksTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CableLinksTests.swift; sourceTree = "<group>"; };
 		AC0A00092F8D607C0090E7A1 /* DisplayStreamCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayStreamCaptureTests.swift; sourceTree = "<group>"; };
 		EE200A012F8D60780090E796 /* MenuBarIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarIcon.swift; sourceTree = "<group>"; };
 		EE200A022F8D607C0090E796 /* MenuBarIconTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarIconTests.swift; sourceTree = "<group>"; };
@@ -360,6 +364,7 @@
 				AC0A00012F8D60780090E796 /* AutoConnect.swift */,
 				AC0A00242F8D60780090E796 /* LoginAgentInstaller.swift */,
 				AC0A00202F8D60780090E796 /* LoginAgentSettings.swift */,
+				AC0A00302F8D60780090E796 /* CableLinks.swift */,
 				AC0A001B2F8D60780090E796 /* ByteOrder.swift */,
 				AC0A00192F8D60780090E796 /* HDRMetadata.swift */,
 				AC0A00172F8D60780090E796 /* KeyFrameRequests.swift */,
@@ -440,6 +445,7 @@
 				AC0A00032F8D607C0090E7A1 /* AutoConnectTests.swift */,
 				AC0A00262F8D607C0090E7A1 /* LoginAgentInstallerTests.swift */,
 				AC0A00222F8D607C0090E7A1 /* LoginAgentSettingsTests.swift */,
+				AC0A00322F8D607C0090E7A1 /* CableLinksTests.swift */,
 				AC0A00092F8D607C0090E7A1 /* DisplayStreamCaptureTests.swift */,
 				DD100A1B2F8D607C0090E7A1 /* StreamingDisplayTests.swift */,
 				AB300B032F8D60790090E796 /* RemoteSessionsTests.swift */,
@@ -631,6 +637,7 @@
 				AC0A00022F8D60780090E796 /* AutoConnect.swift in Sources */,
 				AC0A00252F8D60780090E796 /* LoginAgentInstaller.swift in Sources */,
 				AC0A00212F8D60780090E796 /* LoginAgentSettings.swift in Sources */,
+				AC0A00312F8D60780090E796 /* CableLinks.swift in Sources */,
 				AC0A001C2F8D60780090E796 /* ByteOrder.swift in Sources */,
 				AC0A001A2F8D60780090E796 /* HDRMetadata.swift in Sources */,
 				AC0A00182F8D60780090E796 /* KeyFrameRequests.swift in Sources */,
@@ -707,6 +714,7 @@
 				AC0A00042F8D607C0090E7A1 /* AutoConnectTests.swift in Sources */,
 				AC0A00272F8D607C0090E7A1 /* LoginAgentInstallerTests.swift in Sources */,
 				AC0A00232F8D607C0090E7A1 /* LoginAgentSettingsTests.swift in Sources */,
+				AC0A00332F8D607C0090E7A1 /* CableLinksTests.swift in Sources */,
 				AC0A000A2F8D607C0090E7A1 /* DisplayStreamCaptureTests.swift in Sources */,
 				DD100B1B2F8D607C0090E7A1 /* StreamingDisplayTests.swift in Sources */,
 				AB300C032F8D60790090E796 /* RemoteSessionsTests.swift in Sources */,

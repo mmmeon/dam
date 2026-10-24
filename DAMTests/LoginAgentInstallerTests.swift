@@ -22,6 +22,41 @@ final class LoginAgentInstallerTests: XCTestCase {
         XCTAssertEqual(S.status(wanted: renamed, installed: wanted, agentMatches: true), .current, "not worth a password")
     }
 
+    func testStatusFollowsWhoTheMoonlightHostIsAndWhomItServes() {
+        let iPad = MoonlightClient(name: "iPad", certificate: Data([1]), paired: Date(), showsLoginWindow: true)
+        let moonlight = LoginAgentSettings.Moonlight(uniqueID: "A", certificate: Data([9]), clients: [iPad])
+        let wanted = LoginAgentSettings(moonlight: moonlight)
+        typealias S = LoginAgentInstaller
+        XCTAssertEqual(S.status(wanted: wanted, installed: nil, agentMatches: false), .notInstalled, "Moonlight alone")
+        XCTAssertEqual(S.status(wanted: wanted, installed: wanted, agentMatches: true), .current)
+        var other = wanted
+        other.moonlight?.clients.append(MoonlightClient(name: "iPhone", certificate: Data([2]), paired: Date()))
+        XCTAssertEqual(S.status(wanted: other, installed: wanted, agentMatches: true), .needsUpdate, "another device")
+        XCTAssertEqual(S.status(wanted: LoginAgentSettings(), installed: wanted, agentMatches: true), .needsUpdate,
+                       "a device no longer allowed")
+        var newKey = wanted
+        newKey.moonlight?.certificate = Data([8])
+        XCTAssertEqual(S.status(wanted: newKey, installed: wanted, agentMatches: true), .needsUpdate, "a new host identity")
+        var tuned = wanted
+        tuned.moonlight?.defaults = ["dam.moonlight.hevc": "off"]
+        XCTAssertEqual(S.status(wanted: tuned, installed: wanted, agentMatches: true), .current, "not worth a password")
+    }
+
+    func testTheMoonlightHostsFilesGoWhereOnlyRootReadsThem() {
+        let staging = URL(fileURLWithPath: "/tmp/s")
+        let with = LoginAgentInstaller.installScript(staging: staging, moonlight: true)
+        let folder = "'/Library/Application Support/DAM/LoginWindow/Moonlight'"
+        XCTAssertTrue(with.contains("mkdir -m 700 \(folder)"))
+        for file in [MoonlightHost.keyFile, MoonlightHost.certificateFile, MoonlightHost.clientsFile] {
+            XCTAssertTrue(with.contains("install -o root -g wheel -m 600 '/tmp/s/\(file)' '/Library/Application Support/DAM/LoginWindow/Moonlight/\(file)'"), file)
+        }
+        let without = LoginAgentInstaller.installScript(staging: staging)
+        XCTAssertTrue(without.contains("rm -rf \(folder)"))
+        XCTAssertFalse(without.contains(MoonlightHost.keyFile))
+        // The launch agent goes last, so the agent never starts with half its files.
+        XCTAssertTrue(with.split(separator: "\n").last?.contains("LaunchAgents") == true)
+    }
+
     func testReceiversNeverConnectedByCableAreNamed() {
         let settings = LoginAgentSettings(entries: [iPad, AutoConnectEntry(target: .openDisplay(key: "b"), mode: .startup)],
                                           names: ["a": "iPad", "b": "iPhone"], usbIDs: ["udid": "a"])

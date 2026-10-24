@@ -70,18 +70,21 @@ enum LocalNetwork {
     }
 
     /// The subnets of the interfaces that are up.
-    static func interfaceSubnets() -> [Subnet] {
+    static func interfaceSubnets() -> [Subnet] { namedSubnets().map(\.subnet) }
+
+    /// The subnets of the interfaces that are up, with each interface's BSD name.
+    static func namedSubnets() -> [(interface: String, subnet: Subnet)] {
         var first: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&first) == 0 else { return [] }
         defer { freeifaddrs(first) }
-        var subnets: [Subnet] = []
+        var subnets: [(interface: String, subnet: Subnet)] = []
         var next = first
         while let entry = next?.pointee {
             next = entry.ifa_next
             guard entry.ifa_flags & UInt32(IFF_UP) != 0, let address = entry.ifa_addr, let mask = entry.ifa_netmask,
                   let bytes = Self.bytes(address), let maskBytes = Self.bytes(mask, family: address.pointee.sa_family),
                   bytes.count == maskBytes.count else { continue }
-            subnets.append(Subnet(address: bytes, mask: maskBytes))
+            subnets.append((String(cString: entry.ifa_name), Subnet(address: bytes, mask: maskBytes)))
         }
         return subnets
     }
@@ -865,7 +868,9 @@ final class MoonlightStream {
     private let video: MoonlightVideoSender
     private let control: MoonlightControlServer
     private let audio: MoonlightAudioSender
+    #if !LOGIN_AGENT
     private let input: MoonlightInputInjector
+    #endif
     private let lock = NSLock()
     private var encoder: MoonlightVideoEncoder?
     private var capture: SharedScreenCapture.Subscription?
@@ -894,13 +899,15 @@ final class MoonlightStream {
         self.config = config
         self.displayID = displayID
         inputAllowed = allowsInput
+        #if !LOGIN_AGENT
         input = MoonlightInputInjector(displayID: displayID, streamWidth: config.width, streamHeight: config.height)
+        #endif
         video = try MoonlightVideoSender(port: ports.video, pingPayload: pingPayload, client: clientAddress,
                                          packetSize: config.packetSize, minimumParity: config.minimumParity,
                                          bitrateKbps: config.bitrateKbps,
                                          key: config.videoEncrypted ? key : nil)
         control = try MoonlightControlServer(port: ports.control, key: key, connectData: connectData,
-                                             hdr: config.hdr ? MoonlightScreenCapture.hdrMetadata : nil)
+                                             hdr: config.hdr ? SharedScreenCapture.hdrMetadata : nil)
         audio = try MoonlightAudioSender(port: ports.audio, pingPayload: pingPayload, client: clientAddress, config: config,
                                          key: key, keyID: keyID, stats: video.stats)
     }
@@ -936,12 +943,14 @@ final class MoonlightStream {
         }
         statsTimer = stats
         stats.resume()
+        #if !LOGIN_AGENT
         // Whether input is allowed is checked where it is posted, so none that came before
         // it was turned off goes after the release.
         input.allowInput(allowsInput)
         control.onInput = { [weak self] payload in
             self?.input.handle(MoonlightInput.parse(payload))
         }
+        #endif
         control.onDisconnect = { [weak self] in self?.end("Moonlight disconnected") }
         video.onFirstPing = { [weak self] in self?.startPicture() }
         activity = ProcessInfo.processInfo.beginActivity(
@@ -965,7 +974,9 @@ final class MoonlightStream {
             lock.lock()
             inputAllowed = newValue
             lock.unlock()
+            #if !LOGIN_AGENT
             input.allowInput(newValue)
+            #endif
         }
     }
 
@@ -985,7 +996,9 @@ final class MoonlightStream {
         (statsTimer, bitrateTimer) = (nil, nil)
         lock.unlock()
         capture?.cancel()
+        #if !LOGIN_AGENT
         input.close()
+        #endif
         control.stop()
         video.stop()
         audio.stop()
@@ -1037,7 +1050,7 @@ final class MoonlightStream {
                 settings: .init(width: config.width, height: config.height, fps: config.fps,
                                 bitrateKbps: config.bitrateKbps, codec: config.codec ?? .h264,
                                 lowLatency: config.lowLatency,
-                                hdr: config.hdr ? MoonlightScreenCapture.hdrMetadata : nil,
+                                hdr: config.hdr ? SharedScreenCapture.hdrMetadata : nil,
                                 largestFrame: MoonlightPacketizer.largestFrame(packetSize: config.packetSize))) { [weak self] frame in
                 self?.video.send(frame)
             }
@@ -1102,7 +1115,7 @@ final class MoonlightStream {
             if ended { capture.cancel() }
             // Capture can start and still send nothing; say so rather than leave Moonlight
             // waiting for video that will not come. Allows for capture restarting replayd.
-            let wait = 5 + MoonlightScreenCapture.answerTimeout + 1
+            let wait = 5 + SharedScreenCapture.answerTimeout + 1
             DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
                 guard let self else { return }
                 self.lock.lock()
