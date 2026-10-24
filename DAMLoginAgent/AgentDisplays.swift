@@ -55,12 +55,7 @@ final class AgentDisplays {
         adLog.notice("made display \(id) for \(identity.name, privacy: .public) at \(mode.width)×\(mode.height)\(mode.hiDPI ? " HiDPI" : "")")
         waitUntilOnline(id, deadline: Date() + Self.onlineTimeout) { [weak self] online in
             guard let self, online, self.displays[id] != nil else { return done(nil) }
-            // A virtual display first lists as 1×1; its mode comes a moment later.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-                self.setMode(mode, of: id)
-                self.makeMain(id)
-                done(id)
-            }
+            self.place(id, in: mode) { done(id) }
         }
     }
 
@@ -68,11 +63,7 @@ final class AgentDisplays {
         guard let display = displays[id], mode.pixelWidth <= Int(display.maxPixelsWide),
               mode.pixelHeight <= Int(display.maxPixelsHigh),
               display.apply(StreamingDisplayModes.settings(startingIn: mode)) else { return done(false) }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            let set = self.setMode(mode, of: id)
-            self.makeMain(id)
-            done(set)
-        }
+        place(id, in: mode) { done(true) }
     }
 
     func remove(_ id: CGDirectDisplayID) {
@@ -106,39 +97,73 @@ final class AgentDisplays {
         }
     }
 
-    /// Switches display `id` to `mode`, as DAM picks it: size, pixels and whole hertz.
-    @discardableResult
-    private func setMode(_ mode: StreamingDisplayModes.Mode, of id: CGDirectDisplayID) -> Bool {
-        let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
-        let modes = CGDisplayCopyAllDisplayModes(id, options) as? [CGDisplayMode] ?? []
-        guard let wanted = modes.first(where: {
-            $0.width == mode.width && $0.height == mode.height && $0.pixelWidth == mode.pixelWidth
-                && $0.pixelHeight == mode.pixelHeight && Int($0.refreshRate.rounded()) == mode.refreshRate
-        }) else {
-            adLog.error("display \(id): no \(mode.width)×\(mode.height)@\(mode.refreshRate) mode")
-            return false
+    /// Switches display `id` to `mode` and, unless told not to, makes it main: at the origin,
+    /// the others in a row to its right, as the login window follows the main display. One
+    /// change, and none when there is nothing to change: macOS holds a change that changes
+    /// nothing for 10 s (docs/slow-display-removal.md). Committed off the main queue, which
+    /// keeps the receiver's link alive meanwhile; `done` on the main queue.
+    private func place(_ id: CGDirectDisplayID, in mode: StreamingDisplayModes.Mode, done: @escaping () -> Void) {
+        // A virtual display first lists as 1×1; its mode comes a moment later.
+        waitForSize(id, deadline: Date() + 3) { [weak self] in
+            guard let self else { return done() }
+            var config: CGDisplayConfigRef?
+            CGBeginDisplayConfiguration(&config)
+            var changes: [String] = []
+            if let wanted = Self.mode(mode, of: id) {
+                if !Self.same(CGDisplayCopyDisplayMode(id), wanted) {
+                    CGConfigureDisplayWithDisplayMode(config, id, wanted, nil)
+                    changes.append("mode")
+                }
+            } else {
+                adLog.error("display \(id): no \(mode.width)×\(mode.height)@\(mode.refreshRate) mode")
+            }
+            if self.makesMain, CGDisplayBounds(id).origin != .zero {
+                CGConfigureDisplayOrigin(config, id, 0, 0)
+                var x = Int32(mode.width)
+                for other in Self.online() where other != id && CGDisplayMirrorsDisplay(other) == 0 {
+                    CGConfigureDisplayOrigin(config, other, x, 0)
+                    x += Int32(CGDisplayBounds(other).width)
+                }
+                changes.append("main")
+            }
+            guard !changes.isEmpty else {
+                CGCancelDisplayConfiguration(config)
+                adLog.notice("display \(id) already as wanted")
+                return done()
+            }
+            DispatchQueue.global(qos: .userInitiated).async {
+                let started = Date()
+                let error = CGCompleteDisplayConfiguration(config, .forAppOnly)
+                DispatchQueue.main.async {
+                    adLog.notice("display \(id): \(changes.joined(separator: ", "), privacy: .public) → \(error.rawValue) in \(Int(Date().timeIntervalSince(started) * 1000)) ms; main now \(CGMainDisplayID())")
+                    done()
+                }
+            }
         }
-        var config: CGDisplayConfigRef?
-        CGBeginDisplayConfiguration(&config)
-        CGConfigureDisplayWithDisplayMode(config, id, wanted, nil)
-        let error = CGCompleteDisplayConfiguration(config, .forAppOnly)
-        if error != .success { adLog.error("display \(id): mode → \(error.rawValue)") }
-        return error == .success
     }
 
-    /// Puts display `id` at the origin, which makes it main, and the others in a row to its
-    /// right: the login window follows the main display.
-    private func makeMain(_ id: CGDirectDisplayID) {
-        guard makesMain else { return }
-        var config: CGDisplayConfigRef?
-        CGBeginDisplayConfiguration(&config)
-        CGConfigureDisplayOrigin(config, id, 0, 0)
-        var x = Int32(CGDisplayPixelsWide(id))
-        for other in Self.online() where other != id && CGDisplayMirrorsDisplay(other) == 0 {
-            CGConfigureDisplayOrigin(config, other, x, 0)
-            x += Int32(CGDisplayPixelsWide(other))
+    /// Waits until display `id` reports more than its first 1×1, or `deadline` passes.
+    private func waitForSize(_ id: CGDirectDisplayID, deadline: Date, then: @escaping () -> Void) {
+        if CGDisplayBounds(id).width > 1 || Date() >= deadline { return then() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            guard let self else { return then() }
+            self.waitForSize(id, deadline: deadline, then: then)
         }
-        let error = CGCompleteDisplayConfiguration(config, .forAppOnly)
-        adLog.notice("display \(id) made main → \(error.rawValue); main now \(CGMainDisplayID())")
+    }
+
+    /// The mode of display `id` that is `mode`, as DAM picks it: size, pixels and whole hertz.
+    private static func mode(_ mode: StreamingDisplayModes.Mode, of id: CGDirectDisplayID) -> CGDisplayMode? {
+        let options = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
+        let modes = CGDisplayCopyAllDisplayModes(id, options) as? [CGDisplayMode] ?? []
+        return modes.first {
+            $0.width == mode.width && $0.height == mode.height && $0.pixelWidth == mode.pixelWidth
+                && $0.pixelHeight == mode.pixelHeight && Int($0.refreshRate.rounded()) == mode.refreshRate
+        }
+    }
+
+    private static func same(_ a: CGDisplayMode?, _ b: CGDisplayMode) -> Bool {
+        guard let a else { return false }
+        return a.width == b.width && a.height == b.height && a.pixelWidth == b.pixelWidth
+            && a.pixelHeight == b.pixelHeight && Int(a.refreshRate.rounded()) == Int(b.refreshRate.rounded())
     }
 }
