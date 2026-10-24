@@ -64,6 +64,28 @@ final class AgentDisplays {
         }
     }
 
+    /// Whether this process can make a display that comes online: makes one, small and not
+    /// main, and removes it again.
+    func check(done: @escaping (Bool) -> Void) {
+        let descriptor = CGVirtualDisplayDescriptor()
+        descriptor.setDispatchQueue(.main)
+        descriptor.name = "DAM"
+        descriptor.sizeInMillimeters = CGSize(width: 600, height: 340)
+        descriptor.maxPixelsWide = 1280
+        descriptor.maxPixelsHigh = 720
+        descriptor.vendorID = StreamingDisplayIdentity.vendorID
+        descriptor.productID = StreamingDisplayIdentity.productID
+        descriptor.serialNum = StreamingDisplayIdentity.serial(seed: "loginagent.check")
+        let display = CGVirtualDisplay(descriptor: descriptor)
+        let mode = StreamingDisplayModes.Mode(width: 1280, height: 720, refreshRate: 60)
+        guard display.apply(StreamingDisplayModes.settings(startingIn: mode)) else { return done(false) }
+        let id = display.displayID
+        waitUntilOnline(id, deadline: Date() + Self.onlineTimeout) { online in
+            withExtendedLifetime(display) {}
+            done(online)
+        }
+    }
+
     func resize(_ id: CGDirectDisplayID, to mode: StreamingDisplayModes.Mode, done: @escaping (Bool) -> Void) {
         guard let display = displays[id], mode.pixelWidth <= Int(display.maxPixelsWide),
               mode.pixelHeight <= Int(display.maxPixelsHigh),

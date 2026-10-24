@@ -100,41 +100,60 @@ termination.setEventHandler {
 }
 termination.resume()
 
-if !settings.entries.isEmpty { sender.start() }
-
-if let settings = settings.moonlight {
-    // DAM's host, as DAM keeps it, so devices find the host they paired with; its settings
-    // registered, not written, as they are DAM's.
-    UserDefaults.dam.register(defaults: (settings.defaults as? [String: Any] ?? [:])
-        .merging([MoonlightHost.uniqueIDKey: settings.uniqueID]) { $1 })
-    // Next to the settings, as the installer puts it: LoginAgentSettings.moonlightDirectory.
-    let directory = settingsURL.deletingLastPathComponent()
-        .appendingPathComponent(LoginAgentSettings.moonlightDirectory.lastPathComponent, isDirectory: true)
-    let host = MoonlightHost(directory: directory, advertises: false)
-    host.pairs = false
-    host.admits = CableLinks.admits
-    let identity = StreamingDisplayIdentity(name: "Moonlight", seed: "moonlight.loginwindow")
-    host.makeDisplay = { width, height, fps, done in
-        makeDisplay(StreamingDisplayModes.forStream(width: width, height: height, fps: fps), identity, done: done)
+/// Started near boot, a process may never see its displays come online (see makeDisplay);
+/// checked at once, so launchd's next one is up before a device needs it. After a log-out,
+/// the window server long ready, nothing is checked: the check's display would flicker.
+func checkDisplays(then start: @escaping () -> Void) {
+    guard ProcessInfo.processInfo.systemUptime < 5 * 60 else { return start() }
+    displays.check { works in
+        guard works else {
+            say("can't make displays yet; restarting")
+            exit(1)
+        }
+        start()
     }
-    host.removeDisplay = { id in displays.remove(id) }
-    host.resizeDisplay = { id, width, height, fps, done in
-        displays.resize(id, to: StreamingDisplayModes.forStream(width: width, height: height, fps: fps), done: done)
-    }
-    var lastMoonlight = ""
-    host.onChange = {
-        let streaming = host.streamingClients.map(\.name)
-        let status = host.lastError ?? (streaming.isEmpty ? "waiting for a device on a cable"
-                                                          : "streaming to \(streaming.joined(separator: ", "))")
-        guard status != lastMoonlight else { return }
-        lastMoonlight = status
-        say("Moonlight: \(status)")
-    }
-    host.start()
-    let cable = CableAdvertiser(name: MoonlightHost.hostName, type: MoonlightHost.serviceType, port: host.httpPort.rawValue)
-    cable.start()
-    moonlight = host
-    advertiser = cable
 }
+
+/// Starts the sender and the Moonlight host, as the settings ask.
+func startAll() {
+    if !settings.entries.isEmpty { sender.start() }
+
+    if let settings = settings.moonlight {
+        // DAM's host, as DAM keeps it, so devices find the host they paired with; its settings
+        // registered, not written, as they are DAM's.
+        UserDefaults.dam.register(defaults: (settings.defaults as? [String: Any] ?? [:])
+            .merging([MoonlightHost.uniqueIDKey: settings.uniqueID]) { $1 })
+        // Next to the settings, as the installer puts it: LoginAgentSettings.moonlightDirectory.
+        let directory = settingsURL.deletingLastPathComponent()
+            .appendingPathComponent(LoginAgentSettings.moonlightDirectory.lastPathComponent, isDirectory: true)
+        let host = MoonlightHost(directory: directory, advertises: false)
+        host.pairs = false
+        host.admits = CableLinks.admits
+        let identity = StreamingDisplayIdentity(name: "Moonlight", seed: "moonlight.loginwindow")
+        host.makeDisplay = { width, height, fps, done in
+            makeDisplay(StreamingDisplayModes.forStream(width: width, height: height, fps: fps), identity, done: done)
+        }
+        host.removeDisplay = { id in displays.remove(id) }
+        host.resizeDisplay = { id, width, height, fps, done in
+            displays.resize(id, to: StreamingDisplayModes.forStream(width: width, height: height, fps: fps), done: done)
+        }
+        var lastMoonlight = ""
+        host.onChange = {
+            let streaming = host.streamingClients.map(\.name)
+            let status = host.lastError ?? (streaming.isEmpty ? "waiting for a device on a cable"
+                                                              : "streaming to \(streaming.joined(separator: ", "))")
+            guard status != lastMoonlight else { return }
+            lastMoonlight = status
+            say("Moonlight: \(status)")
+        }
+        host.start()
+        let cable = CableAdvertiser(name: MoonlightHost.hostName, type: MoonlightHost.serviceType, port: host.httpPort.rawValue)
+        cable.start()
+        moonlight = host
+        advertiser = cable
+    }
+}
+
+checkDisplays(then: startAll)
 // A run loop, not dispatchMain: the sender's timers are on it.
 while true { RunLoop.main.run() }

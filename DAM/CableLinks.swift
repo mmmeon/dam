@@ -23,7 +23,11 @@ enum CableLinks {
             var parent: io_registry_entry_t = 0
             guard IORegistryEntryGetParentEntry(service, kIOServicePlane, &parent) == KERN_SUCCESS else { continue }
             defer { IOObjectRelease(parent) }
+            // Not the link to a Mac's own Touch Bar chip (iBridge), which is NCM too.
             guard IOObjectConformsTo(parent, "AppleUSBNCMData") != 0,
+                  IORegistryEntrySearchCFProperty(service, kIOServicePlane, "Product Name" as CFString, kCFAllocatorDefault,
+                                                  IOOptionBits(kIORegistryIterateRecursively | kIORegistryIterateParents))
+                      as? String != "iBridge",
                   let name = IORegistryEntryCreateCFProperty(service, "BSD Name" as CFString, kCFAllocatorDefault, 0)?
                       .takeRetainedValue() as? String else { continue }
             names.insert(name)
