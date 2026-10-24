@@ -40,6 +40,22 @@ final class HotkeyPreferenceTests: XCTestCase {
 
     // MARK: - modifierString
 
+    func testIsAllowed_typingKeysNeedControlOrCommand() {
+        func keys(_ code: Int, _ mods: Int) -> HotkeyPreference {
+            HotkeyPreference(keyCode: UInt32(code), modifiers: UInt32(mods))
+        }
+        XCTAssertFalse(keys(kVK_ANSI_A, 0).isAllowed)
+        XCTAssertFalse(keys(kVK_ANSI_A, shiftKey).isAllowed)
+        XCTAssertFalse(keys(kVK_ANSI_A, optionKey | shiftKey).isAllowed)
+        XCTAssertFalse(keys(kVK_Space, optionKey).isAllowed)
+        XCTAssertTrue(keys(kVK_ANSI_A, controlKey).isAllowed)
+        XCTAssertTrue(keys(kVK_ANSI_A, optionKey | cmdKey).isAllowed)
+        XCTAssertTrue(keys(kVK_F5, shiftKey).isAllowed)
+        XCTAssertTrue(keys(kVK_LeftArrow, optionKey).isAllowed)
+        XCTAssertFalse(keys(kVK_F5, 0).isAllowed)
+        XCTAssertTrue(HotkeyAction.allCases.allSatisfy { $0.defaultShortcut.isAllowed })
+    }
+
     func testModifierString_allModifiers_correctOrder() {
         let pref = HotkeyPreference(
             keyCode: UInt32(kVK_ANSI_B),
@@ -386,6 +402,18 @@ final class KeyRecorderViewTests: XCTestCase {
         recorder.keyDown(with: key(kVK_Escape, [], "\u{1b}"))
         XCTAssertEqual(recorder.preference, start)
         XCTAssertEqual(recorder.accessibilityValue() as? String, start.spokenString)
+    }
+
+    func testTypingKeyWithShiftOrOptionAloneIsRefused_functionKeyIsNot() {
+        var recorded: [HotkeyPreference] = []
+        recorder.onChanged = { recorded.append($0) }
+        recorder.startRecording()
+        recorder.keyDown(with: key(kVK_ANSI_A, [.shift], "A"))
+        recorder.keyDown(with: key(kVK_ANSI_A, [.option], "å"))
+        XCTAssertEqual(recorder.accessibilityValue() as? String, "Add Control or Command")
+        XCTAssertTrue(recorded.isEmpty)
+        recorder.keyDown(with: key(kVK_F5, [.shift], "\u{F708}"))
+        XCTAssertEqual(recorded, [HotkeyPreference(keyCode: UInt32(kVK_F5), modifiers: UInt32(shiftKey))])
     }
 
     func testRecording_pausesTheAppsHotkeys() {

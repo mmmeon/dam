@@ -3,7 +3,8 @@
 //
 //  Click to enter recording mode, then press the desired key combination. Escape, the
 //  ⓧ at the right of the field, clicking anywhere else, or the window losing focus
-//  cancels. At least one modifier key (⌃ ⌥ ⇧ ⌘) is required.
+//  cancels. A key that types something needs ⌃ or ⌘ with it; F-keys and the arrow and
+//  page keys can take ⇧ or ⌥ alone (HotkeyPreference.isAllowed).
 //
 
 import AppKit
@@ -31,8 +32,12 @@ final class KeyRecorderView: NSView {
             : nil
     }
 
+    /// Shown in place of "Type shortcut…" after keys that can't be a shortcut.
+    private var refusal: String?
+
     private var isRecording = false {
         didSet {
+            refusal = nil
             needsDisplay = true
             NSAccessibility.post(element: self, notification: .valueChanged)
             toolTip = isRecording ? "Press the new shortcut. Esc cancels." : warningTip
@@ -142,10 +147,19 @@ final class KeyRecorderView: NSView {
             return
         }
 
-        let mods = event.modifierFlags.carbonFlags
-        guard mods != 0 else { return }   // bare keys aren't valid global hotkeys
+        let keys = HotkeyPreference(keyCode: UInt32(event.keyCode), modifiers: event.modifierFlags.carbonFlags)
+        // Bare keys wait for a modifier; a typing key with ⇧ or ⌥ alone is refused.
+        guard keys.modifiers != 0 else { return }
+        guard keys.isAllowed else {
+            NSSound.beep()
+            refusal = String(localized: "Add ⌃ or ⌘",
+                             comment: "Shortcut field, after keys that would take typing away, such as ⇧A")
+            needsDisplay = true
+            NSAccessibility.post(element: self, notification: .valueChanged)
+            return
+        }
 
-        preference = HotkeyPreference(keyCode: UInt32(event.keyCode), modifiers: mods)
+        preference = keys
         isRecording = false
         onChanged?(preference)
     }
@@ -156,7 +170,7 @@ final class KeyRecorderView: NSView {
     override func isAccessibilityElement() -> Bool { true }
     override func accessibilityRole() -> NSAccessibility.Role? { .button }
     override func accessibilityValue() -> Any? {
-        isRecording ? "Type shortcut" : preference.spokenString
+        isRecording ? refusal.map { _ in "Add Control or Command" } ?? "Type shortcut" : preference.spokenString
     }
     override func accessibilityHelp() -> String? {
         isRecording ? "Press the new shortcut. Escape cancels." : warningTip ?? "Press to record a new shortcut."
@@ -187,7 +201,7 @@ final class KeyRecorderView: NSView {
             ring.stroke()
         }
 
-        let label = isRecording ? "Type shortcut…" : preference.displayString
+        let label = isRecording ? refusal ?? "Type shortcut…" : preference.displayString
         let color: NSColor = isRecording ? .secondaryLabelColor
                            : clash != nil || isTakenElsewhere ? .systemRed : .labelColor
         let attrs: [NSAttributedString.Key: Any] = [

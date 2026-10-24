@@ -792,6 +792,21 @@ final class RemoteSessionCoordinator {
         displays.blackOut(keeping: wanting.isEmpty ? nil : Set(sessions.values.compactMap(\.displayID)))
     }
 
+    /// Forgets display `id`, which went without the session ending, as when removed from
+    /// the menu: a display made later may take its ID, and mustn't be kept lit, placed back
+    /// or removed for a session that never had it. The session goes on without a display.
+    func displayGone(_ id: CGDirectDisplayID) {
+        let apps = sessions.filter { $0.value.displayID == id }.map(\.key)
+        guard !apps.isEmpty else { return }
+        for app in apps {
+            rsLog.debug("\(app): its display went")
+            sessions[app]?.displayID = nil
+            sessions[app]?.madeDisplay = false
+        }
+        if isBlackedOut { updateBlackout() }
+        onChange?()
+    }
+
     /// Lights the screens again, for whoever is at the Mac, until the next session; the next
     /// sessions leave them lit unless blacking out is locked in Settings.
     func liftBlackout() {

@@ -92,6 +92,23 @@ struct HotkeyPreference: Codable, Equatable {
     var keyCode:  UInt32   // Carbon virtual key code
     var modifiers: UInt32  // Carbon modifier mask
 
+    // MARK: - Allowed
+
+    /// Whether the keys can be a shortcut. A key that types something needs ⌃ or ⌘ with it:
+    /// as a global shortcut, ⇧A would take every capital A typed anywhere. F-keys and the
+    /// arrow and page keys type nothing, so ⇧ or ⌥ alone will do with them.
+    var isAllowed: Bool {
+        guard modifiers != 0 else { return false }
+        return modifiers & UInt32(controlKey | cmdKey) != 0 || Self.typesNothing.contains(Int(keyCode))
+    }
+
+    private static let typesNothing: Set<Int> = [
+        kVK_F1, kVK_F2, kVK_F3, kVK_F4, kVK_F5, kVK_F6, kVK_F7, kVK_F8, kVK_F9, kVK_F10,
+        kVK_F11, kVK_F12, kVK_F13, kVK_F14, kVK_F15, kVK_F16, kVK_F17, kVK_F18, kVK_F19, kVK_F20,
+        kVK_Help, kVK_Home, kVK_End, kVK_PageUp, kVK_PageDown, kVK_ForwardDelete,
+        kVK_LeftArrow, kVK_RightArrow, kVK_UpArrow, kVK_DownArrow, kVK_ANSI_KeypadClear,
+    ]
+
     // MARK: - Clashes
 
     /// For each of `shortcuts`, the indices of the others set to the same keys. Only one of
