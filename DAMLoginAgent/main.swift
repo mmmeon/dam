@@ -49,7 +49,20 @@ say("starting as uid \(getuid()) for \(settings.entries.count) receiver(s); "
 
 let displays = AgentDisplays(makesMain: !arguments.contains("--not-main"))
 let sender = OpenDisplaySender(store: settings.store())
-sender.makeDisplay = { mode, identity, done in displays.make(mode, identity, done: done) }
+sender.makeDisplay = { mode, identity, done in
+    displays.make(mode, identity) { id in
+        // Started early in boot, before the window server took virtual displays, a process
+        // never sees one come online, however often it tries (2026-10-24). launchd starts a
+        // new one, which does.
+        guard id != nil else {
+            say("couldn't make a display; restarting")
+            sender.stop()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { exit(1) }
+            return
+        }
+        done(id)
+    }
+}
 sender.removeDisplay = { id in displays.remove(id) }
 sender.resizeDisplay = { id, mode, done in displays.resize(id, to: mode, done: done) }
 sender.hasOwnDisplay = { displays.hasOwnDisplay() }

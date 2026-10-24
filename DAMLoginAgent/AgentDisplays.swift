@@ -54,7 +54,12 @@ final class AgentDisplays {
         displays[id] = display
         adLog.notice("made display \(id) for \(identity.name, privacy: .public) at \(mode.width)×\(mode.height)\(mode.hiDPI ? " HiDPI" : "")")
         waitUntilOnline(id, deadline: Date() + Self.onlineTimeout) { [weak self] online in
-            guard let self, online, self.displays[id] != nil else { return done(nil) }
+            guard let self, self.displays[id] != nil else { return done(nil) }
+            guard online else {
+                // Kept, it would hold one of the few displays a process may make.
+                self.remove(id)
+                return done(nil)
+            }
             self.place(id, in: mode) { done(id) }
         }
     }
