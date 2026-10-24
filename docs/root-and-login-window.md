@@ -170,7 +170,15 @@ runs at every login window as root and shows it on a display of its own to:
     so a device finds the host it paired with and needs no new pairing. The key goes in a
     folder only root may read (`LoginWindow/Moonlight`); `settings.plist` holds only what is public.
   - Cable only. It serves connections from USB NCM links alone (`CableLinks.swift`) and
-    advertises over Bonjour on those links alone, so Wi-Fi devices never see it.
+    advertises over Bonjour on those links alone, so Wi-Fi devices never see it. The Mac's
+    Touch Bar link (iBridge) is USB NCM too, and is left out.
+  - Each cable's service names a host of its own, `<name>-enX.local`, whose one address is
+    the cable's (`CableAdvertiser.swift`). Moonlight takes the first IPv4 address a service
+    resolves to, and under the Mac's own name that was often Wi-Fi's: the iPad then tried Wi-Fi
+    alone, was refused, and showed the host offline. A link with only IPv6 isn't advertised,
+    as Moonlight drops a link-local address's scope.
+  - Moonlight still tries the Wi-Fi address it remembers from the user's session first, so
+    the host can show offline for under a second before the cable answers.
   - No pairing, no input, no sound and no HDR (its capture is `CGDisplayStream`, SDR).
   - Moonlight connects, not the agent, so the device's user taps the host. At sign-in the
     stream ends, and a second tap reaches the user's DAM.
@@ -180,4 +188,8 @@ runs at every login window as root and shows it on a display of its own to:
 
 **Boot (2026-10-24):** started before the window server takes virtual displays, the agent's
 displays never come online. A display that doesn't is released and the agent exits, and
-launchd's new one works: 6 s from the first start to the iPad streaming.
+launchd's new one works: 6 s from the first start to the iPad streaming. A process that fails
+this way never recovers, even minutes later, so within 5 minutes of boot the agent first makes
+a small display and lets it go, and exits at once if it doesn't come online, before any device
+asks for one. At a real login window this restarted it 6 s after boot, and a Moonlight tap
+streamed at once.
