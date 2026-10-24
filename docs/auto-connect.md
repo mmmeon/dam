@@ -52,7 +52,8 @@ One ordered list in Settings, **Connect Automatically**. Each entry:
   condition, `video.hasOwnDisplay()`).
 
 Rows are added from the displays DAM sees now, through the same lists the menu shows, and
-dragged to reorder. Nicknames (`VisibilityPreferences.nickname`) show as elsewhere.
+moved with ↑ and ↓ buttons (simpler in the form's grid than dragging, and usable with
+VoiceOver). The list is the last group of the Devices tab. Nicknames (`VisibilityPreferences.nickname`) show as elsewhere.
 
 ## Behaviour
 
@@ -81,14 +82,36 @@ its attempts. It then starts at most one connection.
    connects, so an iPad on the list isn't connected when the TV already is.
 2. **No switching up.** When a higher entry appears while a lower one of the same exclusive
    kind is connected, the lower one stays: switching would tear down a screen in use.
-3. **AirPlay at sign-in is allowed**, but only after Control Center's panel has answered once,
-   and never while a key is held down, since the user may be typing.
+3. **AirPlay at sign-in is allowed**, but only once Control Center answers Accessibility (asked
+   without opening anything) and no key has been pressed for 2 s, since the user may be
+   typing. Accessibility is never asked for by the connector.
 4. **Migration.**
    - Today's receivers turned on become OpenDisplay entries in their current order (as
      stored: sorted by key).
    - `autoConnectsSidecarWithoutDisplay` becomes "any iPad on USB, only without a display of
      its own".
    - `autoConnectSingleDisplay` stays a hotkey setting.
+
+## When: always, at login, at startup (2026-10-23)
+
+The user wants designated displays connected only if they are there at sign-in or shortly
+after, not whenever they come within reach. Each entry has a mode:
+
+| Mode | Connected | Kinds |
+|---|---|---|
+| Always | whenever it comes within reach | all |
+| At login | in the window after DAM starts at sign-in | all |
+| At startup | at the login window too (part 1's agent, which launchd runs at every login window), then as at login | OpenDisplay only: nothing else can connect before sign-in |
+
+- **The window** is one setting, 2 minutes by default (30 s to 10 min), measured from DAM's
+  start. DAM counts as started at sign-in when it starts within the window of the user's console
+  login (from the login records). Opened by hand later, there is no window.
+- **At startup covers every sign-in**, not only the first since boot (changed 2026-10-23): the
+  agent shows the login window after a log-out too, and DAM should take the receiver back after.
+- **Defaults:** entries added in Settings are At login. Entries migrated from the older settings,
+  and receivers turned on from the OpenDisplay page, are Always, which is how they behaved.
+- **Once the window closes** nothing at login or startup is dialled or retried. A connection
+  already made stays.
 
 ## Link to part 1
 

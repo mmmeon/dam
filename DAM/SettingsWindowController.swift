@@ -410,7 +410,285 @@ final class SettingsWindowController: NSWindowController {
             ("AirPlay Displays:",   airPlay.isEmpty  ? [placeholderLabel("None discovered yet")] : airPlay),
             ("Sidecar:",            sidecar.isEmpty  ? [placeholderLabel("No Sidecar devices found")] : sidecar),
             ("Connected Displays:", displays.isEmpty ? [placeholderLabel("No external displays")] : displays),
+            ("Connect Automatically:", autoConnectControls()),
         ])
+    }
+
+    // MARK: Connect Automatically
+
+    /// The trusted displays, best first (AutoConnect.swift): a row each, to move it, set when it
+    /// applies, or take it off; then a menu of the displays found now that could be added.
+    private func autoConnectControls() -> [NSView] {
+        let entries = AutoConnectList.entries
+        let rows: [[NSView]] = entries.enumerated().map { i, entry in
+            let (name, kind) = autoConnectName(entry.target)
+            let up = small(ClosureButton(title: "↑") { [weak self] _ in self?.moveAutoConnect(at: i, by: -1) })
+            up.isEnabled = i > 0
+            up.setAccessibilityLabel("Move \(name) up")
+            let down = small(ClosureButton(title: "↓") { [weak self] _ in self?.moveAutoConnect(at: i, by: 1) })
+            down.isEnabled = i < entries.count - 1
+            down.setAccessibilityLabel("Move \(name) down")
+            let when = ClosurePopup(onSelect: { [weak self] value in
+                self?.setAutoConnectCondition(at: i, onlyWithoutOwnDisplay: value == "without")
+            })
+            when.controlSize = .small
+            when.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+            for (title, value) in [("Always", "always"), ("Only with no display of its own", "without")] {
+                let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+                item.representedObject = value
+                when.menu?.addItem(item)
+            }
+            when.selectItem(at: entry.onlyWithoutOwnDisplay ? 1 : 0)
+            when.setAccessibilityLabel("When to connect \(name)")
+            let mode = ClosurePopup(onSelect: { [weak self] value in
+                guard let mode = value.flatMap(AutoConnectEntry.Mode.init(rawValue:)) else { return }
+                self?.setAutoConnectMode(at: i, mode)
+            })
+            mode.controlSize = .small
+            mode.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+            for option in AutoConnectEntry.modes(for: entry.target) {
+                let item = NSMenuItem(title: Self.autoConnectModeTitle(option), action: nil, keyEquivalent: "")
+                item.representedObject = option.rawValue
+                mode.menu?.addItem(item)
+                if option == entry.mode { mode.select(item) }
+            }
+            mode.setAccessibilityLabel("When \(name) is connected")
+            mode.toolTip = "Always: whenever it comes within reach. At login: only in the window after you sign in. " +
+                           "At startup (OpenDisplay, by cable): at the login window as well, before anyone signs in, " +
+                           "then as at login."
+            let remove = small(ClosureButton(title: "Remove") { [weak self] _ in self?.removeAutoConnect(entry.target) })
+            remove.setAccessibilityLabel("Remove \(name)")
+            return [up, down, rowLabel(name), placeholderLabel(kind), mode, when, remove]
+        }
+        var controls: [NSView] = [rows.isEmpty ? placeholderLabel("No displays yet") : rowGrid(rows)]
+        if let add = addAutoConnectMenu(listed: Set(entries.map(\.target))) { controls.append(add) }
+        controls.append(autoConnectWindowRow())
+        if let loginWindow = loginWindowRow() { controls.append(loginWindow) }
+        controls.append(smallNote("Connected best first. Of AirPlay displays and iPads, only the first available is " +
+                                  "connected, and none while one already is; every OpenDisplay receiver listed is " +
+                                  "connected. One disconnected by hand stays so until it goes away and comes back. " +
+                                  "A display added here is connected at login."))
+        return controls
+    }
+
+    private static func autoConnectModeTitle(_ mode: AutoConnectEntry.Mode) -> String {
+        switch mode {
+        case .always:  return "Always"
+        case .login:   return "At login"
+        case .startup: return "At startup"
+        }
+    }
+
+    /// "Window after login: [2 minutes]": how long entries connected at login or startup may be.
+    private func autoConnectWindowRow() -> NSView {
+        let popup = ClosurePopup(onSelect: { value in
+            guard let seconds = value.flatMap(Double.init) else { return }
+            AutoConnectList.window = seconds
+        })
+        popup.controlSize = .small
+        popup.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        var choices = AutoConnectList.windowChoices
+        if !choices.contains(AutoConnectList.window) { choices = (choices + [AutoConnectList.window]).sorted() }
+        for seconds in choices {
+            let text = seconds < 60 ? "\(Int(seconds)) seconds"
+                : seconds == 60 ? "1 minute" : "\(Int(seconds / 60)) minutes"
+            let item = NSMenuItem(title: text, action: nil, keyEquivalent: "")
+            item.representedObject = String(seconds)
+            popup.menu?.addItem(item)
+            if seconds == AutoConnectList.window { popup.select(item) }
+        }
+        popup.setAccessibilityLabel("Window after login")
+        popup.toolTip = "How long after you sign in a display set to connect at login or startup may still be " +
+                        "connected, for one that is slow to come within reach. Applies from the next login."
+        let label = smallLabel("Window after login:")
+        let row = NSStackView(views: [label, popup])
+        row.orientation = .horizontal
+        row.spacing = 6
+        return row
+    }
+
+    /// An entry's name as the app shows it, and its kind.
+    private func autoConnectName(_ target: AutoConnectTarget) -> (name: String, kind: String) {
+        switch target {
+        case .openDisplay(let key):
+            return (openDisplay?.receivers.first { $0.key == key }?.name ?? key, "OpenDisplay")
+        case .airPlay(let name):
+            return (VisibilityPreferences.nickname(.display, for: name) ?? name, "AirPlay")
+        case .sidecar(let name):
+            return (VisibilityPreferences.nickname(.sidecar, for: name) ?? name, "Sidecar")
+        case .anyIPadOnUSB:
+            return ("Any iPad plugged in", "Sidecar")
+        }
+    }
+
+    /// "Add Display", listing what is found now and not on the list; nil when there is nothing.
+    private func addAutoConnectMenu(listed: Set<AutoConnectTarget>) -> NSView? {
+        var targets = videoManager.allAirPlayDevices.map { AutoConnectTarget.airPlay(name: $0.name) }
+        targets += sidecarManager.devices.map { AutoConnectTarget.sidecar(name: $0.name) }
+        targets.append(.anyIPadOnUSB)
+        targets += (openDisplay?.receivers ?? []).map { AutoConnectTarget.openDisplay(key: $0.key) }
+        var seen = listed
+        targets = targets.filter { seen.insert($0).inserted }
+        guard !targets.isEmpty else { return nil }
+        let menu = ClosurePopup(onSelect: { [weak self] value in
+            guard let index = value.flatMap(Int.init), targets.indices.contains(index) else { return }
+            self?.addAutoConnect(targets[index])
+        })
+        menu.pullsDown = true
+        menu.controlSize = .small
+        menu.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        menu.addItem(withTitle: "Add Display")
+        for (i, target) in targets.enumerated() {
+            let (name, kind) = autoConnectName(target)
+            let item = NSMenuItem(title: "\(name) (\(kind))", action: nil, keyEquivalent: "")
+            item.representedObject = String(i)
+            menu.menu?.addItem(item)
+        }
+        menu.toolTip = "Adds a display found now to the end of the list."
+        return menu
+    }
+
+    /// Receivers go through the sender, which dials one added and hangs up on one removed.
+    /// An entry added here is connected at login.
+    private func addAutoConnect(_ target: AutoConnectTarget) {
+        if case .openDisplay(let key) = target, let openDisplay {
+            var entries = AutoConnectList.settingOpenDisplay(key, on: true, in: AutoConnectList.entries)
+            if let i = entries.firstIndex(where: { $0.target == target }) { entries[i].mode = .login }
+            AutoConnectList.entries = entries
+            openDisplay.setOn(true, key: key)
+        } else {
+            AutoConnectList.entries.append(AutoConnectEntry(target: target, mode: .login))
+        }
+        autoConnectDidChange()
+    }
+
+    private func setAutoConnectMode(at index: Int, _ mode: AutoConnectEntry.Mode) {
+        var entries = AutoConnectList.entries
+        guard entries.indices.contains(index) else { return }
+        let wasStartup = entries[index].mode == .startup
+        entries[index].mode = mode
+        AutoConnectList.entries = entries
+        autoConnectDidChange()
+        if wasStartup || mode == .startup { syncLoginAgent() }
+    }
+
+    private func removeAutoConnect(_ target: AutoConnectTarget) {
+        let wasStartup = AutoConnectList.entries.contains { $0.target == target && $0.mode == .startup }
+        if case .openDisplay(let key) = target, let openDisplay {
+            openDisplay.setOn(false, key: key)
+        } else {
+            AutoConnectList.entries.removeAll { $0.target == target }
+        }
+        autoConnectDidChange()
+        if wasStartup { syncLoginAgent() }
+    }
+
+    // MARK: Login window
+
+    /// "Login window: Installed · Screen Recording allowed [Uninstall…]": the agent that shows
+    /// receivers connected at startup the login window (LoginAgentInstaller.swift). Nil while
+    /// none is and nothing is installed.
+    private func loginWindowRow() -> NSView? {
+        let status = LoginAgentInstaller.status()
+        guard status != .notNeeded else { return nil }
+        var text: String
+        var buttons: [NSButton] = []
+        switch status {
+        case .notNeeded:
+            return nil
+        case .notInstalled:
+            text = "Not installed"
+            buttons.append(small(ClosureButton(title: "Install…") { [weak self] _ in self?.syncLoginAgent() }))
+        case .needsUpdate:
+            text = "Needs an update"
+            buttons.append(small(ClosureButton(title: "Update…") { [weak self] _ in self?.syncLoginAgent() }))
+        case .current:
+            switch LoginAgentInstaller.screenRecordingAllowed() {
+            case true?:  text = "Installed · Screen Recording allowed"
+            case false?: text = "Installed · Screen Recording not allowed yet"
+            case nil:    text = "Installed · not yet shown at the login window"
+            }
+        case .unneeded:
+            text = "Installed, though no receiver connects at startup"
+        }
+        if let wanted = LoginAgentInstaller.wanted() {
+            let unknown = LoginAgentInstaller.unknownByCable(wanted)
+            if !unknown.isEmpty {
+                text += " · connect \(unknown.joined(separator: ", ")) by cable once first"
+            }
+        }
+        if status == .current || status == .needsUpdate || status == .unneeded {
+            if status != .unneeded {
+                let recording = small(ClosureButton(title: "Screen Recording…") { _ in
+                    // The agent goes in the list by hand: it never runs where macOS could ask.
+                    NSWorkspace.shared.activateFileViewerSelecting([LoginAgentInstaller.installedAgent])
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+                        NSWorkspace.shared.open(url)
+                    }
+                })
+                recording.toolTip = "The agent needs Screen Recording to show the login window. In Privacy & Security › " +
+                                    "Screen Recording, click + and choose DAMLoginAgent, which Finder shows."
+                buttons.append(recording)
+            }
+            let remove = small(ClosureButton(title: "Uninstall…") { [weak self] _ in
+                LoginAgentInstaller.uninstall { error in self?.loginAgentDone(error) }
+            })
+            buttons.append(remove)
+        }
+        let label = smallLabel("Login window: \(text)")
+        label.toolTip = "OpenDisplay receivers set to connect At startup are shown the login window, over a cable only, " +
+                        "by an agent DAM installs. Installing, updating and uninstalling ask for an administrator's password."
+        let row = NSStackView(views: [label] + buttons)
+        row.orientation = .horizontal
+        row.spacing = 6
+        return row
+    }
+
+    /// Installs, updates or uninstalls the login window agent as the list now asks.
+    private func syncLoginAgent() {
+        switch LoginAgentInstaller.status() {
+        case .notInstalled, .needsUpdate:
+            guard let wanted = LoginAgentInstaller.wanted() else { return }
+            LoginAgentInstaller.install(wanted) { [weak self] error in self?.loginAgentDone(error) }
+        case .unneeded:
+            LoginAgentInstaller.uninstall { [weak self] error in self?.loginAgentDone(error) }
+        case .current, .notNeeded:
+            break
+        }
+    }
+
+    private func loginAgentDone(_ error: String?) {
+        if let error, error != "cancelled" {
+            let alert = NSAlert()
+            alert.messageText = "The login window agent could not be changed"
+            alert.informativeText = error
+            alert.runModal()
+        }
+        devicesContent = buildDevicesTab()
+        if selectedTab == TabID.devices { selectTab(TabID.devices) }
+    }
+
+    private func moveAutoConnect(at index: Int, by offset: Int) {
+        var entries = AutoConnectList.entries
+        let other = index + offset
+        guard entries.indices.contains(index), entries.indices.contains(other) else { return }
+        entries.swapAt(index, other)
+        AutoConnectList.entries = entries
+        autoConnectDidChange()
+    }
+
+    private func setAutoConnectCondition(at index: Int, onlyWithoutOwnDisplay: Bool) {
+        var entries = AutoConnectList.entries
+        guard entries.indices.contains(index) else { return }
+        entries[index].onlyWithoutOwnDisplay = onlyWithoutOwnDisplay
+        AutoConnectList.entries = entries
+        autoConnectDidChange()
+    }
+
+    /// The list shows on the Devices tab, and the receivers' switches on the OpenDisplay page.
+    private func autoConnectDidChange() {
+        devicesDidChange()
+        openDisplayDidChange()
     }
 
     /// What the General tab shows that changes outside it: the outputs to speak through, by
@@ -425,7 +703,10 @@ final class SettingsWindowController: NSWindowController {
         DevicesState(audio: audioManager.allOutputDevices.map(\.name),
                      airPlay: videoManager.allAirPlayDevices.map(\.name),
                      sidecar: sidecarManager.devices.map(\.name),
-                     displays: videoManager.allConnectedDisplays.filter { !$0.isSidecar }.map(\.name))
+                     displays: videoManager.allConnectedDisplays.filter { !$0.isSidecar }.map(\.name),
+                     autoConnect: AutoConnectList.entries,
+                     loginAgent: "\(LoginAgentInstaller.status()) \(String(describing: LoginAgentInstaller.screenRecordingAllowed()))",
+                     receivers: (openDisplay?.receivers ?? []).map { "\($0.key) \($0.name)" })
     }
 
     /// Rebuilds the General and Devices tabs if what they list has changed, as when a device
@@ -481,16 +762,12 @@ final class SettingsWindowController: NSWindowController {
                                             "other resolutions. " +
                                             "Applies on the next Sidecar connection.",
                                       action: { VisibilityPreferences.backsSidecarWithVirtualDisplay = $0 })
-        let sidecarAutoConnect = checkbox(title: "Connect a plugged-in iPad when there is no other display",
-                                          isOn: VisibilityPreferences.autoConnectsSidecarWithoutDisplay,
-                                          help: "When an iPad is plugged in over USB and the Mac has no " +
-                                                "display of its own, connect it over Sidecar. Also " +
-                                                "applies at login with the iPad already plugged in.",
-                                          action: { VisibilityPreferences.autoConnectsSidecarWithoutDisplay = $0 })
         return formTab([
             ("Refresh Rates:", [rates]),
             ("On AirPlay Connect:", [airPlayDefault]),
-            ("On Sidecar Connect:", [sidecarBacking, sidecarAutoConnect]),
+            ("On Sidecar Connect:", [sidecarBacking,
+                                     smallNote("To connect an iPad by itself when it is plugged in, add it, or " +
+                                               "“Any iPad plugged in”, under Devices › Connect Automatically.")]),
         ], leftAligned: true)
     }
 
@@ -792,7 +1069,8 @@ final class SettingsWindowController: NSWindowController {
             ("Sending:", [send]),
             ("Bitrate:", [bitrate]),
             ("Receivers:", [receivers,
-                            smallNote("A receiver takes the newest sender, so DAM dials only those turned on. " +
+                            smallNote("A receiver takes the newest sender, so DAM dials only those turned on, " +
+                                      "in their order under Devices › Connect Automatically. " +
                                       "Turning one on takes it from the OpenDisplay Mac app if that is streaming to it.")]),
         ], leftAligned: true)
     }
@@ -805,6 +1083,8 @@ final class SettingsWindowController: NSWindowController {
 
     /// Rebuilds the OpenDisplay page if what it shows of the receivers has changed.
     func openDisplayDidChange() {
+        // The Connect Automatically list names receivers and shows which are on.
+        devicesDidChange()
         guard let sender = openDisplay,
               sender.receivers != openDisplayShown || sender.isRunning != openDisplayRunning else { return }
         openDisplayContent = buildOpenDisplayTab()
@@ -2305,6 +2585,11 @@ private struct DevicesState: Equatable {
     var airPlay: [String] = []
     var sidecar: [String] = []
     var displays: [String] = []
+    var autoConnect: [AutoConnectEntry] = []
+    /// The login window agent's status, as the list's last row shows it.
+    var loginAgent = ""
+    /// The receivers' keys and names, which the Connect Automatically list shows.
+    var receivers: [String] = []
 }
 
 /// What the Browser Stream tab shows of the server, to tell when it must be rebuilt.

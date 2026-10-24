@@ -333,7 +333,7 @@ final class OpenDisplayTests: XCTestCase {
     }
 
     func testACableTakesOverOnlyOnceItConnects() {
-        let sender = OpenDisplaySender()
+        let sender = OpenDisplaySender(store: MemoryOpenDisplayStore())
         let session = OpenDisplaySession(key: "A-1", name: "iPad", sender: sender)
         defer { session.end(reason: "test over") }
         let wifi = FakeChannel(.wifi)
@@ -368,7 +368,7 @@ final class OpenDisplayTests: XCTestCase {
     }
 
     func testAHelloFromAnotherReceiverLosesTheLink() {
-        let sender = OpenDisplaySender()
+        let sender = OpenDisplaySender(store: MemoryOpenDisplayStore())
         let session = OpenDisplaySession(key: "A-1", name: "iPad", sender: sender)
         defer { session.end(reason: "test over") }
         let wifi = FakeChannel(.wifi)
@@ -392,7 +392,7 @@ final class OpenDisplayTests: XCTestCase {
     }
 
     func testAHelloGivesACabledReceiverItsID() {
-        let sender = OpenDisplaySender()
+        let sender = OpenDisplaySender(store: MemoryOpenDisplayStore())
         sender.setOn(true, key: "usb:00008027-AB")
         defer { sender.forget(key: "A-1") }
         let session = OpenDisplaySession(key: "usb:00008027-AB", name: "iPad", sender: sender)
@@ -409,7 +409,7 @@ final class OpenDisplayTests: XCTestCase {
     }
 
     func testAReceiverInstalledAgainOnTheCableTakesItsNewID() {
-        let sender = OpenDisplaySender()
+        let sender = OpenDisplaySender(store: MemoryOpenDisplayStore())
         sender.setOn(true, key: "usb:00008027-CD")
         defer { sender.forget(key: "A-2") }
         let session = OpenDisplaySession(key: "usb:00008027-CD", name: "iPad", sender: sender)
@@ -482,5 +482,50 @@ final class OpenDisplayTests: XCTestCase {
         channel.onClose = { _ in closed.fulfill() }
         channel.start()
         wait(for: [closed], timeout: 10)
+    }
+
+    // MARK: - Stores
+
+    func testTheMemoryStoreKeepsTheOrderAndRenamesInPlace() {
+        let store = MemoryOpenDisplayStore(entries: [AutoConnectEntry(target: .openDisplay(key: "b")),
+                                                     AutoConnectEntry(target: .airPlay(name: "Den"))])
+        store.turnedOn = ["b", "usb:1", "a"]
+        XCTAssertEqual(store.toDial(hasOwnDisplay: false), ["b", "a", "usb:1"], "new ones after, in key order")
+        store.rename("usb:1", to: "c")
+        XCTAssertEqual(store.toDial(hasOwnDisplay: false), ["b", "a", "c"])
+        store.turnedOn = ["a", "c"]
+        XCTAssertEqual(store.toDial(hasOwnDisplay: false), ["a", "c"])
+        XCTAssertTrue(store.entries.contains { $0.target == .airPlay(name: "Den") }, "other kinds are left alone")
+    }
+
+    func testTheMemoryStoreDialsWhateverTheMode() {
+        let store = MemoryOpenDisplayStore(entries: [
+            AutoConnectEntry(target: .openDisplay(key: "a"), mode: .startup),
+            AutoConnectEntry(target: .openDisplay(key: "b"), onlyWithoutOwnDisplay: true)])
+        XCTAssertEqual(store.toDial(hasOwnDisplay: false), ["a", "b"])
+        XCTAssertEqual(store.toDial(hasOwnDisplay: true), ["a"])
+    }
+
+    func testTheDefaultsStoreIsTheConnectAutomaticallyList() {
+        AutoConnectList.entries = [AutoConnectEntry(target: .airPlay(name: "Den"))]
+        let store = DefaultsOpenDisplayStore()
+        store.turnedOn = ["k"]
+        XCTAssertEqual(AutoConnectList.entries, [AutoConnectEntry(target: .airPlay(name: "Den")),
+                                                 AutoConnectEntry(target: .openDisplay(key: "k"))])
+        store.rename("k", to: "id")
+        XCTAssertEqual(store.turnedOn, ["id"])
+        store.turnedOn = []
+        XCTAssertEqual(AutoConnectList.entries, [AutoConnectEntry(target: .airPlay(name: "Den"))])
+    }
+
+    func testASenderKeepsWhatItLearnsInItsStore() {
+        let store = MemoryOpenDisplayStore()
+        let sender = OpenDisplaySender(store: store)
+        sender.setOn(true, key: "k")
+        XCTAssertEqual(store.turnedOn, ["k"])
+        sender.setBitrate(kbps: 30_000)
+        XCTAssertEqual(store.bitrateKbps, 30_000)
+        sender.forget(key: "k")
+        XCTAssertTrue(store.turnedOn.isEmpty)
     }
 }

@@ -256,69 +256,6 @@ final class MoonlightStreamStats {
     }
 }
 
-/// Asks a stream's encoder for keyframes, for whoever needs one: a client that lost packets,
-/// a viewer joining or catching up, the stream itself. Requests go through
-/// MoonlightKeyFrameRequests: at most one keyframe a quarter second, none for a request a
-/// keyframe on its way answers, and none for one held for later that a keyframe answered
-/// meanwhile. A keyframe is made from the picture the caller gives at once, such as the last
-/// one while the screen is still, which brings no next frame; else from the next frame.
-final class MoonlightKeyFrameRequester {
-    /// The encoder, and the picture to make the keyframe from now, nil for the next frame.
-    /// Called once for each keyframe asked of the encoder.
-    typealias Source = () -> (encoder: MoonlightVideoEncoder?, picture: (buffer: CVPixelBuffer, time: CMTime)?)
-
-    private let lock = NSLock()
-    private var requests = MoonlightKeyFrameRequests()
-    /// Where requests held for later are made again.
-    private let queue: DispatchQueue
-
-    init(retryingOn queue: DispatchQueue) {
-        self.queue = queue
-    }
-
-    /// A request now; `roundTrip` is the client's in nanoseconds, nil for any other (see
-    /// MoonlightKeyFrameRequests). `source` is called with no lock held.
-    @discardableResult
-    func request(roundTrip: UInt64? = nil, from source: @escaping Source) -> MoonlightKeyFrameRequests.Decision {
-        handle(roundTrip: roundTrip, retry: false, source: source)
-    }
-
-    /// A keyframe came out, asked for or not.
-    func keyFrameSent() {
-        lock.lock()
-        requests.keyFrameSent(at: DispatchTime.now().uptimeNanoseconds)
-        lock.unlock()
-    }
-
-    /// A keyframe could not be sent; the next request is not covered by it.
-    func keyFrameDropped() {
-        lock.lock()
-        requests.keyFrameDropped()
-        lock.unlock()
-    }
-
-    @discardableResult
-    private func handle(roundTrip: UInt64?, retry: Bool, source: @escaping Source) -> MoonlightKeyFrameRequests.Decision {
-        let now = DispatchTime.now().uptimeNanoseconds
-        lock.lock()
-        let decision = retry ? requests.retry(at: now, roundTrip: roundTrip) : requests.request(at: now, roundTrip: roundTrip)
-        lock.unlock()
-        switch decision {
-        case .now:
-            let (encoder, picture) = source()
-            encoder?.requestKeyFrame()
-            if let picture { encoder?.encode(picture.buffer, at: picture.time) }
-        case .later(let wait):
-            queue.asyncAfter(deadline: .now() + .nanoseconds(Int(wait))) { [weak self] in
-                self?.handle(roundTrip: roundTrip, retry: true, source: source)
-            }
-        case .alreadyDue, .covered:
-            break
-        }
-        return decision
-    }
-}
-
 /// Learns where Moonlight wants video from its pings, and sends frames there, paced: a
 /// frame's packets go out spread at a few times the stream's bitrate rather than at once,
 /// as a burst at full speed overflows Wi-Fi queues and loses packets. Sending happens on a
