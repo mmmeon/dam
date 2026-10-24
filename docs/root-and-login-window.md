@@ -158,3 +158,26 @@ worked.
 2. `tools/loginprobe` at the login window: done (above). Capture, a virtual display and an
    MJPEG stream work; no remote input wanted there.
 3. Only if both work: the root daemon and the hand-off between the two agents.
+
+## The login window agent
+
+`DAMLoginAgent`, which DAM carries and installs from Settings (`LoginAgentInstaller.swift`),
+runs at every login window as root and shows it on a display of its own to:
+
+- **OpenDisplay receivers** set to connect At startup, which it dials over USB (`auto-connect.md`).
+- **Moonlight devices** allowed with "Login window" in Settings › Moonlight (2026-10-24):
+  - It runs DAM's own host with a copy of its key, certificate, ID and the devices allowed,
+    so a device finds the host it paired with and needs no new pairing. The key goes in a
+    folder only root may read (`LoginWindow/Moonlight`); `settings.plist` holds only what is public.
+  - Cable only. It serves connections from USB NCM links alone (`CableLinks.swift`) and
+    advertises over Bonjour on those links alone, so Wi-Fi devices never see it.
+  - No pairing, no input, no sound and no HDR (its capture is `CGDisplayStream`, SDR).
+  - Moonlight connects, not the agent, so the device's user taps the host. At sign-in the
+    stream ends, and a second tap reaches the user's DAM.
+  - Tried in the user session with DAM quit, the iPad on USB-C and its Wi-Fi on: the iPad
+    found the host on the cable and streamed a new display, 2.3 s from launch to picture.
+    Wi-Fi and loopback connections were cut, and pairing was refused.
+
+**Boot (2026-10-24):** started before the window server takes virtual displays, the agent's
+displays never come online. A display that doesn't is released and the agent exits, and
+launchd's new one works: 6 s from the first start to the iPad streaming.

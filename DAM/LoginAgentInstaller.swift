@@ -25,25 +25,39 @@ enum LoginAgentInstaller {
     }
 
     enum Status: Equatable {
-        /// No receiver connects at startup, and nothing is installed.
+        /// No receiver connects at startup, no Moonlight device may stream the login window, and
+        /// nothing is installed.
         case notNeeded
-        /// Receivers connect at startup, and nothing is installed.
+        /// Receivers connect at startup or a Moonlight device may stream the login window, and
+        /// nothing is installed.
         case notInstalled
-        /// Installed, but its receivers, their cable IDs or the agent are older than DAM's.
+        /// Installed, but its receivers, their cable IDs, its Moonlight devices or the agent
+        /// are older than DAM's.
         case needsUpdate
         case current
-        /// Installed, but no receiver connects at startup any more.
+        /// Installed, but there is nothing for it to do any more.
         case unneeded
     }
 
     /// What should be installed now: the receivers connected at startup and what DAM learned
-    /// of them; nil when there are none.
+    /// of them, and the Moonlight devices allowed; nil when there are none.
     static func wanted() -> LoginAgentSettings? {
         let store = DefaultsOpenDisplayStore()
         let settings = LoginAgentSettings.make(entries: AutoConnectList.entries, names: store.names,
                                                usbIDs: store.usbIDs, bonjourIDs: store.bonjourIDs,
-                                               bitrateKbps: OpenDisplaySender.bitrateKbps)
-        return settings.entries.isEmpty ? nil : settings
+                                               bitrateKbps: OpenDisplaySender.bitrateKbps, moonlight: wantedMoonlight())
+        return settings.isEmpty ? nil : settings
+    }
+
+    /// DAM's Moonlight host as the agent should run it, from the files it keeps; nil before
+    /// it has an identity or while no device may stream the login window.
+    static func wantedMoonlight(directory: URL = MoonlightHost.defaultDirectory) -> LoginAgentSettings.Moonlight? {
+        guard FileManager.default.fileExists(atPath: directory.appendingPathComponent(MoonlightHost.keyFile).path),
+              let certificate = try? Data(contentsOf: directory.appendingPathComponent(MoonlightHost.certificateFile)),
+              let data = try? Data(contentsOf: directory.appendingPathComponent(MoonlightHost.clientsFile)),
+              let clients = try? JSONDecoder().decode([MoonlightClient].self, from: data) else { return nil }
+        return .make(uniqueID: MoonlightHost.uniqueID, certificate: certificate, clients: clients,
+                     defaults: UserDefaults.dam.dictionaryRepresentation())
     }
 
     static func status() -> Status {
@@ -54,13 +68,20 @@ enum LoginAgentInstaller {
     }
 
     /// Whether what is installed does what `wanted` asks. The receivers, their order and how
-    /// they are found by cable count; names and the bitrate don't, as a stale one does no
-    /// harm and each would mean asking for the password again.
+    /// they are found by cable count, as do the Moonlight host and the devices it serves;
+    /// names, the bitrate and stream settings don't, as a stale one does no harm and each
+    /// would mean asking for the password again.
     static func status(wanted: LoginAgentSettings?, installed: LoginAgentSettings?, agentMatches: Bool) -> Status {
         guard let installed else { return wanted == nil ? .notNeeded : .notInstalled }
         guard let wanted else { return .unneeded }
         let same = installed.entries == wanted.entries && installed.usbIDs == wanted.usbIDs && agentMatches
+            && moonlightKey(installed.moonlight) == moonlightKey(wanted.moonlight)
         return same ? .current : .needsUpdate
+    }
+
+    /// What counts of the Moonlight host in `status`: who it is and whom it serves.
+    private static func moonlightKey(_ moonlight: LoginAgentSettings.Moonlight?) -> [Data]? {
+        moonlight.map { [Data($0.uniqueID.utf8), $0.certificate] + $0.clients.map(\.certificate) }
     }
 
     /// The receivers at startup the agent can't find by cable: they were never connected by
@@ -100,15 +121,25 @@ enum LoginAgentInstaller {
         return (try? PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)) ?? Data()
     }
 
-    /// The shell script root runs to put the files staged in `staging` in place.
-    static func installScript(staging: URL) -> String {
-        """
-        set -e
-        mkdir -p \(quoted(directory.path)) \(quoted(log.deletingLastPathComponent().path))
-        install -o root -g wheel -m 755 \(quoted(staging.appendingPathComponent("DAMLoginAgent").path)) \(quoted(installedAgent.path))
-        install -o root -g wheel -m 644 \(quoted(staging.appendingPathComponent("settings.plist").path)) \(quoted(LoginAgentSettings.url.path))
-        install -o root -g wheel -m 644 \(quoted(staging.appendingPathComponent("agent.plist").path)) \(quoted(launchAgent.path))
-        """
+    /// The shell script root runs to put the files staged in `staging` in place. With
+    /// `moonlight`, the Moonlight host's files go in a folder only root may read; without,
+    /// any left from before go.
+    static func installScript(staging: URL, moonlight: Bool = false) -> String {
+        let ml = LoginAgentSettings.moonlightDirectory
+        let moonlightFiles = [MoonlightHost.keyFile, MoonlightHost.certificateFile, MoonlightHost.clientsFile].map {
+            "install -o root -g wheel -m 600 \(quoted(staging.appendingPathComponent($0).path)) \(quoted(ml.appendingPathComponent($0).path))"
+        }
+        let moonlightLines = moonlight
+            ? ["rm -rf \(quoted(ml.path))", "mkdir -m 700 \(quoted(ml.path))"] + moonlightFiles
+            : ["rm -rf \(quoted(ml.path))"]
+        return ([
+            "set -e",
+            "mkdir -p \(quoted(directory.path)) \(quoted(log.deletingLastPathComponent().path))",
+            "install -o root -g wheel -m 755 \(quoted(staging.appendingPathComponent("DAMLoginAgent").path)) \(quoted(installedAgent.path))",
+            "install -o root -g wheel -m 644 \(quoted(staging.appendingPathComponent("settings.plist").path)) \(quoted(LoginAgentSettings.url.path))",
+        ] + moonlightLines + [
+            "install -o root -g wheel -m 644 \(quoted(staging.appendingPathComponent("agent.plist").path)) \(quoted(launchAgent.path))",
+        ]).joined(separator: "\n")
     }
 
     static let uninstallScript = """
@@ -129,15 +160,30 @@ enum LoginAgentInstaller {
         let staging: URL
         do {
             staging = try makeStaging()
-            try FileManager.default.copyItem(at: bundled, to: staging.appendingPathComponent("DAMLoginAgent"))
-            try settings.data.write(to: staging.appendingPathComponent("settings.plist"))
-            try launchAgentPlist().write(to: staging.appendingPathComponent("agent.plist"))
         } catch {
             return done(error.localizedDescription)
         }
-        runAsRoot(installScript(staging: staging), prompt: "DAM wants to show the login window on your devices.") { error in
+        do {
+            try FileManager.default.copyItem(at: bundled, to: staging.appendingPathComponent("DAMLoginAgent"))
+            try settings.data.write(to: staging.appendingPathComponent("settings.plist"))
+            try launchAgentPlist().write(to: staging.appendingPathComponent("agent.plist"))
+            if let moonlight = settings.moonlight {
+                // The key as DAM's host keeps it; the certificate and devices as wanted.
+                try FileManager.default.copyItem(at: MoonlightHost.defaultDirectory.appendingPathComponent(MoonlightHost.keyFile),
+                                                 to: staging.appendingPathComponent(MoonlightHost.keyFile))
+                try moonlight.certificate.write(to: staging.appendingPathComponent(MoonlightHost.certificateFile))
+                try JSONEncoder().encode(moonlight.clients).write(to: staging.appendingPathComponent(MoonlightHost.clientsFile))
+            }
+        } catch {
             try? FileManager.default.removeItem(at: staging)
-            if error == nil { liLog.notice("installed for \(settings.entries.count) receiver(s)") }
+            return done(error.localizedDescription)
+        }
+        runAsRoot(installScript(staging: staging, moonlight: settings.moonlight != nil),
+                  prompt: "DAM wants to show the login window on your devices.") { error in
+            try? FileManager.default.removeItem(at: staging)
+            if error == nil {
+                liLog.notice("installed for \(settings.entries.count) receiver(s), \(settings.moonlight?.clients.count ?? 0) Moonlight device(s)")
+            }
             done(error)
         }
     }

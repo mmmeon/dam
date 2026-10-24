@@ -28,10 +28,16 @@ shared=(
     OpenDisplaySender OpenDisplayTransport OpenDisplayProtocol OpenDisplayStore
     SharedScreenCapture DisplayStreamCapture StreamingDisplayModes DisplayRotation
     MoonlightVideoEncoder KeyFrameRequests H264OneReference HDRMetadata ByteOrder ControlSocketPath
+    MoonlightHost MoonlightStream MoonlightRTSP MoonlightProtocol MoonlightCrypto MoonlightFEC MoonlightPairing
+    MoonlightAudioEncoder MoonlightInput SpokenMessages CableLinks
 )
 sources=(${shared/#/$repo/DAM/} )
 sources=(${^sources}.swift $repo/DAMLoginAgent/*.swift)
-inputs=($sources $repo/DAMLoginAgent/Info.plist $repo/DAM/DAM-Bridging-Header.h $repo/DAM/CGVirtualDisplayPrivate.h $0)
+# ENet, for Moonlight's control stream, with the flags DAM's target gives it.
+enet=($repo/DAM/Vendor/enet/*.c)
+enet_flags=(-w -O2 -DHAS_FCNTL -DHAS_GETADDRINFO -DHAS_GETNAMEINFO -DHAS_INET_NTOP -DHAS_INET_PTON
+            -DHAS_MSGHDR_FLAGS -DHAS_POLL -DHAS_SOCKLEN_T -I$repo/DAM/Vendor/enet/include)
+inputs=($sources $enet $repo/DAMLoginAgent/Info.plist $repo/DAM/DAM-Bridging-Header.h $repo/DAM/CGVirtualDisplayPrivate.h $0)
 
 if [[ -x $out ]]; then
     stale=0
@@ -39,11 +45,17 @@ if [[ -x $out ]]; then
     (( stale )) || { print $out; exit 0 }
 fi
 
-DEVELOPER_DIR=${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer} \
-    xcrun swiftc -O -DLOGIN_AGENT -module-name DAMLoginAgent \
+export DEVELOPER_DIR=${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}
+objects=$(mktemp -d ${TMPDIR:-/tmp}/dam-loginagent-enet.XXXXXX)
+trap "rm -rf $objects" EXIT
+for file in $enet; do
+    xcrun clang -c $enet_flags -mmacosx-version-min=13.3 -o $objects/${file:t:r}.o $file
+done
+
+xcrun swiftc -O -DLOGIN_AGENT -module-name DAMLoginAgent -target $(uname -m)-apple-macos13.3 \
     -Xcc -I$repo/DAM/Vendor/enet/include -import-objc-header $repo/DAM/DAM-Bridging-Header.h \
     -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker $repo/DAMLoginAgent/Info.plist \
-    -o $out $sources
+    -o $out $sources $objects/*.o
 
 [[ -n $identity ]] || identity=$(security find-identity -v -p codesigning | awk -F'"' '/Apple Development/ { print $2; exit }')
 if [[ -n $identity ]]; then

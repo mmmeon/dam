@@ -27,19 +27,24 @@ struct MoonlightClient: Codable, Equatable {
     var lowLatency = true
     /// Whether its mouse, keyboard and text reach the Mac; see MoonlightInputInjector.
     var allowsInput = true
+    /// Whether it may stream the login window, over a cable, from the login window agent
+    /// (LoginAgentSettings.swift).
+    var showsLoginWindow = false
 
-    init(name: String, certificate: Data, paired: Date, lowLatency: Bool = true, allowsInput: Bool = true) {
+    init(name: String, certificate: Data, paired: Date, lowLatency: Bool = true, allowsInput: Bool = true,
+         showsLoginWindow: Bool = false) {
         self.name = name
         self.certificate = certificate
         self.paired = paired
         self.lowLatency = lowLatency
         self.allowsInput = allowsInput
+        self.showsLoginWindow = showsLoginWindow
     }
 
     // Saved under a key of its own since low-latency became the default, so that devices
     // saved with the old default (off) get it too; devices saved before either have none.
     private enum CodingKeys: String, CodingKey {
-        case name, certificate, paired, allowsInput
+        case name, certificate, paired, allowsInput, showsLoginWindow
         case lowLatency = "lowLatencyEncoding"
     }
 
@@ -50,6 +55,7 @@ struct MoonlightClient: Codable, Equatable {
         paired = try container.decode(Date.self, forKey: .paired)
         lowLatency = try container.decodeIfPresent(Bool.self, forKey: .lowLatency) ?? true
         allowsInput = try container.decodeIfPresent(Bool.self, forKey: .allowsInput) ?? true
+        showsLoginWindow = try container.decodeIfPresent(Bool.self, forKey: .showsLoginWindow) ?? false
     }
 }
 
@@ -129,7 +135,12 @@ final class MoonlightHost {
     /// Main10 then and DESCRIBE decides; without HDR the launch is offered `codecs`.
     static func offersHDR(offer: MoonlightHEVCOffer = MoonlightHost.hevcOffer,
                           support: [VideoCodec: VideoCodec.Support] = VideoCodec.support) -> Bool {
-        offer != .off && support[.hevc].map { $0.hardware && $0.main10 } == true
+        #if LOGIN_AGENT
+        // The agent's capture is SDR only (SharedScreenCapture.hdrMetadata).
+        return false
+        #else
+        return offer != .off && support[.hevc].map { $0.hardware && $0.main10 } == true
+        #endif
     }
 
     /// ServerCodecModeSupport's bit for HEVC Main10 (SCM_HEVC_MAIN10).
@@ -175,7 +186,7 @@ final class MoonlightHost {
     }
 
     private static let enabledKey = "\(AppIdentity.shortID).moonlight.enabled"
-    private static let uniqueIDKey = "\(AppIdentity.shortID).moonlight.uniqueID"
+    static let uniqueIDKey = "\(AppIdentity.shortID).moonlight.uniqueID"
     private static let allowsPairingKey = "\(AppIdentity.shortID).moonlight.allowsPairing"
     private static let isAdvertisedKey = "\(AppIdentity.shortID).moonlight.advertised"
 
@@ -247,6 +258,12 @@ final class MoonlightHost {
     var othersStream: (CGDirectDisplayID) -> Bool = { _ in false }
     /// Hands a display made here, that no device needs now, to the other server streaming it.
     var handOverDisplay: ((CGDirectDisplayID) -> Void)?
+    /// Whether a connection from `endpoint` is served at all: every one in DAM, only those
+    /// over a cable in the login window agent (CableLinks.swift).
+    var admits: (NWEndpoint) -> Bool = { _ in true }
+    /// Whether devices may pair here, as well as `allowsPairing` says: never in the login
+    /// window agent, where no one could type the PIN.
+    var pairs = true
 
     /// Asks the user for the PIN Moonlight shows on the device at `address`. The answer is
     /// nil when they decline. `isCurrent` says whether the request still waits for its PIN, for
@@ -400,7 +417,10 @@ final class MoonlightHost {
                     guard let self else { return "Stopped" }
                     return self.startStream(launch, config)
                 }
-                rtspListeners[slot].newConnectionHandler = { [weak rtsp] in rtsp?.accept($0) }
+                rtspListeners[slot].newConnectionHandler = { [weak self, weak rtsp] connection in
+                    guard self?.admits(connection.endpoint) == true else { return connection.cancel() }
+                    rtsp?.accept(connection)
+                }
             }
             for listener in listeners {
                 let secure = listener === httpsListener
@@ -427,7 +447,8 @@ final class MoonlightHost {
                 }
                 if listener === httpListener || listener === httpsListener {
                     listener.newConnectionHandler = { [weak self] connection in
-                        self?.http.accept(connection, secure: secure)
+                        guard let self, self.admits(connection.endpoint) else { return connection.cancel() }
+                        self.http.accept(connection, secure: secure)
                     }
                 }
                 listener.start(queue: .main)
@@ -485,6 +506,14 @@ final class MoonlightHost {
         onChange?()
     }
 
+    /// Sets whether `client` may stream the login window; the agent's copy is DAM's to update.
+    func setShowsLoginWindow(_ shows: Bool, for client: MoonlightClient) {
+        guard let index = clientIndex(for: client.certificate) else { return }
+        clients[index].showsLoginWindow = shows
+        saveClients()
+        onChange?()
+    }
+
     /// Sets whether `client`'s mouse, keyboard and text reach the Mac, its stream's at once.
     func setAllowsInput(_ allowsInput: Bool, for client: MoonlightClient) {
         guard let index = clientIndex(for: client.certificate) else { return }
@@ -494,7 +523,16 @@ final class MoonlightHost {
         onChange?()
     }
 
-    private static var hostName: String {
+    /// Whether display `id` is online. Not DisplayArrangement's list, which the login window
+    /// agent doesn't build with.
+    private static func isOnline(_ id: CGDirectDisplayID) -> Bool {
+        var ids = [CGDirectDisplayID](repeating: 0, count: 32)
+        var count: UInt32 = 0
+        CGGetOnlineDisplayList(32, &ids, &count)
+        return ids.prefix(Int(count)).contains(id)
+    }
+
+    static var hostName: String {
         Host.current().localizedName ?? ProcessInfo.processInfo.hostName
     }
 
@@ -715,7 +753,7 @@ final class MoonlightHost {
         }
         let listed = appID == Self.newDisplayAppID ? nil : apps.first(where: { $0.id == appID })?.displayID
         guard let current, current.appID == appID || current.displayID == listed,
-              DisplayArrangement.onlineDisplayIDs().contains(current.displayID) else { return makeNew() }
+              Self.isOnline(current.displayID) else { return makeNew() }
         mlLog.debug("\(resume ? "resume" : "launch", privacy: .public) on display \(current.displayID)")
         let reuse = { [weak self] in
             guard let self else { return }
@@ -847,7 +885,7 @@ final class MoonlightHost {
         guard waitingForPIN == nil, !othersPairing else {
             return reply(Self.xml(status: 409, message: "Already pairing", fields: ["paired": "0"]), to: connection)
         }
-        guard Self.allowsPairing else {
+        guard pairs && Self.allowsPairing else {
             mlLog.debug("pairing refused: new devices may not pair")
             return reply(Self.xml(status: 403, message: "\(AppIdentity.name) is not accepting new devices",
                                   fields: ["paired": "0"]), to: connection)
@@ -985,7 +1023,7 @@ final class MoonlightHost {
     // MARK: - Identity and storage
 
     /// The host's ID, which Moonlight keeps it by.
-    private static var uniqueID: String {
+    static var uniqueID: String {
         if let id = UserDefaults.dam.string(forKey: uniqueIDKey) { return id }
         let id = UUID().uuidString
         UserDefaults.dam.set(id, forKey: uniqueIDKey)
@@ -998,9 +1036,14 @@ final class MoonlightHost {
             .appendingPathComponent("Moonlight", isDirectory: true)
     }
 
-    private var keyURL: URL { directory.appendingPathComponent("host-key.der") }
-    private var certificateURL: URL { directory.appendingPathComponent("host-certificate.der") }
-    private var clientsURL: URL { directory.appendingPathComponent("paired-clients.json") }
+    /// The files a host keeps in its directory: its key, its certificate, its paired devices.
+    static let keyFile = "host-key.der"
+    static let certificateFile = "host-certificate.der"
+    static let clientsFile = "paired-clients.json"
+
+    private var keyURL: URL { directory.appendingPathComponent(Self.keyFile) }
+    private var certificateURL: URL { directory.appendingPathComponent(Self.certificateFile) }
+    private var clientsURL: URL { directory.appendingPathComponent(Self.clientsFile) }
 
     /// The host's key and certificate, made on first use and kept, as Moonlight pins the
     /// certificate it paired with. A new one unpairs every device.

@@ -28,6 +28,37 @@ final class LoginAgentSettingsTests: XCTestCase {
         XCTAssertThrowsError(try LoginAgentSettings.read(from: url.appendingPathExtension("missing")))
     }
 
+    func testOnlyDevicesAllowedGoToTheAgentAndWithoutInput() throws {
+        let clients = [MoonlightClient(name: "iPad", certificate: Data([1]), paired: Date(), allowsInput: true,
+                                       showsLoginWindow: true),
+                       MoonlightClient(name: "Phone", certificate: Data([2]), paired: Date())]
+        let defaults: [String: Any] = ["dam.moonlight.videoEncryption": "always", "dam.moonlight.hevc": "off",
+                                       "dam.moonlight.enabled": true, "dam.moonlight.allowsPairing": true,
+                                       "dam.moonlight.uniqueID": "A", "dam.other": 1]
+        let moonlight = try XCTUnwrap(LoginAgentSettings.Moonlight.make(uniqueID: "A", certificate: Data([9]),
+                                                                        clients: clients, defaults: defaults))
+        XCTAssertEqual(moonlight.clients.map(\.name), ["iPad"])
+        XCTAssertEqual(moonlight.clients.map(\.allowsInput), [false])
+        XCTAssertEqual(moonlight.defaults, ["dam.moonlight.videoEncryption": "always", "dam.moonlight.hevc": "off"])
+        XCTAssertNil(LoginAgentSettings.Moonlight.make(uniqueID: "A", certificate: Data([9]), clients: [clients[1]],
+                                                       defaults: [:]), "none allowed")
+    }
+
+    func testTheMoonlightHostReadsBackAsWrittenWithoutItsKey() throws {
+        let iPad = MoonlightClient(name: "iPad", certificate: Data([1]), paired: Date(timeIntervalSince1970: 0),
+                                   allowsInput: false, showsLoginWindow: true)
+        let settings = LoginAgentSettings(moonlight: .init(uniqueID: "A", certificate: Data([9]), clients: [iPad],
+                                                           defaults: ["dam.moonlight.hevc": "off"]))
+        XCTAssertFalse(settings.isEmpty)
+        XCTAssertTrue(LoginAgentSettings().isEmpty)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("agent-\(UUID().uuidString).plist")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try settings.data.write(to: url)
+        XCTAssertEqual(try LoginAgentSettings.read(from: url), settings)
+        let keys = try XCTUnwrap(settings.dictionary["moonlight"] as? [String: Any]).keys
+        XCTAssertEqual(Set(keys), ["uniqueID", "certificate", "clients", "defaults"], "no key: anyone may read it")
+    }
+
     func testTheAgentsStoreDialsByCableOnly() {
         let store = LoginAgentSettings(entries: [AutoConnectEntry(target: .openDisplay(key: "a"), mode: .startup)]).store()
         XCTAssertTrue(store.usbOnly)

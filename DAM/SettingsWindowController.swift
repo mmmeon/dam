@@ -609,7 +609,7 @@ final class SettingsWindowController: NSWindowController {
             case nil:    text = "Installed · not yet shown at the login window"
             }
         case .unneeded:
-            text = "Installed, though no receiver connects at startup"
+            text = "Installed, though nothing uses it now"
         }
         if let wanted = LoginAgentInstaller.wanted() {
             let unknown = LoginAgentInstaller.unknownByCable(wanted)
@@ -636,8 +636,9 @@ final class SettingsWindowController: NSWindowController {
             buttons.append(remove)
         }
         let label = smallLabel("Login window: \(text)")
-        label.toolTip = "OpenDisplay receivers set to connect At startup are shown the login window, over a cable only, " +
-                        "by an agent DAM installs. Installing, updating and uninstalling ask for an administrator's password."
+        label.toolTip = "OpenDisplay receivers set to connect At startup, and Moonlight devices allowed in the Moonlight " +
+                        "tab, are shown the login window, over a cable only, by an agent DAM installs. Installing, " +
+                        "updating and uninstalling ask for an administrator's password."
         let row = NSStackView(views: [label] + buttons)
         row.orientation = .horizontal
         row.spacing = 6
@@ -665,7 +666,8 @@ final class SettingsWindowController: NSWindowController {
             alert.runModal()
         }
         devicesContent = buildDevicesTab()
-        if selectedTab == TabID.devices { selectTab(TabID.devices) }
+        moonlightContent = buildMoonlightTab()
+        if selectedTab == TabID.devices || selectedTab == TabID.moonlight { selectTab(selectedTab) }
     }
 
     private func moveAutoConnect(at index: Int, by offset: Int) {
@@ -862,11 +864,23 @@ final class SettingsWindowController: NSWindowController {
                                      host?.setAllowsInput(allows, for: client)
                                      if allows { _ = VideoManager.hasAccessibilityAccess(prompting: true) }
                                  })
-            let forget = small(ClosureButton(title: "Forget") { [weak self] _ in self?.onForgetMoonlightClient?(client) })
+            let loginWindow = checkbox(title: "Login window", isOn: client.showsLoginWindow,
+                                       help: "Lets the device stream the login window over a USB cable, without " +
+                                             "input, from an agent \(AppIdentity.name) installs. Changing it asks " +
+                                             "for an administrator's password.",
+                                       action: { [weak self, weak host] shows in
+                                           host?.setShowsLoginWindow(shows, for: client)
+                                           self?.syncLoginAgent()
+                                       })
+            let forget = small(ClosureButton(title: "Forget") { [weak self] _ in
+                self?.onForgetMoonlightClient?(client)
+                // Or the agent's copy would still let it stream the login window.
+                if client.showsLoginWindow { self?.syncLoginAgent() }
+            })
             forget.toolTip     = "Unpairs \(client.name): it has to pair again to connect."
             let name = rowLabel(client.name)
             name.toolTip = "Paired \(client.paired.formatted(date: .abbreviated, time: .shortened))"
-            return [name, lowLatency, input, forget]
+            return [name, lowLatency, input, loginWindow, forget]
         }
         let deviceGrid = rowGrid(devices)
 
@@ -877,7 +891,7 @@ final class SettingsWindowController: NSWindowController {
             ("Encrypt Video:", [encryption]),
             ("HEVC:", [hevcPopup()]),
             ("Paired Devices:", [devices.isEmpty ? placeholderLabel("None yet") : deviceGrid]),
-        ], leftAligned: true)
+        ] + (loginWindowRow().map { [("", [$0])] } ?? []), leftAligned: true)
     }
 
     /// The browser stream: on or off, where from, pairing, the devices that may watch, how
@@ -2563,6 +2577,8 @@ private struct MoonlightState: Equatable {
     var isRunning = false
     var lastError: String?
     var clients: [Data] = []
+    /// The devices that may stream the login window, and the agent's status, as the tab shows them.
+    var loginWindow: [Bool] = []
 
     init(host: MoonlightHost?) {
         guard let host else { return }
@@ -2570,6 +2586,7 @@ private struct MoonlightState: Equatable {
         isRunning = host.isRunning
         lastError = host.lastError
         clients = host.clients.map(\.certificate)
+        loginWindow = host.clients.map(\.showsLoginWindow)
     }
 }
 
