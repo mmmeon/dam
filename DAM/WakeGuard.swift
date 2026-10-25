@@ -5,8 +5,9 @@
 //  bag, whose keys or lid wake it. Waking itself can't be stopped: the Mac's controller
 //  wakes it before macOS runs. So once it is locked and awake it has a few seconds to be
 //  unlocked: 10 after it is locked, 15 after the power button (Touch ID, which may take a
-//  second try) and 3 after the keyboard, trackpad or lid; keys pressed meanwhile don't add
-//  to them, but for a password typed on a display that is plugged in, for up to 45 s.
+//  second try, and after any wake by hand on a Mac that doesn't say which) and 3 after the
+//  keyboard, trackpad or lid; keys pressed meanwhile don't add to them, but for a password
+//  typed on a display that is plugged in, for up to 45 s.
 //
 //  A wake for anything else, as over the network, is left be, and so is a Mac in use from
 //  elsewhere: a stream of DAM's, a remote session, or another app keeping it awake. On
@@ -78,14 +79,18 @@ final class WakeGuard {
     }
 
     private func woke() {
-        let reason = Self.wakeReason()
-        wgLog.debug("woke: \(reason.isEmpty ? "no reason given" : reason, privacy: .public)")
-        guard Self.isLocked(), let allowed = Self.allowance(forWake: reason) else { return }
-        arm(allowed, "woken by \(reason)")
+        let reason = Self.wakeProperty("Wake Reason"), type = Self.wakeProperty("Wake Type")
+        wgLog.debug("woke: reason \(reason.isEmpty ? "none" : reason, privacy: .public), type \(type.isEmpty ? "none" : type, privacy: .public)")
+        guard Self.isLocked(), let allowed = Self.allowance(forWake: reason, type: type) else { return }
+        arm(allowed, "woken by \(reason.isEmpty ? type : reason)")
     }
 
     /// Seconds a wake for `reason` gives to unlock in; nil for a wake nobody at the Mac made.
-    static func allowance(forWake reason: String) -> TimeInterval? {
+    /// A Mac without a T2 chip, as a 2017 MacBook Pro, gives no reason, only the type a wake
+    /// by its keys, trackpad or power button has (pmset's "HID Activity"), which can't tell
+    /// the power button apart: it gets the power button's time, for Touch ID.
+    static func allowance(forWake reason: String, type: String) -> TimeInterval? {
+        guard !reason.isEmpty else { return type.contains("UserActivity") ? 15 : nil }
         if reason.contains("PowerButton") || reason.contains("PWRB") { return 15 }
         let byHand = ["Keyboard", "Touchpad", "Trackpad", "Lid", "LID0"]
         return byHand.contains { reason.contains($0) } ? 3 : nil
@@ -122,10 +127,11 @@ final class WakeGuard {
         (CGSessionCopyCurrentDictionary() as? [String: Any])?["CGSSessionScreenIsLocked"] as? Bool ?? false
     }
 
-    static func wakeReason() -> String {
+    /// The power manager's `name` for the last wake, as "Wake Reason" or "Wake Type"; empty without one.
+    static func wakeProperty(_ name: String) -> String {
         let root = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPMrootDomain"))
         defer { IOObjectRelease(root) }
-        return IORegistryEntryCreateCFProperty(root, "Wake Reason" as CFString, kCFAllocatorDefault, 0)?
+        return IORegistryEntryCreateCFProperty(root, name as CFString, kCFAllocatorDefault, 0)?
             .takeRetainedValue() as? String ?? ""
     }
 
