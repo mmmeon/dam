@@ -955,7 +955,14 @@ final class SettingsWindowController: NSWindowController {
 
         let devices: [[NSView]] = server.devices.all.map { device in
             let name = rowLabel(device.name)
-            name.toolTip = "\(device.kind == .link ? "Link" : "Paired") \(device.added.formatted(date: .abbreviated, time: .shortened))"
+            var tip = "\(device.kind == .link ? "Link" : "Paired") \(device.added.formatted(date: .abbreviated, time: .shortened))"
+            if let used = device.lastUsed {
+                tip += "; last used \(used.formatted(date: .abbreviated, time: .shortened))"
+            }
+            if device.kind == .browser {
+                tip += ". Forgotten after \(Int(WebStreamDevices.idleLimit / 86_400)) days unused."
+            }
+            name.toolTip = tip
             let kind = placeholderLabel(device.kind == .link ? "Link" : "Browser")
             var row: [NSView] = [name, kind]
             if device.kind == .link {

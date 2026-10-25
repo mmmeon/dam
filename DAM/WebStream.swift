@@ -300,6 +300,7 @@ final class WebStreamServer {
         } catch {
             return stop(error: error.localizedDescription)
         }
+        forgetIdleDevices()
         isRunning = true
         lastError = nil
         restarts.open { [weak self] in self?.listen() }
@@ -536,6 +537,14 @@ final class WebStreamServer {
         onChange?()
     }
 
+    /// Forgets browsers not used for `WebStreamDevices.idleLimit`.
+    private func forgetIdleDevices() {
+        let idle = devices.forgetIdle()
+        guard !idle.isEmpty else { return }
+        wsLog.debug("forgot \(idle.map(\.name).joined(separator: ", "), privacy: .public): not used for a long time")
+        onChange?()
+    }
+
     // MARK: Requests
 
     private var sessions: [WebStreamSession.Key: WebStreamSession] = [:]
@@ -566,6 +575,10 @@ final class WebStreamServer {
             wsLog.debug("refused \(request.address, privacy: .public): out of reach")
             return send(status: "403 Forbidden", body: Data("\(AppIdentity.name) does not stream to \(request.address).\n".utf8),
                         to: connection)
+        }
+        if let refusal = plainHTTPRefusal(request) {
+            wsLog.debug("refused \(request.address, privacy: .public): plain HTTP from off this Mac's networks")
+            return send(status: refusal.status, headers: refusal.headers, body: refusal.body, to: connection)
         }
         // Only pairing begins with a POST; anything else asked that way is no request of the page's.
         guard (request.method == "POST") == (request.path == "/pair/begin") else {
@@ -612,6 +625,7 @@ final class WebStreamServer {
             }
             sendJSON(["state": pending.declined ? "declined" : "waiting"], to: connection)
         case "/apps.json", "/stream.mp4":
+            forgetIdleDevices()
             // A link's token is the device's own, and looked at first; a cookie counts only on
             // one of the Mac's names.
             let linked = devices.device(token: request.query["token"])
@@ -628,6 +642,7 @@ final class WebStreamServer {
                 return send(status: "401 Unauthorized", body: Data("Pair this browser, or use a link from \(AppIdentity.name).\n".utf8),
                             to: connection)
             }
+            if devices.used(device) { onChange?() }
             if request.path == "/apps.json" {
                 // A browser paired over HTTPS before the cookie had a name of its own there
                 // has a Secure cookie by HTTP's name, which keeps HTTP's from being set: it
@@ -642,6 +657,26 @@ final class WebStreamServer {
         default:
             send(status: "404 Not Found", body: Data(), to: connection)
         }
+    }
+
+    /// What a request over plain HTTP from off the Mac's own networks gets in place of an
+    /// answer, as over a VPN or a forwarded port: there its token, cookie or pairing, and the
+    /// picture, would cross networks anyone along the way can read. The page is sent on to
+    /// HTTPS, without its query, so a token or QR key in it is not handed back; anything
+    /// else is refused, the certificate authority too, which taken in the clear could be
+    /// anyone's. Nil for HTTPS, and for plain HTTP on the Mac's networks.
+    func plainHTTPRefusal(_ request: Request) -> (status: String, headers: [String], body: Data)? {
+        guard !request.secure, !LocalNetwork.contains(request.peer) else { return nil }
+        let page = request.host.map { host -> String in
+            let name = IPv6Address(host) != nil ? "[\(host)]" : host
+            return "https://\(name):\(securePort.rawValue)/watch"
+        }
+        if let page, request.method == "GET", request.path == "/" || request.path == "/watch" {
+            return ("308 Permanent Redirect", ["Location: \(page)"], Data())
+        }
+        let address = page.map { " Use \($0)." } ?? ""
+        return ("403 Forbidden",
+                [], Data("From off this Mac's networks, \(AppIdentity.name) streams over HTTPS only.\(address)\n".utf8))
     }
 
     private func beginPairing(_ request: Request, on connection: NWConnection) {
