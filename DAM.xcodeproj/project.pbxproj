@@ -28,6 +28,7 @@
 		AA500B002F8D607C0090E796 /* ControlStripPresenterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA500A002F8D607C0090E796 /* ControlStripPresenterTests.swift */; };
 		AA600B002F8D607C0090E796 /* ScreenMirroringPanelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA600A002F8D607C0090E796 /* ScreenMirroringPanelTests.swift */; };
 		AA700B002F8D607C0090E796 /* MirrorPlanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA700A002F8D607C0090E796 /* MirrorPlanTests.swift */; };
+		AA700B992F8D607C0090E796 /* WakeGuardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA700A992F8D607C0090E796 /* WakeGuardTests.swift */; };
 		AA800B002F8D607C0090E796 /* MirrorPickerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA800A002F8D607C0090E796 /* MirrorPickerTests.swift */; };
 		AA900B002F8D607C0090E796 /* MainDisplayPickerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA900A002F8D607C0090E796 /* MainDisplayPickerTests.swift */; };
 		AA900B012F8D607C0090E796 /* ResolutionChoicesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA900A012F8D607C0090E796 /* ResolutionChoicesTests.swift */; };
@@ -61,6 +62,7 @@
 		AC0A00062F8D60780090E796 /* OpenDisplayStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0A00052F8D60780090E796 /* OpenDisplayStore.swift */; };
 		AC0A00082F8D60780090E796 /* DisplayStreamCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0A00072F8D60780090E796 /* DisplayStreamCapture.swift */; };
 		AB300C052F8D60790090E796 /* LocalBlackout.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB300B052F8D60790090E796 /* LocalBlackout.swift */; };
+		AB300C992F8D60790090E796 /* WakeGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB300B992F8D60790090E796 /* WakeGuard.swift */; };
 		AB300C042F8D60790090E796 /* SessionDetectors.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB300B042F8D60790090E796 /* SessionDetectors.swift */; };
 		AB300C022F8D60790090E796 /* ControlSocket.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB300B022F8D60790090E796 /* ControlSocket.swift */; };
 		AB300C012F8D60790090E796 /* RemoteSessions.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB300B012F8D60790090E796 /* RemoteSessions.swift */; };
@@ -169,6 +171,7 @@
 		AA500A002F8D607C0090E796 /* ControlStripPresenterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlStripPresenterTests.swift; sourceTree = "<group>"; };
 		AA600A002F8D607C0090E796 /* ScreenMirroringPanelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenMirroringPanelTests.swift; sourceTree = "<group>"; };
 		AA700A002F8D607C0090E796 /* MirrorPlanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirrorPlanTests.swift; sourceTree = "<group>"; };
+		AA700A992F8D607C0090E796 /* WakeGuardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WakeGuardTests.swift; sourceTree = "<group>"; };
 		AA800A002F8D607C0090E796 /* MirrorPickerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirrorPickerTests.swift; sourceTree = "<group>"; };
 		AA900A002F8D607C0090E796 /* MainDisplayPickerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainDisplayPickerTests.swift; sourceTree = "<group>"; };
 		AA900A012F8D607C0090E796 /* ResolutionChoicesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResolutionChoicesTests.swift; sourceTree = "<group>"; };
@@ -202,6 +205,7 @@
 		AC0A00052F8D60780090E796 /* OpenDisplayStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenDisplayStore.swift; sourceTree = "<group>"; };
 		AC0A00072F8D60780090E796 /* DisplayStreamCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayStreamCapture.swift; sourceTree = "<group>"; };
 		AB300B052F8D60790090E796 /* LocalBlackout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalBlackout.swift; sourceTree = "<group>"; };
+		AB300B992F8D60790090E796 /* WakeGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WakeGuard.swift; sourceTree = "<group>"; };
 		AB300B042F8D60790090E796 /* SessionDetectors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionDetectors.swift; sourceTree = "<group>"; };
 		AB300B022F8D60790090E796 /* ControlSocket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlSocket.swift; sourceTree = "<group>"; };
 		AB300B012F8D60790090E796 /* RemoteSessions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteSessions.swift; sourceTree = "<group>"; };
@@ -377,6 +381,7 @@
 				AC0A00052F8D60780090E796 /* OpenDisplayStore.swift */,
 				AC0A00072F8D60780090E796 /* DisplayStreamCapture.swift */,
 				AB300B052F8D60790090E796 /* LocalBlackout.swift */,
+				AB300B992F8D60790090E796 /* WakeGuard.swift */,
 				AB300B042F8D60790090E796 /* SessionDetectors.swift */,
 				AB300B022F8D60790090E796 /* ControlSocket.swift */,
 				AB300B012F8D60790090E796 /* RemoteSessions.swift */,
@@ -430,6 +435,7 @@
 				AA300A002F8D607C0090E796 /* VideoManagerFilterTests.swift */,
 				AA600A002F8D607C0090E796 /* ScreenMirroringPanelTests.swift */,
 				AA700A002F8D607C0090E796 /* MirrorPlanTests.swift */,
+				AA700A992F8D607C0090E796 /* WakeGuardTests.swift */,
 				AA800A002F8D607C0090E796 /* MirrorPickerTests.swift */,
 				AA900A002F8D607C0090E796 /* MainDisplayPickerTests.swift */,
 				AA900A012F8D607C0090E796 /* ResolutionChoicesTests.swift */,
@@ -650,6 +656,7 @@
 				AC0A00062F8D60780090E796 /* OpenDisplayStore.swift in Sources */,
 				AC0A00082F8D60780090E796 /* DisplayStreamCapture.swift in Sources */,
 				AB300C052F8D60790090E796 /* LocalBlackout.swift in Sources */,
+				AB300C992F8D60790090E796 /* WakeGuard.swift in Sources */,
 				AB300C042F8D60790090E796 /* SessionDetectors.swift in Sources */,
 				AB300C022F8D60790090E796 /* ControlSocket.swift in Sources */,
 				AB300C012F8D60790090E796 /* RemoteSessions.swift in Sources */,
@@ -699,6 +706,7 @@
 				AA300B002F8D607C0090E796 /* VideoManagerFilterTests.swift in Sources */,
 				AA600B002F8D607C0090E796 /* ScreenMirroringPanelTests.swift in Sources */,
 				AA700B002F8D607C0090E796 /* MirrorPlanTests.swift in Sources */,
+				AA700B992F8D607C0090E796 /* WakeGuardTests.swift in Sources */,
 				AA800B002F8D607C0090E796 /* MirrorPickerTests.swift in Sources */,
 				AA900B002F8D607C0090E796 /* MainDisplayPickerTests.swift in Sources */,
 				AA900B012F8D607C0090E796 /* ResolutionChoicesTests.swift in Sources */,

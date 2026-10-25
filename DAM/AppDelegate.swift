@@ -152,6 +152,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         openDisplay.hasOwnDisplay = { [weak self] in self?.videoManager.hasOwnDisplay() ?? true }
         if OpenDisplaySender.isEnabled { openDisplay.start() }
+        WakeGuard.shared.isInUse = { [weak self] in
+            guard let self else { return false }
+            return !self.videoManager.streamingDisplayIDs.isEmpty || !self.moonlightHost.launches.isEmpty
+                || self.webStream.viewerCount > 0 || self.sessionCoordinator?.sessions.isEmpty == false
+        }
+        WakeGuard.shared.start()
         AudioOutputPicker.shared.configure(audioManager: audioManager)
         MirrorPicker.shared.configure(videoManager: videoManager)
         MainDisplayPicker.shared.configure(videoManager: videoManager)

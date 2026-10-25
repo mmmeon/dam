@@ -316,6 +316,15 @@ final class SettingsWindowController: NSWindowController {
             ("Startup:", [
                 launchAtLoginCheckbox(),
             ]),
+            ("Sleep:", [
+                checkbox(title: "Sleep again when woken locked in a bag",
+                         isOn: WakeGuard.isEnabled,
+                         help: "On battery, a locked Mac woken by its keyboard, trackpad or lid goes back to " +
+                               "sleep after 3 seconds if not unlocked, after 15 by the power button (for Touch ID) " +
+                               "and 10 after it is locked. Not while streaming, in a remote session, or while " +
+                               "another app keeps the Mac awake; never on power.",
+                         action: { WakeGuard.shared.setEnabled($0) }),
+            ]),
             ("Screen Mirroring:", [extraRow]),
         ])
     }
