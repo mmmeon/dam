@@ -218,4 +218,17 @@ final class MirrorSetMembersTests: XCTestCase {
                                             slavesOf: { $0 == self.anchor ? [self.a] : [] }, anchorIDs: [anchor])
         XCTAssertTrue(ids.isEmpty)
     }
+
+    /// Where a virtual display mirroring another crashes WindowServer, none of DAM's is made
+    /// a slave; it may still be freed, and others may mirror it.
+    func testAVirtualDisplayIsNotMadeASlaveWhereThatCrashes() {
+        let virtual: CGDirectDisplayID = 9, physical: CGDirectDisplayID = 1
+        func may(_ slave: CGDirectDisplayID, _ master: CGDirectDisplayID, crashes: Bool) -> Bool {
+            VideoManager.mayMirror(slave, onto: master, virtualDisplaysMayMirror: !crashes, isVirtual: { $0 == virtual })
+        }
+        XCTAssertFalse(may(virtual, physical, crashes: true))
+        XCTAssertTrue(may(virtual, 0, crashes: true), "freed")
+        XCTAssertTrue(may(physical, virtual, crashes: true), "mirroring the virtual one")
+        XCTAssertTrue(may(virtual, physical, crashes: false), "before macOS 26")
+    }
 }

@@ -90,6 +90,8 @@ enum Spoken {
 
     static let displayNotConnected = String(localized: "The display is not connected", comment: "Display error")
     static let noOtherDisplayToMirror = String(localized: "No other display to mirror", comment: "Display error")
+    static let virtualDisplayCannotMirror = String(localized: "A virtual display can't mirror another on this macOS",
+                                                   comment: "Display error: on macOS 26, mirroring onto a virtual display crashes WindowServer")
     static let displayChangeFailed = String(localized: "The display change failed", comment: "Display error")
     static let displayChangeDidNotFinish = String(localized: "The display change did not finish", comment: "Display error")
     static let noOtherDisplay = String(localized: "No other display", comment: "Arrange or main display with only one display")

@@ -256,7 +256,7 @@ extension VideoManager {
         }
         streamingMirrorReleaseInFlight = true
         commitDisplayChange({ cfg in
-            for id in free { CGConfigureDisplayMirrorOfDisplay(cfg, id, CGDirectDisplayID(0)) }
+            for id in free { VideoManager.configureMirror(cfg, id, CGDirectDisplayID(0)) }
             for (id, mode) in modes { CGConfigureDisplayWithDisplayMode(cfg, id, mode, nil) }
             for (id, origin) in origins {
                 CGConfigureDisplayOrigin(cfg, id, Int32(origin.x.rounded()), Int32(origin.y.rounded()))
@@ -671,7 +671,7 @@ extension VideoManager {
         // For the session, as placing one is.
         let start = Self.configureDisplays(in: .forSession, { cfg in
             // WindowServer may mirror, move or resize the others for the new size.
-            if CGDisplayMirrorsDisplay(id) != master { CGConfigureDisplayMirrorOfDisplay(cfg, id, master) }
+            if CGDisplayMirrorsDisplay(id) != master { VideoManager.configureMirror(cfg, id, master) }
             _ = before.restore(in: cfg, excluding: [id])
             before.restoreModes(in: cfg, excluding: [id])
             // Always: given a new mode list, the display reports `target` as its mode already

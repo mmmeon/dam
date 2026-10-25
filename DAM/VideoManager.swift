@@ -543,6 +543,9 @@ final class VideoManager: ObservableObject {
     enum MirrorError: LocalizedError {
         case notConnected
         case noOtherDisplay
+        /// One of DAM's virtual displays would mirror another, which crashes WindowServer
+        /// on macOS 26 (see `mayMirror`).
+        case virtualDisplayCannotMirror
         case configuration(CGError)
         case timedOut
 
@@ -550,6 +553,7 @@ final class VideoManager: ObservableObject {
             switch self {
             case .notConnected:   return Spoken.displayNotConnected
             case .noOtherDisplay: return Spoken.noOtherDisplayToMirror
+            case .virtualDisplayCannotMirror: return Spoken.virtualDisplayCannotMirror
             case .configuration:  return Spoken.displayChangeFailed
             case .timedOut:       return Spoken.displayChangeDidNotFinish
             }
@@ -714,14 +718,14 @@ final class VideoManager: ObservableObject {
         case .extendSelf:
             mirrorLog.debug("toggleMirroring: extending slave \(id)")
             keepUserMirror([id], on: 0)
-            commitDisplayChange({ CGConfigureDisplayMirrorOfDisplay($0, id, CGDirectDisplayID(0)) }) {
+            commitDisplayChange({ VideoManager.configureMirror($0, id, CGDirectDisplayID(0)) }) {
                 finish($0.map { .extended })
             }
         case .extendSlaves(let mirroringThis):
             mirrorLog.debug("toggleMirroring: extending slaves \(mirroringThis) of \(id)")
             keepUserMirror(mirroringThis, on: 0)
             commitDisplayChange({ cfg in
-                for slave in mirroringThis { CGConfigureDisplayMirrorOfDisplay(cfg, slave, CGDirectDisplayID(0)) }
+                for slave in mirroringThis { VideoManager.configureMirror(cfg, slave, CGDirectDisplayID(0)) }
             }) { finish($0.map { .extended }) }
         case .noOtherDisplay:
             finish(.failure(.noOtherDisplay))
@@ -750,6 +754,7 @@ final class VideoManager: ObservableObject {
         let slaves = slaves.filter { $0.cgDisplayID != 0 && $0.cgDisplayID != id }
         guard !slaves.isEmpty else { return finish(.failure(.noOtherDisplay)) }
         let slaveIDs = slaves.map(\.cgDisplayID)
+        guard slaveIDs.allSatisfy({ Self.mayMirror($0, onto: id) }) else { return finish(.failure(.virtualDisplayCannotMirror)) }
         // An anchored iPad keeps its anchor, which the others mirror too: releasing it
         // would cost the iPad its sizes, and Sidecar does not hold up without one.
         let keptAnchor = display.isSidecar ? anchorID(driving: id) : nil
@@ -769,7 +774,7 @@ final class VideoManager: ObservableObject {
                     self?.keepUserMirror(slaveIDs.filter { CGDisplayMirrorsDisplay($0) != masterID }, on: 0)
                 }
                 self.commitDisplayChange({ cfg in
-                    for slave in slaveIDs { CGConfigureDisplayMirrorOfDisplay(cfg, slave, masterID) }
+                    for slave in slaveIDs { VideoManager.configureMirror(cfg, slave, masterID) }
                 }, lateFailure: undoKeep) { result in
                     // One that timed out may still land, and is kept as asked until it fails.
                     if case .failure(let error) = result, !error.mayStillLand { undoKeep() }
@@ -790,7 +795,7 @@ final class VideoManager: ObservableObject {
         mirrorLog.debug("extend: freeing \(toExtend)")
         keepUserMirror(Array(toExtend), on: 0)
         commitDisplayChange({ cfg in
-            for id in toExtend { CGConfigureDisplayMirrorOfDisplay(cfg, id, CGDirectDisplayID(0)) }
+            for id in toExtend { VideoManager.configureMirror(cfg, id, CGDirectDisplayID(0)) }
         }) { completion?($0) }
     }
 
@@ -1039,7 +1044,7 @@ final class VideoManager: ObservableObject {
         // Mirror changes have taken about the default 10 s on their own; the set is built only
         // once this one has landed, so it is given longer before it is given up on.
         commitDisplayChange({ cfg in
-            for id in toExtend { CGConfigureDisplayMirrorOfDisplay(cfg, id, CGDirectDisplayID(0)) }
+            for id in toExtend { VideoManager.configureMirror(cfg, id, CGDirectDisplayID(0)) }
         }, settle: 1.0, timeout: 30, completion: completion)
     }
 
@@ -1088,6 +1093,34 @@ final class VideoManager: ObservableObject {
         case unchanged
         /// It could not begin.
         case failed(CGError)
+    }
+
+    /// Whether WindowServer survives a virtual display made to mirror another. On macOS 26
+    /// it crashes (SimpleDisplay found it, in a VM); a display mirroring a virtual one, as
+    /// an iPad its anchor, is fine.
+    static var virtualDisplaysMayMirror: Bool {
+        if #available(macOS 26, *) { return false }
+        return true
+    }
+
+    /// Whether `slave` may be made to mirror `master` (0: given its own desktop): anything
+    /// but one of DAM's virtual displays made a slave where that crashes WindowServer.
+    static func mayMirror(_ slave: CGDirectDisplayID, onto master: CGDirectDisplayID,
+                          virtualDisplaysMayMirror: Bool = virtualDisplaysMayMirror,
+                          isVirtual: (CGDirectDisplayID) -> Bool = { CGDisplayVendorNumber($0) == anchorVendorID }) -> Bool {
+        master == 0 || virtualDisplaysMayMirror || !isVirtual(slave)
+    }
+
+    /// `CGConfigureDisplayMirrorOfDisplay`, but leaving out what `mayMirror` refuses: the
+    /// rest of the transaction goes ahead without it.
+    @discardableResult
+    static func configureMirror(_ cfg: CGDisplayConfigRef, _ slave: CGDirectDisplayID,
+                                _ master: CGDirectDisplayID) -> CGError {
+        guard mayMirror(slave, onto: master) else {
+            mirrorLog.error("left out: virtual display \(slave) mirroring \(master), which crashes WindowServer here")
+            return .illegalArgument
+        }
+        return CGConfigureDisplayMirrorOfDisplay(cfg, slave, master)
     }
 
     /// One display configuration transaction: begins it and lets `queue` fill it. When `queue`
@@ -1267,12 +1300,16 @@ final class VideoManager: ObservableObject {
         }
         // The old master and every other member of the set come to mirror the new master.
         let others = slaves(of: master).filter { $0 != display.cgDisplayID }
+        guard ([master] + others).allSatisfy({ Self.mayMirror($0, onto: display.cgDisplayID) }) else {
+            completion?(.failure(.virtualDisplayCannotMirror))
+            return
+        }
         mirrorLog.debug("setAsOptimizedDisplay: \(display.cgDisplayID) replaces \(master); others \(others)")
         keepUserMirror([display.cgDisplayID], on: 0)
         keepUserMirror([master] + others, on: display.cgDisplayID)
         commitDisplayChange({ cfg in
-            CGConfigureDisplayMirrorOfDisplay(cfg, master, display.cgDisplayID)
-            for other in others { CGConfigureDisplayMirrorOfDisplay(cfg, other, display.cgDisplayID) }
+            VideoManager.configureMirror(cfg, master, display.cgDisplayID)
+            for other in others { VideoManager.configureMirror(cfg, other, display.cgDisplayID) }
         }) {
             if case .failure(let error) = $0 {
                 mirrorLog.error("setAsOptimizedDisplay '\(display.name)': \(String(describing: error))")
@@ -1323,6 +1360,13 @@ final class VideoManager: ObservableObject {
             completion?(.success(()))
             return
         }
+        // Promoting it below would make its master mirror it.
+        let mirrored = CGDisplayMirrorsDisplay(cgDisplayID)
+        guard mirrored == 0 || Self.mayMirror(mirrored, onto: cgDisplayID) else {
+            undoKeep()
+            completion?(.failure(.virtualDisplayCannotMirror))
+            return
+        }
         // WindowServer re-lays out the displays for the new size; the arrangement goes back
         // once it has.
         let before = currentLayout()
@@ -1331,7 +1375,7 @@ final class VideoManager: ObservableObject {
             // ("Optimize for this display") so the resolution change applies to it.
             let masterID = CGDisplayMirrorsDisplay(cgDisplayID)
             if masterID != CGDirectDisplayID(0) {
-                CGConfigureDisplayMirrorOfDisplay(cfg, masterID, cgDisplayID)
+                VideoManager.configureMirror(cfg, masterID, cgDisplayID)
             }
             CGConfigureDisplayWithDisplayMode(cfg, cgDisplayID, cgMode, nil)
         }, settle: 0.3, lateFailure: undoKeep) { [weak self] result in
