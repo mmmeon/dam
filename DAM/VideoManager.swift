@@ -229,6 +229,9 @@ final class VideoManager: ObservableObject {
     /// The layout to keep after a streaming display was added or removed, and until when.
     /// WindowServer can change resolutions for the new set some seconds later.
     var streamingSettle: (arrangement: DisplayArrangement, until: Date)?
+    /// Settles begun (beginStreamingSettle): what a change that failed changed in one is put
+    /// back only in that one, whose time can start again meanwhile.
+    var streamingSettlesBegun = 0
     /// The streaming display just removed, while WindowServer has yet to take it off: the
     /// settle's time runs from when the display is gone, not from when it was let go.
     var streamingSettleAwaitsRemoval: CGDirectDisplayID?
@@ -839,7 +842,7 @@ final class VideoManager: ObservableObject {
     @discardableResult
     func keepUserMode(_ mode: CGDisplayMode, for id: CGDirectDisplayID,
                       keepingSleepMode: Bool = false) -> () -> Void {
-        let settleUntil = streamingSettle?.until
+        let settle = streamingSettlesBegun
         let settleMode = streamingSettle?.arrangement.modes[id]
         let change = streamingChangesBegun
         let changeMode = streamingChangeLayout?.modes[id]
@@ -859,7 +862,7 @@ final class VideoManager: ObservableObject {
 
         return { [weak self] in
             guard let self else { return }
-            if self.streamingSettle?.until == settleUntil { self.streamingSettle?.arrangement.modes[id] = settleMode }
+            if self.streamingSettlesBegun == settle { self.streamingSettle?.arrangement.modes[id] = settleMode }
             if self.streamingChangesBegun == change { self.streamingChangeLayout?.modes[id] = changeMode }
             if !self.holdsStreamingArrangement { self.streamingArrangement?.modes[id] = arrangementMode }
             for (name, kept) in anchorModes { self.virtualAnchorArrangements[name]?.modes[id] = kept }
@@ -879,7 +882,7 @@ final class VideoManager: ObservableObject {
     func keepUserOrigins(_ origins: [CGDirectDisplayID: CGPoint]) -> () -> Void {
         let ids = Set(origins.keys)
         let held = { (kept: DisplayArrangement?) in kept?.origins.filter { ids.contains($0.key) } ?? [:] }
-        let settleUntil = streamingSettle?.until
+        let settle = streamingSettlesBegun
         let settleOrigins = held(streamingSettle?.arrangement)
         let change = streamingChangesBegun
         let changeOrigins = held(streamingChangeLayout)
@@ -897,7 +900,7 @@ final class VideoManager: ObservableObject {
 
         return { [weak self] in
             guard let self else { return }
-            if self.streamingSettle?.until == settleUntil {
+            if self.streamingSettlesBegun == settle {
                 self.streamingSettle = self.streamingSettle.map { ($0.arrangement.replacingOrigins(settleOrigins), $0.until) }
             }
             if self.streamingChangesBegun == change {
@@ -953,7 +956,8 @@ final class VideoManager: ObservableObject {
             }
         }
         let byChoice = streamingDisplayIDs.contains(ownID)
-        let settleBefore = streamingSettle
+        let settleBefore = streamingSettle?.arrangement
+        let settle = streamingSettlesBegun
         let change = streamingChangesBegun
         let changeLayoutBefore = streamingChangeLayout
         let choose = { [weak self] in
@@ -984,7 +988,9 @@ final class VideoManager: ObservableObject {
                 mirrorLog.error("setMainDisplay '\(display.name)': \(String(describing: error))")
                 // Not made main after all; the layout kept is put back unless replaced meanwhile.
                 self?.streamingDisplayIsMainByChoice = wasByChoice
-                if self?.streamingSettle?.until == settleBefore?.until { self?.streamingSettle = settleBefore }
+                if self?.streamingSettlesBegun == settle, let settleBefore {
+                    self?.streamingSettle = self?.streamingSettle.map { (settleBefore, $0.until) }
+                }
                 // Only while nothing has written it since, as placing the display does.
                 if self?.streamingChangesBegun == change, self?.streamingChangeLayoutWrites == writesAfterChoosing {
                     self?.streamingChangeLayout = changeLayoutBefore

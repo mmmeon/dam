@@ -509,7 +509,7 @@ extension VideoManager {
         if streamingDisplays.isEmpty { streamingArrangement = nil }
         // Its 5 s start once WindowServer has taken the display off (startSettleOnceRemoved),
         // which can take seconds; in 15 s at the most.
-        streamingSettle = arrangement.map { ($0, Date().addingTimeInterval(15)) }
+        beginStreamingSettle(arrangement, for: 15)
         streamingSettleAwaitsRemoval = arrangement.map { _ in last.id }
         streamingChangeInFlight = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.mergeDevices() }
@@ -527,6 +527,12 @@ extension VideoManager {
     private func beginStreamingChange(from layout: DisplayArrangement) {
         streamingChangesBegun += 1
         streamingChangeLayout = layout
+    }
+
+    /// Keeps `arrangement` for `seconds` from now, as a settle of its own.
+    func beginStreamingSettle(_ arrangement: DisplayArrangement?, for seconds: TimeInterval) {
+        streamingSettle = arrangement.map { ($0, Date().addingTimeInterval(seconds)) }
+        streamingSettlesBegun += 1
     }
 
     /// Starts the settle's 5 s after a removal once the display is no longer online.
@@ -549,7 +555,11 @@ extension VideoManager {
     /// other displays onto the streaming one, a second or so after DAM's own commit.
     func reassertStreamingLayout() {
         guard !streamingReassertInFlight, let settle = streamingSettle else { return }
-        guard settle.until > Date() else { streamingSettle = nil; return }
+        guard settle.until > Date() else {
+            streamingSettle = nil
+            streamingSettleAwaitsRemoval = nil
+            return
+        }
         let arrangement = settle.arrangement
         // Not what the anchors keep: the layout can be from before an anchor came or went.
         let excluded = anchorManagedDisplayIDs
@@ -674,7 +684,7 @@ extension VideoManager {
             // Failed, it still runs its old mode, which the layout taken after the new list
             // doesn't hold.
             let kept = done ? others.adding(id, origin: origin, mode: target, mirroring: master) : others
-            self.streamingSettle = (kept, Date().addingTimeInterval(5))
+            self.beginStreamingSettle(kept, for: 5)
             self.streamingSettleAwaitsRemoval = nil
             self.reassertStreamingLayout()
             self.mergeDevices()
@@ -780,7 +790,7 @@ extension VideoManager {
         streamingChangeLayout = placed
         let settle = { [weak self] in
             // WindowServer can still change the others' resolutions for the new set.
-            self?.streamingSettle = (self?.streamingChangeLayout ?? placed, Date().addingTimeInterval(5))
+            self?.beginStreamingSettle(self?.streamingChangeLayout ?? placed, for: 5)
             self?.streamingSettleAwaitsRemoval = nil
             self?.reassertStreamingLayout()
             self?.mergeDevices()

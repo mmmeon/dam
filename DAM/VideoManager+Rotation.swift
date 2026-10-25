@@ -208,9 +208,9 @@ extension VideoManager {
         guard online.contains(standInID), online.contains(screenID),
               let (layout, swapped) = Self.swappedLayout(standInID, screenID, settle: activeStreamingSettle,
                                                          live: DisplayArrangement.current()) else { return }
-        let until = Date().addingTimeInterval(5)
-        streamingSettle = (layout, until)
-        streamingSettleAwaitsRemoval = nil
+        // A removal still waiting for its display to go starts this one's time again then.
+        beginStreamingSettle(layout, for: 5)
+        let settle = streamingSettlesBegun
         let start = Self.configureDisplays(in: .permanently, { cfg in
             for (id, origin) in swapped { CGConfigureDisplayOrigin(cfg, id, Int32(origin.x), Int32(origin.y)) }
             return true
@@ -219,7 +219,7 @@ extension VideoManager {
             guard let self else { return }
             // Its 5 s from when the swap has landed, which the commit can take seconds to;
             // not for a settle another change has set since.
-            if err == .success, self.streamingSettle?.until == until {
+            if err == .success, self.streamingSettlesBegun == settle {
                 self.streamingSettle = self.streamingSettle.map { ($0.arrangement, Date().addingTimeInterval(5)) }
             }
             self.streamingReassertInFlight = false
