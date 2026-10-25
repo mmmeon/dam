@@ -1260,4 +1260,17 @@ final class MoonlightHostTests: XCTestCase {
         }
         socket.close()
     }
+
+    /// Each of the Mac's own displays has an app ID by its unit number; two with one unit
+    /// number, as a virtual display made again can, still get IDs of their own.
+    func testOwnDisplaysGetAppIDsOfTheirOwn() {
+        let units: [CGDirectDisplayID: UInt32] = [1: 0, 7: 2, 9: 2, 12: 3]
+        let ids = MoonlightHost.ownDisplayAppIDs([12, 9, 7, 1], unitNumber: { units[$0]! })
+        XCTAssertEqual(ids[1], 1000)
+        XCTAssertEqual(ids[7], 1002, "the lower display ID keeps the unit's")
+        XCTAssertEqual(ids[9], 1003, "the next one free")
+        XCTAssertEqual(ids[12], 1004, "taken, so after it")
+        XCTAssertEqual(Set(ids.values).count, 4)
+        XCTAssertEqual(MoonlightHost.ownDisplayAppIDs([1], unitNumber: { units[$0]! }), [1: 1000])
+    }
 }

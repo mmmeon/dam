@@ -225,9 +225,24 @@ final class MoonlightHost {
     }
     private static let listsOwnDisplaysKey = "\(AppIdentity.shortID).moonlight.ownDisplays"
 
-    /// The app ID of one of the Mac's own displays, by its unit number, which stays with the
-    /// display while the Mac's set of displays does; past streaming displays' and New Display's.
-    static func ownDisplayAppID(_ id: CGDirectDisplayID) -> Int { 1000 + Int(CGDisplayUnitNumber(id)) }
+    /// The app IDs of the Mac's own displays, by unit number, which stays with a display
+    /// while the Mac's set of displays does; past streaming displays' and New Display's. A
+    /// virtual display made again can take a unit number another display has (as OpenDisplay
+    /// found), and two apps can't share an ID: the display with the lower ID keeps it, and the
+    /// other takes the next one free.
+    static func ownDisplayAppIDs(_ ids: [CGDirectDisplayID],
+                                 unitNumber: (CGDirectDisplayID) -> UInt32 = CGDisplayUnitNumber)
+        -> [CGDirectDisplayID: Int] {
+        var appIDs: [CGDirectDisplayID: Int] = [:]
+        var taken: Set<Int> = []
+        for id in Set(ids).sorted() {
+            var appID = 1000 + Int(unitNumber(id))
+            while taken.contains(appID) { appID += 1 }
+            taken.insert(appID)
+            appIDs[id] = appID
+        }
+        return appIDs
+    }
 
     /// Whether it hosts, or is to once the ports are free.
     private(set) var isRunning = false

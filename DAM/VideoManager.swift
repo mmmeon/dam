@@ -229,6 +229,9 @@ final class VideoManager: ObservableObject {
     /// The layout to keep after a streaming display was added or removed, and until when.
     /// WindowServer can change resolutions for the new set some seconds later.
     var streamingSettle: (arrangement: DisplayArrangement, until: Date)?
+    /// The streaming display just removed, while WindowServer has yet to take it off: the
+    /// settle's time runs from when the display is gone, not from when it was let go.
+    var streamingSettleAwaitsRemoval: CGDirectDisplayID?
     /// Whether that layout is being put back; later changes wait for the one it causes.
     var streamingReassertInFlight = false
     /// The layout the addition or resize under way puts the displays back to: the one from
@@ -400,6 +403,7 @@ final class VideoManager: ObservableObject {
         reconfigureWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             self?.reassertAnchorLayout()
+            self?.startSettleOnceRemoved()
             self?.reassertStreamingLayout()
             self?.mergeDevices()
             self?.noteDisplaySetChanged()
