@@ -663,9 +663,9 @@ final class WebStreamTests: XCTestCase {
                 secure: secure, peer: .hostPort(host: NWEndpoint.Host(address), port: 50000)))
         }
         let page = try XCTUnwrap(refusal("/watch"))
-        XCTAssertEqual(page.status, "308 Permanent Redirect")
+        XCTAssertEqual(page.status, "307 Temporary Redirect")
         XCTAssertEqual(page.headers, ["Location: https://mac.example.com:\(server.securePort.rawValue)/watch"])
-        XCTAssertEqual(refusal("/")?.status, "308 Permanent Redirect")
+        XCTAssertEqual(refusal("/")?.status, "307 Temporary Redirect")
         XCTAssertEqual(refusal("/watch", host: "[2001:db8::1]:47995")?.headers,
                        ["Location: https://[2001:db8::1]:\(server.securePort.rawValue)/watch"])
         for path in ["/stream.mp4", "/apps.json", "/ca.cer", "/pair/wait"] {

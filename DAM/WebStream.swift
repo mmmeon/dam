@@ -672,7 +672,9 @@ final class WebStreamServer {
             return "https://\(name):\(securePort.rawValue)/watch"
         }
         if let page, request.method == "GET", request.path == "/" || request.path == "/watch" {
-            return ("308 Permanent Redirect", ["Location: \(page)"], Data())
+            // Not for good: the HTTPS port may not be the one forwarded, and a browser keeps a
+            // permanent one.
+            return ("307 Temporary Redirect", ["Location: \(page)"], Data())
         }
         let address = page.map { " Use \($0)." } ?? ""
         return ("403 Forbidden",

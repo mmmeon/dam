@@ -27,4 +27,22 @@ final class WakeGuardTests: XCTestCase {
         XCTAssertNil(WakeGuard.allowance(forWake: "RTC (Alarm)", byUser: nil))
         XCTAssertNil(WakeGuard.allowance(forWake: "", byUser: nil))
     }
+
+    /// A lock's time doesn't run while the Mac sleeps, and a wake nobody at the Mac made
+    /// ends any time running, so it isn't slept straight away.
+    func testNoTimeRunsThroughASleepOrPastAWakeNobodyMade() {
+        let guarded = WakeGuard()
+        guarded.arm(10, "locked")
+        guarded.wentToSleep()
+        XCTAssertFalse(guarded.isWatching, "asleep")
+
+        guarded.arm(10, "locked")
+        guarded.woke(reason: "ARPT", type: "Network", byUser: false, locked: true)
+        XCTAssertFalse(guarded.isWatching, "Wake on LAN")
+
+        guarded.woke(reason: "SPIT", type: "User", byUser: true, locked: true)
+        XCTAssertTrue(guarded.isWatching, "a key")
+        guarded.woke(reason: "SPIT", type: "User", byUser: true, locked: false)
+        XCTAssertFalse(guarded.isWatching, "unlocked")
+    }
 }

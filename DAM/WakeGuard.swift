@@ -73,6 +73,12 @@ final class WakeGuard {
                                                            object: nil, queue: .main) { [weak self] _ in
             self?.woke()
         }))
+        // Time asleep isn't time not unlocked: a lock just before sleep would otherwise come
+        // due the moment the Mac wakes, for any wake.
+        observers.append((workspace, workspace.addObserver(forName: NSWorkspace.willSleepNotification,
+                                                           object: nil, queue: .main) { [weak self] _ in
+            self?.wentToSleep()
+        }))
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.check() }
         if Self.isLocked() { arm(10, "locked at start") }
         wgLog.debug("started")
@@ -91,9 +97,25 @@ final class WakeGuard {
         let reason = Self.wakeProperty("Wake Reason"), type = Self.wakeProperty("Wake Type")
         let byUser = Self.userTriggeredFullWake()
         wgLog.debug("woke: reason \(reason.isEmpty ? "none" : reason, privacy: .public), type \(type.isEmpty ? "none" : type, privacy: .public), by a user \(byUser.map { $0 ? "yes" : "no" } ?? "not said", privacy: .public)")
-        guard Self.isLocked(), let allowed = Self.allowance(forWake: reason, byUser: byUser) else { return }
+        woke(reason: reason, type: type, byUser: byUser, locked: Self.isLocked())
+    }
+
+    /// Watches the wake if someone at the Mac made it and it is locked; otherwise watches
+    /// nothing, whatever was watched before.
+    func woke(reason: String, type: String, byUser: Bool?, locked: Bool) {
+        guard locked, let allowed = Self.allowance(forWake: reason, byUser: byUser) else {
+            window = nil
+            return
+        }
         arm(allowed, "woken by \(reason.isEmpty ? type : reason)")
     }
+
+    func wentToSleep() {
+        window = nil
+    }
+
+    /// Whether a time to unlock in is running.
+    var isWatching: Bool { window != nil }
 
     /// Seconds a wake for `reason` gives to unlock in; nil for a wake nobody at the Mac made.
     /// `byUser` is IOPMUserTriggeredFullWake; without it, the reason alone says.
@@ -110,13 +132,18 @@ final class WakeGuard {
         return byHand.contains { reason.contains($0) } ? 3 : nil
     }
 
-    private func arm(_ allowed: TimeInterval, _ why: String) {
+    func arm(_ allowed: TimeInterval, _ why: String) {
         window = (Date(), allowed, why)
         typingLogged = false
     }
 
     private func check() {
         guard let current = window else { return }
+        // Switched out, the session's lock is not the one at the Mac.
+        guard Self.isOnConsole() else {
+            window = nil
+            return wgLog.debug("not sleeping: another user is at the Mac")
+        }
         guard Self.isLocked() else {
             // As loginwindow does itself for a wake within the password delay after the
             // display turned off.
@@ -124,7 +151,8 @@ final class WakeGuard {
             return wgLog.debug("not sleeping: unlocked")
         }
         let elapsed = Date().timeIntervalSince(current.since)
-        // A password typed on a display plugged in, when Touch ID fails.
+        // A password typed on a display plugged in, when Touch ID fails; the Mac's own isn't
+        // one, as it lights up in a bag as well.
         if Self.hasPhysicalDisplay(), Self.secondsSinceInput() < 3, elapsed < 45 {
             if !typingLogged { wgLog.debug("waiting: typing on a display") }
             typingLogged = true
@@ -149,6 +177,11 @@ final class WakeGuard {
 
     static func isLocked() -> Bool {
         (CGSessionCopyCurrentDictionary() as? [String: Any])?["CGSSessionScreenIsLocked"] as? Bool ?? false
+    }
+
+    /// Whether this session is the one at the Mac, not one switched out.
+    static func isOnConsole() -> Bool {
+        (CGSessionCopyCurrentDictionary() as? [String: Any])?[kCGSessionOnConsoleKey] as? Bool ?? true
     }
 
     /// Whether the kernel took the last full wake for one by someone at the Mac; nil if it
@@ -177,13 +210,16 @@ final class WakeGuard {
         return (nanoseconds?.doubleValue ?? .infinity) / 1_000_000_000
     }
 
-    /// Whether a display other than DAM's own virtual ones is online, to type a password on.
+    /// Whether a display plugged in is online, to type a password on: not the Mac's own, nor
+    /// one of DAM's virtual ones.
     static func hasPhysicalDisplay() -> Bool {
         var count: UInt32 = 0
         guard CGGetOnlineDisplayList(0, nil, &count) == .success, count > 0 else { return false }
         var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
         CGGetOnlineDisplayList(count, &ids, &count)
-        return ids.prefix(Int(count)).contains { CGDisplayVendorNumber($0) != VideoManager.anchorVendorID }
+        return ids.prefix(Int(count)).contains {
+            CGDisplayIsBuiltin($0) == 0 && CGDisplayVendorNumber($0) != VideoManager.anchorVendorID
+        }
     }
 
     static func isOnBattery() -> Bool {
