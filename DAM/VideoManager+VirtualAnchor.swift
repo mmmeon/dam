@@ -137,7 +137,7 @@ struct DisplayArrangement {
         }
         for (id, master) in changes {
             vdLog.debug("restore: display \(id) mirror master \(CGDisplayMirrorsDisplay(id)) → \(master)")
-            CGConfigureDisplayMirrorOfDisplay(cfg, id, master)
+            VideoManager.configureMirror(cfg, id, master)
         }
         let moved = restoreOrigins(in: cfg, excluding: excluded, mirrorOf: { changes[$0] ?? CGDisplayMirrorsDisplay($0) })
         return moved || !changes.isEmpty
@@ -806,7 +806,7 @@ extension VideoManager {
             if airPlayCGID != 0 {
                 // The displays the user set to mirror the iPad go on mirroring it, without the anchor.
                 for id in setSlaves where online.contains(id) && id != airPlayCGID {
-                    CGConfigureDisplayMirrorOfDisplay(cfg, id, airPlayCGID)
+                    VideoManager.configureMirror(cfg, id, airPlayCGID)
                     changed = true
                 }
             }
@@ -1166,7 +1166,7 @@ extension VideoManager {
         let hadExistingMirror = existingMirror != CGDirectDisplayID(0) && anchorPendingSlaves[name] == nil
         if hadExistingMirror {
             let start = Self.configureDisplays(in: .forAppOnly, { cfg in
-                CGConfigureDisplayMirrorOfDisplay(cfg, airPlayID, CGDirectDisplayID(0))
+                VideoManager.configureMirror(cfg, airPlayID, CGDirectDisplayID(0))
                 return true
             }) { [weak vd] err in
                 vdLog.debug("step1: teardown complete err=\(err.rawValue) — waiting 1 s before mirror")
@@ -1225,7 +1225,7 @@ extension VideoManager {
             // The default layout can make the virtual display a slave of the target; it must be
             // the master.
             if CGDisplayMirrorsDisplay(virtualID) != 0 {
-                CGConfigureDisplayMirrorOfDisplay(cfg, virtualID, CGDirectDisplayID(0))
+                VideoManager.configureMirror(cfg, virtualID, CGDirectDisplayID(0))
             }
             if let startMode = anchorStartMode(initialMode, slaveID: airPlayID) {
                 virtualAnchorModes[name] = startMode
@@ -1236,9 +1236,9 @@ extension VideoManager {
                 vdLog.debug("step2: anchor starts at \(cgMode.width)×\(cgMode.height) (pixels \(cgMode.pixelWidth)×\(cgMode.pixelHeight)) @\(cgMode.refreshRate)Hz")
                 CGConfigureDisplayWithDisplayMode(cfg, virtualID, cgMode, nil)
             }
-            CGConfigureDisplayMirrorOfDisplay(cfg, airPlayID, virtualID)
+            VideoManager.configureMirror(cfg, airPlayID, virtualID)
             if !joining.isEmpty { vdLog.debug("step2: \(joining) join the set on the anchor") }
-            for id in joining { CGConfigureDisplayMirrorOfDisplay(cfg, id, virtualID) }
+            for id in joining { VideoManager.configureMirror(cfg, id, virtualID) }
             return true
         }) { [weak self, weak vd] mirrorErr in
             vdLog.debug("step2: CompleteDisplayConfiguration err=\(mirrorErr.rawValue)")
@@ -1412,7 +1412,7 @@ extension VideoManager {
                    CGDisplayMirrorsDisplay(target) != anchorID,
                    !online.contains(where: { CGDisplayMirrorsDisplay($0) == target }) {
                     vdLog.debug("reassert: display \(target) back onto its anchor \(anchorID)")
-                    CGConfigureDisplayMirrorOfDisplay(cfg, target, anchorID)
+                    VideoManager.configureMirror(cfg, target, anchorID)
                     changed = true
                 }
                 if let mode = virtualAnchorModes[name], !anchorRuns(mode, anchorID: anchorID),

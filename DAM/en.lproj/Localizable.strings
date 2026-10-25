@@ -51,6 +51,9 @@
 /* Display error */
 "No other display to mirror" = "No other display to mirror";
 
+/* Display error: on macOS 26, mirroring onto a virtual display crashes WindowServer */
+"A virtual display can't mirror another on this macOS" = "A virtual display can't mirror another on this macOS";
+
 /* Display error */
 "The display change failed" = "The display change failed";
 
