@@ -225,23 +225,27 @@ final class MoonlightHost {
     }
     private static let listsOwnDisplaysKey = "\(AppIdentity.shortID).moonlight.ownDisplays"
 
-    /// The app IDs of the Mac's own displays, by unit number, which stays with a display
-    /// while the Mac's set of displays does; past streaming displays' and New Display's. A
-    /// virtual display made again can take a unit number another display has (as OpenDisplay
-    /// found), and two apps can't share an ID: the display with the lower ID keeps it, and the
-    /// other takes the next one free.
-    static func ownDisplayAppIDs(_ ids: [CGDirectDisplayID],
-                                 unitNumber: (CGDirectDisplayID) -> UInt32 = CGDisplayUnitNumber)
-        -> [CGDirectDisplayID: Int] {
-        var appIDs: [CGDirectDisplayID: Int] = [:]
-        var taken: Set<Int> = []
-        for id in Set(ids).sorted() {
-            var appID = 1000 + Int(unitNumber(id))
+    /// The app IDs of the Mac's own displays `listed`, in order, by unit number, which stays
+    /// with a display while the Mac's set of displays does; past streaming displays' and New
+    /// Display's. A virtual display made again can take a unit number another display has (as
+    /// OpenDisplay found), and two apps can't share an ID: the display with the lower ID keeps
+    /// it, and the other takes the next one no display has by its unit number, so that no
+    /// other display's moves. `others`, the displays not listed for now (as one mirroring),
+    /// keep theirs for when they are again.
+    static func ownDisplayAppIDs(_ listed: [CGDirectDisplayID], others: [CGDirectDisplayID] = [],
+                                 unitNumber: (CGDirectDisplayID) -> UInt32 = CGDisplayUnitNumber) -> [Int] {
+        func byUnit(_ id: CGDirectDisplayID) -> Int { 1000 + Int(unitNumber(id)) }
+        var holders: [Int: CGDirectDisplayID] = [:]
+        for id in Set(listed + others).sorted() where holders[byUnit(id)] == nil { holders[byUnit(id)] = id }
+        var taken = Set(holders.keys)
+        var moved: [CGDirectDisplayID: Int] = [:]
+        for id in Set(listed).sorted() where holders[byUnit(id)] != id {
+            var appID = byUnit(id) + 1
             while taken.contains(appID) { appID += 1 }
             taken.insert(appID)
-            appIDs[id] = appID
+            moved[id] = appID
         }
-        return appIDs
+        return listed.map { moved[$0] ?? byUnit($0) }
     }
 
     /// Whether it hosts, or is to once the ports are free.

@@ -416,9 +416,22 @@ final class StreamingRequestTests: XCTestCase {
         let undo = manager.keepUserOrigins([2: CGPoint(x: -1920, y: 0)])
         // A streaming display came meanwhile and keeps a layout of its own.
         let placed = twoSideBySide.adding(3, origin: CGPoint(x: 3360, y: 0), mode: nil)
-        manager.streamingSettle = (placed, Date().addingTimeInterval(6))
+        manager.beginStreamingSettle(placed, for: 6)
         undo()
         XCTAssertEqual(manager.streamingSettle?.arrangement.origins, placed.origins)
+    }
+
+    func testAnUndoReachesALayoutWhoseTimeStartedAgain() {
+        let manager = VideoManager()
+        manager.beginStreamingSettle(twoSideBySide, for: 15)
+        // A display removed, that WindowServer takes off meanwhile; none has this ID.
+        manager.streamingSettleAwaitsRemoval = 0xDEAD
+        let undo = manager.keepUserOrigins([2: CGPoint(x: -1920, y: 0)])
+        manager.startSettleOnceRemoved()
+        XCTAssertNil(manager.streamingSettleAwaitsRemoval)
+        XCTAssertLessThan(manager.streamingSettle?.until ?? .distantFuture, Date().addingTimeInterval(6))
+        undo()
+        XCTAssertEqual(manager.streamingSettle?.arrangement.origins, twoSideBySide.origins)
     }
 
     func testModesReachEveryKeptLayoutAndTheStreamingDisplay() throws {
