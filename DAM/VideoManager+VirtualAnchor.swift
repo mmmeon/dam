@@ -135,6 +135,9 @@ struct DisplayArrangement {
         for id in freeing where online.contains(id) && changes[id] == nil && CGDisplayMirrorsDisplay(id) != 0 {
             changes[id] = 0
         }
+        // One that can't be made (see VideoManager.mayMirror) is no change, or each check
+        // would find it out of place again.
+        changes = changes.filter { VideoManager.mayMirror($0.key, onto: $0.value) }
         for (id, master) in changes {
             vdLog.debug("restore: display \(id) mirror master \(CGDisplayMirrorsDisplay(id)) → \(master)")
             VideoManager.configureMirror(cfg, id, master)
