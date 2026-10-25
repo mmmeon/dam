@@ -5,13 +5,20 @@
 //  bag, whose keys or lid wake it. Waking itself can't be stopped: the Mac's controller
 //  wakes it before macOS runs. So once it is locked and awake it has a few seconds to be
 //  unlocked: 10 after it is locked, 15 after the power button (Touch ID, which may take a
-//  second try, and after any wake by hand on a Mac that doesn't say which) and 3 after the
-//  keyboard, trackpad or lid; keys pressed meanwhile don't add to them, but for a password
-//  typed on a display that is plugged in, for up to 45 s.
+//  second try, and after a wake that doesn't say what woke it) and 3 after the keyboard,
+//  trackpad or lid; keys pressed meanwhile don't add to them, but for a password typed on
+//  a display that is plugged in, for up to 45 s.
 //
-//  A wake for anything else, as over the network, is left be, and so is a Mac in use from
-//  elsewhere: a stream of DAM's, a remote session, or another app keeping it awake. On
-//  power, as a Mac kept to be streamed from is, it does nothing. Off unless turned on.
+//  Whether someone at the Mac woke it is the kernel's to say: IOPMrootDomain's
+//  IOPMUserTriggeredFullWake, set as it reaches full wake, is true for a wake by its keys,
+//  trackpad, power button or lid, or a timer, and false for one over the network or for a
+//  notification or another process asking for the display. The wake reason only sets the
+//  time, as its codes differ from Mac to Mac ("SPIT" for the keyboard and trackpad on SPI
+//  of a 2016–2017 MacBook Pro, "PWRB" for its power button).
+//
+//  A wake nobody at the Mac made is left be, and so is a Mac in use from elsewhere: a
+//  stream of DAM's, a remote session, or another app keeping it awake. On power, as a Mac
+//  kept to be streamed from is, it does nothing. Off unless turned on.
 //
 //  After castbar's WakeGuard (MIT): wake reason from IOPMrootDomain, lock state from the
 //  session, `pmset sleepnow` to sleep.
@@ -80,19 +87,23 @@ final class WakeGuard {
 
     private func woke() {
         let reason = Self.wakeProperty("Wake Reason"), type = Self.wakeProperty("Wake Type")
-        wgLog.debug("woke: reason \(reason.isEmpty ? "none" : reason, privacy: .public), type \(type.isEmpty ? "none" : type, privacy: .public)")
-        guard Self.isLocked(), let allowed = Self.allowance(forWake: reason, type: type) else { return }
+        let byUser = Self.userTriggeredFullWake()
+        wgLog.debug("woke: reason \(reason.isEmpty ? "none" : reason, privacy: .public), type \(type.isEmpty ? "none" : type, privacy: .public), by a user \(byUser.map { $0 ? "yes" : "no" } ?? "not said", privacy: .public)")
+        guard Self.isLocked(), let allowed = Self.allowance(forWake: reason, byUser: byUser) else { return }
         arm(allowed, "woken by \(reason.isEmpty ? type : reason)")
     }
 
     /// Seconds a wake for `reason` gives to unlock in; nil for a wake nobody at the Mac made.
-    /// A Mac without a T2 chip, as a 2017 MacBook Pro, gives no reason, only the type a wake
-    /// by its keys, trackpad or power button has (pmset's "HID Activity"), which can't tell
-    /// the power button apart: it gets the power button's time, for Touch ID.
-    static func allowance(forWake reason: String, type: String) -> TimeInterval? {
-        guard !reason.isEmpty else { return type.contains("UserActivity") ? 15 : nil }
-        if reason.contains("PowerButton") || reason.contains("PWRB") { return 15 }
-        let byHand = ["Keyboard", "Touchpad", "Trackpad", "Lid", "LID0"]
+    /// `byUser` is IOPMUserTriggeredFullWake; without it, the reason alone says.
+    static func allowance(forWake reason: String, byUser: Bool?) -> TimeInterval? {
+        let powerButton = ["PowerButton", "PWRB", "pwrbtn"].contains { reason.contains($0) }
+        if let byUser {
+            guard byUser else { return nil }
+            // A wake that doesn't say may have been the power button.
+            return powerButton || reason.isEmpty ? 15 : 3
+        }
+        if powerButton { return 15 }
+        let byHand = ["Keyboard", "Touchpad", "Trackpad", "Lid", "LID0", "SPIT"]
         return byHand.contains { reason.contains($0) } ? 3 : nil
     }
 
@@ -125,6 +136,15 @@ final class WakeGuard {
 
     static func isLocked() -> Bool {
         (CGSessionCopyCurrentDictionary() as? [String: Any])?["CGSSessionScreenIsLocked"] as? Bool ?? false
+    }
+
+    /// Whether the kernel took the last full wake for one by someone at the Mac; nil if it
+    /// doesn't say.
+    static func userTriggeredFullWake() -> Bool? {
+        let root = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPMrootDomain"))
+        defer { IOObjectRelease(root) }
+        return IORegistryEntryCreateCFProperty(root, "IOPMUserTriggeredFullWake" as CFString, kCFAllocatorDefault, 0)?
+            .takeRetainedValue() as? Bool
     }
 
     /// The power manager's `name` for the last wake, as "Wake Reason" or "Wake Type"; empty without one.
