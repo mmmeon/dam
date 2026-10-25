@@ -14,8 +14,7 @@
 //  trackpad, power button or lid, or a timer, and false for one over the network or for a
 //  notification or another process asking for the display. The wake reason only sets the
 //  time, as its codes differ from Mac to Mac: a 2016–2017 MacBook Pro gives "EC.PowerButton
-//  PWRB" for its power button, or at times "SPIT", its keyboard and trackpad on SPI, which
-//  the power button sits on too.
+//  PWRB" for its power button and "SPIT" for its keyboard and trackpad, on SPI.
 //
 //  A wake nobody at the Mac made is left be, and so is a Mac in use from elsewhere: a
 //  stream of DAM's, a remote session, or another app keeping it awake. On power, as a Mac
@@ -97,15 +96,15 @@ final class WakeGuard {
     /// Seconds a wake for `reason` gives to unlock in; nil for a wake nobody at the Mac made.
     /// `byUser` is IOPMUserTriggeredFullWake; without it, the reason alone says.
     static func allowance(forWake reason: String, byUser: Bool?) -> TimeInterval? {
-        // SPIT: a 2016–2017 MacBook Pro's keyboard, which can be its power button too.
-        let powerButton = ["PowerButton", "PWRB", "pwrbtn", "SPIT"].contains { reason.contains($0) }
+        let powerButton = ["PowerButton", "PWRB", "pwrbtn"].contains { reason.contains($0) }
         if let byUser {
             guard byUser else { return nil }
             // A wake that doesn't say may have been the power button.
             return powerButton || reason.isEmpty ? 15 : 3
         }
         if powerButton { return 15 }
-        let byHand = ["Keyboard", "Touchpad", "Trackpad", "Lid", "LID0"]
+        // SPIT: a 2016–2017 MacBook Pro's keyboard and trackpad, on SPI.
+        let byHand = ["Keyboard", "Touchpad", "Trackpad", "Lid", "LID0", "SPIT"]
         return byHand.contains { reason.contains($0) } ? 3 : nil
     }
 
