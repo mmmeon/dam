@@ -54,6 +54,8 @@ final class WakeGuard {
     /// The time it has to be unlocked in, counted from `since`; nil with nothing to watch.
     private var window: (since: Date, allowed: TimeInterval, why: String)?
     private var lastSleep = Date.distantPast
+    /// Whether waiting for a password typed has been logged since `window` was set.
+    private var typingLogged = false
     private var observers: [(NotificationCenter, NSObjectProtocol)] = []
     private var timer: Timer?
 
@@ -110,14 +112,24 @@ final class WakeGuard {
 
     private func arm(_ allowed: TimeInterval, _ why: String) {
         window = (Date(), allowed, why)
+        typingLogged = false
     }
 
     private func check() {
         guard let current = window else { return }
-        guard Self.isLocked() else { window = nil; return }
+        guard Self.isLocked() else {
+            // As loginwindow does itself for a wake within the password delay after the
+            // display turned off.
+            window = nil
+            return wgLog.debug("not sleeping: unlocked")
+        }
         let elapsed = Date().timeIntervalSince(current.since)
         // A password typed on a display plugged in, when Touch ID fails.
-        if Self.hasPhysicalDisplay(), Self.secondsSinceInput() < 3, elapsed < 45 { return }
+        if Self.hasPhysicalDisplay(), Self.secondsSinceInput() < 3, elapsed < 45 {
+            if !typingLogged { wgLog.debug("waiting: typing on a display") }
+            typingLogged = true
+            return
+        }
         guard elapsed >= current.allowed, Date().timeIntervalSince(lastSleep) > 10 else { return }
         window = nil
         guard Self.isOnBattery() else { return wgLog.debug("not sleeping: on power") }
