@@ -334,9 +334,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 .map { MoonlightApp(id: streaming.index + 1, title: $0.label, displayID: streaming.id) }
         }
         // The Mac's own displays too, when asked for, those showing a desktop of their own.
-        let own = !MoonlightHost.listsOwnDisplays ? [] : videoManager.allConnectedDisplays
+        let ownDisplays = !MoonlightHost.listsOwnDisplays ? [] : videoManager.allConnectedDisplays
             .filter { $0.isConnected && $0.cgDisplayID != 0 && !$0.isStreaming && !$0.isMirroring }
-            .map { MoonlightApp(id: MoonlightHost.ownDisplayAppID($0.cgDisplayID), title: $0.label, displayID: $0.cgDisplayID) }
+        let ownIDs = MoonlightHost.ownDisplayAppIDs(ownDisplays.map(\.cgDisplayID))
+        let own = ownDisplays.compactMap { display in
+            ownIDs[display.cgDisplayID].map { MoonlightApp(id: $0, title: display.label, displayID: display.cgDisplayID) }
+        }
         moonlightHost.apps = apps + own
         webStream.apps = { apps }
         let menu = NSMenu()

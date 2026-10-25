@@ -461,6 +461,7 @@ extension VideoManager {
         let before = activeStreamingSettle ?? DisplayArrangement.current()
         // Kept for the set without the new display, which it would no longer match.
         streamingSettle = nil
+        streamingSettleAwaitsRemoval = nil
         if streamingDisplays.isEmpty {
             streamingArrangement = before
             streamingDisplayIsMainByChoice = false
@@ -506,10 +507,14 @@ extension VideoManager {
         // layout for the smaller set changed them.
         streamingDisplays.remove(at: i)
         if streamingDisplays.isEmpty { streamingArrangement = nil }
-        streamingSettle = arrangement.map { ($0, Date().addingTimeInterval(5)) }
+        // Its 5 s start once WindowServer has taken the display off (startSettleOnceRemoved),
+        // which can take seconds; in 15 s at the most.
+        streamingSettle = arrangement.map { ($0, Date().addingTimeInterval(15)) }
+        streamingSettleAwaitsRemoval = arrangement.map { _ in last.id }
         streamingChangeInFlight = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.mergeDevices() }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            self?.startSettleOnceRemoved()
             self?.reassertStreamingLayout()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 self?.mergeDevices()
@@ -522,6 +527,13 @@ extension VideoManager {
     private func beginStreamingChange(from layout: DisplayArrangement) {
         streamingChangesBegun += 1
         streamingChangeLayout = layout
+    }
+
+    /// Starts the settle's 5 s after a removal once the display is no longer online.
+    func startSettleOnceRemoved() {
+        guard let id = streamingSettleAwaitsRemoval, !DisplayArrangement.onlineDisplayIDs().contains(id) else { return }
+        streamingSettleAwaitsRemoval = nil
+        streamingSettle = streamingSettle.map { ($0.arrangement, Date().addingTimeInterval(5)) }
     }
 
     /// The layout kept after the last change, until it expires.
@@ -663,6 +675,7 @@ extension VideoManager {
             // doesn't hold.
             let kept = done ? others.adding(id, origin: origin, mode: target, mirroring: master) : others
             self.streamingSettle = (kept, Date().addingTimeInterval(5))
+            self.streamingSettleAwaitsRemoval = nil
             self.reassertStreamingLayout()
             self.mergeDevices()
             completion(done)
@@ -768,6 +781,7 @@ extension VideoManager {
         let settle = { [weak self] in
             // WindowServer can still change the others' resolutions for the new set.
             self?.streamingSettle = (self?.streamingChangeLayout ?? placed, Date().addingTimeInterval(5))
+            self?.streamingSettleAwaitsRemoval = nil
             self?.reassertStreamingLayout()
             self?.mergeDevices()
             // The display that was main may be gone, and a commit that changes nothing

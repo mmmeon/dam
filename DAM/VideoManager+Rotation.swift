@@ -208,13 +208,20 @@ extension VideoManager {
         guard online.contains(standInID), online.contains(screenID),
               let (layout, swapped) = Self.swappedLayout(standInID, screenID, settle: activeStreamingSettle,
                                                          live: DisplayArrangement.current()) else { return }
-        streamingSettle = (layout, Date().addingTimeInterval(5))
+        let until = Date().addingTimeInterval(5)
+        streamingSettle = (layout, until)
+        streamingSettleAwaitsRemoval = nil
         let start = Self.configureDisplays(in: .permanently, { cfg in
             for (id, origin) in swapped { CGConfigureDisplayOrigin(cfg, id, Int32(origin.x), Int32(origin.y)) }
             return true
         }) { [weak self] err in
             rotLog.debug("swap \(standInID) and \(screenID): err=\(err.rawValue)")
             guard let self else { return }
+            // Its 5 s from when the swap has landed, which the commit can take seconds to;
+            // not for a settle another change has set since.
+            if err == .success, self.streamingSettle?.until == until {
+                self.streamingSettle = self.streamingSettle.map { ($0.arrangement, Date().addingTimeInterval(5)) }
+            }
             self.streamingReassertInFlight = false
             self.reassertStreamingLayout()
             self.processStreamingRequests()
