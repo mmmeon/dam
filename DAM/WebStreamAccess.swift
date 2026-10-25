@@ -43,7 +43,8 @@ enum WebStreamReach: String, CaseIterable {
         switch self {
         case .thisMac: return "Only browsers and players on this Mac."
         case .thisNetwork: return "Devices on this Mac's own networks, and over a USB or Thunderbolt cable."
-        case .anywhere: return "Any address that reaches this Mac, as over a VPN or a forwarded port."
+        case .anywhere: return "Any address that reaches this Mac, as over a VPN or a forwarded port; " +
+                               "from off this Mac's networks, over HTTPS only."
         }
     }
 
@@ -85,6 +86,9 @@ struct WebStreamDevice: Codable, Equatable {
     let kind: Kind
     let token: String
     let added: Date
+    /// When it last watched or looked at what there is to watch, to the hour; nil only as
+    /// read from before this was kept.
+    var lastUsed: Date?
 
     init(name: String, kind: Kind, added: Date = Date()) {
         id = UUID().uuidString
@@ -92,6 +96,7 @@ struct WebStreamDevice: Codable, Equatable {
         self.kind = kind
         token = MoonlightCrypto.hex(MoonlightPairing.randomBytes(16)).lowercased()
         self.added = added
+        lastUsed = added
     }
 
     /// Kept for a link from before devices had tokens of their own.
@@ -101,6 +106,7 @@ struct WebStreamDevice: Codable, Equatable {
         kind = .link
         self.token = token
         added = Date()
+        lastUsed = added
     }
 }
 
@@ -125,6 +131,35 @@ final class WebStreamDevices {
             save()
             try? FileManager.default.removeItem(at: old)
         }
+        // Those kept from before last use was, count as used now, so none is forgotten for it.
+        if all.contains(where: { $0.lastUsed == nil }) {
+            for index in all.indices where all[index].lastUsed == nil { all[index].lastUsed = Date() }
+            save()
+        }
+    }
+
+    /// How long a browser may go unused before it is forgotten, and has to pair again. A
+    /// link is kept until the user forgets it, as a player's settings may hold it.
+    static var idleLimit: TimeInterval = 90 * 24 * 60 * 60
+
+    /// Notes that `device` was used at `now`; kept to the hour, so streams starting and
+    /// stopping don't write the file each time. Whether it was written.
+    @discardableResult
+    func used(_ device: WebStreamDevice, now: Date = Date()) -> Bool {
+        guard let index = all.firstIndex(where: { $0.id == device.id }),
+              now.timeIntervalSince(all[index].lastUsed ?? .distantPast) >= 60 * 60 else { return false }
+        all[index].lastUsed = now
+        save()
+        return true
+    }
+
+    /// Forgets the browsers not used for `idleLimit` before `now`, and gives them.
+    func forgetIdle(now: Date = Date()) -> [WebStreamDevice] {
+        let idle = all.filter { $0.kind == .browser && now.timeIntervalSince($0.lastUsed ?? now) > Self.idleLimit }
+        guard !idle.isEmpty else { return [] }
+        all.removeAll { device in idle.contains { $0.id == device.id } }
+        save()
+        return idle
     }
 
     /// The device whose token this is.

@@ -212,6 +212,37 @@ final class WebStreamAccessTests: XCTestCase {
         XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
     }
 
+    /// Use is noted to the hour; a browser unused for long is forgotten, a link is not, and
+    /// those kept from before use was noted count as used when read.
+    func testBrowsersUnusedForLongAreForgotten() throws {
+        let devices = WebStreamDevices(directory: directory)
+        let start = Date()
+        let phone = devices.add(WebStreamDevice(name: "Phone", kind: .browser, added: start))
+        let link = devices.add(WebStreamDevice(name: "mpv", kind: .link, added: start))
+        XCTAssertFalse(devices.used(phone, now: start.addingTimeInterval(60)), "not within the hour")
+        XCTAssertTrue(devices.used(phone, now: start.addingTimeInterval(2 * 60 * 60)))
+        let used = start.addingTimeInterval(2 * 60 * 60)
+        XCTAssertEqual(WebStreamDevices(directory: directory).device(token: phone.token)?.lastUsed, used, "kept")
+
+        let limit = WebStreamDevices.idleLimit
+        XCTAssertEqual(devices.forgetIdle(now: used.addingTimeInterval(limit)), [], "not past the limit")
+        let forgotten = devices.forgetIdle(now: used.addingTimeInterval(limit + 1))
+        XCTAssertEqual(forgotten.map(\.name), ["Phone"])
+        XCTAssertNil(WebStreamDevices(directory: directory).device(token: phone.token))
+        XCTAssertNotNil(devices.device(token: link.token), "a link stays")
+
+        // A file from before: no last use, read as used now.
+        var old = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: JSONEncoder().encode([WebStreamDevice(name: "Old", kind: .browser, added: .distantPast)])) as? [[String: Any]])
+        old[0]["lastUsed"] = nil
+        try JSONSerialization.data(withJSONObject: old).write(to: directory.appendingPathComponent("devices.json"))
+        let read = WebStreamDevices(directory: directory)
+        let kept = try XCTUnwrap(read.all.first)
+        XCTAssertLessThan(abs(try XCTUnwrap(kept.lastUsed).timeIntervalSinceNow), 60)
+        XCTAssertEqual(read.forgetIdle(), [])
+        XCTAssertNotNil(WebStreamDevices(directory: directory).all.first?.lastUsed, "and kept so")
+    }
+
     // MARK: - Certificates
 
     private func trusts(_ server: Data, name: String, authority: Data) -> Bool {

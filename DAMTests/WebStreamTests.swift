@@ -652,6 +652,36 @@ final class WebStreamTests: XCTestCase {
         XCTAssertEqual(try get("/watch").status, 0)
     }
 
+    /// From off the Mac's networks, plain HTTP is sent on to HTTPS for the page, without its
+    /// query, and refused otherwise; HTTPS, and plain HTTP on the Mac's networks, are answered.
+    func testPlainHTTPFromOffTheMacsNetworksGoesToHTTPS() throws {
+        let server = WebStreamServer(directory: FileManager.default.temporaryDirectory)
+        func refusal(_ path: String, host: String? = "mac.example.com:47995", from address: String = "203.0.113.5",
+                     secure: Bool = false, method: String = "GET") -> (status: String, headers: [String], body: Data)? {
+            server.plainHTTPRefusal(WebStreamServer.Request(
+                method: method, path: path, query: ["token": "secret"], headers: host.map { ["host": $0] } ?? [:],
+                secure: secure, peer: .hostPort(host: NWEndpoint.Host(address), port: 50000)))
+        }
+        let page = try XCTUnwrap(refusal("/watch"))
+        XCTAssertEqual(page.status, "308 Permanent Redirect")
+        XCTAssertEqual(page.headers, ["Location: https://mac.example.com:\(server.securePort.rawValue)/watch"])
+        XCTAssertEqual(refusal("/")?.status, "308 Permanent Redirect")
+        XCTAssertEqual(refusal("/watch", host: "[2001:db8::1]:47995")?.headers,
+                       ["Location: https://[2001:db8::1]:\(server.securePort.rawValue)/watch"])
+        for path in ["/stream.mp4", "/apps.json", "/ca.cer", "/pair/wait"] {
+            let refused = try XCTUnwrap(refusal(path), path)
+            XCTAssertEqual(refused.status, "403 Forbidden", path)
+            XCTAssertFalse(String(decoding: refused.body, as: UTF8.self).contains("secret"), path)
+        }
+        XCTAssertEqual(refusal("/pair/begin", method: "POST")?.status, "403 Forbidden")
+        XCTAssertEqual(refusal("/watch", host: nil)?.status, "403 Forbidden", "nowhere to send it")
+
+        XCTAssertNil(refusal("/stream.mp4", secure: true))
+        XCTAssertNil(refusal("/stream.mp4", from: "127.0.0.1"))
+        XCTAssertNil(refusal("/stream.mp4", from: "169.254.10.20"), "over a cable")
+        XCTAssertNil(refusal("/stream.mp4", from: "fe80::1"))
+    }
+
     /// Names the user adds are kept as a Host header gives them, and only one of them exactly
     /// counts as the Mac's.
     func testNamesTheUserAddsAreKeptAsHostsGiveThem() {
