@@ -12,7 +12,9 @@ final class WakeGuardTests: XCTestCase {
         XCTAssertNil(WakeGuard.allowance(forWake: "ARPT", type: "UserActivity Assertion"), "Wi-Fi, as Wake on LAN")
         XCTAssertNil(WakeGuard.allowance(forWake: "RTC (Alarm)", type: ""))
         XCTAssertNil(WakeGuard.allowance(forWake: "", type: ""))
-        // A MacBookPro14,2 woken by a key: no reason, the type alone (seen 2026-10-25).
+        // A MacBookPro14,2 woken from sleep by a key (seen 2026-10-25).
+        XCTAssertEqual(WakeGuard.allowance(forWake: "SPIT", type: "User"), 3)
+        // And from a dark wake: no reason, the type alone.
         XCTAssertEqual(WakeGuard.allowance(forWake: "", type: "UserActivity Assertion"), 15)
         XCTAssertNil(WakeGuard.allowance(forWake: "", type: "Maintenance"))
     }

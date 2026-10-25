@@ -92,7 +92,8 @@ final class WakeGuard {
     static func allowance(forWake reason: String, type: String) -> TimeInterval? {
         guard !reason.isEmpty else { return type.contains("UserActivity") ? 15 : nil }
         if reason.contains("PowerButton") || reason.contains("PWRB") { return 15 }
-        let byHand = ["Keyboard", "Touchpad", "Trackpad", "Lid", "LID0"]
+        // SPIT: the keyboard and trackpad of a 2016–2017 MacBook Pro, on SPI.
+        let byHand = ["Keyboard", "Touchpad", "Trackpad", "Lid", "LID0", "SPIT"]
         return byHand.contains { reason.contains($0) } ? 3 : nil
     }
 
