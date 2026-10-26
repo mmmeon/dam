@@ -53,6 +53,17 @@ final class StreamingDisplayTests: XCTestCase {
         XCTAssertEqual(listed, ["1920x1080@2x", "1920x1080", "1440x900", "1024x768"])
     }
 
+    func testTheMenuKeepsSizesInTheDevicesShape() {
+        let m = { (w: Int, h: Int) in
+            VideoManager.virtualMode(width: w, height: h, refreshRate: 60, pixelWidth: w, pixelHeight: h)
+        }
+        let iPad = (1024, 768)
+        XCTAssertTrue(VideoManager.sameShape(m(2048, 1536), iPad))
+        XCTAssertTrue(VideoManager.sameShape(m(1366, 1024), iPad), "within 1%")
+        XCTAssertFalse(VideoManager.sameShape(m(1920, 1080), iPad))
+        XCTAssertFalse(VideoManager.sameShape(m(768, 1024), iPad), "turned is another shape")
+    }
+
     func testListsOnlyHiDPIModesWithinItsLargestSize() {
         let m = { (w: Int, h: Int, scale: Int) in
             VideoManager.virtualMode(width: w, height: h, refreshRate: 60, pixelWidth: w * scale, pixelHeight: h * scale)
