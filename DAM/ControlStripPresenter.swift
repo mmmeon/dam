@@ -426,7 +426,9 @@ final class ControlStripPresenter: NSObject {
         let rightDisplays = connectedAirPlay + physical
         if !rightDisplays.isEmpty {
             ids.append(.flexibleSpace)
-            rightDisplays.forEach { ids.append(displayPopoverID(for: $0)) }
+            // Each ID once: a bar listing one twice throws, and two displays can share one, as
+            // when two report themselves built-in while the display set changes.
+            for id in rightDisplays.map(displayPopoverID(for:)) where !ids.contains(id) { ids.append(id) }
         }
         return ids
     }

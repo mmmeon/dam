@@ -247,6 +247,17 @@ enum VisibilityPreferences {
         virtualRefreshRates(for: context).union([60]).sorted(by: >)
     }
 
+    /// Refresh rates (Hz) streaming displays offer besides the one a stream asks for: those
+    /// picked, highest first, or StreamingDisplayModes.refreshRates when none are.
+    static func streamingRefreshRates() -> [Int] {
+        let rates = UserDefaults.dam.array(forKey: "\(AppIdentity.shortID).streaming.refreshRates") as? [Int] ?? []
+        return rates.isEmpty ? StreamingDisplayModes.refreshRates : Set(rates).sorted(by: >)
+    }
+
+    static func setStreamingRefreshRates(_ rates: Set<Int>) {
+        UserDefaults.dam.set(rates.sorted(by: >), forKey: "\(AppIdentity.shortID).streaming.refreshRates")
+    }
+
     /// Default virtual resolution stored as "WIDTHxHEIGHT", e.g. "3840x2160". Nil means no default.
     static func defaultVirtualResolution(for context: DisplayContext) -> String? {
         UserDefaults.dam.string(forKey: "\(AppIdentity.shortID).virtual.\(context.rawValue).defaultResolution")

@@ -710,7 +710,7 @@ extension VideoManager {
         let airPlayCGID = display.cgDisplayID
         let deviceName  = display.name
         descriptor.terminationHandler = { [weak self] _, vd in
-            let assignedID = vd.displayID
+            let assignedID = vd?.displayID ?? 0
             vdLog.debug("terminationHandler: virtual display for '\(deviceName)' terminated (displayID=\(assignedID))")
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -726,27 +726,16 @@ extension VideoManager {
         // The size the anchor will run at, listed first so it comes up at it (or at its backing
         // size, for a HiDPI one) rather than at a size it is switched away from once mirrored.
         let startMode = initialMode ?? (display.isSidecar ? sidecarStartMode(for: airPlayCGID) : nil)
-        let isStart = { (r: (width: Int, height: Int)) in
-            r.width == startMode?.pixelWidth && r.height == startMode?.pixelHeight
-        }
-        let orderedResolutions = resolutions.filter(isStart) + resolutions.filter { !isStart($0) }
         let vd = CGVirtualDisplay(descriptor: descriptor)
         vdLog.debug("enableVirtualAnchor: CGVirtualDisplay created — immediate displayID=\(vd.displayID)")
 
-        let settings = CGVirtualDisplaySettings()
         // AirPlay anchors always offer HiDPI variants (see virtualModes(for:)); locked anchors
-        // match the display's current mode.
-        settings.hiDPI = (sidecarModes != nil || (locked?.isHiDPI ?? true)) ? 1 : 0
-        // Sidecar runs at 60 Hz whatever the anchor offers.
-        let allRates = sidecarModes != nil ? [60] : VisibilityPreferences.effectiveVirtualRefreshRates(for: context)
-        let startRate = startMode?.roundedRefreshRate
-        let orderedRates = allRates.filter { $0 == startRate } + allRates.filter { $0 != startRate }
-        settings.modes = orderedResolutions.flatMap { res in
-            orderedRates.map { rate in
-                CGVirtualDisplayMode(width: UInt(res.width), height: UInt(res.height), refreshRate: Double(rate))
-            }
-        }
-        vdLog.debug("enableVirtualAnchor: applying \(settings.modes.count) modes (\(allRates) Hz)")
+        // match the display's current mode. Sidecar runs at 60 Hz whatever the anchor offers.
+        let modeList = AnchorModeList(resolutions: resolutions,
+                                      hiDPI: sidecarModes != nil || (locked?.isHiDPI ?? true),
+                                      context: sidecarModes != nil ? nil : context)
+        let settings = modeList.settings(leadingWith: startMode)
+        vdLog.debug("enableVirtualAnchor: applying \(settings.modes.count) modes (\(modeList.rates) Hz)")
 
         let applied = vd.apply(settings)
         vdLog.debug("enableVirtualAnchor: applySettings returned \(applied) — displayID after apply=\(vd.displayID)")
@@ -758,6 +747,7 @@ extension VideoManager {
 
         // Retain vd so it isn't released before mirroring is wired up.
         virtualAnchorStore[deviceName] = vd
+        virtualAnchorModeLists[deviceName] = modeList
         vdLog.debug("enableVirtualAnchor: stored anchor, beginning poll (attempt 0)")
         waitForVirtualDisplay(vd, name: deviceName, serial: serial, airPlayID: airPlayCGID, initialMode: initialMode)
     }
@@ -939,6 +929,7 @@ extension VideoManager {
             virtualAnchorArrangements[display.name] = virtualAnchorArrangements.removeValue(forKey: old)
             virtualAnchorTargets[display.name]      = virtualAnchorTargets.removeValue(forKey: old)
             virtualAnchorModes[display.name]        = virtualAnchorModes.removeValue(forKey: old)
+            virtualAnchorModeLists[display.name]    = virtualAnchorModeLists.removeValue(forKey: old)
             virtualAnchorSettleDeadlines[display.name] = virtualAnchorSettleDeadlines.removeValue(forKey: old)
             anchorSetSlaves[display.name]           = anchorSetSlaves.removeValue(forKey: old)
             anchorPendingSlaves[display.name]       = anchorPendingSlaves.removeValue(forKey: old)
@@ -964,6 +955,7 @@ extension VideoManager {
         }
         virtualAnchorArrangements.removeValue(forKey: name)
         virtualAnchorModes.removeValue(forKey: name)
+        virtualAnchorModeLists.removeValue(forKey: name)
         virtualAnchorSettleDeadlines.removeValue(forKey: name)
         anchorSetSlaves.removeValue(forKey: name)
         anchorPendingSlaves.removeValue(forKey: name)
@@ -1300,8 +1292,12 @@ extension VideoManager {
     /// transaction: while the anchor settles, back to its captured arrangement (or extended, if
     /// there's none), and extended after (see anchorSettling(_:)).
     private func setModeOnVirtualAnchor(_ mode: DisplayMode, anchorID: CGDirectDisplayID,
-                                        name: String, slaveID: CGDirectDisplayID) {
-        guard anchorID != 0, let cgMode = anchorDisplayMode(mode, anchorID: anchorID) else { return }
+                                        name: String, slaveID: CGDirectDisplayID, relisted: Bool = false) {
+        guard anchorID != 0 else { return }
+        if !relisted, relistAnchor(name, anchorID: anchorID, for: mode, then: { [weak self] in
+            self?.setModeOnVirtualAnchor(mode, anchorID: anchorID, name: name, slaveID: slaveID, relisted: true)
+        }) { return }
+        guard let cgMode = anchorDisplayMode(mode, anchorID: anchorID) else { return }
         virtualAnchorModes[name] = mode
         vdLog.debug("setModeOnVirtualAnchor: applying \(cgMode.pixelWidth)×\(cgMode.pixelHeight) @\(cgMode.refreshRate)Hz on master \(anchorID)")
 
@@ -1331,6 +1327,72 @@ extension VideoManager {
         case .committing: break
         case .unchanged: vdLog.debug("setModeOnVirtualAnchor: already in place")
         case .failed(let err): vdLog.error("setModeOnVirtualAnchor: BeginDisplayConfiguration err=\(err.rawValue)")
+        }
+    }
+
+    /// Gives the anchor filed under `name` a new mode list when it lacks `mode`'s rate but
+    /// Settings has picked it since the anchor was made: with `mode` first, so the anchor
+    /// comes up in it, and at the rates Settings picks now. `then` runs once the anchor lists
+    /// it, or after two seconds. False, doing nothing, when there is nothing to add.
+    ///
+    /// DAM sees the new list only once a configuration is committed after WindowServer took
+    /// it, which an empty commit half a second later does (measured; one at once is too soon).
+    ///
+    /// The new list makes WindowServer lay the anchor out again, which can switch it to
+    /// another mode or break its mirror; the anchor settles again for a moment, so
+    /// reassertAnchorLayout puts both back.
+    private func relistAnchor(_ name: String, anchorID: CGDirectDisplayID, for mode: DisplayMode,
+                              then: @escaping () -> Void) -> Bool {
+        guard let list = virtualAnchorModeLists[name], let context = list.context,
+              let vd = virtualAnchorStore[name] as? CGVirtualDisplay,
+              !anchorLists(mode, anchorID: anchorID) else { return false }
+        let updated = AnchorModeList(resolutions: list.resolutions, hiDPI: list.hiDPI, context: context)
+        guard updated.rates.contains(mode.roundedRefreshRate) else { return false }
+        vdLog.debug("relistAnchor: '\(name)' lacks \(mode.roundedRefreshRate) Hz — listing \(updated.rates) Hz")
+        virtualAnchorModes[name] = mode
+        guard vd.apply(updated.settings(leadingWith: mode)) else {
+            vdLog.error("relistAnchor: applySettings failed")
+            return false
+        }
+        virtualAnchorModeLists[name] = updated
+        let deadline = Date().addingTimeInterval(Self.anchorRelistSettleWindow)
+        virtualAnchorSettleDeadlines[name] = max(virtualAnchorSettleDeadlines[name] ?? .distantPast, deadline)
+        waitForListing(mode, anchorID: anchorID, attempt: 0, then: then)
+        return true
+    }
+
+    /// How long the layout around an anchor given a new mode list is kept.
+    static let anchorRelistSettleWindow: TimeInterval = 5
+
+    /// Waits up to two seconds for the anchor to list `mode`, committing an empty
+    /// configuration every half second until it does, then runs `then`.
+    private func waitForListing(_ mode: DisplayMode, anchorID: CGDirectDisplayID, attempt: Int,
+                                then: @escaping () -> Void) {
+        if anchorLists(mode, anchorID: anchorID) { return then() }
+        guard attempt < 20 else {
+            vdLog.error("relistAnchor: \(mode.roundedRefreshRate) Hz never listed")
+            return then()
+        }
+        if attempt > 0, attempt.isMultiple(of: 5) {
+            DispatchQueue.global(qos: .userInitiated).async {
+                var cfg: CGDisplayConfigRef?
+                guard CGBeginDisplayConfiguration(&cfg) == .success else { return }
+                let err = CGCompleteDisplayConfiguration(cfg, .forAppOnly)
+                vdLog.debug("relistAnchor: empty commit err=\(err.rawValue)")
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.waitForListing(mode, anchorID: anchorID, attempt: attempt + 1, then: then)
+        }
+    }
+
+    /// Whether the anchor lists `mode`'s size at its rate, or that size at 1x for a HiDPI
+    /// mode it doesn't derive (as anchorDisplayMode falls back to).
+    private func anchorLists(_ mode: DisplayMode, anchorID: CGDirectDisplayID) -> Bool {
+        let rate = DisplayArrangement.RateMatch.withinOneHertz
+        return DisplayArrangement.listedModes(of: anchorID).contains {
+            (Self.matches($0, mode) || ($0.pixelWidth == mode.width && $0.pixelHeight == mode.height))
+                && rate.matches($0.refreshRate, mode.refreshRate)
         }
     }
 
@@ -1489,5 +1551,38 @@ enum ResolutionChoices {
                 ?? current.virtual.map { kept.count + $0 }
             return (kept.map { native[$0] } + virtual, index)
         }
+    }
+}
+
+/// What a virtual anchor's mode list is made from: its sizes in pixels, each at every rate.
+struct AnchorModeList {
+    let resolutions: [(width: Int, height: Int)]
+    let hiDPI: Bool
+    /// Whose rates it offers; nil for an iPad's anchor, which runs at 60 Hz only.
+    let context: VisibilityPreferences.DisplayContext?
+    /// Its rates, highest first, as Settings picked them when it was made.
+    let rates: [Int]
+
+    init(resolutions: [(width: Int, height: Int)], hiDPI: Bool, context: VisibilityPreferences.DisplayContext?) {
+        self.resolutions = resolutions
+        self.hiDPI = hiDPI
+        self.context = context
+        rates = context.map(VisibilityPreferences.effectiveVirtualRefreshRates(for:)) ?? [60]
+    }
+
+    /// Its settings with `start` first, by its size in pixels and its rate, so the anchor
+    /// comes up in it (or at its backing size, for a HiDPI one).
+    func settings(leadingWith start: DisplayMode?) -> CGVirtualDisplaySettings {
+        let isStart = { (r: (width: Int, height: Int)) in
+            r.width == start?.pixelWidth && r.height == start?.pixelHeight
+        }
+        let startRate = start?.roundedRefreshRate
+        let orderedRates = rates.filter { $0 == startRate } + rates.filter { $0 != startRate }
+        let settings = CGVirtualDisplaySettings()
+        settings.hiDPI = hiDPI ? 1 : 0
+        settings.modes = (resolutions.filter(isStart) + resolutions.filter { !isStart($0) }).flatMap { res in
+            orderedRates.map { CGVirtualDisplayMode(width: UInt(res.width), height: UInt(res.height), refreshRate: Double($0)) }
+        }
+        return settings
     }
 }

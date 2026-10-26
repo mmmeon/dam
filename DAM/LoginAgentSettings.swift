@@ -2,7 +2,7 @@
 //  LoginAgentSettings.swift
 //
 //  What DAM tells the login window agent: the OpenDisplay receivers to connect at startup,
-//  what DAM learned of them, and the bitrate; and the Moonlight devices that may stream the
+//  what DAM learned of them, the bitrate and the streaming displays' refresh rates; and the Moonlight devices that may stream the
 //  login window. DAM writes it, root-only, when either changes; the agent reads it when the
 //  login window comes up (root-and-login-window.md).
 //
@@ -23,6 +23,8 @@ struct LoginAgentSettings: Equatable {
     var usbIDs: [String: String] = [:]
     var bonjourIDs: [String: String] = [:]
     var bitrateKbps = 20_000
+    /// The rates its displays offer, as DAM's streaming displays do.
+    var refreshRates = StreamingDisplayModes.refreshRates
     /// The Moonlight host, when a paired device may stream the login window.
     var moonlight: Moonlight?
 
@@ -85,7 +87,9 @@ struct LoginAgentSettings: Equatable {
     /// What DAM's settings give the agent: the OpenDisplay receivers connected at startup,
     /// and only what was learned of those.
     static func make(entries: [AutoConnectEntry], names: [String: String], usbIDs: [String: String],
-                     bonjourIDs: [String: String], bitrateKbps: Int, moonlight: Moonlight? = nil) -> LoginAgentSettings {
+                     bonjourIDs: [String: String], bitrateKbps: Int,
+                     refreshRates: [Int] = StreamingDisplayModes.refreshRates,
+                     moonlight: Moonlight? = nil) -> LoginAgentSettings {
         let startup = entries.filter { entry in
             guard entry.mode == .startup, case .openDisplay = entry.target else { return false }
             return true
@@ -94,7 +98,7 @@ struct LoginAgentSettings: Equatable {
         return LoginAgentSettings(entries: startup, names: names.filter { keys.contains($0.key) },
                                   usbIDs: usbIDs.filter { keys.contains($0.value) },
                                   bonjourIDs: bonjourIDs.filter { keys.contains($0.value) },
-                                  bitrateKbps: bitrateKbps, moonlight: moonlight)
+                                  bitrateKbps: bitrateKbps, refreshRates: refreshRates, moonlight: moonlight)
     }
 
     /// The agent's store: cable only, and every entry dialled whatever the window.
@@ -107,18 +111,21 @@ struct LoginAgentSettings: Equatable {
 
     var dictionary: [String: Any] {
         var dictionary: [String: Any] = ["entries": entries.map(\.dictionary), "names": names, "usbIDs": usbIDs,
-                                         "bonjourIDs": bonjourIDs, "bitrateKbps": bitrateKbps]
+                                         "bonjourIDs": bonjourIDs, "bitrateKbps": bitrateKbps,
+                                         "refreshRates": refreshRates]
         dictionary["moonlight"] = moonlight?.dictionary
         return dictionary
     }
 
     init(entries: [AutoConnectEntry] = [], names: [String: String] = [:], usbIDs: [String: String] = [:],
-         bonjourIDs: [String: String] = [:], bitrateKbps: Int = 20_000, moonlight: Moonlight? = nil) {
+         bonjourIDs: [String: String] = [:], bitrateKbps: Int = 20_000,
+         refreshRates: [Int] = StreamingDisplayModes.refreshRates, moonlight: Moonlight? = nil) {
         self.entries = entries
         self.names = names
         self.usbIDs = usbIDs
         self.bonjourIDs = bonjourIDs
         self.bitrateKbps = bitrateKbps
+        self.refreshRates = refreshRates
         self.moonlight = moonlight
     }
 
@@ -128,6 +135,11 @@ struct LoginAgentSettings: Equatable {
         usbIDs = dictionary["usbIDs"] as? [String: String] ?? [:]
         bonjourIDs = dictionary["bonjourIDs"] as? [String: String] ?? [:]
         bitrateKbps = (dictionary["bitrateKbps"] as? Int).map { max($0, 1_000) } ?? 20_000
+        // Settings written before it had rates, or with none in range, offer the usual ones.
+        let rates = (dictionary["refreshRates"] as? [Int] ?? []).filter {
+            (1...StreamingDisplayModes.highestRefreshRate).contains($0)
+        }
+        refreshRates = rates.isEmpty ? StreamingDisplayModes.refreshRates : rates
         moonlight = (dictionary["moonlight"] as? [String: Any]).flatMap(Moonlight.init(dictionary:))
     }
 

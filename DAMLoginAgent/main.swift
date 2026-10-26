@@ -50,7 +50,7 @@ say("starting as uid \(getuid()) for \(settings.entries.count) receiver(s), "
     + "\(settings.moonlight?.clients.count ?? 0) Moonlight device(s); "
     + "screen recording \(CGPreflightScreenCaptureAccess() ? "allowed" : "NOT allowed")")
 
-let displays = AgentDisplays(makesMain: !arguments.contains("--not-main"))
+let displays = AgentDisplays(makesMain: !arguments.contains("--not-main"), refreshRates: settings.refreshRates)
 let sender = OpenDisplaySender(store: settings.store())
 var moonlight: MoonlightHost?
 var advertiser: CableAdvertiser?

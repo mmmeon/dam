@@ -17,9 +17,12 @@ final class AgentDisplays {
     private var displays: [CGDirectDisplayID: CGVirtualDisplay] = [:]
     /// Whether each display made is made main; not when trying the agent in a signed-in session.
     private let makesMain: Bool
+    /// The rates each display offers besides the one asked for, as DAM's settings pick.
+    private let refreshRates: [Int]
 
-    init(makesMain: Bool = true) {
+    init(makesMain: Bool = true, refreshRates: [Int] = StreamingDisplayModes.refreshRates) {
         self.makesMain = makesMain
+        self.refreshRates = refreshRates
     }
     /// How long a new display has to come online.
     static let onlineTimeout: TimeInterval = 10
@@ -46,7 +49,7 @@ final class AgentDisplays {
             }
         }
         let display = CGVirtualDisplay(descriptor: descriptor)
-        guard display.apply(StreamingDisplayModes.settings(startingIn: mode)) else {
+        guard display.apply(StreamingDisplayModes.settings(startingIn: mode, rates: refreshRates)) else {
             adLog.error("applySettings failed for \(mode.width)×\(mode.height)")
             return done(nil)
         }
@@ -78,7 +81,7 @@ final class AgentDisplays {
         descriptor.serialNum = StreamingDisplayIdentity.serial(seed: "loginagent.check")
         let display = CGVirtualDisplay(descriptor: descriptor)
         let mode = StreamingDisplayModes.Mode(width: 1280, height: 720, refreshRate: 60)
-        guard display.apply(StreamingDisplayModes.settings(startingIn: mode)) else { return done(false) }
+        guard display.apply(StreamingDisplayModes.settings(startingIn: mode, rates: refreshRates)) else { return done(false) }
         let id = display.displayID
         waitUntilOnline(id, deadline: Date() + Self.onlineTimeout) { online in
             withExtendedLifetime(display) {}
@@ -89,7 +92,7 @@ final class AgentDisplays {
     func resize(_ id: CGDirectDisplayID, to mode: StreamingDisplayModes.Mode, done: @escaping (Bool) -> Void) {
         guard let display = displays[id], mode.pixelWidth <= Int(display.maxPixelsWide),
               mode.pixelHeight <= Int(display.maxPixelsHigh),
-              display.apply(StreamingDisplayModes.settings(startingIn: mode)) else { return done(false) }
+              display.apply(StreamingDisplayModes.settings(startingIn: mode, rates: refreshRates)) else { return done(false) }
         place(id, in: mode) { done(true) }
     }
 

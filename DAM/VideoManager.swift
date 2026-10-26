@@ -167,6 +167,9 @@ final class VideoManager: ObservableObject {
     var virtualAnchorTargets: [String: CGDirectDisplayID] = [:]
     /// The size each anchor is meant to run at, keyed like the above.
     var virtualAnchorModes: [String: DisplayMode] = [:]
+    /// What each anchor's mode list was made from, keyed like the above, so it can be given
+    /// rates picked since.
+    var virtualAnchorModeLists: [String: AnchorModeList] = [:]
     /// Until when the layout around each newly mirrored anchor is kept, keyed like the above.
     /// WindowServer can re-lay the displays out some seconds after the mirror is committed.
     var virtualAnchorSettleDeadlines: [String: Date] = [:]
