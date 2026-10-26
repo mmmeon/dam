@@ -374,6 +374,13 @@ extension VideoManager {
         return .panel(modes: options.modes, current: options.currentIndex)
     }
 
+    /// Whether `mode` is in the shape of a `size` (width, height), within 1%.
+    static func sameShape(_ mode: DisplayMode, _ size: (Int, Int)) -> Bool {
+        guard size.0 > 0, size.1 > 0, mode.height > 0 else { return false }
+        let wanted = Double(size.0) / Double(size.1)
+        return abs(Double(mode.width) / Double(mode.height) - wanted) / wanted < 0.01
+    }
+
     /// Resolution choices for an external or built-in display: one native mode per logical
     /// size (HiDPI preferred), trimmed and ordered by `pickerResolutions`. Each is at the
     /// current refresh rate when the display supports it there, otherwise its highest rate.
@@ -393,14 +400,19 @@ extension VideoManager {
         let native = display.isSidecar
             ? sidecarNativeMode(for: display.cgDisplayID).map { ($0.pixelWidth, $0.pixelHeight) }
             : Self.nativeSize(of: all)
-        // The streaming display has no panel to fit: every size it offers, in every shape,
-        // at 1x and at HiDPI, short of the HiDPI ones macOS adds past its largest size
-        // unless another app has picked one.
+        // The streaming display has no panel to fit: every size it offers in the shape of the
+        // device it was made for, at 1x and at HiDPI, short of the HiDPI ones macOS adds past
+        // its largest size unless another app has picked one.
         let isCurrent = { (m: DisplayMode) in
             current.map { m.width == $0.width && m.height == $0.height && m.isHiDPI == $0.isHiDPI } ?? false
         }
+        let shape = streamingDisplays.first { $0.id == display.cgDisplayID }.map { ($0.start.width, $0.start.height) }
+        let listed = { (m: DisplayMode) -> Bool in
+            guard StreamingDisplayModes.fits(m) else { return isCurrent(m) }
+            return shape.map { Self.sameShape(m, $0) } ?? true || isCurrent(m)
+        }
         var modes = display.isStreaming
-            ? Self.everyResolution(all.filter { StreamingDisplayModes.fits($0) || isCurrent($0) })
+            ? Self.everyResolution(all.filter(listed))
             : Self.pickerResolutions(Self.onePerSize(all, native: native), native: native, current: current,
                                      includeLarger1x: includeLarger1x)
         if let rate = current?.roundedRefreshRate {

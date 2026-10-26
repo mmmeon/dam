@@ -447,6 +447,31 @@ final class MoonlightHostTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode([MoonlightClient].self, from: saved).map(\.allowsInput), [false])
     }
 
+    func testADeviceIsShownByTheNameGivenItElseTheOneFoundElseWhereItPaired() throws {
+        var client = MoonlightClient(name: "10.0.0.2", certificate: Data([1]), paired: Date())
+        XCTAssertEqual(client.label, "10.0.0.2")
+        client.autoName = "Robins-iPad"
+        XCTAssertEqual(client.label, "Robins-iPad")
+        client.customName = "Living Room"
+        XCTAssertEqual(client.label, "Living Room")
+        let read = try JSONDecoder().decode([MoonlightClient].self, from: JSONEncoder().encode([client]))
+        XCTAssertEqual(read, [client], "both names are kept")
+        let older = try JSONDecoder().decode([MoonlightClient].self, from: JSONEncoder().encode(
+            [MoonlightClient(name: "10.0.0.2", certificate: Data([1]), paired: Date())]))
+        XCTAssertNil(older.first?.autoName)
+        XCTAssertNil(older.first?.customName)
+    }
+
+    func testHostNamesLoseTheirDomain() {
+        XCTAssertEqual(MoonlightHost.shortHostName("Robins-iPad.local."), "Robins-iPad")
+        XCTAssertEqual(MoonlightHost.shortHostName("laptop.lan"), "laptop")
+        XCTAssertEqual(MoonlightHost.shortHostName("laptop"), "laptop")
+        XCTAssertNil(MoonlightHost.shortHostName("10.0.0.2"), "an address written out is no name")
+        XCTAssertNil(MoonlightHost.shortHostName("fe80::1"))
+        XCTAssertNil(MoonlightHost.shortHostName(""))
+        XCTAssertEqual(MoonlightHost.deviceName(resolving: "127.0.0.1"), "This Mac")
+    }
+
     func testDevicesSavedBeforeInputAllowItOn() throws {
         let saved = try JSONEncoder().encode([MoonlightClient(name: "10.0.0.2", certificate: Data([1]), paired: Date())])
         var object = try XCTUnwrap(JSONSerialization.jsonObject(with: saved) as? [[String: Any]])

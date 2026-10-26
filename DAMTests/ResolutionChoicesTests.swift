@@ -49,4 +49,19 @@ final class ResolutionChoicesTests: XCTestCase {
             XCTAssertEqual(flat.current, 1)
         }
     }
+
+    // MARK: - Aspect ratio
+
+    func testAspectRatiosAreWrittenAsDisplaysAreSold() {
+        XCTAssertEqual(VideoManager.aspectRatioLabel(width: 1920, height: 1080), "16:9")
+        XCTAssertEqual(VideoManager.aspectRatioLabel(width: 1366, height: 768), "16:9", "within 1.5%")
+        XCTAssertEqual(VideoManager.aspectRatioLabel(width: 2560, height: 1600), "16:10")
+        XCTAssertEqual(VideoManager.aspectRatioLabel(width: 2048, height: 1536), "4:3")
+        XCTAssertEqual(VideoManager.aspectRatioLabel(width: 2256, height: 1504), "3:2")
+        XCTAssertEqual(VideoManager.aspectRatioLabel(width: 3440, height: 1440), "21:9")
+        XCTAssertEqual(VideoManager.aspectRatioLabel(width: 1170, height: 2532), "9:19.5", "upright, short side first")
+        XCTAssertEqual(VideoManager.aspectRatioLabel(width: 1080, height: 1920), "9:16")
+        XCTAssertEqual(VideoManager.aspectRatioLabel(width: 2388, height: 1668), "1.43:1", "no name, nor a small ratio")
+        XCTAssertEqual(VideoManager.aspectRatioLabel(width: 1400, height: 1000), "7:5")
+    }
 }

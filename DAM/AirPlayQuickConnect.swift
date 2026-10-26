@@ -26,23 +26,26 @@ private extension NSTouchBarItem.Identifier {
 
 // MARK: - Targets
 
-/// Something that can be connected without a screen to click on: an AirPlay display or an
-/// iPad over Sidecar. The connect hotkey and the Touch Bar list both.
+/// Something that can be connected without a screen to click on: an AirPlay display, an
+/// iPad over Sidecar, or an OpenDisplay receiver. The connect hotkey and the Touch Bar list them.
 enum ConnectTarget: Hashable {
     case airPlay(DisplayInfo)
     case sidecar(SidecarDevice)
+    case openDisplay(OpenDisplaySender.Receiver)
 
     var label: String {
         switch self {
-        case .airPlay(let display): return display.label
-        case .sidecar(let device):  return device.label
+        case .airPlay(let display):      return display.label
+        case .sidecar(let device):       return device.label
+        case .openDisplay(let receiver): return receiver.name
         }
     }
 
     var isConnected: Bool {
         switch self {
-        case .airPlay(let display): return display.isConnected
-        case .sidecar(let device):  return device.isConnected
+        case .airPlay(let display):      return display.isConnected
+        case .sidecar(let device):       return device.isConnected
+        case .openDisplay(let receiver): return receiver.isConnected
         }
     }
 
@@ -51,19 +54,34 @@ enum ConnectTarget: Hashable {
         switch (self, other) {
         case (.airPlay(let a), .airPlay(let b)): return a.id == b.id
         case (.sidecar(let a), .sidecar(let b)): return a.id == b.id
+        case (.openDisplay(let a), .openDisplay(let b)): return a.key == b.key
         default:                                 return false
         }
     }
 
-    /// AirPlay displays first, then iPads, connected or not.
-    static func all(video: VideoManager, sidecar: SidecarManager?) -> [ConnectTarget] {
-        video.airPlayDevices.map(ConnectTarget.airPlay) + (sidecar?.devices ?? []).map(ConnectTarget.sidecar)
+    /// AirPlay displays first, then iPads, then OpenDisplay receivers, connected or not:
+    /// those found now, while DAM sends to receivers.
+    static func all(video: VideoManager, sidecar: SidecarManager?, openDisplay: OpenDisplaySender? = nil) -> [ConnectTarget] {
+        let receivers = openDisplay?.isRunning == true
+            ? openDisplay!.receivers.filter { !$0.transports.isEmpty || $0.isConnected } : []
+        return video.airPlayDevices.map(ConnectTarget.airPlay) + (sidecar?.devices ?? []).map(ConnectTarget.sidecar)
+            + receivers.map(ConnectTarget.openDisplay)
     }
 
-    /// "Connecting to pad over USB" for an iPad, naming the link it will use.
+    /// "Connecting to pad over USB" for an iPad or receiver, naming the link it will use.
     var connectingAnnouncement: String {
-        guard case .sidecar(let device) = self, let link = device.link else { return Spoken.connecting(to: label) }
-        return Spoken.connecting(to: label, over: link.rawValue)
+        switch self {
+        case .sidecar(let device):
+            if let link = device.link { return Spoken.connecting(to: label, over: link.rawValue) }
+        case .openDisplay(let receiver):
+            // A cable is dialed first.
+            if let link = receiver.transports.contains(.usb) ? .usb : receiver.transports.first {
+                return Spoken.connecting(to: label, over: link.rawValue)
+            }
+        case .airPlay:
+            break
+        }
+        return Spoken.connecting(to: label)
     }
 }
 
@@ -95,6 +113,7 @@ final class AirPlayQuickConnect: NSObject {
 
     private weak var videoManager: VideoManager?
     private weak var sidecarManager: SidecarManager?
+    private weak var openDisplay: OpenDisplaySender?
     private var state: QCState = .idle
 
     // The press waits on both: the cancel window passing and the panel finding the row.
@@ -122,9 +141,11 @@ final class AirPlayQuickConnect: NSObject {
 
     // MARK: - Configuration
 
-    func configure(videoManager: VideoManager, sidecarManager: SidecarManager? = nil) {
+    func configure(videoManager: VideoManager, sidecarManager: SidecarManager? = nil,
+                   openDisplay: OpenDisplaySender? = nil) {
         self.videoManager = videoManager
         self.sidecarManager = sidecarManager
+        self.openDisplay = openDisplay
     }
 
     // MARK: - Activation (called by the GlobalHotkey)
@@ -135,7 +156,7 @@ final class AirPlayQuickConnect: NSObject {
         if case .idle = state {} else { cancel() }
 
         sidecarManager?.refresh()
-        let all = ConnectTarget.all(video: vm, sidecar: sidecarManager)
+        let all = ConnectTarget.all(video: vm, sidecar: sidecarManager, openDisplay: openDisplay)
         guard !all.isEmpty else {
             SpeechSynthesizer.shared.announce(Spoken.noAirPlayOrIPads)
             return
@@ -245,6 +266,13 @@ final class AirPlayQuickConnect: NSObject {
                 else { return }
                 SpeechSynthesizer.shared.announce(display.connectingAnnouncement)
                 sidecar.connect(device, videoManager: vm)
+            }
+        case .openDisplay(let receiver):
+            // Turned on, it is dialed; the display comes at the size its hello asks for.
+            pendingPress = { [weak self] proceed in
+                guard proceed, let sender = self?.openDisplay else { return }
+                SpeechSynthesizer.shared.announce(display.connectingAnnouncement)
+                sender.setOn(true, key: receiver.key)
             }
         }
     }

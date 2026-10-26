@@ -14,9 +14,9 @@ and Opus audio. Cancelling from Moonlight removes the display; resuming keeps it
 changed in place to the size the client asks for now.
 
 Apart from Moonlight, DAM also serves displays to browsers and media players, over HTTP
-on port 47995 and HTTPS on 47996. It is turned on and set up on its own: the Browser
-Stream menu and Settings › Browser Stream, independent of Moonlight hosting and its
-settings.
+on port 47995 and HTTPS on 47996. It is turned on and set up on its own, in Settings ›
+Streaming › HTTP Stream, independent of Moonlight hosting and its settings. Each streaming
+display's menu has Watch in Browser and Copy Watch Address while it is on.
 
 - `/watch` plays the stream in a browser through Media Source Extensions.
   It keeps the screen awake while it plays (over HTTPS only). It starts the stream again
@@ -86,7 +86,7 @@ Who may watch (`WebStreamAccess`):
   header names the Mac: an IP address; `localhost`; the Mac's Bonjour name alone or under
   a local network's suffix (`slab`, `slab.local`, `slab.lan`, `slab.home.arpa`…); a name
   the HTTPS certificate is for (DAM's own: the host name too; an imported one's, wildcards
-  by one label); or one listed under Settings › Browser Stream › Also Reachable As (a
+  by one label); or one listed under Settings › Streaming › HTTP Stream › Also Reachable As (a
   subdomain of the user's own domain, say; matched exactly, no wildcards). Any other name
   is refused, a local-looking one too: a host on the network can answer mDNS for
   `evil.local` itself. Anything else gets a 403 for pairing and a 401 for the cookie. A
@@ -101,7 +101,7 @@ Who may watch (`WebStreamAccess`):
   (Export Certificate…), an iPhone or iPad by installing `http://<mac>.local:47995/ca.cer`
   and turning on full trust for it. Without that, players that don't check certificates
   (mpv, IINA, ffmpeg by default) still play over HTTPS, and VLC asks once.
-- **Imported certificates** (Settings › Browser Stream › Import Certificate…). It takes PEM
+- **Imported certificates** (Settings › Streaming › HTTP Stream › Import Certificate…). It takes PEM
   files (certificates, any chain, and one RSA or EC key in PKCS#1, SEC1 or PKCS#8 form,
   not encrypted) or a .p12 file with its password. A .p12 file is read through the system's
   `/usr/bin/openssl` (LibreSSL), because Security on macOS 13 can't read OpenSSL 3's AES

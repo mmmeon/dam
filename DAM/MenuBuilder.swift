@@ -4,15 +4,26 @@
 
 import AppKit
 
+/// What the display submenus need besides the display: the managers, and whether
+/// displays can mirror one another now.
+private struct MenuContext {
+    let video: VideoManager
+    let moonlight: MoonlightHost
+    let webStream: WebStreamServer
+    let canMirror: Bool
+}
+
 func buildStatusMenu(audio: AudioManager,
                      video: VideoManager,
                      sidecar: SidecarManager,
                      moonlight: MoonlightHost,
                      webStream: WebStreamServer,
+                     openDisplay: OpenDisplaySender? = nil,
                      sessions: [RemoteSessionCoordinator.Session] = [],
                      blackedOut: Bool = false,
                      onRefresh: @escaping () -> Void) -> NSMenu {
     let menu = NSMenu()
+    let context = MenuContext(video: video, moonlight: moonlight, webStream: webStream, canMirror: canMirror(video: video))
 
     // — Audio section —
     menu.addItem(sectionHeader("Audio Output"))
@@ -35,7 +46,6 @@ func buildStatusMenu(audio: AudioManager,
 
     // — AirPlay Display section —
     menu.addItem(sectionHeader("AirPlay Display"))
-    let canMirrorDisplays = canMirror(video: video)
     if video.airPlayDevices.isEmpty {
         menu.addItem(disabledItem("Searching…"))
     } else {
@@ -56,11 +66,7 @@ func buildStatusMenu(audio: AudioManager,
                   + "(needs Accessibility access)"
 
             if display.isConnected && display.cgDisplayID != 0 {
-                let submenu = buildResolutionSubmenu(display: display, video: video)
-                submenu.addItem(.separator())
-                addDisplayControls(to: submenu, for: display, video: video, canMirror: canMirrorDisplays)
-                submenu.addItem(disconnectItem(for: display))
-                item.submenu = submenu
+                item.submenu = displaySubmenu(for: display, context: context, actions: [disconnectItem(for: display)])
             }
 
             menu.addItem(item)
@@ -89,53 +95,49 @@ func buildStatusMenu(audio: AudioManager,
                     ?? "Seen over Bluetooth only"
 
                 // A connected iPad's display controls live here, as an AirPlay display's do.
-                // An item with a submenu cannot be clicked, so the submenu ends in Disconnect.
+                // An item with a submenu cannot be clicked, so the submenu has Disconnect.
                 if device.isConnected,
                    let display = video.connectedDisplays.first(where: { $0.isSidecar && $0.name == device.name }) {
                     item.image = displayIcon(for: display, video: video) ?? linkIcon ?? menuIcon("ipad")
-                    let submenu = NSMenu()
-                    if let link = device.link {
-                        let over = disabledItem("Connected over \(link.rawValue)")
-                        over.image = menuIcon(link.symbolName)
-                        submenu.addItem(over)
-                        submenu.addItem(.separator())
-                    }
-                    for control in buildResolutionSubmenu(display: display, video: video).items {
-                        control.menu?.removeItem(control)
-                        submenu.addItem(control)
-                    }
-                    submenu.addItem(.separator())
-                    addDisplayControls(to: submenu, for: display, video: video, canMirror: canMirrorDisplays)
                     let disconnect = NSMenuItem(
                         title: "Disconnect",
                         action: #selector(AppDelegate.selectSidecarDevice(_:)),
                         keyEquivalent: ""
                     )
                     disconnect.representedObject = device
-                    submenu.addItem(disconnect)
-                    item.submenu = submenu
+                    item.submenu = displaySubmenu(for: display, context: context,
+                                                  info: device.link.map { [connectedOverItem($0.rawValue, symbol: $0.symbolName)] } ?? [],
+                                                  actions: [disconnect])
                 }
                 menu.addItem(item)
             }
         }
     }
 
-    // — Streaming Displays section — DAM's own, for streaming or remote-desktop apps
+    // — OpenDisplay section — while DAM sends to receivers: those found, or streaming
+    let receivers = openDisplay?.isRunning == true
+        ? openDisplay!.receivers.filter { !$0.transports.isEmpty || $0.isConnected } : []
+    if openDisplay?.isRunning == true {
+        menu.addItem(.separator())
+        menu.addItem(sectionHeader("OpenDisplay"))
+        if receivers.isEmpty { menu.addItem(disabledItem("No receivers found")) }
+        for receiver in receivers { menu.addItem(receiverItem(receiver, context: context)) }
+    }
+
+    // — Streaming Displays section — DAM's own, for streaming or remote-desktop apps; those
+    // streamed to an OpenDisplay receiver are listed with it above
     menu.addItem(.separator())
     menu.addItem(sectionHeader("Streaming Displays"))
-    for display in video.connectedDisplays where display.isStreaming {
+    let receiverDisplays = Set(receivers.compactMap(\.displayID))
+    for display in video.connectedDisplays where display.isStreaming && !receiverDisplays.contains(display.cgDisplayID) {
         let item = NSMenuItem(title: display.label, action: nil, keyEquivalent: "")
         item.state = .on
         item.image = displayIcon(for: display, video: video)
-        let submenu = buildResolutionSubmenu(display: display, video: video)
-        submenu.addItem(.separator())
-        addDisplayControls(to: submenu, for: display, video: video, canMirror: canMirrorDisplays)
         let remove = NSMenuItem(title: "Remove",
                                 action: #selector(AppDelegate.removeStreamingDisplay(_:)),
                                 keyEquivalent: "")
         remove.representedObject = display
-        submenu.addItem(remove)
-        item.submenu = submenu
+        item.submenu = displaySubmenu(for: display, context: context, actions: [remove] + watchItems(for: display, context: context))
         menu.addItem(item)
     }
     let create = NSMenuItem(title: "Create Streaming Display",
@@ -146,8 +148,6 @@ func buildStatusMenu(audio: AudioManager,
         ? "A virtual display for a streaming or remote-desktop app to show, one per stream."
         : "There can be up to \(VideoManager.maxStreamingDisplays) streaming displays."
     menu.addItem(create)
-    menu.addItem(moonlightItem(host: moonlight))
-    menu.addItem(browserStreamItem(server: webStream))
     for session in sessions { menu.addItem(remoteSessionItem(session)) }
     if blackedOut {
         let light = NSMenuItem(title: "Light This Mac's Screens", action: #selector(AppDelegate.liftBlackout(_:)),
@@ -169,13 +169,7 @@ func buildStatusMenu(audio: AudioManager,
             let item = NSMenuItem(title: display.label, action: nil, keyEquivalent: "")
             item.state = display.isConnected ? .on : .off
             item.image = displayIcon(for: display, video: video)
-
-            let submenu = buildResolutionSubmenu(display: display, video: video)
-            if display.cgDisplayID != 0 {
-                if canMirrorDisplays { submenu.addItem(.separator()) }
-                addDisplayControls(to: submenu, for: display, video: video, canMirror: canMirrorDisplays)
-            }
-            item.submenu = submenu
+            item.submenu = displaySubmenu(for: display, context: context)
             menu.addItem(item)
         }
     }
@@ -209,6 +203,136 @@ func buildStatusMenu(audio: AudioManager,
                  keyEquivalent: "q")
 
     return menu
+}
+
+/// A display's submenu: its name with its native aspect ratio, `info` on how it is
+/// connected, its actions (`actions` first, then mirroring, the main display, position),
+/// the streams of it, then its resolutions and rates.
+private func displaySubmenu(for display: DisplayInfo, context: MenuContext, info: [NSMenuItem] = [],
+                            actions: [NSMenuItem] = []) -> NSMenu {
+    let video = context.video
+    let submenu = NSMenu()
+    let header = sectionHeader(display.label)
+    submenu.addItem(header)
+    info.forEach(submenu.addItem)
+    var controls = actions
+    if display.cgDisplayID != 0 { controls += displayControls(for: display, video: video, canMirror: context.canMirror) }
+    if !controls.isEmpty {
+        if !info.isEmpty { submenu.addItem(.separator()) }
+        controls.forEach(submenu.addItem)
+    }
+    let streams = streamItems(for: display, context: context)
+    if !streams.isEmpty {
+        submenu.addItem(.separator())
+        submenu.addItem(sectionHeader("Streams"))
+        streams.forEach(submenu.addItem)
+    }
+    submenu.addItem(.separator())
+    for item in buildResolutionSubmenu(display: display, video: video).items {
+        item.menu?.removeItem(item)
+        submenu.addItem(item)
+    }
+    if let ratio = video.nativeAspectRatio(of: display) { setTrailing(ratio, on: header, in: submenu) }
+    return submenu
+}
+
+/// "Connected over USB", with the link's symbol.
+private func connectedOverItem(_ link: String, symbol: String) -> NSMenuItem {
+    let item = disabledItem("Connected over \(link)")
+    item.image = menuIcon(symbol)
+    return item
+}
+
+/// An OpenDisplay receiver: picked, it connects or stops connecting; once streaming, its
+/// display's submenu, which ends the stream with Disconnect.
+private func receiverItem(_ receiver: OpenDisplaySender.Receiver, context: MenuContext) -> NSMenuItem {
+    let item = NSMenuItem(title: receiver.name, action: #selector(AppDelegate.toggleOpenDisplayReceiver(_:)),
+                          keyEquivalent: "")
+    item.representedObject = receiver.key
+    // Turned on and not streaming yet: dialing, or waiting to.
+    item.state = receiver.isConnected ? .on : receiver.isOn ? .mixed : .off
+    let link = receiver.transport ?? (receiver.transports.contains(.usb) ? .usb : receiver.transports.first)
+    item.image = link.flatMap { menuIcon($0.link.symbolName) }
+    item.toolTip = receiver.isOn ? "\(receiver.status). Select to stop." : "Select to connect over "
+        + receiver.transports.map(\.rawValue).joined(separator: " or ") + "."
+    if receiver.isConnected, let id = receiver.displayID,
+       let display = context.video.connectedDisplays.first(where: { $0.cgDisplayID == id }) {
+        item.image = displayIcon(for: display, video: context.video) ?? item.image
+        let disconnect = NSMenuItem(title: "Disconnect", action: #selector(AppDelegate.toggleOpenDisplayReceiver(_:)),
+                                    keyEquivalent: "")
+        disconnect.representedObject = receiver.key
+        let over = receiver.transport.map { [connectedOverItem($0.rawValue, symbol: $0.link.symbolName)] } ?? []
+        item.submenu = displaySubmenu(for: display, context: context, info: over, actions: [disconnect])
+    }
+    return item
+}
+
+/// Watching a streaming display in this Mac's browser, or on another device from its
+/// address, while the HTTP stream is on.
+private func watchItems(for display: DisplayInfo, context: MenuContext) -> [NSMenuItem] {
+    guard context.webStream.isRunning,
+          let app = context.webStream.apps().first(where: { $0.displayID == display.cgDisplayID }) else { return [] }
+    let open = NSMenuItem(title: "Watch in Browser", action: #selector(AppDelegate.openWebStream(_:)), keyEquivalent: "")
+    open.representedObject = app.id
+    open.toolTip = "Plays this display in this Mac's browser, as any browser on the network can with the address " +
+                   "Copy Watch Address gives."
+    let copy = NSMenuItem(title: "Copy Watch Address", action: #selector(AppDelegate.copyWebStreamAddress(_:)),
+                          keyEquivalent: "")
+    copy.representedObject = app.id
+    copy.toolTip = "Copies the address of this display's player page. A browser that opens it pairs with a code typed " +
+                   "on this Mac. Players need a link of their own, from Settings › Streaming › HTTP Stream."
+    return [open, copy]
+}
+
+/// Who streams `display`: each Moonlight device, with its settings and a way to end its
+/// stream, and each browser or player watching, all with the link they stream over.
+private func streamItems(for display: DisplayInfo, context: MenuContext) -> [NSMenuItem] {
+    guard display.cgDisplayID != 0 else { return [] }
+    var items: [NSMenuItem] = []
+    for (client, link) in context.moonlight.streams(on: display.cgDisplayID) {
+        let item = NSMenuItem(title: client.label, action: nil, keyEquivalent: "")
+        item.attributedTitle = streamTitle(client.label, kind: "Moonlight", link: link)
+        item.image = link.flatMap { menuIcon($0.symbolName) }
+        let submenu = NSMenu()
+        let input = NSMenuItem(title: "Allow Input", action: #selector(AppDelegate.toggleMoonlightInput(_:)),
+                               keyEquivalent: "")
+        input.representedObject = client.certificate
+        input.state = client.allowsInput ? .on : .off
+        input.toolTip = "Lets \(client.label) use the Mac's pointer and keyboard on this display. Takes effect at once."
+        submenu.addItem(input)
+        let lowLatency = NSMenuItem(title: "Low-Latency Encoding",
+                                    action: #selector(AppDelegate.toggleMoonlightLowLatency(_:)), keyEquivalent: "")
+        lowLatency.representedObject = client.certificate
+        lowLatency.state = client.lowLatency ? .on : .off
+        lowLatency.toolTip = "Sends each frame the moment it is encoded, about a frame sooner. Takes effect from the next stream."
+        submenu.addItem(lowLatency)
+        submenu.addItem(.separator())
+        let end = NSMenuItem(title: "End Stream", action: #selector(AppDelegate.endMoonlightStream(_:)), keyEquivalent: "")
+        end.representedObject = client.certificate
+        end.toolTip = "Ends what \(client.label) launched, and removes the display made for it. Other devices go on streaming."
+        submenu.addItem(end)
+        item.submenu = submenu
+        items.append(item)
+    }
+    for viewer in context.webStream.viewers(on: display.cgDisplayID) {
+        let item = NSMenuItem(title: viewer.name, action: nil, keyEquivalent: "")
+        item.attributedTitle = streamTitle(viewer.name, kind: "HTTP", link: viewer.link)
+        item.image = viewer.link.flatMap { menuIcon($0.symbolName) }
+        item.toolTip = "Watching in a browser or player. Forget it in Settings › Streaming › HTTP Stream to cut it off."
+        items.append(item)
+    }
+    return items
+}
+
+/// "iPad  Moonlight · USB": the device's name, then what it streams with and over, dimmed.
+private func streamTitle(_ name: String, kind: String, link: StreamLink?) -> NSAttributedString {
+    let title = NSMutableAttributedString(string: name, attributes: [.font: NSFont.menuFont(ofSize: 0)])
+    let detail = [kind, link?.rawValue].compactMap { $0 }.joined(separator: " · ")
+    title.append(NSAttributedString(string: "  " + detail, attributes: [
+        .font: NSFont.menuFont(ofSize: 0),
+        .foregroundColor: NSColor.secondaryLabelColor,
+    ]))
+    return title
 }
 
 #if DEBUG
@@ -284,86 +408,6 @@ private func remoteSessionItem(_ session: RemoteSessionCoordinator.Session) -> N
     return item
 }
 
-/// Hosting for Moonlight, on or off, and the browser stream; the rest is in Settings.
-private func moonlightItem(host: MoonlightHost) -> NSMenuItem {
-    let item = NSMenuItem(title: "Moonlight", action: nil, keyEquivalent: "")
-    item.state = host.isRunning ? .on : .off
-    let submenu = NSMenu()
-    guard !MoonlightHost.usesExternalSunshine else {
-        submenu.addItem(disabledItem("Sunshine Hosts Moonlight"))
-        submenu.addItem(.separator())
-        submenu.addItem(withTitle: "Moonlight Settings…", action: #selector(AppDelegate.openMoonlightSettings(_:)),
-                        keyEquivalent: "")
-        item.submenu = submenu
-        return item
-    }
-    let toggle = NSMenuItem(title: "Allow Moonlight to Connect",
-                            action: #selector(AppDelegate.toggleMoonlightHost(_:)),
-                            keyEquivalent: "")
-    toggle.state = host.isRunning ? .on : .off
-    toggle.toolTip = "Lets Moonlight on another device find this Mac and pair with it. " +
-                     "Each streaming display is listed in Moonlight as an app."
-    submenu.addItem(toggle)
-    if let error = host.lastError { submenu.addItem(disabledItem(error)) }
-    if host.isRunning {
-        let streaming = host.streamingClients
-        if !streaming.isEmpty {
-            submenu.addItem(.separator())
-            submenu.addItem(sectionHeader("Streaming"))
-            for client in streaming {
-                let end = NSMenuItem(title: "End Stream to \(client.name)",
-                                     action: #selector(AppDelegate.endMoonlightStream(_:)), keyEquivalent: "")
-                end.representedObject = client.certificate
-                end.toolTip = "Ends what \(client.name) launched, and removes the display made for it. " +
-                              "Other devices go on streaming."
-                submenu.addItem(end)
-            }
-        }
-    }
-    submenu.addItem(.separator())
-    let settings = NSMenuItem(title: "Moonlight Settings…",
-                              action: #selector(AppDelegate.openMoonlightSettings(_:)),
-                              keyEquivalent: "")
-    settings.toolTip = "Pairing, the paired devices, and how streams are made."
-    submenu.addItem(settings)
-    item.submenu = submenu
-    return item
-}
-
-/// The stream for browsers and players, on or off, its address; the rest is in Settings.
-private func browserStreamItem(server: WebStreamServer) -> NSMenuItem {
-    let item = NSMenuItem(title: "Browser Stream", action: nil, keyEquivalent: "")
-    item.state = server.isRunning ? .on : .off
-    let submenu = NSMenu()
-    let toggle = NSMenuItem(title: "Allow Browsers to Watch",
-                            action: #selector(AppDelegate.toggleWebStream(_:)), keyEquivalent: "")
-    toggle.state = server.isRunning ? .on : .off
-    toggle.toolTip = "Lets a browser or player given the link play a streaming display, on port " +
-                     "\(server.port.rawValue). Apart from Moonlight."
-    submenu.addItem(toggle)
-    if let error = server.lastError { submenu.addItem(disabledItem(error)) }
-    if server.isRunning {
-        submenu.addItem(.separator())
-        let open = NSMenuItem(title: "Open in Browser", action: #selector(AppDelegate.openWebStream(_:)), keyEquivalent: "")
-        open.toolTip = "Plays a streaming display in this Mac's browser, as any browser or player on the network can " +
-                       "with the link Copy Address gives."
-        submenu.addItem(open)
-        let copy = NSMenuItem(title: "Copy Address", action: #selector(AppDelegate.copyWebStreamAddress(_:)), keyEquivalent: "")
-        copy.toolTip = "Copies \(server.watchURL.absoluteString). A browser that opens it pairs with a code typed " +
-                       "on this Mac. Players need a link of their own, from Browser Stream Settings."
-        submenu.addItem(copy)
-        let watching = server.viewerCount
-        if watching > 0 { submenu.addItem(disabledItem(watching == 1 ? "1 watching" : "\(watching) watching")) }
-    }
-    submenu.addItem(.separator())
-    let settings = NSMenuItem(title: "Browser Stream Settings…",
-                              action: #selector(AppDelegate.openBrowserStreamSettings(_:)), keyEquivalent: "")
-    settings.toolTip = "The profile, the pointer, and the link."
-    submenu.addItem(settings)
-    item.submenu = submenu
-    return item
-}
-
 private func sectionHeader(_ title: String) -> NSMenuItem {
     let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
     item.isEnabled = false
@@ -375,6 +419,27 @@ private func sectionHeader(_ title: String) -> NSMenuItem {
         ]
     )
     return item
+}
+
+/// Sets `trailing` flush right on header `item`'s line, as a display's aspect ratio by its
+/// name: a right tab stop where the menu's other titles end, so the header doesn't widen it.
+/// Call once the menu is built.
+private func setTrailing(_ trailing: String, on item: NSMenuItem, in menu: NSMenu) {
+    let attributes: [NSAttributedString.Key: Any] = [
+        .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize, weight: .semibold),
+        .foregroundColor: NSColor.secondaryLabelColor,
+    ]
+    let own = (item.title as NSString).size(withAttributes: attributes).width
+        + 16 + (trailing as NSString).size(withAttributes: attributes).width
+    // A menu is its titles' width and 29 points, and 31 more for submenu arrows when any item
+    // has a submenu; an item's title as wide as a tab stop's place (measured on macOS 13).
+    let arrows: CGFloat = menu.items.contains(where: \.hasSubmenu) ? 31 : 0
+    let style = NSMutableParagraphStyle()
+    style.tabStops = [NSTextTab(textAlignment: .right, location: max(ceil(own), floor(menu.size.width - 29 - arrows)))]
+    var styled = attributes
+    styled[.paragraphStyle] = style
+    item.attributedTitle = NSAttributedString(string: item.title + "\t" + trailing, attributes: styled)
+    item.setAccessibilityLabel("\(item.title), \(trailing)")
 }
 
 private func buildResolutionSubmenu(display: DisplayInfo, video: VideoManager) -> NSMenu {
@@ -522,14 +587,15 @@ private func displayIcon(for display: DisplayInfo, video: VideoManager) -> NSIma
 }
 
 /// The mirror, optimize, main-display and position items for a connected display.
-private func addDisplayControls(to submenu: NSMenu, for display: DisplayInfo,
-                                video: VideoManager, canMirror: Bool) {
+private func displayControls(for display: DisplayInfo, video: VideoManager, canMirror: Bool) -> [NSMenuItem] {
+    var items: [NSMenuItem] = []
     if canMirror {
-        addMirrorItems(to: submenu, for: display, video: video)
-        if let item = optimizeItem(for: display, video: video) { submenu.addItem(item) }
+        items += mirrorItems(for: display, video: video)
+        if let item = optimizeItem(for: display, video: video) { items.append(item) }
     }
-    if let item = mainDisplayItem(for: display, video: video) { submenu.addItem(item) }
-    if let item = positionItem(for: display, video: video) { submenu.addItem(item) }
+    if let item = mainDisplayItem(for: display, video: video) { items.append(item) }
+    if let item = positionItem(for: display, video: video) { items.append(item) }
+    return items
 }
 
 private func canMirror(video: VideoManager) -> Bool {
@@ -567,14 +633,13 @@ private func optimizeItem(for display: DisplayInfo, video: VideoManager) -> NSMe
 /// several, a display that mirrors another keeps the toggle (it can only be freed), while
 /// any other gets a "Mirror on" submenu listing the displays that can mirror it, the ones
 /// doing so checked, plus "All Displays", and "Use as Separate Display" when it has slaves.
-private func addMirrorItems(to submenu: NSMenu, for display: DisplayInfo, video: VideoManager) {
+private func mirrorItems(for display: DisplayInfo, video: VideoManager) -> [NSMenuItem] {
     let targets = video.mirrorTargets(for: display)
     let inSet   = video.isInMirrorSet(display)
     if targets.count < 2 || display.isMirroring {
-        submenu.addItem(mirrorToggleItem(for: display, isMirroring: inSet))
-        return
+        return [mirrorToggleItem(for: display, isMirroring: inSet)]
     }
-    if inSet { submenu.addItem(mirrorToggleItem(for: display, isMirroring: true)) }
+    var items = inSet ? [mirrorToggleItem(for: display, isMirroring: true)] : []
 
     let slaves   = Set(video.slaveDisplays(of: display).map(\.id))
     let mirrorOn = NSMenu()
@@ -596,7 +661,8 @@ private func addMirrorItems(to submenu: NSMenu, for display: DisplayInfo, video:
 
     let parent = NSMenuItem(title: "Mirror on", action: nil, keyEquivalent: "")
     parent.submenu = mirrorOn
-    submenu.addItem(parent)
+    items.append(parent)
+    return items
 }
 
 /// "Use as Main Display", checked while the display is the main one; nil when it cannot be

@@ -46,6 +46,8 @@ struct MoonlightLaunch {
     /// The address of the device that launched it, which alone may shake hands over RTSP
     /// and ping without the payload; empty when unknown, which lets no one.
     var clientAddress = ""
+    /// The link the device launched over, for the menu to show.
+    var link: StreamLink?
     /// Whether ANNOUNCE has started its stream. A second would seal video under the same
     /// key from the same counter; a stream that starts again comes with a new launch.
     var announced = false

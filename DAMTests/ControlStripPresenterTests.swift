@@ -256,6 +256,28 @@ final class ControlStripPresenterTests: XCTestCase {
         XCTAssertFalse(ConnectTarget.airPlay(tv).isSame(as: .airPlay(other)))
         XCTAssertFalse(ConnectTarget.airPlay(tv).isSame(as: .sidecar(pad)), "An iPad is never an AirPlay display")
         XCTAssertTrue(ConnectTarget.sidecar(pad).isSame(as: .sidecar(SidecarDevice(id: "tv", name: "tv", isConnected: true))))
+        let receiver = OpenDisplaySender.Receiver(key: "tv", name: "tv", transports: [.wifi], isOn: false, status: "Off")
+        var streaming = receiver
+        streaming.isOn = true
+        streaming.transport = .usb
+        streaming.displayID = 7
+        XCTAssertTrue(ConnectTarget.openDisplay(receiver).isSame(as: .openDisplay(streaming)))
+        XCTAssertFalse(ConnectTarget.openDisplay(receiver).isSame(as: .sidecar(pad)), "A receiver is never an iPad")
+        XCTAssertFalse(ConnectTarget.openDisplay(receiver).isConnected)
+        XCTAssertTrue(ConnectTarget.openDisplay(streaming).isConnected)
+    }
+
+    func testAReceiverIsAnnouncedOverTheLinkItIsDialedOn() {
+        let both = OpenDisplaySender.Receiver(key: "k", name: "Pad", transports: [.wifi, .usb], isOn: false, status: "Off")
+        XCTAssertEqual(ConnectTarget.openDisplay(both).connectingAnnouncement, Spoken.connecting(to: "Pad", over: "USB"))
+        let none = OpenDisplaySender.Receiver(key: "k", name: "Pad", transports: [], isOn: true, status: "Not found")
+        XCTAssertEqual(ConnectTarget.openDisplay(none).connectingAnnouncement, Spoken.connecting(to: "Pad"))
+    }
+
+    func testAWatchAddressNamesTheDisplaysApp() {
+        let url = URL(string: "http://localhost:47995/watch?token=abc")!
+        XCTAssertEqual(AppDelegate.watchURL(url, app: 2).absoluteString, "http://localhost:47995/watch?token=abc&app=2")
+        XCTAssertEqual(AppDelegate.watchURL(url, app: nil), url)
     }
 
     // MARK: - Switcher visibility

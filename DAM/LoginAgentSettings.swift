@@ -54,6 +54,9 @@ struct LoginAgentSettings: Equatable {
             let allowed = clients.filter(\.showsLoginWindow).map { client -> MoonlightClient in
                 var client = client
                 client.allowsInput = false
+                // Not the names DAM shows, which the agent doesn't, so renaming needs no update.
+                client.autoName = nil
+                client.customName = nil
                 return client
             }
             guard !allowed.isEmpty else { return nil }
