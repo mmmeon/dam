@@ -61,7 +61,9 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic) unsigned int serialNum;
 @property(nonatomic) unsigned int productID;
 @property(nonatomic) unsigned int vendorID;
-@property(copy, nonatomic) void (^terminationHandler)(id, CGVirtualDisplay*);
+// The first argument is not always an object: when the connection to WindowServer goes
+// ("proxyGone"), it was 0x420, and retaining it as one crashed DAM. The display can be nil.
+@property(copy, nonatomic) void (^terminationHandler)(void * _Nullable, CGVirtualDisplay * _Nullable);
 
 - (instancetype)init;
 - (nullable dispatch_queue_t)dispatchQueue;
