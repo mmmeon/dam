@@ -757,6 +757,29 @@ final class WebStreamServer {
         ownedDisplays.remove(id)
     }
 
+    /// The devices watching display `id`, each once per link it watches over, by name.
+    func viewers(on id: CGDirectDisplayID) -> [(name: String, link: StreamLink?)] {
+        var seen: [(name: String, link: StreamLink?)] = []
+        for session in sessions.values where session.key.displayID == id {
+            for viewer in session.watching {
+                let name = devices.all.first { $0.id == viewer.device }?.name ?? "Browser"
+                if !seen.contains(where: { $0.name == name && $0.link == viewer.link }) { seen.append((name, viewer.link)) }
+            }
+        }
+        return seen.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    /// The links `device` watches over now, each once.
+    func links(of device: WebStreamDevice) -> [StreamLink] {
+        var links: [StreamLink] = []
+        for session in sessions.values {
+            for viewer in session.watching where viewer.device == device.id {
+                if let link = viewer.link, !links.contains(link) { links.append(link) }
+            }
+        }
+        return links
+    }
+
     /// Whether a viewer here streams display `id`.
     func streams(display id: CGDirectDisplayID) -> Bool {
         sessions.keys.contains { $0.displayID == id }
@@ -881,7 +904,8 @@ final class WebStreamServer {
                                        lowLatency: request.lowLatency)
         let viewer = WebStreamViewer(connection: connection,
                                      maxInFlight: request.profile.maxInFlight(bitrateKbps: request.bitrateKbps),
-                                     audio: request.audio, device: request.device)
+                                     audio: request.audio, device: request.device,
+                                     link: StreamLink.of(connection.currentPath?.remoteEndpoint ?? connection.endpoint))
         // A session that has just ended, and is still to be let go here, takes no one.
         if let running = sessions[key], running.add(viewer) { return }
         guard sessions.count < Self.maxSessions else {
@@ -1027,6 +1051,12 @@ final class WebStreamSession {
     var viewerCount: Int {
         lock.lock(); defer { lock.unlock() }
         return viewers.count
+    }
+
+    /// Who watches: each viewer's device id and link.
+    var watching: [(device: String?, link: StreamLink?)] {
+        lock.lock(); defer { lock.unlock() }
+        return viewers.map { ($0.device, $0.link) }
     }
 
     init(key: Key) throws {
@@ -1500,6 +1530,8 @@ final class WebStreamViewer {
     let audio: Bool
     /// The id of the device watching.
     let device: String?
+    /// The link it watches over.
+    let link: StreamLink?
     private let lock = NSLock()
     private var inFlight = 0
     private var closed = false
@@ -1516,11 +1548,12 @@ final class WebStreamViewer {
     }
 
     init(connection: NWConnection, maxInFlight: Int, audio: Bool = true, device: String? = nil,
-         patience: TimeInterval = 10) {
+         link: StreamLink? = nil, patience: TimeInterval = 10) {
         self.connection = connection
         self.maxInFlight = max(maxInFlight, 256 * 1024)
         self.audio = audio
         self.device = device
+        self.link = link
         self.patience = patience
     }
 

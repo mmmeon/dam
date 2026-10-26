@@ -63,3 +63,32 @@ enum CableLinks {
         return !on.isEmpty && on.allSatisfy(cable.contains)
     }
 }
+
+/// How a device streaming reaches the Mac, as the menu and Settings name it.
+enum StreamLink: String {
+    case thisMac = "This Mac"
+    case usb = "USB"
+    case lan = "LAN"
+    case wan = "WAN"
+
+    /// The SF Symbol for the link.
+    var symbolName: String {
+        switch self {
+        case .thisMac: return "laptopcomputer"
+        case .usb:     return "cable.connector"
+        case .lan:     return "network"
+        case .wan:     return "globe"
+        }
+    }
+
+    /// The link a connection from `endpoint` came over; nil for an endpoint with no address.
+    static func of(_ endpoint: NWEndpoint?) -> StreamLink? {
+        guard let endpoint, case .hostPort = endpoint else { return nil }
+        let subnets = LocalNetwork.interfaceSubnets()
+        let address = MoonlightHost.address(endpoint)
+        if address.hasPrefix("127.") || address == "::1"
+            || LocalNetwork.ownAddresses(subnets: subnets).contains(address) { return .thisMac }
+        if CableLinks.admits(endpoint) { return .usb }
+        return LocalNetwork.contains(endpoint, subnets: subnets) ? .lan : .wan
+    }
+}

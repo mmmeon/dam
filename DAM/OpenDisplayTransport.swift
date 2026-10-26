@@ -33,6 +33,9 @@ protocol OpenDisplayChannel: AnyObject {
 enum OpenDisplayTransport: String {
     case wifi = "Wi-Fi"
     case usb = "USB"
+
+    /// The link, as other streams name theirs: Wi-Fi is found by Bonjour, so on the LAN.
+    var link: StreamLink { self == .usb ? .usb : .lan }
 }
 
 /// What a channel has been handed to send and not yet written out; from any thread.

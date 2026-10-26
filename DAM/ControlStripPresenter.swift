@@ -184,6 +184,7 @@ final class ControlStripPresenter: NSObject {
     private weak var audioManager: AudioManager?
     private weak var videoManager: VideoManager?
     private weak var sidecarManager: SidecarManager?
+    private weak var openDisplay: OpenDisplaySender?
     private var modalBar: NSTouchBar?
 
     /// Maps each resolution segmented control → (display, ordered modes) so the
@@ -220,10 +221,12 @@ final class ControlStripPresenter: NSObject {
     /// Counts the switcher's closes, so a change that settles after one doesn't bring it back.
     private var closes = SwitcherCloses()
 
-    init(audioManager: AudioManager, videoManager: VideoManager, sidecarManager: SidecarManager? = nil) {
+    init(audioManager: AudioManager, videoManager: VideoManager, sidecarManager: SidecarManager? = nil,
+         openDisplay: OpenDisplaySender? = nil) {
         self.audioManager = audioManager
         self.videoManager = videoManager
         self.sidecarManager = sidecarManager
+        self.openDisplay = openDisplay
         super.init()
         SpeechSynthesizer.shared.onSpokenLengthChanged = {
             CaptionHUD.shared.setSpoken(SpeechSynthesizer.shared.spokenLength)
@@ -742,13 +745,13 @@ final class ControlStripPresenter: NSObject {
     /// on the right side of the bar instead.
     private var connectableTargets: [ConnectTarget] {
         guard let vm = videoManager else { return [] }
-        return ConnectTarget.all(video: vm, sidecar: sidecarManager).filter { !$0.isConnected }
+        return ConnectTarget.all(video: vm, sidecar: sidecarManager, openDisplay: openDisplay).filter { !$0.isConnected }
     }
 
     private func videoSegmented() -> NSView {
         let displays = connectableTargets
         guard !displays.isEmpty else {
-            let anyConnected = videoManager.map { ConnectTarget.all(video: $0, sidecar: sidecarManager) }?
+            let anyConnected = videoManager.map { ConnectTarget.all(video: $0, sidecar: sidecarManager, openDisplay: openDisplay) }?
                 .contains { $0.isConnected } ?? false
             return placeholder(anyConnected ? "Displays connected" : "No AirPlay or iPads")
         }
@@ -881,6 +884,9 @@ final class ControlStripPresenter: NSObject {
         case .sidecar(let device):
             SpeechSynthesizer.shared.announce(target.connectingAnnouncement)
             sidecarManager?.connect(device, videoManager: vm)
+        case .openDisplay(let receiver):
+            SpeechSynthesizer.shared.announce(target.connectingAnnouncement)
+            openDisplay?.setOn(true, key: receiver.key)
         }
     }
 

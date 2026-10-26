@@ -52,6 +52,17 @@ final class LoginAgentSettingsTests: XCTestCase {
                                                        defaults: [:]), "none allowed")
     }
 
+    func testTheAgentsDevicesHaveNoNamesOfDAMsSoRenamingNeedsNoUpdate() throws {
+        var client = MoonlightClient(name: "10.0.0.2", certificate: Data([1]), paired: Date(), showsLoginWindow: true)
+        let before = try XCTUnwrap(LoginAgentSettings.Moonlight.make(uniqueID: "A", certificate: Data([9]),
+                                                                      clients: [client], defaults: [:]))
+        client.autoName = "Robins-iPad"
+        client.customName = "Living Room"
+        let after = try XCTUnwrap(LoginAgentSettings.Moonlight.make(uniqueID: "A", certificate: Data([9]),
+                                                                     clients: [client], defaults: [:]))
+        XCTAssertEqual(after, before)
+    }
+
     func testTheMoonlightHostReadsBackAsWrittenWithoutItsKey() throws {
         let iPad = MoonlightClient(name: "iPad", certificate: Data([1]), paired: Date(timeIntervalSince1970: 0),
                                    allowsInput: false, showsLoginWindow: true)

@@ -69,8 +69,8 @@ only a Homebrew formula, and current sources need Xcode 16.2. It is the only hos
 a hook the client's size. The forks (Apollo, Vibepollo, foundation-sunshine) have no Mac
 builds.
 
-1. In Settings › Moonlight, set **Host** to **Sunshine**. DAM's own host stops, so Sunshine
-   can use ports 47984–48010.
+1. In Settings › Streaming › Remote Sessions › Sunshine, check **Sunshine hosts Moonlight**.
+   DAM's own host stops, so Sunshine can use ports 47984–48010.
 2. Add the commands shown there to Sunshine › Configuration › General › Command
    Preparations:
 

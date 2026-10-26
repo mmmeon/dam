@@ -19,13 +19,20 @@ import Network
 final class OpenDisplaySender {
 
     /// A receiver DAM knows of: found now, turned on, or both.
-    struct Receiver: Equatable {
+    struct Receiver: Hashable {
         /// Its ID from Bonjour or its hello, or "usb:" and its UDID until its hello gives one.
         let key: String
         var name: String
         var transports: [OpenDisplayTransport]
         var isOn: Bool
         var status: String
+        /// The display streamed to it, once made.
+        var displayID: CGDirectDisplayID? = nil
+        /// What it streams over, while it does.
+        var transport: OpenDisplayTransport? = nil
+
+        /// Whether it is streaming.
+        var isConnected: Bool { transport != nil }
     }
 
     // MARK: Settings
@@ -160,7 +167,8 @@ final class OpenDisplaySender {
             if usbDevices.contains(where: { self.key(for: $0) == key }) { transports.append(.usb) }
             if wifi[key] != nil { transports.append(.wifi) }
             return Receiver(key: key, name: name(of: key), transports: transports, isOn: on.contains(key),
-                            status: status(of: key, on: on.contains(key), found: !transports.isEmpty))
+                            status: status(of: key, on: on.contains(key), found: !transports.isEmpty),
+                            displayID: sessions[key]?.displayID, transport: sessions[key]?.transport)
         }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 

@@ -61,7 +61,7 @@ final class SettingsWindowController: NSWindowController {
     private var openDisplayRunning = false
     /// The General tab's launch-at-login box.
     private weak var launchAtLoginBox: NSButton?
-    /// The Streaming tab, holding the Moonlight, Browser Stream and Remote Sessions pages.
+    /// The Streaming tab, holding the General, Moonlight, HTTP Stream, OpenDisplay and Remote Sessions pages.
     private lazy var streamingContent = StreamingTabView(titles: TabID.streamingPages.map(Self.title)) {
         [weak self] index in self?.selectTab(TabID.streamingPages[index])
     }
@@ -74,7 +74,11 @@ final class SettingsWindowController: NSWindowController {
     /// The app's row atop its page, to show its status as it changes.
     private weak var sessionSummary: ListRowView?
     /// The Streaming page last shown, which the Streaming tab opens on.
-    private var streamingPage = TabID.moonlight
+    private var streamingPage = TabID.streamingGeneral
+    /// What applies to every stream, and each service's state.
+    private lazy var streamingGeneralContent: NSView = buildStreamingGeneralTab()
+    /// The services' statuses as the Streaming General page shows them.
+    private var servicesShown: [String] = []
 
     // MARK: - Toolbar identifiers
 
@@ -88,10 +92,11 @@ final class SettingsWindowController: NSWindowController {
         static let browser = NSToolbarItem.Identifier("\(AppIdentity.shortID).settings.browser")
         static let opendisplay = NSToolbarItem.Identifier("\(AppIdentity.shortID).settings.opendisplay")
         static let streaming = NSToolbarItem.Identifier("\(AppIdentity.shortID).settings.streaming")
+        static let streamingGeneral = NSToolbarItem.Identifier("\(AppIdentity.shortID).settings.streaming.general")
         /// The toolbar's tabs.
         static let all: [NSToolbarItem.Identifier] = [general, hotkeys, devices, virtual, streaming]
         /// The Streaming tab's pages, in the order its bar shows them.
-        static let streamingPages: [NSToolbarItem.Identifier] = [moonlight, browser, opendisplay, sessions]
+        static let streamingPages: [NSToolbarItem.Identifier] = [streamingGeneral, moonlight, browser, opendisplay, sessions]
     }
 
     // MARK: - Init
@@ -160,7 +165,8 @@ final class SettingsWindowController: NSWindowController {
         case TabID.virtual:   return "Virtual Display"
         case TabID.moonlight: return "Moonlight"
         case TabID.sessions:  return "Remote Sessions"
-        case TabID.browser:   return "Browser Stream"
+        case TabID.browser:   return "HTTP Stream"
+        case TabID.streamingGeneral: return "General"
         case TabID.opendisplay: return "OpenDisplay"
         case TabID.streaming: return "Streaming"
         default:              return "Hotkeys"
@@ -179,6 +185,7 @@ final class SettingsWindowController: NSWindowController {
         case TabID.sessions:  page = sessionsContent
         case TabID.browser:   page = browserContent
         case TabID.opendisplay: page = openDisplayContent
+        case TabID.streamingGeneral: page = streamingGeneralContent
         default:              page = hotkeyContent
         }
         var tab = id, content = page, above: CGFloat = 0
@@ -204,8 +211,8 @@ final class SettingsWindowController: NSWindowController {
 
     /// Sets the width once, to fit the widest tab, so switching tabs never changes it.
     private func fixWidth() {
-        var pages = [generalContent, hotkeyContent, devicesContent, virtualContent, moonlightContent,
-                     sessionsContent, browserContent]
+        var pages = [generalContent, hotkeyContent, devicesContent, virtualContent, streamingGeneralContent,
+                     moonlightContent, sessionsContent, browserContent]
         // An app's page, which the Remote Sessions page opens to.
         if let coordinator = sessionCoordinator { pages.append(buildSessionApp("rustdesk", coordinator: coordinator)) }
         // A stack is as wide as its window; what is in it has its own width.
@@ -685,7 +692,8 @@ final class SettingsWindowController: NSWindowController {
         }
         devicesContent = buildDevicesTab()
         moonlightContent = buildMoonlightTab()
-        if selectedTab == TabID.devices || selectedTab == TabID.moonlight { selectTab(selectedTab) }
+        streamingGeneralContent = buildStreamingGeneralTab()
+        if [TabID.devices, TabID.moonlight, TabID.streamingGeneral].contains(selectedTab) { selectTab(selectedTab) }
     }
 
     private func moveAutoConnect(at index: Int, by offset: Int) {
@@ -791,55 +799,169 @@ final class SettingsWindowController: NSWindowController {
         ], leftAligned: true)
     }
 
-    /// Hosting, how streams are made, and the devices paired.
+    // MARK: Streaming
+
+    /// A service that streams the displays, with a page of its own in the Streaming tab.
+    private struct StreamService {
+        let tab: NSToolbarItem.Identifier
+        let title: String
+        let symbol: String
+        let isOn: Bool
+        let status: String
+    }
+
+    /// Moonlight, the HTTP stream and OpenDisplay, each on or off, with what it is doing.
+    private func streamServices() -> [StreamService] {
+        let host = moonlightHost
+        var moonlight = MoonlightHost.usesExternalSunshine ? "Off · Sunshine hosts Moonlight"
+            : host.isRunning ? "On · \(Self.count(host.clients.count, "device")) paired" : host.lastError ?? "Off"
+        let streaming = host.streamingClients.count
+        if host.isRunning && streaming > 0 { moonlight += ", \(streaming) streaming" }
+        let watching = webStream.viewerCount
+        let http = webStream.isRunning
+            ? "On · port \(webStream.port.rawValue)" + (watching > 0 ? ", \(watching) watching" : "")
+            : webStream.lastError ?? "Off"
+        var services = [
+            StreamService(tab: TabID.moonlight, title: "Moonlight", symbol: "gamecontroller",
+                          isOn: host.isRunning, status: moonlight),
+            StreamService(tab: TabID.browser, title: "HTTP Stream", symbol: "globe",
+                          isOn: webStream.isRunning, status: http),
+        ]
+        if let sender = openDisplay {
+            let found = sender.receivers.filter { !$0.transports.isEmpty }.count
+            let connected = sender.receivers.filter(\.isConnected).count
+            let status = !sender.isRunning ? "Off"
+                : "On · \(Self.count(found, "receiver")) found" + (connected > 0 ? ", \(connected) streaming" : "")
+            services.append(StreamService(tab: TabID.opendisplay, title: "OpenDisplay", symbol: "ipad.and.iphone",
+                                          isOn: sender.isRunning, status: status))
+        }
+        return services
+    }
+
+    /// "1 device", "3 devices".
+    private static func count(_ n: Int, _ noun: String) -> String { "\(n) \(noun)\(n == 1 ? "" : "s")" }
+
+    /// What applies to every stream, whichever service it goes out by, under the services
+    /// themselves, each opening its page.
+    private func buildStreamingGeneralTab() -> NSView {
+        let services = streamServices()
+        servicesShown = services.map { "\($0.isOn) \($0.status)" }
+        let list = GroupedListView(rows: services.map { service in
+            ListRowView(icon: NSImage(systemSymbolName: service.symbol, accessibilityDescription: nil), title: service.title,
+                        status: service.status, dot: service.isOn ? .systemGreen : .systemGray) { [weak self] in
+                self?.selectTab(service.tab)
+            }
+        })
+
+        // Moonlight's and the HTTP stream's setting, kept apart, set together here.
+        weak var pointerBox: NSButton?
+        let pointer = ClosureButton(title: "Show the pointer") { _ in
+            // A mixed box, clicked, turns both on; from then on it is on or off.
+            pointerBox?.allowsMixedState = false
+            MoonlightStream.showsPointer = pointerBox?.state == .on
+            WebStreamServer.showsPointer = pointerBox?.state == .on
+        }
+        pointerBox = pointer
+        pointer.setButtonType(.switch)
+        pointer.font = .systemFont(ofSize: NSFont.systemFontSize)
+        let both = (MoonlightStream.showsPointer, WebStreamServer.showsPointer)
+        pointer.allowsMixedState = both.0 != both.1
+        pointer.state = both.0 != both.1 ? .mixed : both.0 ? .on : .off
+        pointer.toolTip = "Draws the Mac's pointer into Moonlight and HTTP streams. OpenDisplay receivers draw their own. " +
+                          "Takes effect from the next stream."
+        let rates = small(ClosureButton(title: "Refresh Rates…") { [weak self] _ in self?.selectTab(TabID.virtual) })
+        rates.toolTip = "Settings › Virtual Display › Refresh Rates › Streaming."
+        var groups: [(label: String, controls: [NSView])] = [
+            ("Pointer:", [pointer]),
+            ("Displays:", [smallNote("Each stream gets a display at the device's size. Besides the rate a stream asks " +
+                                     "for, its display offers the rates picked for streaming displays."), rates]),
+        ]
+        if let row = loginWindowRow() { groups.append(("Login Window:", [row])) }
+        let form = RoundedBoxView(formGrid(groups), centered: false)
+        return scrollingPage([list, form], leftAligned: true, filling: [list, form])
+    }
+
+    /// Rebuilds the Streaming General page if a service's state has changed.
+    private func streamingGeneralDidChange() {
+        guard streamServices().map({ "\($0.isOn) \($0.status)" }) != servicesShown else { return }
+        streamingGeneralContent = buildStreamingGeneralTab()
+        if selectedTab == TabID.streamingGeneral { selectTab(TabID.streamingGeneral) }
+    }
+
+    /// A service's page: a row naming it, with its status and a switch turning it on, over
+    /// its settings, which can't be changed while it is off. `toggle` turns it on or off and
+    /// says whether it is on after.
+    private func servicePage(_ tab: NSToolbarItem.Identifier, help: String, notes: [String] = [],
+                             toggle: @escaping () -> Bool,
+                             groups: [(label: String, controls: [NSView])]) -> NSView {
+        guard let service = streamServices().first(where: { $0.tab == tab }) else { return formTab(groups) }
+        // Turning it on may fail, leaving nothing changed for the page to be rebuilt by.
+        weak var switched: NSSwitch?
+        let control = ClosureSwitch(isOn: service.isOn) { _ in switched?.state = toggle() ? .on : .off }
+        switched = control
+        control.toolTip = help
+        control.setAccessibilityLabel(service.title)
+        let row = ListRowView(icon: NSImage(systemSymbolName: service.symbol, accessibilityDescription: nil),
+                              title: service.title, status: service.status,
+                              dot: service.isOn ? .systemGreen : .systemGray, onClick: nil, accessory: control)
+        let summary = GroupedListView(rows: [row])
+        var views: [NSView] = [summary] + notes.map(smallNote)
+        var filling: [NSView] = [summary] + views.dropFirst()
+        if !groups.isEmpty {
+            let grid = formGrid(groups)
+            if !service.isOn { Self.disable(grid) }
+            let form = RoundedBoxView(grid, centered: false)
+            views.append(form)
+            filling.append(form)
+        }
+        return scrollingPage(views, leftAligned: true, filling: filling)
+    }
+
+    /// Turns off every control in `view`, and dims what isn't one, as for a service that is off.
+    private static func disable(_ view: NSView) {
+        view.alphaValue = 0.6
+        var stack = [view]
+        while let next = stack.popLast() {
+            (next as? NSControl)?.isEnabled = false
+            stack += next.subviews
+        }
+    }
+
+    /// How streams are made, and the devices paired; hosting itself is turned on above them.
     private func buildMoonlightTab() -> NSView {
         let host = moonlightHost
         moonlightShown = MoonlightState(host: host)
-        let hostChoice = popup([("\(AppIdentity.name)", "dam"), ("Sunshine", "sunshine")],
-                               selected: MoonlightHost.usesExternalSunshine ? "sunshine" : "dam") { [weak self] raw in
-            self?.onUseExternalSunshine?(raw == "sunshine")
+        let enabled = host.isRunning
+        var notes: [String] = []
+        if MoonlightHost.usesExternalSunshine {
+            notes.append("Sunshine hosts Moonlight on this Mac, as set in Remote Sessions › Sunshine. Turning this on " +
+                         "hosts it in \(AppIdentity.name) again.")
         }
-        hostChoice.toolTip = "Who Moonlight connects to: \(AppIdentity.name)'s own host, or Sunshine " +
-                             "running on this Mac, for which \(AppIdentity.name) makes and places the displays."
-        guard !MoonlightHost.usesExternalSunshine else {
-            return formTab([("Host:", [hostChoice])] + sunshineGroups(), leftAligned: true)
-        }
-        var hosting: [NSView] = []
-        // Hosting may fail to start, leaving nothing changed for the tab to be rebuilt by.
-        weak var allowButton: NSButton?
-        let allow = checkbox(title: "Allow Moonlight to connect", isOn: host.isRunning,
-                             help: "Lets Moonlight on another device find this Mac and pair with it. " +
-                                   "Each streaming display is listed in Moonlight as an app.",
-                             action: { [weak self, weak host] _ in
-                                 self?.onToggleMoonlight?()
-                                 allowButton?.state = host?.isRunning == true ? .on : .off
-                             })
-        allowButton = allow as? NSButton
-        hosting.append(allow)
-        if let error = host.lastError { hosting.append(placeholderLabel(error)) }
-        hosting.append(checkbox(title: "Allow new devices to pair",
-                                isOn: MoonlightHost.allowsPairing,
-                                help: "Unchecked, a device that isn't paired yet is turned away without " +
-                                      "asking for a PIN; paired devices still connect.",
-                                action: { MoonlightHost.allowsPairing = $0 }))
-        hosting.append(checkbox(title: "List this Mac's own displays",
-                                isOn: MoonlightHost.listsOwnDisplays,
-                                help: "Moonlight then lists the Mac's own displays beside the streaming ones, " +
-                                      "and a paired device may watch and use them. Only these can stream HDR " +
-                                      "(on macOS 15 and later, from a display showing it): macOS's virtual " +
-                                      "displays are SDR only.",
-                                action: { [weak host] in
-                                    MoonlightHost.listsOwnDisplays = $0
-                                    host?.onChange?()
-                                }))
-        hosting.append(checkbox(title: "Show this Mac to Moonlight on the network",
-                                isOn: MoonlightHost.isAdvertised,
-                                help: "Unchecked, Moonlight doesn't list this Mac by itself; add it in " +
-                                      "Moonlight by its address. Streams carry on either way.",
-                                action: { [weak host] in
-                                    MoonlightHost.isAdvertised = $0
-                                    host?.updateAdvertising()
-                                }))
+        let hosting: [NSView] = [
+            checkbox(title: "Allow new devices to pair",
+                     isOn: MoonlightHost.allowsPairing,
+                     help: "Unchecked, a device that isn't paired yet is turned away without " +
+                           "asking for a PIN; paired devices still connect.",
+                     action: { MoonlightHost.allowsPairing = $0 }),
+            checkbox(title: "List this Mac's own displays",
+                     isOn: MoonlightHost.listsOwnDisplays,
+                     help: "Moonlight then lists the Mac's own displays beside the streaming ones, " +
+                           "and a paired device may watch and use them. Only these can stream HDR " +
+                           "(on macOS 15 and later, from a display showing it): macOS's virtual " +
+                           "displays are SDR only.",
+                     action: { [weak host] in
+                         MoonlightHost.listsOwnDisplays = $0
+                         host?.onChange?()
+                     }),
+            checkbox(title: "Show this Mac to Moonlight on the network",
+                     isOn: MoonlightHost.isAdvertised,
+                     help: "Unchecked, Moonlight doesn't list this Mac by itself; add it in " +
+                           "Moonlight by its address. Streams carry on either way.",
+                     action: { [weak host] in
+                         MoonlightHost.isAdvertised = $0
+                         host?.updateAdvertising()
+                     }),
+        ]
 
         let streams = [
             checkbox(title: "Adapt the bitrate to the network",
@@ -855,11 +977,6 @@ final class SettingsWindowController: NSWindowController {
                            "mouse were plugged into this Mac. Unchecked, each step the mouse reports " +
                            "moves the pointer a point. Takes effect at once.",
                      action: { MoonlightInputInjector.acceleratesPointer = $0 }),
-            checkbox(title: "Show the pointer",
-                     isOn: MoonlightStream.showsPointer,
-                     help: "Draws the Mac's pointer into Moonlight streams. Takes effect from the " +
-                           "next stream.",
-                     action: { MoonlightStream.showsPointer = $0 }),
         ]
 
         let encryption = popup(choosing: MoonlightStream.videoEncryption, title: \.title, tip: \.summary) {
@@ -870,6 +987,19 @@ final class SettingsWindowController: NSWindowController {
                              "Takes effect from the next launch."
 
         let devices: [[NSView]] = host.clients.map { client in
+            let name = ClosureTextField(text: client.customName ?? "", placeholder: client.autoName ?? client.name) {
+                [weak host] text in
+                guard text != (client.customName ?? "") else { return }
+                host?.rename(client, to: text)
+            }
+            name.controlSize = .small
+            name.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+            name.widthAnchor.constraint(equalToConstant: 130).isActive = true
+            name.setAccessibilityLabel("Name for \(client.label)")
+            name.toolTip = "A name of your own for this device. Left blank, it is named after the host name its " +
+                           "address resolves to, “\(client.autoName ?? client.name)”. Paired " +
+                           "\(client.paired.formatted(date: .abbreviated, time: .shortened)) from \(client.name)."
+            let link = placeholderLabel(host.link(of: client).map { "Streaming over \($0.rawValue)" } ?? "")
             let lowLatency = checkbox(title: "Low-latency encoding", isOn: client.lowLatency,
                                       help: "Sends each frame the moment it is encoded, about a frame " +
                                             "sooner. Takes effect from the next stream.",
@@ -884,8 +1014,8 @@ final class SettingsWindowController: NSWindowController {
                                  })
             let loginWindow = checkbox(title: "Login window", isOn: client.showsLoginWindow,
                                        help: "Lets the device stream the login window over a USB cable, without " +
-                                             "input, from an agent \(AppIdentity.name) installs. Changing it asks " +
-                                             "for an administrator's password.",
+                                             "input, from an agent \(AppIdentity.name) installs (Streaming › General). " +
+                                             "Changing it asks for an administrator's password.",
                                        action: { [weak self, weak host] shows in
                                            host?.setShowsLoginWindow(shows, for: client)
                                            self?.syncLoginAgent()
@@ -895,41 +1025,33 @@ final class SettingsWindowController: NSWindowController {
                 // Or the agent's copy would still let it stream the login window.
                 if client.showsLoginWindow { self?.syncLoginAgent() }
             })
-            forget.toolTip     = "Unpairs \(client.name): it has to pair again to connect."
-            let name = rowLabel(client.name)
-            name.toolTip = "Paired \(client.paired.formatted(date: .abbreviated, time: .shortened))"
-            return [name, lowLatency, input, loginWindow, forget]
+            forget.toolTip     = "Unpairs \(client.label): it has to pair again to connect."
+            return [name, lowLatency, input, loginWindow, forget, link]
         }
         let deviceGrid = rowGrid(devices)
 
-        return formTab([
-            ("Host:", [hostChoice]),
-            ("Hosting:", hosting),
-            ("Streams:", streams),
-            ("Encrypt Video:", [encryption]),
-            ("HEVC:", [hevcPopup()]),
-            ("Paired Devices:", [devices.isEmpty ? placeholderLabel("None yet") : deviceGrid]),
-        ] + (loginWindowRow().map { [("", [$0])] } ?? []), leftAligned: true)
+        return servicePage(TabID.moonlight,
+                           help: "Lets Moonlight on another device find this Mac and pair with it. " +
+                                 "Each streaming display is listed in Moonlight as an app.",
+                           notes: notes,
+                           toggle: { [weak self, weak host] in
+                               self?.onToggleMoonlight?()
+                               return host?.isRunning == true
+                           },
+                           groups: [
+                               ("Hosting:", hosting),
+                               ("Streams:", streams),
+                               ("Encrypt Video:", [encryption]),
+                               ("HEVC:", [hevcPopup(enabled: enabled)]),
+                               ("Paired Devices:", [devices.isEmpty ? placeholderLabel("None yet") : deviceGrid]),
+                           ])
     }
 
-    /// The browser stream: on or off, where from, pairing, the devices that may watch, how
-    /// streams are made, and its HTTPS certificate.
+    /// The HTTP stream, for browsers and players: where from, pairing, the devices that may
+    /// watch, how streams are made, and its HTTPS certificate; serving is turned on above them.
     private func buildBrowserTab() -> NSView {
         let server = webStream
         browserShown = BrowserState(server: server)
-        var serving: [NSView] = []
-        weak var allowButton: NSButton?
-        let allow = checkbox(title: "Allow browsers to watch", isOn: server.isRunning,
-                             help: "Lets a paired browser, or a player with a link, play a streaming display: " +
-                                   "HTTP on port \(server.port.rawValue), HTTPS on \(server.securePort.rawValue). " +
-                                   "Apart from Moonlight.",
-                             action: { [weak self, weak server] _ in
-                                 self?.onToggleWebStream?()
-                                 allowButton?.state = server?.isRunning == true ? .on : .off
-                             })
-        allowButton = allow as? NSButton
-        serving.append(allow)
-        if let error = server.lastError { serving.append(placeholderLabel(error)) }
 
         let reach = popup(choosing: WebStreamReach.current, title: \.title, tip: \.summary) {
             WebStreamReach.current = $0
@@ -1036,8 +1158,20 @@ final class SettingsWindowController: NSWindowController {
             https.append(own)
         }
 
-        return formTab([
-            ("Serving:", serving),
+        let watching = server.devices.all.compactMap { device -> String? in
+            let links = server.links(of: device)
+            return links.isEmpty ? nil : "\(device.name) over \(links.map(\.rawValue).joined(separator: ", "))"
+        }
+        return servicePage(TabID.browser,
+                           help: "Lets a paired browser, or a player with a link, play a streaming display: " +
+                                 "HTTP on port \(server.port.rawValue), HTTPS on \(server.securePort.rawValue). " +
+                                 "Apart from Moonlight.",
+                           notes: watching.isEmpty ? [] : ["Watching: " + watching.joined(separator: "; ") + "."],
+                           toggle: { [weak self, weak server] in
+                               self?.onToggleWebStream?()
+                               return server?.isRunning == true
+                           },
+                           groups: [
             ("Reach:", [reach]),
             ("Pairing:", [allowPairing, qr]),
             ("Also Reachable As:", [names]),
@@ -1045,22 +1179,13 @@ final class SettingsWindowController: NSWindowController {
             ("Streams:", [pointer]),
             ("Profile:", [profile]),
             ("HTTPS:", https),
-        ], leftAligned: true)
+        ])
     }
 
     private func buildOpenDisplayTab() -> NSView {
         guard let sender = openDisplay else { return formTab([]) }
         openDisplayShown = sender.receivers
         openDisplayRunning = sender.isRunning
-        let send = checkbox(title: "Send to OpenDisplay receivers", isOn: OpenDisplaySender.isEnabled,
-                            help: "Streams a display of its own to each receiver turned on below: the OpenDisplay " +
-                                  "app on an iPhone, iPad or Mac, over Wi-Fi or a USB cable. The display is made " +
-                                  "at the size the receiver asks for before any video goes out.",
-                            action: { [weak self, weak sender] on in
-                                OpenDisplaySender.isEnabled = on
-                                if on { sender?.start() } else { sender?.stop() }
-                                self?.openDisplayDidChange()
-                            })
         let rows: [[NSView]] = openDisplayShown.map { receiver in
             let toggle = ClosureButton(title: receiver.name) { [weak sender] on in
                 sender?.setOn(on, key: receiver.key)
@@ -1069,7 +1194,10 @@ final class SettingsWindowController: NSWindowController {
             toggle.state = receiver.isOn ? .on : .off
             toggle.toolTip = receiver.key.hasPrefix("usb:") ? "On a cable; its ID comes with its first connection."
                                                             : "Receiver ID \(receiver.key)"
-            let via = placeholderLabel(receiver.transports.map(\.rawValue).joined(separator: ", "))
+            // The link it streams over, else those it is found on.
+            let links = receiver.transport.map { [$0] } ?? receiver.transports
+            let via = placeholderLabel(links.map(\.link.rawValue).joined(separator: ", "))
+            via.toolTip = links.map(\.rawValue).joined(separator: " and ")
             let status = placeholderLabel(receiver.status)
             // The page's width is set before receivers turn up, so a long status may not fit.
             (status as? NSTextField)?.lineBreakMode = .byTruncatingTail
@@ -1104,14 +1232,24 @@ final class SettingsWindowController: NSWindowController {
         }
         bitrate.toolTip = "The video's bitrate to each receiver. Higher is sharper in motion, and needs " +
                           "more of the Wi-Fi; a cable has room for any of them. Takes effect at once."
-        return formTab([
-            ("Sending:", [send]),
+        return servicePage(TabID.opendisplay,
+                           help: "Streams a display of its own to each receiver turned on below: the OpenDisplay " +
+                                 "app on an iPhone, iPad or Mac, over Wi-Fi or a USB cable. The display is made " +
+                                 "at the size the receiver asks for before any video goes out.",
+                           toggle: { [weak self, weak sender] in
+                               let on = sender?.isRunning != true
+                               OpenDisplaySender.isEnabled = on
+                               if on { sender?.start() } else { sender?.stop() }
+                               self?.openDisplayDidChange()
+                               return sender?.isRunning == true
+                           },
+                           groups: [
             ("Bitrate:", [bitrate]),
             ("Receivers:", [receivers,
                             smallNote("A receiver takes the newest sender, so DAM dials only those turned on, " +
                                       "in their order under Devices › Connect Automatically. " +
                                       "Turning one on takes it from the OpenDisplay Mac app if that is streaming to it.")]),
-        ], leftAligned: true)
+        ])
     }
 
     /// "20 Mbit/s", or "12.5 Mbit/s" for a rate set outside Settings.
@@ -1128,6 +1266,7 @@ final class SettingsWindowController: NSWindowController {
               sender.receivers != openDisplayShown || sender.isRunning != openDisplayRunning else { return }
         openDisplayContent = buildOpenDisplayTab()
         if selectedTab == TabID.opendisplay { selectTab(TabID.opendisplay) }
+        streamingGeneralDidChange()
     }
 
     private func small<Button: NSButton>(_ button: Button) -> Button {
@@ -1269,6 +1408,7 @@ final class SettingsWindowController: NSWindowController {
 
     /// Rebuilds the Browser Stream tab if what it shows of the server has changed.
     func browserStreamDidChange() {
+        streamingGeneralDidChange()
         guard BrowserState(server: webStream) != browserShown else { return }
         browserContent = buildBrowserTab()
         if selectedTab == TabID.browser { selectTab(TabID.browser) }
@@ -1487,6 +1627,18 @@ final class SettingsWindowController: NSWindowController {
         }
         var groups: [(label: String, controls: [NSView])] = []
         let name = RemoteSessionApp.name(of: app)
+        if app == "sunshine" {
+            let hosts = checkbox(title: "Sunshine hosts Moonlight", isOn: MoonlightHost.usesExternalSunshine,
+                                 help: "Hands Moonlight's ports to Sunshine running on this Mac, for which " +
+                                       "\(AppIdentity.name) makes and places the displays; \(AppIdentity.name)'s own " +
+                                       "host is turned off. Unchecked, \(AppIdentity.name) hosts Moonlight itself.",
+                                 action: { [weak self] in
+                                     self?.onUseExternalSunshine?($0)
+                                     self?.reloadSessions()
+                                 })
+            groups.append(("Moonlight:", [hosts]))
+            if MoonlightHost.usesExternalSunshine { groups += sunshineGroups() }
+        }
         if profile.isAdded {
             let field = ClosureTextField(text: profile.name ?? "", placeholder: "Its name") { [weak self] text in
                 guard !text.isEmpty, text != profile.name else { return }
@@ -1832,7 +1984,11 @@ final class SettingsWindowController: NSWindowController {
 
     /// Rebuilds the Moonlight tab if what it shows of the host, or which host, has changed.
     func moonlightDidChange() {
+        streamingGeneralDidChange()
         guard MoonlightState(host: moonlightHost) != moonlightShown else { return }
+        // Not from under a name being typed; the name's end rebuilds it.
+        if let editor = window?.firstResponder as? NSText, let field = editor.delegate as? NSView,
+           field.isDescendant(of: moonlightContent) { return }
         moonlightContent = buildMoonlightTab()
         if selectedTab == TabID.moonlight { selectTab(TabID.moonlight) }
     }
@@ -2165,7 +2321,7 @@ final class SettingsWindowController: NSWindowController {
 
     /// When HEVC is offered, with what this Mac's encoders were measured to do, found off the
     /// main queue (measuring takes about a second); off where there's no HEVC in hardware.
-    private func hevcPopup() -> NSView {
+    private func hevcPopup(enabled: Bool) -> NSView {
         let popup = popup(choosing: MoonlightHost.hevcOffer, title: \.title, tip: \.summary) {
             MoonlightHost.hevcOffer = $0
         }
@@ -2186,7 +2342,7 @@ final class SettingsWindowController: NSWindowController {
                 : " This Mac at 1080p: " + [line(.hevc), line(.h264)].compactMap { $0 }.joined(separator: "; ") + "."
             DispatchQueue.main.async {
                 popup?.toolTip = about + here
-                popup?.isEnabled = hardware
+                popup?.isEnabled = hardware && enabled
             }
         }
         return popup
@@ -2241,18 +2397,6 @@ final class SettingsWindowController: NSWindowController {
     func showSessions() {
         if sessionsApp != nil { openSessionApp(nil) }
         selectTab(TabID.sessions)
-        show()
-    }
-
-    /// Shows the window on the Browser Stream tab.
-    func showBrowserStream() {
-        selectTab(TabID.browser)
-        show()
-    }
-
-    /// Shows the window on the Moonlight tab.
-    func showMoonlight() {
-        selectTab(TabID.moonlight)
         show()
     }
 
@@ -2459,7 +2603,9 @@ private final class ListRowView: NSView {
     private let light: DotView
     private let state: NSTextField
 
-    init(icon: NSImage?, title: String, status: String, dot: NSColor, onClick: (() -> Void)?) {
+    /// `accessory`, as a switch, sits at the trailing edge of a row that opens nothing.
+    init(icon: NSImage?, title: String, status: String, dot: NSColor, onClick: (() -> Void)?,
+         accessory: NSView? = nil) {
         self.onClick = onClick
         self.title = title
         light = DotView(color: dot)
@@ -2505,8 +2651,22 @@ private final class ListRowView: NSView {
                 chevron.centerYAnchor.constraint(equalTo: centerYAnchor),
                 text.trailingAnchor.constraint(lessThanOrEqualTo: chevron.leadingAnchor, constant: -8),
             ])
+        } else if let accessory {
+            accessory.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(accessory)
+            NSLayoutConstraint.activate([
+                accessory.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+                accessory.centerYAnchor.constraint(equalTo: centerYAnchor),
+                text.trailingAnchor.constraint(lessThanOrEqualTo: accessory.leadingAnchor, constant: -8),
+            ])
         } else {
             text.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -12).isActive = true
+        }
+        // A row with a control in it is a group the control is reached in, not one element.
+        guard accessory == nil else {
+            setAccessibilityRole(.group)
+            setAccessibilityLabel(title)
+            return
         }
         setAccessibilityElement(true)
         setAccessibilityRole(onClick == nil ? .group : .button)
@@ -2617,6 +2777,9 @@ private struct MoonlightState: Equatable {
     var clients: [Data] = []
     /// The devices that may stream the login window, and the agent's status, as the tab shows them.
     var loginWindow: [Bool] = []
+    /// Their names, given and found, and the links they stream over.
+    var names: [String] = []
+    var links: [String] = []
 
     init(host: MoonlightHost?) {
         guard let host else { return }
@@ -2625,6 +2788,8 @@ private struct MoonlightState: Equatable {
         lastError = host.lastError
         clients = host.clients.map(\.certificate)
         loginWindow = host.clients.map(\.showsLoginWindow)
+        names = host.clients.map { "\($0.customName ?? "")/\($0.autoName ?? "")" }
+        links = host.clients.map { host.link(of: $0)?.rawValue ?? "" }
     }
 }
 
@@ -2654,6 +2819,8 @@ private struct BrowserState: Equatable {
     var devices: [WebStreamDevice] = []
     var hasCertificates = false
     var certificate: String?
+    /// Each device's links while it watches, which the page notes.
+    var watching: [String] = []
 
     init(server: WebStreamServer?) {
         guard let server else { return }
@@ -2662,6 +2829,7 @@ private struct BrowserState: Equatable {
         devices = server.devices.all
         hasCertificates = server.certificates != nil
         certificate = SettingsWindowController.certificateSummary(server)
+        watching = server.devices.all.map { device in server.links(of: device).map(\.rawValue).joined() }
     }
 }
 
@@ -2757,6 +2925,24 @@ private final class ClosureButton: NSButton {
     }
 }
 
+/// NSSwitch that fires a closure with its new state.
+private final class ClosureSwitch: NSSwitch {
+    private let handler: (Bool) -> Void
+
+    init(isOn: Bool, action: @escaping (Bool) -> Void) {
+        handler = action
+        super.init(frame: .zero)
+        state = isOn ? .on : .off
+        target = self
+        self.action = #selector(fired)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    @objc private func fired() {
+        handler(state == .on)
+    }
+}
 
 /// Saves a device's nickname when editing ends; blank clears it.
 private final class NicknameField: RoundedTextField, NSTextFieldDelegate {

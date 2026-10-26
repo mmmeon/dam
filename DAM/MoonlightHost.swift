@@ -21,6 +21,10 @@ private let mlLog = Logger(subsystem: AppIdentity.bundleID, category: "Moonlight
 struct MoonlightClient: Codable, Equatable {
     /// Where it paired from; Moonlight sends no name of its own.
     let name: String
+    /// The host name its address last resolved to, as "Robins-iPad".
+    var autoName: String?
+    /// A name the user gave it in Settings.
+    var customName: String?
     let certificate: Data
     let paired: Date
     /// Whether its streams use low-latency rate control; see MoonlightVideoEncoder.
@@ -44,19 +48,24 @@ struct MoonlightClient: Codable, Equatable {
     // Saved under a key of its own since low-latency became the default, so that devices
     // saved with the old default (off) get it too; devices saved before either have none.
     private enum CodingKeys: String, CodingKey {
-        case name, certificate, paired, allowsInput, showsLoginWindow
+        case name, autoName, customName, certificate, paired, allowsInput, showsLoginWindow
         case lowLatency = "lowLatencyEncoding"
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         name = try container.decode(String.self, forKey: .name)
+        autoName = try container.decodeIfPresent(String.self, forKey: .autoName)
+        customName = try container.decodeIfPresent(String.self, forKey: .customName)
         certificate = try container.decode(Data.self, forKey: .certificate)
         paired = try container.decode(Date.self, forKey: .paired)
         lowLatency = try container.decodeIfPresent(Bool.self, forKey: .lowLatency) ?? true
         allowsInput = try container.decodeIfPresent(Bool.self, forKey: .allowsInput) ?? true
         showsLoginWindow = try container.decodeIfPresent(Bool.self, forKey: .showsLoginWindow) ?? false
     }
+
+    /// The name shown for it: the user's, else its host name, else where it paired from.
+    var label: String { customName ?? autoName ?? name }
 }
 
 /// When HEVC is offered, where this Mac encodes it in hardware.
@@ -517,6 +526,57 @@ final class MoonlightHost {
         onChange?()
     }
 
+    /// Names `client` as the user typed it; blank goes back to its own name.
+    func rename(_ client: MoonlightClient, to name: String) {
+        guard let index = clientIndex(for: client.certificate) else { return }
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        clients[index].customName = trimmed.isEmpty ? nil : trimmed
+        saveClients()
+        onChange?()
+    }
+
+    /// Names the device with `certificate` after the host name `address` resolves back to,
+    /// looked up off the main queue (a name not found takes mDNS a few seconds); it keeps
+    /// the name it has when there is none.
+    private func nameClient(_ certificate: Data, at address: String) {
+        guard !address.isEmpty else { return }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let name = Self.deviceName(resolving: address) else { return }
+            DispatchQueue.main.async {
+                guard let self, let index = self.clientIndex(for: certificate),
+                      self.clients[index].autoName != name else { return }
+                self.clients[index].autoName = name
+                self.saveClients()
+                self.onChange?()
+            }
+        }
+    }
+
+    /// The host name an IP address resolves back to, without its domain: "Robins-iPad" for
+    /// Robins-iPad.local; "This Mac" for one of the Mac's own.
+    static func deviceName(resolving address: String) -> String? {
+        if address.hasPrefix("127.") || address == "::1" || LocalNetwork.ownAddresses().contains(address) {
+            return "This Mac"
+        }
+        var hints = addrinfo()
+        hints.ai_flags = AI_NUMERICHOST
+        var info: UnsafeMutablePointer<addrinfo>?
+        guard getaddrinfo(address, nil, &hints, &info) == 0, let first = info else { return nil }
+        defer { freeaddrinfo(info) }
+        var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+        guard getnameinfo(first.pointee.ai_addr, first.pointee.ai_addrlen, &host, socklen_t(host.count),
+                          nil, 0, NI_NAMEREQD) == 0 else { return nil }
+        return shortHostName(String(cString: host))
+    }
+
+    /// A host name without its domain; nil for one that is an address written out.
+    static func shortHostName(_ host: String) -> String? {
+        let trimmed = host.hasSuffix(".") ? String(host.dropLast()) : host
+        guard !trimmed.isEmpty, IPv4Address(trimmed) == nil, IPv6Address(trimmed) == nil,
+              let first = trimmed.split(separator: ".").first, !first.isEmpty else { return nil }
+        return String(first)
+    }
+
     /// Sets whether `client`'s streams use low-latency rate control, from its next stream on.
     func setLowLatency(_ lowLatency: Bool, for client: MoonlightClient) {
         guard let index = clientIndex(for: client.certificate) else { return }
@@ -724,6 +784,9 @@ final class MoonlightHost {
             launch.offersEncryptedVideo = encryption.offers(to: peer)
             launch.requiresEncryptedVideo = encryption == .always
             launch.clientAddress = Self.address(peer)
+            launch.link = StreamLink.of(peer)
+            // Where it streams from now may have a name, or a better one than where it paired.
+            self.nameClient(certificate, at: launch.clientAddress)
             if let session = self.session(for: certificate) {
                 session.endStream()
                 // Another launch of the device's, answered first, may have made a display.
@@ -795,6 +858,18 @@ final class MoonlightHost {
             mlLog.debug("could not resize display \(current.displayID); making another")
             makeNew()
         }
+    }
+
+    /// The paired devices streaming display `id`, oldest first, each with its link.
+    func streams(on id: CGDirectDisplayID) -> [(client: MoonlightClient, link: StreamLink?)] {
+        sessions.filter { $0.launch.displayID == id }.compactMap { session in
+            client(for: session.certificate).map { ($0, session.launch.link) }
+        }
+    }
+
+    /// The link `client` streams over, while it streams.
+    func link(of client: MoonlightClient) -> StreamLink? {
+        session(for: client.certificate)?.launch.link
     }
 
     /// Whether a device's launch streams display `id`.
@@ -972,6 +1047,7 @@ final class MoonlightHost {
                                        certificate: certificate, paired: Date()))
         saveClients()
         onChange?()
+        nameClient(certificate, at: pairingAddress)
     }
 
     // MARK: - Responses

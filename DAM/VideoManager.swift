@@ -1227,6 +1227,40 @@ final class VideoManager: ObservableObject {
             .sorted { ($0.pixelWidth, $0.pixelHeight, $0.refreshRate) > ($1.pixelWidth, $1.pixelHeight, $1.refreshRate) }
     }
 
+    /// "16:10": the shape of the display's native mode, the one its panel or receiver marks
+    /// as such, else its largest.
+    func nativeAspectRatio(of display: DisplayInfo) -> String? {
+        guard display.cgDisplayID != 0 else { return nil }
+        let modes = DisplayArrangement.listedModes(of: display.cgDisplayID).filter { $0.pixelWidth > 1 && $0.pixelHeight > 1 }
+        // kDisplayModeNativeFlag, from IOGraphicsTypes.h.
+        let nativeFlag: UInt32 = 0x0200_0000
+        guard let native = modes.first(where: { $0.ioFlags & nativeFlag != 0 })
+                ?? modes.max(by: { $0.pixelWidth * $0.pixelHeight < $1.pixelWidth * $1.pixelHeight }) else { return nil }
+        return Self.aspectRatioLabel(width: native.pixelWidth, height: native.pixelHeight)
+    }
+
+    /// The ratios displays are sold as, longer side first, by how they are written.
+    private static let namedAspectRatios: [(ratio: Double, label: (String, String))] = [
+        (1, ("1", "1")), (5.0 / 4, ("5", "4")), (4.0 / 3, ("4", "3")), (3.0 / 2, ("3", "2")),
+        (16.0 / 10, ("16", "10")), (5.0 / 3, ("5", "3")), (16.0 / 9, ("16", "9")), (2, ("2", "1")),
+        (19.5 / 9, ("19.5", "9")), (64.0 / 27, ("21", "9")), (32.0 / 9, ("32", "9")),
+    ]
+
+    /// "16:9", or "9:16" upright: the named ratio within 1.5% of the size's, else the size's
+    /// own reduced, else "1.43:1".
+    static func aspectRatioLabel(width: Int, height: Int) -> String {
+        let long = max(width, height), short = max(min(width, height), 1)
+        let ratio = Double(long) / Double(short)
+        func written(_ a: String, _ b: String) -> String { width >= height ? "\(a):\(b)" : "\(b):\(a)" }
+        if let named = namedAspectRatios.first(where: { abs($0.ratio - ratio) / $0.ratio < 0.015 }) {
+            return written(named.label.0, named.label.1)
+        }
+        func gcd(_ a: Int, _ b: Int) -> Int { b == 0 ? a : gcd(b, a % b) }
+        let g = gcd(long, short)
+        if long / g <= 32 { return written(String(long / g), String(short / g)) }
+        return written(String(format: "%.2f", ratio), "1")
+    }
+
     /// One mode per logical resolution, preferring HiDPI over non-HiDPI, then highest refresh rate.
     /// Single pass over the listed modes — does not call availableModes().
     func availableModesDeduped(for cgDisplayID: CGDirectDisplayID) -> [DisplayMode] {

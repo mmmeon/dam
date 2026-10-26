@@ -64,7 +64,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controlStrip = ControlStripPresenter(
             audioManager: audioManager,
             videoManager: videoManager,
-            sidecarManager: sidecarManager
+            sidecarManager: sidecarManager,
+            openDisplay: openDisplay
         )
         controlStrip.onModalClose = { [weak self] in self?.switcherClosed() }
         controlStrip.onModalWatchGaveUp = { [weak self] in
@@ -88,7 +89,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshAll(nil)
         controlStrip.install()
 
-        AirPlayQuickConnect.shared.configure(videoManager: videoManager, sidecarManager: sidecarManager)
+        AirPlayQuickConnect.shared.configure(videoManager: videoManager, sidecarManager: sidecarManager,
+                                             openDisplay: openDisplay)
         autoConnector = AutoConnector(sidecar: sidecarManager, video: videoManager)
         autoConnector?.start()
         moonlightHost.requestPIN = { [weak self] address, isCurrent, answer in
@@ -131,7 +133,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         webStream.othersStream = { [weak self] id in self?.moonlightHost.streams(display: id) ?? false }
         webStream.handOverDisplay = { [weak self] id in self?.moonlightHost.adopt(display: id) }
         if WebStreamServer.isEnabled { webStream.start() }
-        openDisplay.onChange = { [weak self] in self?.settingsWindow?.openDisplayDidChange() }
+        openDisplay.onChange = { [weak self] in self?.openDisplayChanged() }
         openDisplay.makeDisplay = { [weak self] mode, identity, done in
             guard let self else { return done(nil) }
             self.videoManager.createStreamingDisplay(mode: mode, identity: identity, completion: done)
@@ -327,6 +329,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         rebuild()
     }
 
+    /// The receivers as the menu and Touch Bar last listed them, without their status.
+    private var receiversShown: [OpenDisplaySender.Receiver] = []
+
+    /// Lists the receivers again where they are offered for connecting, when what is listed
+    /// of them changed; their status is for Settings alone, which follows it each time.
+    private func openDisplayChanged() {
+        let shown = !openDisplay.isRunning ? [] : openDisplay.receivers.map { receiver -> OpenDisplaySender.Receiver in
+            var receiver = receiver
+            receiver.status = ""
+            return receiver
+        }
+        guard shown != receiversShown else {
+            settingsWindow?.openDisplayDidChange()
+            return
+        }
+        receiversShown = shown
+        rebuild()
+    }
+
     private func rebuild() {
         // Every display, those hidden from the menu bar and Touch Bar too, which hides no more.
         let apps = videoManager.streamingDisplays.filter { $0.standsInFor == nil }.compactMap { streaming in
@@ -372,6 +393,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             sidecar: sidecarManager,
             moonlight: moonlightHost,
             webStream: webStream,
+            openDisplay: openDisplay,
             sessions: sessionCoordinator?.sessions.values.sorted { $0.started < $1.started } ?? [],
             blackedOut: sessionCoordinator?.isBlackedOut ?? false,
             onRefresh: { [weak self] in self?.refreshAll(nil) }
@@ -742,18 +764,6 @@ extension AppDelegate: NSMenuDelegate {
         }
     }
 
-    /// Opens Settings on the Moonlight tab.
-    @objc func openMoonlightSettings(_ sender: Any?) {
-        openSettings(nil)
-        settingsWindow?.showMoonlight()
-    }
-
-    /// Opens Settings on the Browser Stream tab.
-    @objc func openBrowserStreamSettings(_ sender: Any?) {
-        openSettings(nil)
-        settingsWindow?.showBrowserStream()
-    }
-
     /// Opens the Arrange Displays window, one for the app's lifetime.
     @objc func openArrangeDisplays(_ sender: Any?) {
         let wc = arrangeWindow ?? ArrangeDisplaysWindowController(videoManager: videoManager)
@@ -813,18 +823,52 @@ extension AppDelegate: NSMenuDelegate {
         rebuild()
     }
 
-    /// Opens the stream's player page in the browser.
+    /// Opens the stream's player page in the browser, on the display whose app ID the item holds.
     @objc func openWebStream(_ sender: NSMenuItem) {
         MoonlightScreenCapture.requestPermission()
-        NSWorkspace.shared.open(webStream.localWatchURL)
+        NSWorkspace.shared.open(Self.watchURL(webStream.localWatchURL, app: sender.representedObject as? Int))
     }
 
-    /// Puts the player page's address on the clipboard, for a browser on another device.
+    /// Puts the player page's address on the clipboard, for a browser on another device, on
+    /// the display whose app ID the item holds.
     @objc func copyWebStreamAddress(_ sender: NSMenuItem) {
-        let address = webStream.watchURL.absoluteString
+        let address = Self.watchURL(webStream.watchURL, app: sender.representedObject as? Int).absoluteString
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(address, forType: .string)
         SpeechSynthesizer.shared.announce(Spoken.copied(address))
+    }
+
+    /// `url` with the player page told to play app `app`, when there is one.
+    static func watchURL(_ url: URL, app: Int?) -> URL {
+        guard let app, var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
+        parts.queryItems = (parts.queryItems ?? []) + [URLQueryItem(name: "app", value: String(app))]
+        return parts.url ?? url
+    }
+
+    /// Turns the OpenDisplay receiver whose key the item holds on, which dials it, or off,
+    /// which ends its stream and removes its display.
+    @objc func toggleOpenDisplayReceiver(_ sender: NSMenuItem) {
+        guard let key = sender.representedObject as? String,
+              let receiver = openDisplay.receivers.first(where: { $0.key == key }) else { return }
+        SpeechSynthesizer.shared.announce(receiver.isOn ? Spoken.disconnecting(receiver.name)
+                                          : ConnectTarget.openDisplay(receiver).connectingAnnouncement)
+        openDisplay.setOn(!receiver.isOn, key: key)
+    }
+
+    /// Lets the Moonlight device whose certificate the item holds use the pointer and
+    /// keyboard, or stops it.
+    @objc func toggleMoonlightInput(_ sender: NSMenuItem) {
+        guard let certificate = sender.representedObject as? Data,
+              let client = moonlightHost.clients.first(where: { $0.certificate == certificate }) else { return }
+        moonlightHost.setAllowsInput(!client.allowsInput, for: client)
+        if !client.allowsInput { _ = VideoManager.hasAccessibilityAccess(prompting: true) }
+    }
+
+    /// Turns low-latency encoding on or off for the Moonlight device whose certificate the item holds.
+    @objc func toggleMoonlightLowLatency(_ sender: NSMenuItem) {
+        guard let certificate = sender.representedObject as? Data,
+              let client = moonlightHost.clients.first(where: { $0.certificate == certificate }) else { return }
+        moonlightHost.setLowLatency(!client.lowLatency, for: client)
     }
 
     /// Ends one Moonlight device's stream; Moonlight shows that the host ended it.
@@ -837,7 +881,7 @@ extension AppDelegate: NSMenuDelegate {
     /// Unpairs a Moonlight device.
     private func forget(_ client: MoonlightClient) {
         moonlightHost.forget(client)
-        SpeechSynthesizer.shared.announce(Spoken.forgot(client.name))
+        SpeechSynthesizer.shared.announce(Spoken.forgot(client.label))
         rebuild()
     }
 
