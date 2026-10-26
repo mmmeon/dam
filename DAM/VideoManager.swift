@@ -1228,9 +1228,13 @@ final class VideoManager: ObservableObject {
     }
 
     /// "16:10": the shape of the display's native mode, the one its panel or receiver marks
-    /// as such, else its largest.
+    /// as such, else its largest. A streaming display's is the device's: the size it was
+    /// made or last resized at, as it lists every size at every rate.
     func nativeAspectRatio(of display: DisplayInfo) -> String? {
         guard display.cgDisplayID != 0 else { return nil }
+        if let streaming = streamingDisplays.first(where: { $0.id == display.cgDisplayID }) {
+            return Self.aspectRatioLabel(width: streaming.start.width, height: streaming.start.height)
+        }
         let modes = DisplayArrangement.listedModes(of: display.cgDisplayID).filter { $0.pixelWidth > 1 && $0.pixelHeight > 1 }
         // kDisplayModeNativeFlag, from IOGraphicsTypes.h.
         let nativeFlag: UInt32 = 0x0200_0000
