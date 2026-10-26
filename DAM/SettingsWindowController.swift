@@ -1973,28 +1973,41 @@ final class SettingsWindowController: NSWindowController {
 
     // MARK: - Virtual Display helpers
 
-    /// A grid with a row per display kind and a column per refresh rate.
+    /// A grid with a row per display kind and a column per refresh rate: the rates a virtual
+    /// anchor offers for AirPlay, external and built-in displays, and those streaming displays offer.
     private func buildRefreshRateGrid() -> NSView {
-        let contexts: [(name: String, context: VisibilityPreferences.DisplayContext)] = [
-            ("AirPlay", .airPlay), ("External", .external), ("Built-in", .builtIn),
+        typealias Kind = (name: String, get: () -> Set<Int>, set: (Set<Int>) -> Void)
+        let anchored = { (name: String, context: VisibilityPreferences.DisplayContext) -> Kind in
+            (name, { VisibilityPreferences.virtualRefreshRates(for: context) },
+             { VisibilityPreferences.setVirtualRefreshRates($0, for: context) })
+        }
+        let kinds: [Kind] = [
+            anchored("AirPlay", .airPlay), anchored("External", .external), anchored("Built-in", .builtIn),
+            // Streaming displays (OpenDisplay, Moonlight, remote sessions) have no anchor;
+            // the ones up now are given the new rates as they change.
+            ("Streaming", { Set(VisibilityPreferences.streamingRefreshRates()) },
+             { [weak self] in
+                 VisibilityPreferences.setStreamingRefreshRates($0)
+                 self?.videoManager.relistStreamingDisplays()
+             }),
         ]
         let rates = [30, 60, 120, 240]
 
         var rows: [[NSView]] = [[NSGridCell.emptyContentView] + rates.map { rotatedColumnHeader("\($0) Hz") }]
-        for entry in contexts {
+        for entry in kinds {
             var row: [NSView] = [rowLabel(entry.name)]
-            let enabled = VisibilityPreferences.virtualRefreshRates(for: entry.context)
+            let enabled = entry.get()
             for rate in rates {
                 weak var box: NSButton?
                 let view = checkbox(title: "", isOn: enabled.contains(rate)) { [weak self] isOn in
-                    var rates = VisibilityPreferences.virtualRefreshRates(for: entry.context)
+                    var rates = entry.get()
                     if isOn { rates.insert(rate) } else { rates.remove(rate) }
                     // The last rate stays: unchecking it leaves it checked.
                     if rates.isEmpty {
                         rates = [rate]
                         box?.state = .on
                     }
-                    VisibilityPreferences.setVirtualRefreshRates(rates, for: entry.context)
+                    entry.set(rates)
                     self?.onRebuild?()
                 }
                 box = view as? NSButton

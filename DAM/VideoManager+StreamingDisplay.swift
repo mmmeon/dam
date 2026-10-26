@@ -278,6 +278,9 @@ extension VideoManager {
         case rotate(id: CGDirectDisplayID, DisplayRotation, completion: (Bool) -> Void)
         /// A stand-in and the screen it covers trading places (see `swapPlaces`).
         case swap(standIn: CGDirectDisplayID, screen: CGDirectDisplayID)
+        /// Streaming display `id` listing the rates Settings now picks, in the mode it runs
+        /// (see `relistStreamingDisplays`).
+        case relist(id: CGDirectDisplayID)
 
         var isAddition: Bool {
             if case .add = self { return true }
@@ -289,7 +292,7 @@ extension VideoManager {
             switch self {
             case .add: return 1
             case .remove: return -1
-            case .resize, .rotate, .swap: return 0
+            case .resize, .rotate, .swap, .relist: return 0
             }
         }
     }
@@ -357,6 +360,34 @@ extension VideoManager {
         processStreamingRequests()
     }
 
+    /// The settings a streaming display is given: every size at the rates Settings picks,
+    /// `start` first.
+    static func streamingSettings(startingIn start: StreamingDisplayModes.Mode) -> CGVirtualDisplaySettings {
+        StreamingDisplayModes.settings(startingIn: start, rates: VisibilityPreferences.streamingRefreshRates())
+    }
+
+    /// Asks for the streaming displays up now to list the rates Settings picks, each keeping
+    /// the mode it runs.
+    func relistStreamingDisplays() {
+        for id in streamingDisplays.map(\.id) where id != 0 && !streamingRequests.contains(where: {
+            if case .relist(id) = $0 { return true } else { return false }
+        }) {
+            streamingRequests.append(.relist(id: id))
+        }
+        processStreamingRequests()
+    }
+
+    /// Gives streaming display `id` its modes again at the rates Settings picks, as a resize to
+    /// the mode it runs: a new mode list makes WindowServer lay the display out again, and may
+    /// switch it to the list's first mode or mirror it, which the resize puts back.
+    private func relistStreamingDisplay(_ id: CGDirectDisplayID) {
+        guard let running = CGDisplayCopyDisplayMode(id) else { return }
+        sdLog.debug("relist \(id) at \(VisibilityPreferences.streamingRefreshRates()) Hz")
+        resizeStreamingDisplay(id: id, mode: StreamingDisplayModes.Mode(running), relisting: true) { done in
+            if !done { sdLog.error("relist: \(id) not given its new rates") }
+        }
+    }
+
     /// The IDs of the online streaming displays that stand in for another display.
     var standInDisplayIDs: Set<CGDirectDisplayID> {
         Set(streamingDisplays.filter { $0.standsInFor != nil }.map(\.id)).subtracting([0])
@@ -398,6 +429,8 @@ extension VideoManager {
                 rotateStreamingDisplay(id: id, rotation: rotation, completion: completion)
             case .swap(let standIn, let screen):
                 commitSwap(standIn, screen)
+            case .relist(let id):
+                relistStreamingDisplay(id)
             }
         }
     }
@@ -467,7 +500,7 @@ extension VideoManager {
             streamingDisplayIsMainByChoice = false
         }
         let vd = CGVirtualDisplay(descriptor: descriptor)
-        guard vd.apply(StreamingDisplayModes.settings(startingIn: mode)) else {
+        guard vd.apply(Self.streamingSettings(startingIn: mode)) else {
             sdLog.error("add: applySettings failed")
             if streamingDisplays.isEmpty { streamingArrangement = nil }
             completion?(nil)
@@ -582,9 +615,10 @@ extension VideoManager {
     }
 
     /// Gives streaming display `id` a mode list starting with `mode`, then switches to it once
-    /// WindowServer lists it, putting the others back as they were.
+    /// WindowServer lists it, putting the others back as they were. `relisting` gives it the
+    /// new list even when it runs `mode` already.
     private func resizeStreamingDisplay(id: CGDirectDisplayID, mode: StreamingDisplayModes.Mode,
-                                        completion: @escaping (Bool) -> Void) {
+                                        relisting: Bool = false, completion: @escaping (Bool) -> Void) {
         guard id != 0, mode.isValid, let i = streamingDisplays.firstIndex(where: { $0.id == id }),
               let vd = streamingDisplays[i].display as? CGVirtualDisplay,
               mode.pixelWidth <= Int(vd.maxPixelsWide), mode.pixelHeight <= Int(vd.maxPixelsHigh) else {
@@ -597,7 +631,8 @@ extension VideoManager {
         // reports the list's first mode as its own straight away, while it still runs the old one.
         let running = CGDisplayCopyDisplayMode(id)
         // Already in it, mirroring nothing or as chosen: nothing to do.
-        if CGDisplayMirrorsDisplay(id) == 0 || keepsMirror, let running, let wanted = Self.displayMode(mode, of: id),
+        if !relisting, CGDisplayMirrorsDisplay(id) == 0 || keepsMirror, let running,
+           let wanted = Self.displayMode(mode, of: id),
            DisplayArrangement.sameMode(wanted, running) {
             keepUserMode(running, for: id)
             streamingDisplays[i].start = mode
@@ -605,7 +640,7 @@ extension VideoManager {
         }
         let index = streamingDisplays[i].index
         sdLog.debug("resize \(index) to \(mode.width)×\(mode.height)@\(mode.refreshRate)\(mode.hiDPI ? " HiDPI" : "")")
-        guard vd.apply(StreamingDisplayModes.settings(startingIn: mode)) else {
+        guard vd.apply(Self.streamingSettings(startingIn: mode)) else {
             sdLog.error("resize: applySettings failed")
             return completion(false)
         }
@@ -622,7 +657,7 @@ extension VideoManager {
                 // Its mode list goes back to one led by what it still runs, or it would go on
                 // reporting the new mode as its own, and asking for that again would do nothing.
                 sdLog.debug("resize: failed; listing \(running.width)×\(running.height) first again")
-                _ = vd?.apply(StreamingDisplayModes.settings(startingIn: StreamingDisplayModes.Mode(running)))
+                _ = vd?.apply(Self.streamingSettings(startingIn: StreamingDisplayModes.Mode(running)))
             }
             completion(done)
         }

@@ -18,6 +18,7 @@ enum StreamingDisplayModes {
         (1280, 800), (1440, 900), (1680, 1050), (1920, 1200), (2560, 1600),
         (1024, 768), (1600, 1200), (2048, 1536)
     ]
+    /// The rates offered unless Settings picks others (`VisibilityPreferences.streamingRefreshRates`).
     static let refreshRates = [60, 30, 120]
 
     /// The most pixels a streaming display is made with on either side (8K), and its highest
@@ -76,11 +77,12 @@ enum StreamingDisplayModes {
     /// Every size at every rate, the start mode first so the display comes up in it.
     static var advertised: [(width: Int, height: Int, refreshRate: Int)] { advertised(startingIn: start) }
 
-    /// Every size at every rate and `start` with them, which comes first. The sizes stand the
-    /// way `start` does, so a portrait display lists portrait sizes.
-    static func advertised(startingIn start: Mode) -> [(width: Int, height: Int, refreshRate: Int)] {
+    /// Every size at each of `rates` and `start` with them, which comes first whatever its
+    /// rate. The sizes stand the way `start` does, so a portrait display lists portrait sizes.
+    static func advertised(startingIn start: Mode,
+                           rates: [Int] = refreshRates) -> [(width: Int, height: Int, refreshRate: Int)] {
         let all = sizes.flatMap { size in
-            refreshRates.map { start.isPortrait ? (size.height, size.width, $0) : (size.width, size.height, $0) }
+            rates.map { start.isPortrait ? (size.height, size.width, $0) : (size.width, size.height, $0) }
         }
         let isStart = { (m: (width: Int, height: Int, refreshRate: Int)) in
             m.width == start.width && m.height == start.height && m.refreshRate == start.refreshRate
@@ -88,11 +90,11 @@ enum StreamingDisplayModes {
         return [(start.width, start.height, start.refreshRate)] + all.filter { !isStart($0) }
     }
 
-    /// The settings that give a streaming display every mode, `start` first.
-    static func settings(startingIn start: Mode) -> CGVirtualDisplaySettings {
+    /// The settings that give a streaming display every mode at `rates`, `start` first.
+    static func settings(startingIn start: Mode, rates: [Int] = refreshRates) -> CGVirtualDisplaySettings {
         let settings = CGVirtualDisplaySettings()
         settings.hiDPI = 1
-        settings.modes = advertised(startingIn: start).map {
+        settings.modes = advertised(startingIn: start, rates: rates).map {
             CGVirtualDisplayMode(width: UInt($0.width), height: UInt($0.height), refreshRate: Double($0.refreshRate))
         }
         return settings

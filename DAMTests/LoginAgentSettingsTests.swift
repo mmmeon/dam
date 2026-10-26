@@ -28,6 +28,14 @@ final class LoginAgentSettingsTests: XCTestCase {
         XCTAssertThrowsError(try LoginAgentSettings.read(from: url.appendingPathExtension("missing")))
     }
 
+    func testRefreshRatesReadBackAndDefaultWhenMissingOrOutOfRange() {
+        let settings = LoginAgentSettings(refreshRates: [120, 60])
+        XCTAssertEqual(LoginAgentSettings(dictionary: settings.dictionary).refreshRates, [120, 60])
+        XCTAssertEqual(LoginAgentSettings(dictionary: [:]).refreshRates, StreamingDisplayModes.refreshRates)
+        XCTAssertEqual(LoginAgentSettings(dictionary: ["refreshRates": [0, 9_999]]).refreshRates,
+                       StreamingDisplayModes.refreshRates)
+    }
+
     func testOnlyDevicesAllowedGoToTheAgentAndWithoutInput() throws {
         let clients = [MoonlightClient(name: "iPad", certificate: Data([1]), paired: Date(), allowsInput: true,
                                        showsLoginWindow: true),

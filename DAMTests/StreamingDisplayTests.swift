@@ -19,6 +19,14 @@ final class StreamingDisplayTests: XCTestCase {
         XCTAssertEqual(Set(modes.map { "\($0.width)x\($0.height)@\($0.refreshRate)" }).count, modes.count)
     }
 
+    func testOffersOnlyTheRatesPickedAndTheStartModesOwn() {
+        let start = StreamingDisplayModes.Mode(width: 1920, height: 1080, refreshRate: 30)
+        let modes = StreamingDisplayModes.advertised(startingIn: start, rates: [60])
+        XCTAssertEqual(modes.first.map { "\($0.width)x\($0.height)@\($0.refreshRate)" }, "1920x1080@30")
+        XCTAssertEqual(Set(modes.dropFirst().map(\.refreshRate)), [60])
+        XCTAssertEqual(modes.count, StreamingDisplayModes.sizes.count + 1)
+    }
+
     func testOffers1080pAtHiDPI() {
         // HiDPI 1920 × 1080 needs 3840 × 2160 listed too.
         XCTAssertTrue(StreamingDisplayModes.sizes.contains { $0 == (3840, 2160) })

@@ -45,7 +45,9 @@ enum LoginAgentInstaller {
         let store = DefaultsOpenDisplayStore()
         let settings = LoginAgentSettings.make(entries: AutoConnectList.entries, names: store.names,
                                                usbIDs: store.usbIDs, bonjourIDs: store.bonjourIDs,
-                                               bitrateKbps: OpenDisplaySender.bitrateKbps, moonlight: wantedMoonlight())
+                                               bitrateKbps: OpenDisplaySender.bitrateKbps,
+                                               refreshRates: VisibilityPreferences.streamingRefreshRates(),
+                                               moonlight: wantedMoonlight())
         return settings.isEmpty ? nil : settings
     }
 
@@ -69,7 +71,7 @@ enum LoginAgentInstaller {
 
     /// Whether what is installed does what `wanted` asks. The receivers, their order and how
     /// they are found by cable count, as do the Moonlight host and the devices it serves;
-    /// names, the bitrate and stream settings don't, as a stale one does no harm and each
+    /// names, the bitrate, refresh rates and stream settings don't, as a stale one does no harm and each
     /// would mean asking for the password again.
     static func status(wanted: LoginAgentSettings?, installed: LoginAgentSettings?, agentMatches: Bool) -> Status {
         guard let installed else { return wanted == nil ? .notNeeded : .notInstalled }
