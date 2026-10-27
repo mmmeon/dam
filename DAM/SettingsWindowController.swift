@@ -480,7 +480,7 @@ final class SettingsWindowController: NSWindowController {
             mode.setAccessibilityLabel("When \(name) is connected")
             mode.toolTip = "While signed in: whenever it comes within reach after you sign in, not at the login window. At login: only in the window after you sign in. " +
                            "At startup (OpenDisplay, by cable): at the login window as well, before anyone signs in, " +
-                           "then as at login."
+                           "then whenever it comes within reach."
             let remove = small(ClosureButton(title: "Remove") { [weak self] _ in self?.removeAutoConnect(entry.target) })
             remove.setAccessibilityLabel("Remove \(name)")
             return [up, down, rowLabel(name), placeholderLabel(kind), mode, when, remove]
@@ -504,7 +504,7 @@ final class SettingsWindowController: NSWindowController {
         }
     }
 
-    /// "Window after login: [2 minutes]": how long entries connected at login or startup may be.
+    /// "Window after login: [2 minutes]": how long entries connected at login may be.
     private func autoConnectWindowRow() -> NSView {
         let popup = ClosurePopup(onSelect: { value in
             guard let seconds = value.flatMap(Double.init) else { return }
@@ -523,7 +523,7 @@ final class SettingsWindowController: NSWindowController {
             if seconds == AutoConnectList.window { popup.select(item) }
         }
         popup.setAccessibilityLabel("Window after login")
-        popup.toolTip = "How long after you sign in a display set to connect at login or startup may still be " +
+        popup.toolTip = "How long after you sign in a display set to connect at login may still be " +
                         "connected, for one that is slow to come within reach. Applies from the next login."
         let label = smallLabel("Window after login:")
         let row = NSStackView(views: [label, popup])
