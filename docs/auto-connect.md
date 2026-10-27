@@ -101,7 +101,7 @@ after, not whenever they come within reach. Each entry has a mode:
 |---|---|---|
 | While signed in (was “Always”) | whenever it comes within reach after sign-in; not at the login window | all |
 | At login | in the window after DAM starts at sign-in | all |
-| At startup | at the login window too (part 1's agent, which launchd runs at every login window), then as at login | OpenDisplay only: nothing else can connect before sign-in |
+| At startup | at the login window too (part 1's agent, which launchd runs at every login window), then whenever it comes within reach after sign-in | OpenDisplay only: nothing else can connect before sign-in |
 
 - **The window** is one setting, 2 minutes by default (30 s to 10 min), measured from DAM's
   start. DAM counts as started at sign-in when it starts within the window of the user's console
@@ -112,7 +112,9 @@ after, not whenever they come within reach. Each entry has a mode:
   and receivers turned on from the OpenDisplay page, are While signed in, which is how they behaved.
 - **“Always” renamed “While signed in”** (2026-10-27): “Always” read as covering the login window
   too, which only At startup does. Stored as `always` still.
-- **Once the window closes** nothing at login or startup is dialled or retried. A connection
+- **At startup is in every scenario** (changed 2026-10-27): after sign-in it is as While signed
+  in, no longer limited to the window, so DAM opened by hand later still connects it.
+- **Once the window closes** nothing at login is dialled or retried. A connection
   already made stays.
 
 ## Link to part 1

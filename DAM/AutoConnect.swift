@@ -32,8 +32,8 @@ struct AutoConnectEntry: Hashable {
         /// In the window after DAM starts at sign-in.
         case login
         /// At the login window too, by the login window agent (root-and-login-window.md), which
-        /// launchd runs at every one; after sign-in, as at login. OpenDisplay only, as nothing
-        /// else can be connected before sign-in.
+        /// launchd runs at every one; after sign-in, whenever it comes within reach. OpenDisplay
+        /// only, as nothing else can be connected before sign-in.
         case startup
     }
 
@@ -51,8 +51,8 @@ struct AutoConnectEntry: Hashable {
     func applies(hasOwnDisplay: Bool, windows: AutoConnectWindows = .always) -> Bool {
         guard !(onlyWithoutOwnDisplay && hasOwnDisplay) else { return false }
         switch mode {
-        case .always:           return true
-        case .login, .startup:  return windows.login
+        case .always, .startup: return true
+        case .login:            return windows.login
         }
     }
 
@@ -140,7 +140,7 @@ enum AutoConnectList {
     /// The window lengths Settings offers, in seconds.
     static let windowChoices: [TimeInterval] = [30, 60, 120, 300, 600]
 
-    /// How long after sign-in entries connected at login or startup may still be.
+    /// How long after sign-in entries connected at login may still be.
     static var window: TimeInterval {
         get { (UserDefaults.dam.object(forKey: windowKey) as? Double).map { max(0, $0) } ?? defaultWindow }
         set { UserDefaults.dam.set(newValue, forKey: windowKey) }
@@ -179,7 +179,7 @@ enum AutoConnectList {
 
 // MARK: - Windows
 
-/// Whether entries connected at login or startup apply now.
+/// Whether entries connected at login apply now.
 struct AutoConnectWindows: Equatable {
     var login = false
 

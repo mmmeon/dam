@@ -154,8 +154,8 @@ final class AutoConnectTests: XCTestCase {
         XCTAssertTrue(always.applies(hasOwnDisplay: false, windows: .none))
         XCTAssertFalse(login.applies(hasOwnDisplay: false, windows: .none))
         XCTAssertTrue(login.applies(hasOwnDisplay: false, windows: AutoConnectWindows(login: true)))
-        XCTAssertFalse(startup.applies(hasOwnDisplay: false, windows: .none))
-        XCTAssertTrue(startup.applies(hasOwnDisplay: false, windows: AutoConnectWindows(login: true)), "at every sign-in")
+        XCTAssertTrue(startup.applies(hasOwnDisplay: false, windows: .none), "whenever in reach after sign-in")
+        XCTAssertTrue(startup.applies(hasOwnDisplay: false, windows: AutoConnectWindows(login: true)))
     }
 
     func testAnEntryAtLoginIsLeftAloneOutsideTheWindow() {
@@ -170,7 +170,7 @@ final class AutoConnectTests: XCTestCase {
         let list = [AutoConnectEntry(target: .openDisplay(key: "a"), mode: .startup),
                     AutoConnectEntry(target: .openDisplay(key: "b"), mode: .login),
                     AutoConnectEntry(target: .openDisplay(key: "c"))]
-        XCTAssertEqual(AutoConnectList.openDisplayKeys(in: list, hasOwnDisplay: false, windows: .none), ["c"])
+        XCTAssertEqual(AutoConnectList.openDisplayKeys(in: list, hasOwnDisplay: false, windows: .none), ["a", "c"])
         XCTAssertEqual(AutoConnectList.openDisplayKeys(in: list, hasOwnDisplay: false, windows: AutoConnectWindows(login: true)),
                        ["a", "b", "c"])
         XCTAssertEqual(AutoConnectList.openDisplayKeys(in: list, hasOwnDisplay: false), ["a", "b", "c"])
