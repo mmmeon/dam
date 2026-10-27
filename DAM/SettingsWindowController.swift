@@ -478,7 +478,7 @@ final class SettingsWindowController: NSWindowController {
                 if option == entry.mode { mode.select(item) }
             }
             mode.setAccessibilityLabel("When \(name) is connected")
-            mode.toolTip = "Always: whenever it comes within reach. At login: only in the window after you sign in. " +
+            mode.toolTip = "While signed in: whenever it comes within reach after you sign in, not at the login window. At login: only in the window after you sign in. " +
                            "At startup (OpenDisplay, by cable): at the login window as well, before anyone signs in, " +
                            "then as at login."
             let remove = small(ClosureButton(title: "Remove") { [weak self] _ in self?.removeAutoConnect(entry.target) })
@@ -498,7 +498,7 @@ final class SettingsWindowController: NSWindowController {
 
     private static func autoConnectModeTitle(_ mode: AutoConnectEntry.Mode) -> String {
         switch mode {
-        case .always:  return "Always"
+        case .always:  return "While signed in"
         case .login:   return "At login"
         case .startup: return "At startup"
         }

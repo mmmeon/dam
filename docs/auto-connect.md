@@ -99,7 +99,7 @@ after, not whenever they come within reach. Each entry has a mode:
 
 | Mode | Connected | Kinds |
 |---|---|---|
-| Always | whenever it comes within reach | all |
+| While signed in (was “Always”) | whenever it comes within reach after sign-in; not at the login window | all |
 | At login | in the window after DAM starts at sign-in | all |
 | At startup | at the login window too (part 1's agent, which launchd runs at every login window), then as at login | OpenDisplay only: nothing else can connect before sign-in |
 
@@ -109,7 +109,9 @@ after, not whenever they come within reach. Each entry has a mode:
 - **At startup covers every sign-in**, not only the first since boot (changed 2026-10-23): the
   agent shows the login window after a log-out too, and DAM should take the receiver back after.
 - **Defaults:** entries added in Settings are At login. Entries migrated from the older settings,
-  and receivers turned on from the OpenDisplay page, are Always, which is how they behaved.
+  and receivers turned on from the OpenDisplay page, are While signed in, which is how they behaved.
+- **“Always” renamed “While signed in”** (2026-10-27): “Always” read as covering the login window
+  too, which only At startup does. Stored as `always` still.
 - **Once the window closes** nothing at login or startup is dialled or retried. A connection
   already made stays.
 
