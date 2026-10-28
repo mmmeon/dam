@@ -487,7 +487,8 @@ final class SettingsWindowController: NSWindowController {
         }
         var controls: [NSView] = [rows.isEmpty ? placeholderLabel("No displays yet") : rowGrid(rows)]
         if let add = addAutoConnectMenu(listed: Set(entries.map(\.target))) { controls.append(add) }
-        controls.append(autoConnectWindowRow())
+        // Only At login entries have a window.
+        if entries.contains(where: { $0.mode == .login }) { controls.append(autoConnectWindowRow()) }
         if let loginWindow = loginWindowRow() { controls.append(loginWindow) }
         controls.append(smallNote("Connected best first. Of AirPlay displays and iPads, only the first available is " +
                                   "connected, and none while one already is; every OpenDisplay receiver listed is " +
