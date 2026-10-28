@@ -23,6 +23,8 @@ protocol ScreenCaptureSource: AnyObject {
     var showsCursor: Bool { get set }
     /// Called with each piece of the Mac's sound, where the capture has sound; set before `start`.
     var audio: ((CMSampleBuffer) -> Void)? { get set }
+    /// Whether sound is captured, given `audio`; may change while capture runs.
+    var capturesAudio: Bool { get set }
     /// Called when capture stops on its own, as when the display goes away.
     var onStop: ((Error) -> Void)? { get set }
     func start(completion: @escaping (Error?) -> Void)
@@ -33,7 +35,7 @@ protocol ScreenCaptureSource: AnyObject {
 /// for it at the same size, rate and pointer setting: two devices on one display cost one
 /// capture, and each encodes for itself. Started by the first to subscribe, stopped once the
 /// last cancels. A stream joining a running capture gets its last picture at once, as a
-/// still screen sends no more.
+/// still screen sends no more. Sound is captured only while a subscriber takes it.
 final class SharedScreenCapture {
     struct Key: Hashable {
         let displayID: CGDirectDisplayID
@@ -48,13 +50,13 @@ final class SharedScreenCapture {
     final class Subscription {
         fileprivate weak var capture: SharedScreenCapture?
         fileprivate let frame: (CVPixelBuffer, CMTime) -> Void
-        fileprivate let audio: (CMSampleBuffer) -> Void
+        fileprivate let audio: ((CMSampleBuffer) -> Void)?
         fileprivate let stopped: (Error) -> Void
         /// Frames are handed over under it, one at a time, with `hasFrame`.
         private let delivery = NSLock()
         private var hasFrame = false
 
-        fileprivate init(frame: @escaping (CVPixelBuffer, CMTime) -> Void, audio: @escaping (CMSampleBuffer) -> Void,
+        fileprivate init(frame: @escaping (CVPixelBuffer, CMTime) -> Void, audio: ((CMSampleBuffer) -> Void)?,
                          stopped: @escaping (Error) -> Void) {
             self.frame = frame
             self.audio = audio
@@ -131,12 +133,12 @@ final class SharedScreenCapture {
     static var startCapture: (ScreenCaptureSource, @escaping (Error?) -> Void) -> Void = { $0.start(completion: $1) }
 
     /// Joins the capture for `key`, starting it if none runs. `frame` is called on the capture
-    /// thread, `audio` on a queue of the capture's own; `started` once, with whether capture
-    /// started; `stopped` if capture stops on its own once started, as when replayd dies or
-    /// the display goes away. The capture is let go then, and the next to subscribe starts
-    /// another.
+    /// thread, `audio` on a queue of the capture's own (nil takes no sound); `started` once,
+    /// with whether capture started; `stopped` if capture stops on its own once started, as
+    /// when replayd dies or the display goes away. The capture is let go then, and the next to
+    /// subscribe starts another.
     static func subscribe(_ key: Key, frame: @escaping (CVPixelBuffer, CMTime) -> Void,
-                          audio: @escaping (CMSampleBuffer) -> Void,
+                          audio: ((CMSampleBuffer) -> Void)?,
                           started: @escaping (Error?) -> Void,
                           stopped: @escaping (Error) -> Void = { _ in }) -> Subscription {
         let subscription = Subscription(frame: frame, audio: audio, stopped: stopped)
@@ -166,6 +168,8 @@ final class SharedScreenCapture {
     private var outcome: Result<Void, Error>?
     private var waiting: [(Error?) -> Void] = []
     private var stopped = false
+    /// Whether a subscriber takes sound; under `lock`.
+    private var wantsAudio: Bool { subscriptions.contains { $0.audio != nil } }
 
     private init(key: Key) {
         self.key = key
@@ -178,6 +182,7 @@ final class SharedScreenCapture {
         capture.onStop = { [weak self] error in self?.stoppedOnItsOwn(error) }
         lock.lock()
         self.capture = capture
+        capture.capturesAudio = wantsAudio
         lock.unlock()
         Self.startCapture(capture) { [weak self] error in self?.started(error) }
     }
@@ -195,6 +200,7 @@ final class SharedScreenCapture {
         subscription.capture = self
         lock.lock()
         subscriptions.append(subscription)
+        if subscription.audio != nil { capture?.capturesAudio = true }
         let outcome = self.outcome
         if outcome == nil { waiting.append(started) }
         let last = self.last
@@ -230,7 +236,7 @@ final class SharedScreenCapture {
         lock.lock()
         let subscriptions = self.subscriptions
         lock.unlock()
-        for subscription in subscriptions { subscription.audio(sample) }
+        for subscription in subscriptions { subscription.audio?(sample) }
     }
 
     private func remove(_ subscription: Subscription) {
@@ -239,6 +245,7 @@ final class SharedScreenCapture {
         lock.lock()
         subscriptions.removeAll { $0 === subscription }
         let empty = subscriptions.isEmpty
+        if !empty { capture?.capturesAudio = wantsAudio }
         lock.unlock()
         if empty, Self.running[key] === self { Self.running[key] = nil }
         Self.registryLock.unlock()

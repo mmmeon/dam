@@ -38,6 +38,8 @@ final class DisplayStreamCapture: ScreenCaptureSource {
     var showsCursor = true
     /// Never called: CGDisplayStream has no sound.
     var audio: ((CMSampleBuffer) -> Void)?
+    /// Changes nothing, for the same reason.
+    var capturesAudio = false
     var onStop: ((Error) -> Void)?
 
     static let pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange

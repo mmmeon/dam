@@ -1111,6 +1111,8 @@ final class WebStreamSession {
         lock.lock()
         self.activity = activity
         self.capture = capture
+        // Sound is captured only while a viewer takes it; meanwhile the track is silence.
+        capture.capturesAudio = wantsAudio
         (repeater, silenceTimer, self.statsTimer) = (timer, silence, statsTimer)
         lock.unlock()
         [timer, silence, statsTimer].forEach { $0.resume() }
@@ -1138,6 +1140,7 @@ final class WebStreamSession {
         guard !ended else { lock.unlock(); return false }
         viewers.append(viewer)
         closing = false
+        capture?.capturesAudio = wantsAudio
         lock.unlock()
         viewer.onClose = { [weak self, weak viewer] in
             guard let self, let viewer else { return }
@@ -1155,6 +1158,7 @@ final class WebStreamSession {
         viewers.removeAll { $0 === viewer }
         let empty = viewers.isEmpty
         if empty { closing = true }
+        capture?.capturesAudio = wantsAudio
         lock.unlock()
         wsLog.debug("viewer left: \(self.viewerCount) watching")
         DispatchQueue.main.async { self.onChange?() }
@@ -1168,6 +1172,9 @@ final class WebStreamSession {
             if stillEmpty { self.end("last viewer left") }
         }
     }
+
+    /// Whether a viewer takes sound; under `lock`.
+    private var wantsAudio: Bool { viewers.contains { $0.audio } }
 
     /// Whether a viewer of another device than `device` watches.
     func hasViewers(otherThan device: String?) -> Bool {

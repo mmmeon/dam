@@ -844,7 +844,7 @@ final class OpenDisplaySession {
             let encoder = self.encoder
             self.lock.unlock()
             encoder?.encode(buffer, at: time)
-        }, audio: { _ in }, started: { [weak self] error in
+        }, audio: nil, started: { [weak self] error in
             guard let error else { return }
             DispatchQueue.main.async {
                 self?.fail("capture failed: \(error.localizedDescription)")
