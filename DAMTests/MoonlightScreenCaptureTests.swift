@@ -283,6 +283,33 @@ final class MoonlightScreenCaptureTests: XCTestCase {
         XCTAssertEqual(made.count, 3, "started afresh")
     }
 
+    /// Sound is captured only while a stream on the capture takes it, as Moonlight's do and
+    /// OpenDisplay's don't.
+    func testSoundIsCapturedOnlyWhileAStreamTakesIt() {
+        let makeCapture = SharedScreenCapture.makeCapture, startCapture = SharedScreenCapture.startCapture
+        defer { SharedScreenCapture.makeCapture = makeCapture; SharedScreenCapture.startCapture = startCapture }
+        var made: ScreenCaptureSource?
+        SharedScreenCapture.makeCapture = { key, frame in
+            let capture = MoonlightScreenCapture(displayID: key.displayID, width: key.width, height: key.height,
+                                                 fps: key.fps, frame: frame)
+            made = capture
+            return capture
+        }
+        SharedScreenCapture.startCapture = { _, done in done(nil) }
+        let key = SharedScreenCapture.Key(displayID: 5, width: 64, height: 64, fps: 60, showsCursor: true)
+
+        let silent = SharedScreenCapture.subscribe(key, frame: { _, _ in }, audio: nil, started: { _ in })
+        XCTAssertEqual(made?.capturesAudio, false, "nobody takes sound")
+        let listening = SharedScreenCapture.subscribe(key, frame: { _, _ in }, audio: { _ in }, started: { _ in })
+        XCTAssertEqual(made?.capturesAudio, true)
+        listening.cancel()
+        XCTAssertEqual(made?.capturesAudio, false, "the one taking sound left")
+        silent.cancel()
+
+        SharedScreenCapture.subscribe(key, frame: { _, _ in }, audio: { _ in }, started: { _ in }).cancel()
+        XCTAssertEqual(made?.capturesAudio, true, "the first to subscribe takes sound")
+    }
+
     /// A stream joining as a new frame comes never gets the older last picture after it.
     func testAJoiningStreamNeverGetsAnOlderPictureAfterANewer() throws {
         let makeCapture = SharedScreenCapture.makeCapture, startCapture = SharedScreenCapture.startCapture

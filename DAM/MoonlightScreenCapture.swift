@@ -40,6 +40,9 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     private var rotationObserver: NSObjectProtocol?
     /// Whether this capture counts among `liveCaptures`; under `lock`.
     private var live = false
+    /// Whether sound is wanted, and whether `stream` was last set up to capture it; under `lock`.
+    private var wantsAudio = true
+    private var streamCapturesAudio = false
 
     /// How long ScreenCaptureKit has to list the displays before replayd is taken to be stuck.
     /// replayd can lose track of an app replaced while it ran (a new build, say) and then
@@ -75,6 +78,18 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     /// Called on `audioQueue` with each piece of the Mac's sound; set before `start` to
     /// capture sound too.
     var audio: ((CMSampleBuffer) -> Void)?
+    /// Whether sound is captured, given `audio`; may change while capture runs, which
+    /// ScreenCaptureKit then follows without stopping the picture.
+    var capturesAudio: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return wantsAudio }
+        set {
+            lock.lock()
+            wantsAudio = newValue
+            let running = stream != nil && !stopped
+            lock.unlock()
+            if running { queue.async { [weak self] in self?.reconfigure() } }
+        }
+    }
     var audioQueue = DispatchQueue(label: "\(AppIdentity.bundleID).moonlight.capture.audio", qos: .userInteractive)
     /// Whether frames show the pointer; set before `start`.
     var showsCursor = true
@@ -171,7 +186,10 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         // No frame comes before the stream starts, so this is set ahead of `queue`.
         let rotation = StreamRotations.shared.rotation(of: self.displayID)
         setRotation(rotation)
-        let configuration = makeConfiguration(rotation: rotation)
+        lock.lock()
+        let capturesAudio = wantsAudio && audio != nil
+        lock.unlock()
+        let configuration = makeConfiguration(rotation: rotation, audio: capturesAudio)
         let stream = SCStream(filter: SCContentFilter(display: display, excludingWindows: []),
                               configuration: configuration, delegate: self)
         do {
@@ -187,6 +205,7 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         let stopped = self.stopped
         if !stopped {
             self.stream = stream
+            streamCapturesAudio = capturesAudio
             rotationObserver = NotificationCenter.default.addObserver(
                 forName: StreamRotations.didChange, object: nil, queue: nil) { [weak self] _ in self?.rotationChanged() }
         }
@@ -197,12 +216,14 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
             // Stopped while it started: stopping it then may not have taken.
             if error == nil, self?.isStopped ?? true { stream.stopCapture { _ in } }
             if error == nil { self?.setLive(true) }
+            // Sound wanted otherwise since the configuration was made is caught up with.
+            if error == nil { self?.queue.async { self?.reconfigure() } }
             completion(error)
         }
     }
 
     /// What capture asks ScreenCaptureKit for, the display's own way up when it is turned.
-    private func makeConfiguration(rotation: DisplayRotation) -> SCStreamConfiguration {
+    private func makeConfiguration(rotation: DisplayRotation, audio: Bool) -> SCStreamConfiguration {
         let configuration = SCStreamConfiguration()
         (configuration.width, configuration.height) = rotation.inverse.size(width: width, height: height)
         configuration.minimumFrameInterval = Self.minimumFrameInterval(
@@ -217,8 +238,8 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         // many, ScreenCaptureKit has nothing to draw into and skips frames.
         configuration.queueDepth = 6
         configuration.showsCursor = showsCursor
-        if audio != nil {
-            configuration.capturesAudio = true
+        configuration.capturesAudio = audio
+        if audio {
             configuration.sampleRate = MoonlightAudioEncoder.sampleRate
             configuration.channelCount = MoonlightAudioEncoder.channels
             configuration.excludesCurrentProcessAudio = true
@@ -263,13 +284,26 @@ final class MoonlightScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate {
             self.lock.lock()
             let stream = self.stopped ? nil : self.stream
             self.lock.unlock()
-            guard let stream else { return }
+            guard stream != nil else { return }
             scLog.debug("display \(self.displayID) turned to \(rotation.rawValue)")
             self.setRotation(rotation)
-            let configuration = self.makeConfiguration(rotation: rotation)
-            stream.updateConfiguration(configuration) { error in
-                if let error { scLog.error("turn: \(error.localizedDescription, privacy: .public)") }
-            }
+            self.reconfigure(turned: true)
+        }
+    }
+
+    /// Brings the stream up to the way the display is turned and whether sound is wanted,
+    /// unless it is already; on `queue`.
+    private func reconfigure(turned: Bool = false) {
+        lock.lock()
+        let stream = stopped ? nil : self.stream
+        let capturesAudio = wantsAudio && audio != nil
+        let soundChanged = capturesAudio != streamCapturesAudio
+        if stream != nil { streamCapturesAudio = capturesAudio }
+        lock.unlock()
+        guard let stream, turned || soundChanged else { return }
+        if soundChanged { scLog.debug("display \(self.displayID): sound \(capturesAudio ? "on" : "off", privacy: .public)") }
+        stream.updateConfiguration(makeConfiguration(rotation: rotation, audio: capturesAudio)) { error in
+            if let error { scLog.error("reconfigure: \(error.localizedDescription, privacy: .public)") }
         }
     }
 
